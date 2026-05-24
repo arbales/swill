@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>cocoa-ui sketch</title>
+    <link rel="stylesheet" href="../shared/shared.css" />
+    <link rel="stylesheet" href="demo.css" />
+    <script type="module" src="dist/index.js"></script>
+  </head>
+  <body>
+    <main>
+      <section window="toolbar">
+        <header controller="Menubar" class="toolbar">
+          <button data-action="newMovie">+ New Movie</button>
+          <button data-action="showObjectBrowser">Objects</button>
+        </header>
+      </section>
+
+      <section window="main">
+        <div controller="MainView">
+          <p class="status" controller="StatusField" outlet="statusField">
+            <span bind="message"></span>
+          </p>
+
+          <input klass="Typeahead" outlet="typeahead" type="text" placeholder="Type to filter…" autofocus />
+
+          <div class="list" controller="MovieList" outlet="movieList" tabindex="0">
+            <header outlet="headerView" class="header">
+              <div data-action="sortBy" data-column="title" bind-data-sort-state="@sortStates.title">Title</div>
+              <div data-action="sortBy" data-column="year" bind-data-sort-state="@sortStates.year">Year</div>
+              <div data-action="sortBy" data-column="director" bind-data-sort-state="@sortStates.director">Director</div>
+              <div data-action="sortBy" data-column="genre" bind-data-sort-state="@sortStates.genre">Genre</div>
+              <div data-action="sortBy" data-column="priority" bind-data-sort-state="@sortStates.priority">Priority</div>
+              <div data-action="sortBy" data-column="verdict" bind-data-sort-state="@sortStates.verdict">Verdict</div>
+              <div data-action="sortBy" data-column="watched" bind-data-sort-state="@sortStates.watched">Watched</div>
+              <div data-action="sortBy" data-column="watched_at" bind-data-sort-state="@sortStates.watched_at">Watched On</div>
+            </header>
+            <section outlet="rows"></section>
+
+            <template for="row">
+              <div class="row">
+                <div bind="title"></div>
+                <div bind="year"></div>
+                <div bind="director"></div>
+                <div bind="genre"></div>
+                <div bind="priority"></div>
+                <div bind="verdict"></div>
+                <div bind="watched" transform="yesno"></div>
+                <div bind="watched_at"></div>
+              </div>
+            </template>
+
+            <template for="editor">
+              <div class="row editing" controller="MovieEditor">
+                <div bind="title"></div>
+                <div bind="year"></div>
+                <div bind="director"></div>
+                <input bind="genre" type="text" />
+                <select klass="Select" outlet="prioritySelect" bind="priority">
+                  <option value="">—</option>
+                </select>
+                <select klass="Select" outlet="verdictSelect" bind="verdict">
+                  <option value="">—</option>
+                </select>
+                <input bind="watched" type="checkbox" />
+                <input bind="watched_at" type="date" />
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <template for="window" name="new-movie">
+        <dialog controller="NewMovieForm" class="window">
+          <h2>New Movie</h2>
+          <label>Title <input outlet="titleInput" type="text" /></label>
+          <label>Year <input outlet="yearInput" type="number" /></label>
+          <label>Director <input outlet="directorInput" type="text" /></label>
+          <div class="actions">
+            <button data-action="cancel">Cancel</button>
+            <button data-action="save">Save</button>
+          </div>
+        </dialog>
+      </template>
+
+      <template for="window" name="object-browser">
+        <dialog controller="ObjectBrowser" class="window object-browser-window">
+          <header>
+            <h2>Object Browser</h2>
+            <div class="actions">
+              <button data-action="refresh">Refresh</button>
+              <button data-action="close">Close</button>
+            </div>
+          </header>
+          <div class="object-path" outlet="pathField"></div>
+          <section class="object-browser">
+            <div class="object-columns" outlet="columns"></div>
+          </section>
+        </dialog>
+      </template>
+    </main>
+  </body>
+</html>

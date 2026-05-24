@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Giraffic</title>
+    <link rel="stylesheet" href="../shared/shared.css" />
+    <link rel="stylesheet" href="../shared/lucide.css" />
+    <link rel="stylesheet" href="giraffic.css" />
+    <script type="module" src="dist/giraffic.js"></script>
+  </head>
+  <body>
+    <section window="toolbar">
+      <header controller="GirafficMenubar" class="toolbar">
+        <button data-action="showLists">Lists</button>
+        <button data-action="showMembers">Members</button>
+        <button data-action="showProfile">Me</button>
+        <button data-action="showObjectBrowser">Objects</button>
+      </header>
+    </section>
+
+    <section window="main" name="lists">
+      <section controller="MailingListsApp" class="mailing-lists-app">
+        <aside class="source">
+          <div class="source-list" controller="MailingListSourceList" outlet="sourceList" bind="lists" tabindex="0">
+            <section outlet="rows"></section>
+            <template for="row">
+              <div class="source-row">
+                <span bind="name"></span>
+              </div>
+            </template>
+          </div>
+        </aside>
+
+        <main class="detail" controller="MailingListDetailView" bind="@sourceList.selectedObject">
+          <h2>Mailing List</h2>
+          <label>Name <input bind="name" type="text" /></label>
+          <label>Address <input bind="address" bind-readonly="id:isPresent" type="text" /></label>
+          <label>Webhook URL <input bind="webhookUrl" type="text" /></label>
+
+          <fieldset class="list-options">
+            <legend>Options</legend>
+            <label><input bind="notificationsEnabled" type="checkbox" /> Notifications enabled </label>
+            <label><input bind="hidden" type="checkbox" /> Hidden </label>
+            <label><input bind="open" type="checkbox" /> Open </label>
+            <label><input bind="historyEnabled" type="checkbox" /> History enabled </label>
+          </fieldset>
+
+          <button data-action="saveChanges">Save</button>
+
+          <h3>Members</h3>
+
+          <section class="member-list" controller="List" outlet="memberList" bind="members" tabindex="0" multiple>
+            <header outlet="headerView" class="member-header">
+              <div>Email</div>
+              <div>Name</div>
+            </header>
+            <section outlet="rows"></section>
+
+            <template for="row">
+              <div class="member-row">
+                <div bind="email"></div>
+                <div bind="name"></div>
+              </div>
+            </template>
+          </section>
+
+          <div class="add-member" controller="MemberPicker" outlet="memberPicker">
+            <input bind="@query" type="search" placeholder="Find or add member" autocomplete="off" />
+            <section class="member-candidates" controller="List" outlet="results" bind="@candidates" tabindex="0">
+              <template for="row">
+                <button type="button" class="member-candidate">
+                  <span bind="label"></span>
+                </button>
+              </template>
+            </section>
+          </div>
+          <button data-action="removeMember" bind-disabled="@memberList.selectedIndexes:isEmpty">Remove Selected</button>
+        </main>
+      </section>
+    </section>
+
+    <template for="window" name="members">
+      <section controller="MembersApp" class="members-app">
+        <h2>Members</h2>
+        <section class="member-list" controller="List" outlet="membersList" bind="members" tabindex="0">
+          <header outlet="headerView" class="member-header">
+            <div>Email</div>
+            <div>Name</div>
+          </header>
+          <section outlet="rows"></section>
+          <template for="row">
+            <div class="member-row">
+              <div bind="email"></div>
+              <div bind="name"></div>
+            </div>
+          </template>
+        </section>
+      </section>
+    </template>
+
+    <template for="window" name="profile">
+      <section controller="MeProfileApp" class="profile-app">
+        <header class="profile-header">
+          <div class="profile-photo"><img bind-src="member.photoUrl" alt="" /></div>
+          <div>
+            <h2 bind="member.name"></h2>
+            <p bind="member.email"></p>
+          </div>
+        </header>
+
+        <section class="profile-sections">
+          <section>
+            <h3>Edit</h3>
+            <div class="profile-form">
+              <label>Nickname <input bind="@draftMember.nickname" type="text" /></label>
+              <label>Phone <input bind="@draftMember.phoneNumber" type="tel" /></label>
+              <label>
+                Phone Visibility
+                <div klass="CustomSelect" outlet="phoneVisibilitySelect" bind="@draftMember.phoneVisibility"></div>
+              </label>
+              <label>Venmo <input bind="@draftMember.venmoHandle" type="text" /></label>
+              <label><input bind="@draftMember.robodialOptOut" type="checkbox" /> Robodial opt-out</label>
+            </div>
+            <div class="profile-actions">
+              <button data-action="saveProfile" bind-disabled="@profileActionsDisabled">Save</button>
+              <button data-action="discardProfile" bind-disabled="@profileActionsDisabled">Reset</button>
+            </div>
+            <p class="profile-error" bind="@saveError"></p>
+          </section>
+
+          <section>
+            <h3>Mailing Address</h3>
+            <dl class="profile-fields">
+              <dt>Address</dt>
+              <dd bind="member.mailingAddress.address1"></dd>
+              <dt>Address 2</dt>
+              <dd bind="member.mailingAddress.address2"></dd>
+              <dt>City</dt>
+              <dd bind="member.mailingAddress.city"></dd>
+              <dt>State</dt>
+              <dd bind="member.mailingAddress.state"></dd>
+              <dt>Postal Code</dt>
+              <dd bind="member.mailingAddress.postalCode"></dd>
+              <dt>Country</dt>
+              <dd bind="member.mailingAddress.country"></dd>
+            </dl>
+          </section>
+        </section>
+      </section>
+    </template>
+
+    <template for="window" name="object-browser">
+      <dialog controller="ObjectBrowser" class="window object-browser-window">
+        <header>
+          <h2>Object Browser</h2>
+          <div class="actions">
+            <button data-action="refresh">Refresh</button>
+            <button data-action="close">Close</button>
+          </div>
+        </header>
+        <div class="object-path" outlet="pathField"></div>
+        <section class="object-browser">
+          <div class="object-columns" outlet="columns"></div>
+        </section>
+      </dialog>
+    </template>
+  </body>
+</html>

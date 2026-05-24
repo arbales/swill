@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+AGENTS.md
+SWILL_HANDOFF.md
+__pycache__/
+.zed/
+tmp/

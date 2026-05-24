@@ -1,0 +1,171 @@
+:root {
+  --member-cols: 1fr 1fr;
+}
+
+.mailing-lists-app {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  min-height: 480px;
+}
+
+.members-app {
+  min-width: 720px;
+}
+
+.profile-app {
+  min-width: 720px;
+  max-width: 880px;
+}
+
+.profile-header {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.profile-photo {
+  width: 96px;
+  height: 96px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.profile-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.profile-fields {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 12px;
+}
+
+.profile-fields dt {
+  color: var(--dim);
+}
+
+.profile-fields dd {
+  margin: 0;
+  min-height: 1.3em;
+}
+
+.profile-form {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-form label {
+  margin: 0;
+}
+
+.profile-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.profile-error {
+  min-height: 1.3em;
+  margin: 8px 0 0;
+  color: #f66;
+}
+
+.mailing-lists-app aside.source {
+  border: 1px solid var(--rule);
+  overflow-y: auto;
+  max-height: 80vh;
+}
+
+.source-row {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.source-list,
+.member-list {
+  outline: none;
+}
+
+.source-row.selected,
+.member-row.selected {
+  background: var(--selected);
+}
+
+/* ---- list detail ------------------------------------------------- */
+
+.detail {
+  min-width: 720px;
+}
+
+.list-options {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid var(--rule);
+}
+
+.list-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- member list ------------------------------------------------ */
+
+.member-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+}
+
+.member-header,
+.member-row {
+  display: grid;
+  grid-template-columns: var(--member-cols);
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+.member-header {
+  color: var(--dim);
+  border-bottom: 1px solid var(--rule);
+}
+
+.member-row {
+  border-bottom: 1px solid var(--rule);
+}
+
+.add-member {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.add-member input {
+  padding: 4px 8px;
+}
+
+.member-candidates {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  min-height: 74px;
+}
+
+.member-candidate {
+  text-align: left;
+}

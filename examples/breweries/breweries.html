@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Breweries</title>
+    <link rel="stylesheet" href="../shared/lucide.css" />
+    <link rel="stylesheet" href="../shared/shared.css" />
+    <link rel="stylesheet" href="breweries.css" />
+    <script type="module" src="dist/breweries.js"></script>
+  </head>
+  <body>
+    <main>
+      <section window="toolbar">
+        <header controller="BreweriesMenubar" class="toolbar">
+          <h2>Breweries</h2>
+          <button data-action="showObjectBrowser">Objects</button>
+        </header>
+      </section>
+
+      <section window="main" name="breweries">
+        <section controller="BreweriesPage" class="breweries-app">
+          <header class="search-bar">
+            <span class="status" bind="@errorMessage"></span>
+            <input bind="@query" type="search" autocomplete="off" />
+            <button data-action="search">Search</button>
+            <button data-action="clearSearch" bind-disabled="@query:isBlank">Clear</button>
+          </header>
+
+          <section class="brewery-list" controller="BreweryList" outlet="breweryList" bind="breweries" tabindex="0">
+            <header outlet="headerView" class="brewery-header">
+              <div data-action="sortBy" data-column="name" bind-data-sort-state="@sortStates.name">Name</div>
+              <div data-action="sortBy" data-column="city" bind-data-sort-state="@sortStates.city">Location</div>
+              <div data-action="sortBy" data-column="breweryType" bind-data-sort-state="@sortStates.breweryType">Type</div>
+            </header>
+            <section outlet="rows"></section>
+            <template for="row">
+              <div class="brewery-row">
+                <strong bind="name"></strong>
+                <span> <span bind="city"></span><span>, </span><span bind="stateProvince"></span> </span>
+                <span bind="breweryType"></span>
+              </div>
+            </template>
+          </section>
+
+          <div class="brewery-detail" controller="Editor" bind="@breweryList.selectedObject">
+            <h2 bind="name"></h2>
+            <dl>
+              <dt>Type</dt>
+              <dd bind="breweryType"></dd>
+              <dt>Address</dt>
+              <dd>
+                <div bind="address1"></div>
+                <div bind="address2"></div>
+                <div bind="address3"></div>
+                <div>
+                  <span bind="city"></span><span>, </span><span bind="stateProvince"></span>
+                  <span bind="postalCode"></span>
+                </div>
+                <div bind="country"></div>
+              </dd>
+              <dt>Phone</dt>
+              <dd bind="phone"></dd>
+              <dt>Website</dt>
+              <dd><a bind-href="websiteURL" bind="websiteURL" transform="url-display" target="_blank" rel="noreferrer"></a></dd>
+              <dt>Coordinates</dt>
+              <dd><span bind="latitude"></span><span>, </span><span bind="longitude"></span></dd>
+            </dl>
+          </div>
+        </section>
+      </section>
+
+      <template for="window" name="object-browser">
+        <dialog controller="ObjectBrowser" class="window object-browser-window">
+          <header>
+            <h2>Object Browser</h2>
+            <div class="actions">
+              <button data-action="refresh">Refresh</button>
+              <button data-action="close">Close</button>
+            </div>
+          </header>
+          <div class="object-path" outlet="pathField"></div>
+          <section class="object-browser">
+            <div class="object-columns" outlet="columns"></div>
+          </section>
+        </dialog>
+      </template>
+    </main>
+  </body>
+</html>
