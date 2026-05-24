@@ -7,7 +7,29 @@ if [ "${1:-}" = "--watch" ]; then
   WATCH="--watch=forever"
 fi
 
-exec esbuild \
+build_framework() {
+  esbuild \
+    src/index.ts \
+    --bundle \
+    --format=esm \
+    --target=es2022 \
+    --outfile=dist/swill.js \
+    --sourcemap \
+    $WATCH
+
+  esbuild \
+    src/index.ts \
+    --bundle \
+    --format=iife \
+    --global-name=Swill \
+    --target=es2022 \
+    --outfile=dist/swill.global.js \
+    --sourcemap \
+    $WATCH
+}
+
+build_examples() {
+  esbuild \
   examples/movies/index.ts \
   examples/giraffic/giraffic.ts \
   examples/breweries/breweries.ts \
@@ -19,3 +41,25 @@ exec esbuild \
   --entry-names=[dir]/dist/[name] \
   --sourcemap \
   $WATCH
+}
+
+if [ -n "$WATCH" ]; then
+  build_framework &
+  FRAMEWORK_PID=$!
+  build_examples &
+  EXAMPLES_PID=$!
+
+  cleanup() {
+    trap - INT TERM EXIT
+    kill "$FRAMEWORK_PID" 2>/dev/null || true
+    kill "$EXAMPLES_PID" 2>/dev/null || true
+    wait "$FRAMEWORK_PID" 2>/dev/null || true
+    wait "$EXAMPLES_PID" 2>/dev/null || true
+  }
+  trap cleanup INT TERM EXIT
+
+  wait "$FRAMEWORK_PID" "$EXAMPLES_PID"
+else
+  build_framework
+  build_examples
+fi

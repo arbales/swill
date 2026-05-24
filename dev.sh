@@ -71,6 +71,7 @@ echo
 echo "  http://localhost:$PORT/examples/movies/demo.html    (Movies)"
 echo "  http://localhost:$PORT/examples/giraffic/giraffic.html    (Giraffic)"
 echo "  http://localhost:$PORT/examples/breweries/breweries.html    (Breweries)"
+echo "  http://localhost:$PORT/examples/static/static.html    (Static)"
 echo "  dev coordinator pid: $$  (recorded in $PIDFILE)"
 echo "  esbuild --watch pid: $ESBUILD_PID  (recorded in $ESBUILD_PIDFILE)"
 echo "  python dev server pid: $PYTHON_PID  (recorded in $PYTHON_PIDFILE)"

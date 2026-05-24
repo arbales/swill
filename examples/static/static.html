@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Swill Static</title>
+  </head>
+  <body>
+    <main controller="Hello">
+      <h1 bind="message"></h1>
+      <input bind="message" autofocus />
+    </main>
+
+    <script src="../../dist/swill.global.js"></script>
+    <script>
+      class Hello extends Swill.Controller {
+        _message = "Swill loaded.";
+
+        get message() {
+          return this._message;
+        }
+
+        set message(value) {
+          const previous = this._message;
+          this._message = value;
+          this.messageDidChange?.(previous, value);
+        }
+      }
+
+      Swill.register("Hello")(Hello);
+      Swill.Application.shared.start(document.body);
+    </script>
+  </body>
+</html>
