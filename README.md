@@ -5,9 +5,9 @@ A weird Cocoa-inspired highly object-oriented library that likely "seems bad."
 ## Usage
 
 1. clone this
-2. run `./dev.sh`
-3. open `./examples/static/static.html` to use pre-built swill. 
-4. navigate to `localhost:3000/examples/breweries/breweries.html`
+2. open `./examples/static/static.html` to use pre-built swill.
+3. run `./dev.sh`
+5. navigate to `localhost:3000/examples/breweries/breweries.html`
 
 The other examples probably won't work for you. 
 
