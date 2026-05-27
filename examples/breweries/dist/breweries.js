@@ -3452,12 +3452,13 @@ _selectedObjectId = new WeakMap();
 __decorateElement(_init11, 4, "selectedObjectId", _selectedObjectId_dec, BreweryList, _selectedObjectId);
 BreweryList = __decorateElement(_init11, 0, "BreweryList", _BreweryList_decorators, BreweryList);
 __runInitializers(_init11, 1, BreweryList);
-var _errorMessage_dec, _isLoading_dec, _breweries_dec, _query_dec, _breweryList_dec, _a12, _BreweriesPage_decorators, _init12, _query, _breweries, _isLoading, _errorMessage;
+var _errorMessage_dec, _isLoading_dec, _breweries_dec, _query_dec, _breweryList_dec, _searchField_dec, _a12, _BreweriesPage_decorators, _init12, _query, _breweries, _isLoading, _errorMessage;
 _BreweriesPage_decorators = [register];
-var BreweriesPage = class extends (_a12 = Controller, _breweryList_dec = [outlet], _query_dec = [observable], _breweries_dec = [observable], _isLoading_dec = [observable], _errorMessage_dec = [observable], _a12) {
+var BreweriesPage = class extends (_a12 = Controller, _searchField_dec = [outlet], _breweryList_dec = [outlet], _query_dec = [observable], _breweries_dec = [observable], _isLoading_dec = [observable], _errorMessage_dec = [observable], _a12) {
   constructor() {
     super(...arguments);
-    __publicField(this, "breweryList", __runInitializers(_init12, 24, this)), __runInitializers(_init12, 27, this);
+    __publicField(this, "searchField", __runInitializers(_init12, 24, this)), __runInitializers(_init12, 27, this);
+    __publicField(this, "breweryList", __runInitializers(_init12, 28, this)), __runInitializers(_init12, 31, this);
     __privateAdd(this, _query, __runInitializers(_init12, 8, this, "Pittsburgh")), __runInitializers(_init12, 11, this);
     __privateAdd(this, _breweries, __runInitializers(_init12, 12, this, [])), __runInitializers(_init12, 15, this);
     __privateAdd(this, _isLoading, __runInitializers(_init12, 16, this, false)), __runInitializers(_init12, 19, this);
@@ -3472,6 +3473,7 @@ var BreweriesPage = class extends (_a12 = Controller, _breweryList_dec = [outlet
     };
   }
   controllerDidLoad() {
+    makeFirstResponder(this.searchField);
     void this.search();
   }
   insertNewline(event) {
@@ -3505,7 +3507,7 @@ var BreweriesPage = class extends (_a12 = Controller, _breweryList_dec = [outlet
     this.breweryList.selectedObject = null;
     this.breweries = [];
     this.errorMessage = "";
-    this.becomeFirstResponder();
+    makeFirstResponder(this.searchField);
   }
 };
 _init12 = __decoratorStart(_a12);
@@ -3517,6 +3519,7 @@ __decorateElement(_init12, 4, "query", _query_dec, BreweriesPage, _query);
 __decorateElement(_init12, 4, "breweries", _breweries_dec, BreweriesPage, _breweries);
 __decorateElement(_init12, 4, "isLoading", _isLoading_dec, BreweriesPage, _isLoading);
 __decorateElement(_init12, 4, "errorMessage", _errorMessage_dec, BreweriesPage, _errorMessage);
+__decorateElement(_init12, 5, "searchField", _searchField_dec, BreweriesPage);
 __decorateElement(_init12, 5, "breweryList", _breweryList_dec, BreweriesPage);
 BreweriesPage = __decorateElement(_init12, 0, "BreweriesPage", _BreweriesPage_decorators, BreweriesPage);
 __runInitializers(_init12, 1, BreweriesPage);

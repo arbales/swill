@@ -8,6 +8,7 @@ import {
   register,
   makeFirstResponder,
   selectedObjectIdBinding,
+  type View,
 } from "../../../src";
 import { Brewery } from "../models/brewery";
 
@@ -27,6 +28,7 @@ export class BreweryList extends SortableList<Brewery> {
 
 @register
 export class BreweriesPage extends Controller {
+  @outlet searchField!: View;
   @outlet breweryList!: BreweryList;
 
   @observable accessor query: string = "Pittsburgh";
@@ -44,6 +46,7 @@ export class BreweriesPage extends Controller {
   }
 
   override controllerDidLoad(): void {
+    makeFirstResponder(this.searchField);
     void this.search();
   }
 
@@ -81,6 +84,6 @@ export class BreweriesPage extends Controller {
     this.breweryList.selectedObject = null;
     this.breweries = [];
     this.errorMessage = "";
-    this.becomeFirstResponder();
+    makeFirstResponder(this.searchField);
   }
 }

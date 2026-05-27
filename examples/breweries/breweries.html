@@ -21,7 +21,7 @@
         <section controller="BreweriesPage" class="breweries-app">
           <header class="search-bar">
             <span class="status" bind="@errorMessage"></span>
-            <input bind="@query" type="search" autocomplete="off" />
+            <input outlet="searchField" bind="@query" type="search" autocomplete="off" />
             <button data-action="search">Search</button>
             <button data-action="clearSearch" bind-disabled="@query:isBlank">Clear</button>
           </header>

@@ -10,6 +10,11 @@ UPSTREAM_BASE = os.environ.get("GIRAFFIC_API_BASE", "http://localhost:5001").rst
 
 
 class SketchesHandler(SimpleHTTPRequestHandler):
+    def redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
+
     def do_OPTIONS(self):
         if self.path.startswith("/giraffic-api"):
             self.send_response(204)
@@ -29,6 +34,12 @@ class SketchesHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         self.dispatch()
 
+    def do_HEAD(self):
+        if self.path in ("/", "/breweries"):
+            self.redirect("/examples/breweries/breweries.html")
+            return
+        super().do_HEAD()
+
     def do_POST(self):
         self.dispatch()
 
@@ -44,6 +55,9 @@ class SketchesHandler(SimpleHTTPRequestHandler):
     def dispatch(self):
         if self.path.startswith("/giraffic-api"):
             self.proxy_giraffic()
+            return
+        if self.path in ("/", "/breweries"):
+            self.redirect("/examples/breweries/breweries.html")
             return
         super().do_GET()
 
@@ -109,7 +123,8 @@ class SketchesHandler(SimpleHTTPRequestHandler):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", "3000"))
+    print(f"Serving on port {port}", flush=True)
     server = ThreadingHTTPServer(("", port), SketchesHandler)
     try:
         server.serve_forever()
