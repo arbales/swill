@@ -33,48 +33,61 @@
 
         <main class="detail" controller="MailingListDetailView" bind="@sourceList.selectedObject">
           <h2>Mailing List</h2>
-          <label>Name <input bind="name" type="text" /></label>
-          <label>Address <input bind="address" bind-readonly="id:isPresent" type="text" /></label>
-          <label>Webhook URL <input bind="webhookUrl" type="text" /></label>
 
-          <fieldset class="list-options">
-            <legend>Options</legend>
-            <label><input bind="notificationsEnabled" type="checkbox" /> Notifications enabled </label>
-            <label><input bind="hidden" type="checkbox" /> Hidden </label>
-            <label><input bind="open" type="checkbox" /> Open </label>
-            <label><input bind="historyEnabled" type="checkbox" /> History enabled </label>
-          </fieldset>
+          <section class="list-detail">
+            <label>Name <input bind="name" type="text" /></label>
+            <label>Address <input bind="address" bind-readonly="id:isPresent" type="text" /></label>
+            <label>Webhook URL <input bind="webhookUrl" type="text" /></label>
 
-          <button data-action="saveChanges">Save</button>
+            <fieldset class="list-options">
+              <legend>Options</legend>
+              <label><input bind="notificationsEnabled" type="checkbox" /> Notifications enabled </label>
+              <label><input bind="hidden" type="checkbox" /> Hidden </label>
+              <label><input bind="open" type="checkbox" /> Open </label>
+              <label><input bind="historyEnabled" type="checkbox" /> History enabled </label>
+            </fieldset>
 
-          <h3>Members</h3>
-
-          <section class="member-list" controller="List" outlet="memberList" bind="members" tabindex="0" multiple>
-            <header outlet="headerView" class="member-header">
-              <div>Email</div>
-              <div>Name</div>
-            </header>
-            <section outlet="rows"></section>
-
-            <template for="row">
-              <div class="member-row">
-                <div bind="email"></div>
-                <div bind="name"></div>
-              </div>
-            </template>
+            <button data-action="saveChanges">Save Changes</button>
           </section>
 
-          <div class="add-member" controller="MemberPicker" outlet="memberPicker">
-            <input bind="@query" type="search" placeholder="Find or add member" autocomplete="off" />
-            <section class="member-candidates" controller="List" outlet="results" bind="@candidates" tabindex="0">
+          <section class="members-column">
+            <h3>Members</h3>
+
+            <div class="add-member" controller="MemberPicker" outlet="memberPicker">
+              <input bind="@query" type="search" placeholder="Find or add member" autocomplete="off" />
+              <section class="member-candidates" controller="List" outlet="results" bind="@candidates" tabindex="0">
+                <template for="row">
+                  <button type="button" class="member-candidate" data-action="activateSelection">
+                    <span bind="label"></span>
+                  </button>
+                </template>
+              </section>
+            </div>
+            <section class="pending-members" controller="List" outlet="pendingAdditionsList" bind="@pendingMemberAdditions" tabindex="0">
               <template for="row">
-                <button type="button" class="member-candidate">
+                <button type="button" class="pending-member" data-action="removePendingAddition">
                   <span bind="label"></span>
+                  <span>Remove</span>
                 </button>
               </template>
             </section>
-          </div>
-          <button data-action="removeMember" bind-disabled="@memberList.selectedIndexes:isEmpty">Remove Selected</button>
+            <button data-action="removeMember" bind-disabled="@memberList.selectedIndexes:isEmpty">Remove Selected</button>
+
+            <section class="member-list" controller="List" outlet="memberList" bind="members" tabindex="0" multiple>
+              <header outlet="headerView" class="member-header">
+                <div>Email</div>
+                <div>Name</div>
+              </header>
+              <section outlet="rows"></section>
+
+              <template for="row">
+                <div class="member-row">
+                  <div bind="email"></div>
+                  <div bind="name"></div>
+                </div>
+              </template>
+            </section>
+          </section>
         </main>
       </section>
     </section>

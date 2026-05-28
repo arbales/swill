@@ -120,6 +120,12 @@ interface MemberPickerCandidate {
   email: string | null;
 }
 
+interface PendingMemberAddition {
+  label: string;
+  member: Member | null;
+  email: string | null;
+}
+
 @register
 export class MemberPicker extends Controller {
   @outlet results!: List<MemberPickerCandidate>;
@@ -151,8 +157,9 @@ export class MemberPicker extends Controller {
 
   activateSelection(): void {
     const candidate = this.results?.selectedObject ?? this.candidates[0] ?? null;
-    if (candidate?.member) void this.addCandidate(candidate.member);
-    else if (candidate?.email) void this.addEmail(candidate.email);
+    if (!candidate) return;
+    this.parent.stageMemberAddition(candidate);
+    this.clear();
   }
 
   private scheduleSearch(): void {
@@ -216,29 +223,11 @@ export class MemberPicker extends Controller {
     return members.some((member) => member.email.toLowerCase() === normalized);
   }
 
-  private async addCandidate(member: Member): Promise<void> {
-    const list = this.parent.representedObject;
-    if (!list) return;
-    try {
-      await list.addMember(member);
-      this.clear();
-    } catch (err) {
-      console.error("[member-picker] add failed", err);
-    }
-  }
-
-  private async addEmail(email: string): Promise<void> {
-    const list = this.parent.representedObject;
-    if (!list) return;
-    try {
-      await list.addMember(email);
-      this.clear();
-    } catch (err) {
-      console.error("[member-picker] add email failed", err);
-    }
-  }
-
   private clear(): void {
+    if (this.searchTimer != null) window.clearTimeout(this.searchTimer);
+    this.searchTimer = null;
+    this.searchGeneration++;
+    this.isSearching = false;
     this.query = "";
     this.candidates = [];
   }
@@ -257,6 +246,26 @@ export class MailingListSourceList extends List<MailingList> {
 export class MailingListDetailView extends Editor<MailingList> {
   @outlet memberList!: List<Member>;
   @outlet memberPicker!: MemberPicker;
+  @outlet pendingAdditionsList!: List<PendingMemberAddition>;
+
+  @observable accessor pendingMemberAdditions: PendingMemberAddition[] = [];
+
+  representedObjectDidChange(): void {
+    this.pendingMemberAdditions = [];
+  }
+
+  stageMemberAddition(candidate: MemberPickerCandidate): void {
+    const addition: PendingMemberAddition = { ...candidate };
+    if (this.memberAlreadyPresent(addition) || this.memberAlreadyPending(addition)) return;
+    this.pendingMemberAdditions = [...this.pendingMemberAdditions, addition];
+  }
+
+  removePendingAddition(): void {
+    const addition = this.pendingAdditionsList.selectedObject;
+    if (!addition) return;
+    this.pendingMemberAdditions = this.pendingMemberAdditions.filter((item) => item !== addition);
+    this.pendingAdditionsList.selectedIndexes = [];
+  }
 
   async removeMember(): Promise<void> {
     const ml = this.representedObject;
@@ -267,11 +276,36 @@ export class MailingListDetailView extends Editor<MailingList> {
   }
 
   async saveChanges(): Promise<void> {
+    const ml = this.representedObject;
+    if (!ml) return;
     try {
-      await this.representedObject?.save();
+      await ml.save();
+      for (const addition of this.pendingMemberAdditions) {
+        await ml.addMember(addition.member ?? addition.email!);
+      }
+      this.pendingMemberAdditions = [];
     } catch (err) {
       console.error("[mailing-list] save failed", err);
     }
+  }
+
+  private memberAlreadyPresent(addition: PendingMemberAddition): boolean {
+    const ml = this.representedObject;
+    if (!ml) return false;
+    const email = addition.email ?? addition.member?.email ?? "";
+    const id = addition.member?.id ?? null;
+    return ml.members.some((member) =>
+      (id != null && member.id === id) || (email !== "" && member.email.toLowerCase() === email.toLowerCase()),
+    );
+  }
+
+  private memberAlreadyPending(addition: PendingMemberAddition): boolean {
+    const email = addition.email ?? addition.member?.email ?? "";
+    const id = addition.member?.id ?? null;
+    return this.pendingMemberAdditions.some((item) =>
+      (id != null && item.member?.id === id) ||
+      (email !== "" && (item.email ?? item.member?.email ?? "").toLowerCase() === email.toLowerCase()),
+    );
   }
 }
 

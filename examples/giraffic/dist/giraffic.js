@@ -2009,7 +2009,7 @@ var List = class extends (_a = Controller, _headerView_dec = [outlet({ optional:
       const idx = this.indexOfEventTarget(e);
       if (idx < 0) return;
       this.handleRowClick(idx, e);
-    });
+    }, { capture: true });
     this.view.element.addEventListener("dblclick", (e) => {
       const idx = this.indexOfEventTarget(e);
       if (idx < 0) return;
@@ -3819,8 +3819,9 @@ var MemberPicker = class extends (_a15 = Controller, _results_dec = [outlet], _q
   }
   activateSelection() {
     const candidate = this.results?.selectedObject ?? this.candidates[0] ?? null;
-    if (candidate?.member) void this.addCandidate(candidate.member);
-    else if (candidate?.email) void this.addEmail(candidate.email);
+    if (!candidate) return;
+    this.parent.stageMemberAddition(candidate);
+    this.clear();
   }
   scheduleSearch() {
     if (this.searchTimer != null) window.clearTimeout(this.searchTimer);
@@ -3879,27 +3880,11 @@ var MemberPicker = class extends (_a15 = Controller, _results_dec = [outlet], _q
     const normalized = email.toLowerCase();
     return members.some((member) => member.email.toLowerCase() === normalized);
   }
-  async addCandidate(member) {
-    const list = this.parent.representedObject;
-    if (!list) return;
-    try {
-      await list.addMember(member);
-      this.clear();
-    } catch (err) {
-      console.error("[member-picker] add failed", err);
-    }
-  }
-  async addEmail(email) {
-    const list = this.parent.representedObject;
-    if (!list) return;
-    try {
-      await list.addMember(email);
-      this.clear();
-    } catch (err) {
-      console.error("[member-picker] add email failed", err);
-    }
-  }
   clear() {
+    if (this.searchTimer != null) window.clearTimeout(this.searchTimer);
+    this.searchTimer = null;
+    this.searchGeneration++;
+    this.isSearching = false;
     this.query = "";
     this.candidates = [];
   }
@@ -3927,13 +3912,29 @@ _selectedObjectId = new WeakMap();
 __decorateElement(_init16, 4, "selectedObjectId", _selectedObjectId_dec, MailingListSourceList, _selectedObjectId);
 MailingListSourceList = __decorateElement(_init16, 0, "MailingListSourceList", _MailingListSourceList_decorators, MailingListSourceList);
 __runInitializers(_init16, 1, MailingListSourceList);
-var _memberPicker_dec, _memberList_dec, _a17, _MailingListDetailView_decorators, _init17;
+var _pendingMemberAdditions_dec, _pendingAdditionsList_dec, _memberPicker_dec, _memberList_dec, _a17, _MailingListDetailView_decorators, _init17, _pendingMemberAdditions;
 _MailingListDetailView_decorators = [register];
-var MailingListDetailView = class extends (_a17 = Editor, _memberList_dec = [outlet], _memberPicker_dec = [outlet], _a17) {
+var MailingListDetailView = class extends (_a17 = Editor, _memberList_dec = [outlet], _memberPicker_dec = [outlet], _pendingAdditionsList_dec = [outlet], _pendingMemberAdditions_dec = [observable], _a17) {
   constructor() {
     super(...arguments);
-    __publicField(this, "memberList", __runInitializers(_init17, 8, this)), __runInitializers(_init17, 11, this);
-    __publicField(this, "memberPicker", __runInitializers(_init17, 12, this)), __runInitializers(_init17, 15, this);
+    __publicField(this, "memberList", __runInitializers(_init17, 12, this)), __runInitializers(_init17, 15, this);
+    __publicField(this, "memberPicker", __runInitializers(_init17, 16, this)), __runInitializers(_init17, 19, this);
+    __publicField(this, "pendingAdditionsList", __runInitializers(_init17, 20, this)), __runInitializers(_init17, 23, this);
+    __privateAdd(this, _pendingMemberAdditions, __runInitializers(_init17, 8, this, [])), __runInitializers(_init17, 11, this);
+  }
+  representedObjectDidChange() {
+    this.pendingMemberAdditions = [];
+  }
+  stageMemberAddition(candidate) {
+    const addition = { ...candidate };
+    if (this.memberAlreadyPresent(addition) || this.memberAlreadyPending(addition)) return;
+    this.pendingMemberAdditions = [...this.pendingMemberAdditions, addition];
+  }
+  removePendingAddition() {
+    const addition = this.pendingAdditionsList.selectedObject;
+    if (!addition) return;
+    this.pendingMemberAdditions = this.pendingMemberAdditions.filter((item) => item !== addition);
+    this.pendingAdditionsList.selectedIndexes = [];
   }
   async removeMember() {
     const ml = this.representedObject;
@@ -3943,16 +3944,41 @@ var MailingListDetailView = class extends (_a17 = Editor, _memberList_dec = [out
     this.memberList.selectedIndexes = [];
   }
   async saveChanges() {
+    const ml = this.representedObject;
+    if (!ml) return;
     try {
-      await this.representedObject?.save();
+      await ml.save();
+      for (const addition of this.pendingMemberAdditions) {
+        await ml.addMember(addition.member ?? addition.email);
+      }
+      this.pendingMemberAdditions = [];
     } catch (err) {
       console.error("[mailing-list] save failed", err);
     }
   }
+  memberAlreadyPresent(addition) {
+    const ml = this.representedObject;
+    if (!ml) return false;
+    const email = addition.email ?? addition.member?.email ?? "";
+    const id = addition.member?.id ?? null;
+    return ml.members.some(
+      (member) => id != null && member.id === id || email !== "" && member.email.toLowerCase() === email.toLowerCase()
+    );
+  }
+  memberAlreadyPending(addition) {
+    const email = addition.email ?? addition.member?.email ?? "";
+    const id = addition.member?.id ?? null;
+    return this.pendingMemberAdditions.some(
+      (item) => id != null && item.member?.id === id || email !== "" && (item.email ?? item.member?.email ?? "").toLowerCase() === email.toLowerCase()
+    );
+  }
 };
 _init17 = __decoratorStart(_a17);
+_pendingMemberAdditions = new WeakMap();
+__decorateElement(_init17, 4, "pendingMemberAdditions", _pendingMemberAdditions_dec, MailingListDetailView, _pendingMemberAdditions);
 __decorateElement(_init17, 5, "memberList", _memberList_dec, MailingListDetailView);
 __decorateElement(_init17, 5, "memberPicker", _memberPicker_dec, MailingListDetailView);
+__decorateElement(_init17, 5, "pendingAdditionsList", _pendingAdditionsList_dec, MailingListDetailView);
 MailingListDetailView = __decorateElement(_init17, 0, "MailingListDetailView", _MailingListDetailView_decorators, MailingListDetailView);
 __runInitializers(_init17, 1, MailingListDetailView);
 function isEmail(value) {

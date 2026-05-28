@@ -2132,7 +2132,7 @@ var Swill = (() => {
         const idx = this.indexOfEventTarget(e);
         if (idx < 0) return;
         this.handleRowClick(idx, e);
-      });
+      }, { capture: true });
       this.view.element.addEventListener("dblclick", (e) => {
         const idx = this.indexOfEventTarget(e);
         if (idx < 0) return;

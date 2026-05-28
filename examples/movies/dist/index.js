@@ -1867,7 +1867,7 @@ var List = class extends (_a = Controller, _headerView_dec = [outlet({ optional:
       const idx = this.indexOfEventTarget(e);
       if (idx < 0) return;
       this.handleRowClick(idx, e);
-    });
+    }, { capture: true });
     this.view.element.addEventListener("dblclick", (e) => {
       const idx = this.indexOfEventTarget(e);
       if (idx < 0) return;
