@@ -68,6 +68,10 @@ registerTransformer<string>("url-display", {
 
 const valueTransforms = new Map<string, (value: unknown) => unknown>();
 
+export function registerValueTransform(name: string, transform: (value: unknown) => unknown): void {
+  valueTransforms.set(name, transform);
+}
+
 valueTransforms.set("isBlank", (value) => {
   if (value == null) return true;
   if (typeof value === "string") return value.trim().length === 0;
@@ -86,4 +90,14 @@ valueTransforms.set("isPresent", (value) => {
   if (typeof value === "string") return value.trim().length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return true;
+});
+
+valueTransforms.set("isPositive", (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+});
+
+valueTransforms.set("isNegative", (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n < 0;
 });

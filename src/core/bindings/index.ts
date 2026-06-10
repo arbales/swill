@@ -12,6 +12,7 @@ export {
   type Transformer,
   getTransformer,
   registerTransformer,
+  registerValueTransform,
 } from "./transformers";
 
 export {

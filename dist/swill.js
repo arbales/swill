@@ -200,6 +200,9 @@ registerTransformer("url-display", {
   }
 });
 var valueTransforms = /* @__PURE__ */ new Map();
+function registerValueTransform(name, transform) {
+  valueTransforms.set(name, transform);
+}
 valueTransforms.set("isBlank", (value) => {
   if (value == null) return true;
   if (typeof value === "string") return value.trim().length === 0;
@@ -216,6 +219,14 @@ valueTransforms.set("isPresent", (value) => {
   if (typeof value === "string") return value.trim().length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return true;
+});
+valueTransforms.set("isPositive", (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+});
+valueTransforms.set("isNegative", (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n < 0;
 });
 
 // src/core/bindings/binding_adapters.ts
@@ -3559,6 +3570,9 @@ function registeredClassesByName() {
   for (const [name, ctor] of registeredClassEntries()) out[name] = ctor;
   return out;
 }
+
+// src/version.ts
+var version = "0.0.1";
 export {
   Application,
   Control,
@@ -3624,6 +3638,7 @@ export {
   register,
   registerControllerDisposer,
   registerTransformer,
+  registerValueTransform,
   relationshipDescriptorOf,
   relationshipDescriptorsOf,
   requestFormJson,
@@ -3638,6 +3653,7 @@ export {
   unbind,
   unbindAll,
   updateOne,
+  version,
   wireBindings,
   wireBindingsInto,
   writePath

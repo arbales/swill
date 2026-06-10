@@ -217,6 +217,14 @@ valueTransforms.set("isPresent", (value) => {
   if (Array.isArray(value)) return value.length > 0;
   return true;
 });
+valueTransforms.set("isPositive", (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+});
+valueTransforms.set("isNegative", (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n < 0;
+});
 
 // src/core/responder/responder.ts
 var firstResponder = null;

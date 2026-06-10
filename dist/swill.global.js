@@ -1,3 +1,4 @@
+// Swill 0.0.0
 "use strict";
 var Swill = (() => {
   var __create = Object.create;
@@ -132,6 +133,7 @@ var Swill = (() => {
     register: () => register,
     registerControllerDisposer: () => registerControllerDisposer,
     registerTransformer: () => registerTransformer,
+    registerValueTransform: () => registerValueTransform,
     relationshipDescriptorOf: () => relationshipDescriptorOf,
     relationshipDescriptorsOf: () => relationshipDescriptorsOf,
     requestFormJson: () => requestFormJson,
@@ -146,6 +148,7 @@ var Swill = (() => {
     unbind: () => unbind,
     unbindAll: () => unbindAll,
     updateOne: () => updateOne,
+    version: () => version,
     wireBindings: () => wireBindings,
     wireBindingsInto: () => wireBindingsInto,
     writePath: () => writePath
@@ -303,6 +306,9 @@ var Swill = (() => {
     }
   });
   var valueTransforms = /* @__PURE__ */ new Map();
+  function registerValueTransform(name, transform) {
+    valueTransforms.set(name, transform);
+  }
   valueTransforms.set("isBlank", (value) => {
     if (value == null) return true;
     if (typeof value === "string") return value.trim().length === 0;
@@ -319,6 +325,14 @@ var Swill = (() => {
     if (typeof value === "string") return value.trim().length > 0;
     if (Array.isArray(value)) return value.length > 0;
     return true;
+  });
+  valueTransforms.set("isPositive", (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0;
+  });
+  valueTransforms.set("isNegative", (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n < 0;
   });
 
   // src/core/bindings/binding_adapters.ts
@@ -3662,6 +3676,9 @@ ${lines.join("\n")}`;
     for (const [name, ctor] of registeredClassEntries()) out[name] = ctor;
     return out;
   }
+
+  // src/version.ts
+  var version = "0.0.0";
   return __toCommonJS(index_exports);
 })();
 //# sourceMappingURL=swill.global.js.map

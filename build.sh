@@ -7,12 +7,16 @@ if [ "${1:-}" = "--watch" ]; then
   WATCH="--watch=forever"
 fi
 
+VERSION="$(tr -d '[:space:]' < VERSION)"
+BANNER="// Swill ${VERSION}"
+
 build_framework() {
   esbuild \
     src/index.ts \
     --bundle \
     --format=esm \
     --target=es2022 \
+    --banner:js="$BANNER" \
     --outfile=dist/swill.js \
     --sourcemap \
     $WATCH
@@ -23,6 +27,7 @@ build_framework() {
     --format=iife \
     --global-name=Swill \
     --target=es2022 \
+    --banner:js="$BANNER" \
     --outfile=dist/swill.global.js \
     --sourcemap \
     $WATCH

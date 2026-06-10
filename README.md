@@ -4,6 +4,8 @@ A weird Cocoa-inspired highly object-oriented library that likely "seems bad."
 
 You can see the [brewery demo app on heroku.](https://secret-escarpment-65845-6e3cf8eddee5.herokuapp.com/) I still use and appreciate Heroku.
 
+Current version: see `VERSION`. This is not an npm package.
+
 ## Usage
 
 1. clone this
