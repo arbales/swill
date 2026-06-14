@@ -1,0 +1,32 @@
+require "fileutils"
+require "opal"
+require "opal/builder"
+
+ROOT = File.expand_path(__dir__)
+LIB = File.join(ROOT, "lib")
+DIST = File.join(ROOT, "dist")
+EXAMPLE = File.join(ROOT, "examples", "static")
+
+def build_framework
+  builder = Opal::Builder.new
+  builder.append_paths(LIB)
+  builder.build("opal")
+  builder.build("swill")
+  File.write(File.join(DIST, "swill.js"), builder.to_s)
+end
+
+def build_example
+  source = File.read(File.join(EXAMPLE, "app.rb"))
+  javascript = Opal.compile(source, file: "examples/static/app.rb")
+  File.write(File.join(EXAMPLE, "dist", "app.js"), javascript)
+end
+
+desc "Compile Swill and the static example"
+task :build do
+  FileUtils.mkdir_p(DIST)
+  FileUtils.mkdir_p(File.join(EXAMPLE, "dist"))
+  build_framework
+  build_example
+end
+
+task default: :build

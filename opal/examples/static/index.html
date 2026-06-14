@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Swill, in Ruby</title>
+  </head>
+  <body>
+    <main controller="HelloController">
+      <h1 bind="message"></h1>
+      <input bind="message" autofocus />
+      <button type="button" data-action="clear">Clear</button>
+    </main>
+
+    <script src="../../dist/swill.js"></script>
+    <script src="./dist/app.js"></script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 AGENTS.md
 SWILL_HANDOFF.md
+handoff/
 __pycache__/
 .zed/
 tmp/
