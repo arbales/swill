@@ -175,44 +175,62 @@ anything that becomes an identifier rather than a bind value.
 
 ### Mutations: Named Commands, Not Change-Sets
 
-sequel-privacy is the *gate*, not the *shape*. It answers "may this viewer
-perform this action and write this field?" It does not express intent and
-invariants (multi-field, multi-record operations, state machines, side
-effects), atomicity (the command is the transaction boundary), or default-deny
-on the write surface (a generic `values: {}` change-set is mass-assignment that
-bets every field write-policy is present and correct — the default-exposed trap
-again).
-
-So the write side mirrors the read side with named, parameterized commands:
+The write side mirrors the read side, in the same shape. Just as named queries
+live in a Sequel `dataset_module`, named mutators live in a dedicated command
+module of ordinary methods:
 
 ```ruby
-class MailingList < Sequel::Model
-  command :rename, params: { name: :string } do |vc|
-    authorize!(vc, :update)   # sequel-privacy: the gate
-    self.name = name          # only declared params are in scope
-    save_changes              # validations + transaction
+module MailingList::Commands
+  def rename(name:)
+    self.name = name
+    save_changes
+  end
+
+  def archive
+    update(archived_at: Time.now)
   end
 end
 ```
+
+There is no `authorize!` call. sequel-privacy enforces permissions during the
+write itself: a record loaded under the connection's viewer context carries that
+context into its save hooks, which check the record action and every changed
+field and raise if the write is not permitted. The command body just expresses
+the operation; privacy is enforced underneath it.
+
+The module *is* the allowlist — only its public methods are callable from the
+wire, exactly as only `dataset_module` methods are queryable. Each method is a
+named, parameterized command by virtue of being a method with arguments; no
+per-command DSL is needed. Keyword arguments map cleanly onto the message's
+param hash. Creation has no receiver record, so create-style commands are
+class-level (mirroring `dataset_module` being class-level); record commands —
+update, destroy, state transitions — are instance-level.
 
 ```ruby
 [:command, 21, :mailing_list, 84, :rename, { name: "Friends of Swill" }, version: 7]
 ```
 
-The server resolves model and id under the viewer context, resolves `:rename`
-against the command allowlist, coerces params via shared codecs, runs in a
-transaction, lets privacy enforce the action and any field writes the body
-performs, and returns a re-filtered snapshot or a typed error. `version:` keeps
-the optimistic-lock check.
+The server resolves model and id under the viewer context, checks `:rename`
+against the command module's method list, coerces scalar args, runs the method
+in a transaction, and returns a re-filtered snapshot or a typed error. Privacy
+raises during `save_changes` if the write is not allowed. `version:` keeps the
+optimistic-lock check.
 
-The division to hold onto:
+This is why change-sets were rejected: a generic `values: {}` mutation is
+mass-assignment that bets every field write-policy is present and correct (the
+default-exposed trap), and it cannot express intent and invariants
+(multi-field, multi-record operations, state machines, side effects) or own a
+transaction boundary. The division to hold onto:
 
-- **sequel-privacy is the gate** — may this happen, enforced inside the command
-  on the real records.
-- **The named command is the shape** — what operations exist at all, their
+- **sequel-privacy is the gate** — may this happen, enforced automatically
+  during the write on the real records.
+- **The command module is the shape** — what operations exist at all, their
   params, invariants, side effects, and atomicity.
 
-Commands obey the same param-is-a-value rule.
+Commands obey the same param-is-a-value rule. Going DSL-free trades away
+declared per-param types; coercion falls back to scalar decoding plus whatever
+the method body and the model's validations enforce — an acceptable trade while
+privacy and the value-only rule still hold.
 
 ### The Generic Update Concession
 
