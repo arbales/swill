@@ -227,10 +227,9 @@ transaction boundary. The division to hold onto:
 - **The command module is the shape** — what operations exist at all, their
   params, invariants, side effects, and atomicity.
 
-Commands obey the same param-is-a-value rule. Going DSL-free trades away
-declared per-param types; coercion falls back to scalar decoding plus whatever
-the method body and the model's validations enforce — an acceptable trade while
-privacy and the value-only rule still hold.
+Commands obey the same param-is-a-value rule, and their params are typed by a
+small signature decorator (see "Param Typing" below) rather than left as raw
+scalars.
 
 ### The Generic Update Concession
 
@@ -238,6 +237,54 @@ To avoid a command per trivial edit, a model may expose a single generic
 `update` command whose param schema *is* its explicitly permitted writable
 fields. Still default-deny (opt-in per field), still privacy-gated — one
 well-defined verb, not an open change-set.
+
+### Param Typing: `Swill::Sig`
+
+How params are typed went through several rejected options — raw scalars (too
+loose), Roda's `typecast_params` (too imperative), and real Sorbet (too much
+ceremony, and `sorbet-runtime` under Opal is an unknown). The resolved design is
+a small Swill-owned signature decorator, implemented in `opal/lib/swill/sig.rb`.
+
+```ruby
+module MailingList::Commands
+  extend Swill::Sig
+
+  sig { params(name: String).void }
+  def rename(name)
+    self.name = name
+    save_changes
+  end
+end
+```
+
+Four decisions define it:
+
+- **Introspectable metadata, not method wrapping.** `sig` records a signature; it
+  does not wrap the method. Validation happens once, at the wire dispatch
+  boundary, where untrusted input enters. Trusted internal calls pay nothing.
+  `Signature#coerce(raw_hash)` is the whole boundary contract: it returns typed
+  keyword args or raises `Swill::Sig::Error`.
+- **Type = structure guard + coercion, in one.** A scalar type rejects arrays and
+  hashes (the scalar-smuggling guard) *and* coerces the value (`"3"` to `3`,
+  an ISO string to `Date`, a decimal string to `BigDecimal`, never `Float`).
+  There is no type that means "column name" or "operator", so the
+  param-is-a-value rule is enforced by construction. Unknown param keys are
+  rejected (default-deny); `enum` returns a symbol from its fixed allowlist
+  rather than interning the client string.
+- **Server authors, client consumes a manifest.** `method_added` binds the block
+  to the next `def`, and runs only on the server (MRI), where it is native. The
+  client never authors sigs: the server ships a plain-data manifest
+  (`Module#sig_manifest`), and the client rebuilds signatures with
+  `Signature.from_descriptor`. So Opal's `method_added` support is not
+  load-bearing. The type and coercion machinery itself compiles and runs under
+  Opal (verified against opal 1.8), so the client can validate optimistically
+  with the same code before sending.
+- **Tiny vocabulary.** Primitive classes `String`, `Integer`, `Float` used
+  directly; `Swill::T.boolean`, `.date`, `.decimal`, `.nilable(t)`, `.array(t)`,
+  `.enum(...)` for the rest. More earns its way in later.
+
+A command or query with no sig should be treated as accepting no params
+(default-deny), not as accepting anything.
 
 ### Guards Carried Forward
 
