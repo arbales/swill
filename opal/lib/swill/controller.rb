@@ -22,6 +22,10 @@ module Swill
       value
     end
 
+    def binding_root
+      ""
+    end
+
     def attach(element)
       @view = View.for(element) || View.new(element)
       @view.controller = self

@@ -8,14 +8,48 @@
   <body>
     <main controller="HelloController">
       <h1 bind="greeting"></h1>
-      <input bind="user.name" outlet="name_field" />
-      <button type="button" data-action="clear">Clear</button>
+      <label>
+        Name
+        <input bind="user.name" outlet="name_field" />
+      </label>
+
+      <label>
+        Email
+        <input bind="user.email" bind-readonly="@saving" />
+      </label>
+
+      <p bind="summary"></p>
+      <p bind-hidden="user.present_email?">Email is missing.</p>
+
+      <label>
+        Saving
+        <input type="checkbox" bind="saving" />
+      </label>
+
+      <button type="button" data-action="fake_save" bind-disabled="user.blank_email?">Save</button>
+      <button type="button" data-action="clear" bind-disabled="user.name.strip.empty?">Clear</button>
+      <button type="button" data-action="show_palette">Show Palette</button>
+
+      <section controller="CardController">
+        <h2 bind="name"></h2>
+        <input bind="name" />
+        <input bind="@note" placeholder="local note" />
+        <button type="button" bind-disabled="@note.empty?">Note action</button>
+      </section>
 
       <section controller="CounterController">
         <p bind="count"></p>
         <button type="button" data-action="increment">Increment</button>
       </section>
     </main>
+
+    <template for="window" name="palette">
+      <dialog controller="PaletteController">
+        <h2>Palette</h2>
+        <input outlet="field" placeholder="Focus lands here" />
+        <button type="button" data-action="close">Close</button>
+      </dialog>
+    </template>
 
     <script src="../../dist/swill.js"></script>
     <script src="./dist/app.js"></script>

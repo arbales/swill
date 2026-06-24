@@ -12,6 +12,7 @@ class El {
     this.tagName = tag.toUpperCase();
     this.attributes = {};
     this.children = [];
+    if (this.tagName === "TEMPLATE") this.content = new Fragment();
     this.parentElement = null;
     this.nodeType = 1;
     this._listeners = {};
@@ -23,11 +24,35 @@ class El {
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
   hasAttribute(name) { return name in this.attributes; }
+  removeAttribute(name) { delete this.attributes[name]; }
 
   appendChild(child) {
     child.parentElement = this;
     this.children.push(child);
     return child;
+  }
+
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentElement = null;
+    this.children = [];
+    for (const child of children) this.appendChild(child);
+  }
+
+  get firstElementChild() {
+    return this.children[0] || null;
+  }
+
+  cloneNode(deep = false) {
+    const clone = createElement(this.tagName.toLowerCase(), this.attributes);
+    clone.value = this.value;
+    clone.checked = this.checked;
+    clone.textContent = this.textContent;
+    if (deep) {
+      const target = clone.tagName === "TEMPLATE" ? clone.content : clone;
+      const source = this.tagName === "TEMPLATE" ? this.content.children : this.children;
+      for (const child of source) target.appendChild(child.cloneNode(true));
+    }
+    return clone;
   }
 
   remove() {
@@ -51,6 +76,7 @@ class El {
   set textContent(v) { this._text = v == null ? "" : String(v); }
 
   _matchToken(token) {
+    if (token === "*") return true;
     if (token.startsWith("[") && token.endsWith("]")) {
       return this.hasAttribute(token.slice(1, -1));
     }
@@ -114,6 +140,9 @@ class El {
   }
 
   focus() {
+    if (globalThis.document && globalThis.document.activeElement && globalThis.document.activeElement !== this) {
+      globalThis.document.activeElement._focused = false;
+    }
     this._focused = true;
     if (globalThis.document) globalThis.document.activeElement = this;
   }
@@ -123,6 +152,31 @@ class El {
     if (globalThis.document && globalThis.document.activeElement === this) {
       globalThis.document.activeElement = null;
     }
+  }
+}
+
+class Fragment {
+  constructor() {
+    this.children = [];
+    this.nodeType = 11;
+  }
+
+  appendChild(child) {
+    child.parentElement = null;
+    this.children.push(child);
+    return child;
+  }
+
+  get firstElementChild() {
+    return this.children[0] || null;
+  }
+
+  cloneNode(deep = false) {
+    const clone = new Fragment();
+    if (deep) {
+      for (const child of this.children) clone.appendChild(child.cloneNode(true));
+    }
+    return clone;
   }
 }
 
@@ -136,7 +190,8 @@ function createElement(tag, attributes = {}) {
 function build(spec) {
   const [tag, attrs = {}, children = []] = spec;
   const el = createElement(tag, attrs);
-  for (const child of children) el.appendChild(build(child));
+  const parent = el.tagName === "TEMPLATE" ? el.content : el;
+  for (const child of children) parent.appendChild(build(child));
   return el;
 }
 
@@ -154,6 +209,10 @@ function install(body) {
     querySelector(selector) {
       if (body.matches && body.matches(selector)) return body;
       return body.querySelector(selector);
+    },
+    querySelectorAll(selector) {
+      const out = body.matches && body.matches(selector) ? [body] : [];
+      return out.concat(body.querySelectorAll(selector));
     },
   };
   globalThis.document = document;

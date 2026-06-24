@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+# TODO: I think we can streamline and simplify this.
+
 module Swill
   # Tracks the computation currently on the stack so that property reads can
   # register themselves as its dependencies. Opal compiles to single-threaded

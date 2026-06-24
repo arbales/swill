@@ -10,6 +10,7 @@ const { build, install } = require("./support/dom");
 globalThis.__hooks__ = [];
 globalThis.__escaped__ = false;
 globalThis.__disappeared__ = [];
+globalThis.__palette__ = [];
 
 // <body><main controller><h1 bind><input bind><button data-action></main></body>
 const body = build([
@@ -23,6 +24,17 @@ const body = build([
       ["section", { controller: "CounterController" }, [
         ["p", { bind: "count" }],
         ["button", { type: "button", "data-action": "increment" }],
+      ]],
+      ["section", { controller: "RootedController" }, [
+        ["p", { bind: "name" }],
+        ["input", { bind: "name" }],
+        ["button", { type: "button", "bind-disabled": "@local_message.strip.empty?" }],
+      ]],
+    ]],
+    ["template", { for: "window", name: "palette" }, [
+      ["dialog", { controller: "PaletteController" }, [
+        ["input", { outlet: "palette_field" }],
+        ["button", { type: "button", "data-action": "close" }],
       ]],
     ]],
   ],
@@ -42,6 +54,10 @@ const button = main.children[4]; // data-action="clear"
 const counterSection = main.children[5]; // controller="CounterController"
 const counterValue = counterSection.children[0]; // bind="count"
 const counterButton = counterSection.children[1]; // data-action="increment"
+const rootedSection = main.children[6]; // controller="RootedController"
+const rootedName = rootedSection.children[0]; // bind="name" via binding_root
+const rootedInput = rootedSection.children[1]; // bind="name" via binding_root
+const rootedButton = rootedSection.children[2]; // bind-disabled="@local_message.strip.empty?"
 
 // 1. Lifecycle hook ordering.
 assert.deepStrictEqual(
@@ -93,6 +109,33 @@ const greetingBefore = greeting.textContent;
 counterButton.dispatch("click");
 assert.strictEqual(counterValue.textContent, "1", "nested action increments nested state");
 assert.strictEqual(greeting.textContent, greetingBefore, "nested action must not affect parent");
+
+// 8b. binding_root prefixes plain paths, while @ remains controller-relative.
+assert.strictEqual(rootedName.textContent, "rooted", "binding_root should prefix display binding");
+assert.strictEqual(rootedInput.value, "rooted", "binding_root should prefix input binding");
+rootedInput.value = "branch";
+rootedInput.dispatch("input");
+assert.strictEqual(rootedName.textContent, "branch", "binding_root input writes through to represented object");
+assert.strictEqual(rootedButton.disabled, true, "@ path should ignore binding_root for property binding");
+
+// 8c. Window templates stay inert until shown, then wire like normal subtrees.
+assert.strictEqual(body.children.length, 2, "template should be inert at launch");
+globalThis.__showPalette__();
+assert.strictEqual(body.children.length, 3, "show_window should append cloned window root");
+const palette = body.children[2];
+const paletteInput = palette.children[0];
+const paletteClose = palette.children[1];
+assert.strictEqual(palette.tagName, "DIALOG", "window template root should be cloned");
+assert.strictEqual(globalThis.__palette__.join(","), "after_load", "window controller should load on show");
+assert.ok(document.activeElement === paletteInput, "shown window should focus its first responder");
+paletteClose.dispatch("click");
+assert.strictEqual(body.children.length, 2, "dismiss should remove the window root");
+assert.strictEqual(
+  globalThis.__palette__.join(","),
+  "after_load,before_disappear,after_disappear",
+  "dismiss should run window disappear hooks",
+);
+assert.ok(document.activeElement === messageInput, "dismiss should restore previous first responder focus");
 
 // 9. Detach: removing the nested subtree fires its disappear hooks and tears
 // down its bindings/actions (the increment action stops working).

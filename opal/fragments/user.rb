@@ -8,7 +8,7 @@ class Movie < Sequel::Model
       update(watched: true)
     end
 
-    sig { params(T.enum('favorite', 'liked', 'neutral', 'disliked')) }
+    sig { params(verdict: T.enum('favorite', 'liked', 'neutral', 'disliked')) }
     def update_verdict(verdict)
       update(verdict: verdict)
     end

@@ -6,10 +6,20 @@ class User
   include Swill::Observable
 
   property :name, default: "world"
+  property :email, default: ""
+
+  computed :blank_email? do
+    email.strip.empty?
+  end
+
+  computed :present_email? do
+    !blank_email?
+  end
 end
 
 class HelloController < Swill::Controller
   property :user, default: -> { User.new }
+  property :saving, default: false
 
   outlet :name_field
 
@@ -17,6 +27,11 @@ class HelloController < Swill::Controller
   # changes through the key-path binding below — no dependency list.
   computed :greeting do
     "Hello, #{user.name}!"
+  end
+
+  computed :summary do
+    email = user.email.strip
+    email.empty? ? "No email." : "Email: #{email}"
   end
 
   # Make the field the first responder rather than poking the DOM: the View
@@ -27,6 +42,29 @@ class HelloController < Swill::Controller
 
   def clear(_sender, _event)
     user.name = ""
+    user.email = ""
+  end
+
+  def fake_save(_sender, _event)
+    self.saving = true
+  end
+
+  def show_palette(_sender, _event)
+    DemoApplication.shared.show_window("palette")
+  end
+end
+
+# A child controller with a binding root. Its markup can say `bind="name"`
+# instead of `bind="represented_object.name"`, while `@note` remains local to
+# the controller.
+class CardController < Swill::Controller
+  property :represented_object, default: -> { User.new.tap { |user| user.name = "Ada" } }
+  property :note, default: ""
+
+  def binding_root = "represented_object"
+
+  computed :note_blank? do
+    note.strip.empty?
   end
 end
 
@@ -38,6 +76,18 @@ class CounterController < Swill::Controller
 
   def increment(_sender, _event)
     self.count = count + 1
+  end
+end
+
+class PaletteController < Swill::Controller
+  outlet :field
+
+  def after_load
+    make_first_responder(field)
+  end
+
+  def close(_sender, _event)
+    DemoApplication.shared.dismiss(self)
   end
 end
 

@@ -61,12 +61,36 @@ class CounterController < Swill::Controller
   def after_disappear = `globalThis.__disappeared__.push("counter:after")`
 end
 
+class RootedController < Swill::Controller
+  property :represented_object, default: -> { User.new.tap { |user| user.name = "rooted" } }
+  property :local_message, default: ""
+
+  def binding_root = "represented_object"
+end
+
+class PaletteController < Swill::Controller
+  outlet :palette_field
+
+  def after_load
+    `globalThis.__palette__.push("after_load")`
+    make_first_responder(palette_field)
+  end
+
+  def before_disappear = `globalThis.__palette__.push("before_disappear")`
+  def after_disappear = `globalThis.__palette__.push("after_disappear")`
+
+  def close(_sender, _event)
+    TestApp.shared.dismiss(self)
+  end
+end
+
 class TestApp < Swill::Application
   def before_launch = `globalThis.__hooks__.push("before_launch")`
   def after_launch = `globalThis.__hooks__.push("after_launch")`
 end
 
 TestApp.shared.start
+`globalThis.__showPalette__ = #{lambda { TestApp.shared.show_window("palette") }}`
 
 # Let the Node harness drive detach (the shim's MutationObserver is a no-op).
 `globalThis.__swillDetach__ = #{lambda { |node| Swill::Awakening.detach(node) }}`
