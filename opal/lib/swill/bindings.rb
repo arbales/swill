@@ -12,17 +12,24 @@ module Swill
         next if path.empty?
 
         `#{element}.__swill_binding__ = true`
-        sync = ->(value) { write_element(element, value) }
-        sync.call(controller.public_send(path))
-        controller.observe(path, &sync)
+        segments = path.split(".")
 
-        next unless writable?(controller, path) && form_control?(element)
+        sync = -> { write_element(element, KeyPath.read(controller, segments)) }
+        sync.call
+        off = KeyPath.observe(controller, segments, &sync)
+        controller.register_teardown do
+          off.call
+          `#{element}.__swill_binding__ = false`
+        end
+
+        next unless writable?(controller, segments) && form_control?(element)
 
         event_name = `#{element}.tagName === "SELECT" || #{element}.type === "checkbox" ? "change" : "input"`
         listener = lambda do |_event|
-          controller.public_send("#{path}=", read_element(element))
+          KeyPath.write(controller, segments, read_element(element))
         end
         `#{element}.addEventListener(#{event_name}, #{listener})`
+        controller.register_teardown { `#{element}.removeEventListener(#{event_name}, #{listener})` }
       end
     end
 
@@ -33,7 +40,7 @@ module Swill
 
       nodes.each do |element|
         boundary = `#{element}.closest("[controller]")`
-        owner = boundary ? `#{boundary}.__swill_controller__` : controller
+        owner = boundary ? View.controller_for(boundary) : controller
         elements << element if owner == controller
       end
 
@@ -44,8 +51,13 @@ module Swill
       `#{element}.matches("input, textarea, select")`
     end
 
-    def writable?(controller, path)
-      controller.respond_to?("#{path}=")
+    # Two-way only when the leaf's owner currently exists and exposes a setter.
+    # Evaluated once at wire time; a path whose intermediate appears later stays
+    # read-only until rewired.
+    def writable?(controller, segments)
+      *leading, last = segments
+      target = KeyPath.read(controller, leading)
+      !target.nil? && target.respond_to?("#{last}=")
     end
 
     def read_element(element)

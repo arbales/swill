@@ -7,9 +7,14 @@
   </head>
   <body>
     <main controller="HelloController">
-      <h1 bind="message"></h1>
-      <input bind="message" autofocus />
+      <h1 bind="greeting"></h1>
+      <input bind="user.name" outlet="name_field" />
       <button type="button" data-action="clear">Clear</button>
+
+      <section controller="CounterController">
+        <p bind="count"></p>
+        <button type="button" data-action="increment">Increment</button>
+      </section>
     </main>
 
     <script src="../../dist/swill.js"></script>

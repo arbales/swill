@@ -2,61 +2,64 @@
 
 module Swill
   class Controller < Responder
-    class << self
-      def property(name, default: nil)
-        define_method(name) do
-          unless @properties.key?(name)
-            @properties[name] = default.respond_to?(:call) ? instance_exec(&default) : default
-          end
-          @properties[name]
-        end
-
-        define_method("#{name}=") do |value|
-          previous = public_send(name)
-          return value if previous == value
-
-          @properties[name] = value
-          notify_change(name, previous, value)
-          value
-        end
-      end
-    end
+    # `property`, `computed`, `observe`, and `notify_change` all come from
+    # Observable. `property` is the observable accessor; plain `attr_accessor`
+    # remains for non-reactive state, and Observable warns if a name is
+    # declared both ways (see its docs).
+    include Observable
+    include Outlets
 
     attr_reader :view
     attr_accessor :parent
 
     def initialize
-      @properties = {}
-      @observers = Hash.new { |hash, key| hash[key] = [] }
       @parent = nil
+    end
+
+    # Coercion hook for JSON-payload outlets (`<script type="application/json"
+    # outlet="name">`). Override to build a value object from the parsed data.
+    def decode_outlet_data(_name, value)
+      value
     end
 
     def attach(element)
       @view = View.for(element) || View.new(element)
       @view.controller = self
-      `#{element}.__swill_controller__ = #{self}`
       self
     end
 
     def next_responder
-      parent || Application.shared
+      parent || FirstResponder.chain_top
     end
 
-    def observe(name, &observer)
-      @observers[name.to_sym] << observer
-      -> { @observers[name.to_sym].delete(observer) }
+    # Bindings and actions register undo callbacks here so detaching the
+    # controller's subtree can release observers and DOM listeners.
+    def register_teardown(&block)
+      (@teardowns ||= []) << block
     end
 
-    def notify_change(name, previous, value)
-      callback = "#{name}_did_change"
-      public_send(callback, previous, value) if respond_to?(callback)
-      @observers[name.to_sym].dup.each { |observer| observer.call(value) }
+    def teardown!
+      (@teardowns || []).each(&:call)
+      @teardowns = []
     end
 
-    def view_did_load; end
-    def awake_from_dom; end
-    def controller_did_load; end
-    def view_will_appear; end
-    def view_did_appear; end
+    # Lifecycle hooks — Sequel's hook structure (override the method, call
+    # `super`) with Cocoa lifecycle nouns. Empty stubs here; subclasses
+    # override.
+    #
+    # Load is once-per-attachment and brackets outlet/binding/action wiring:
+    #   before_load  — the view is in the DOM; outlets and bindings are NOT yet
+    #                  connected. Set up state that does not depend on them.
+    #   after_load   — outlets, bindings, and actions are wired; the controller
+    #                  is fully awake (Cocoa's awakeFromNib moment).
+    #
+    # Appear is repeatable (a controller may appear, disappear, and reappear):
+    #   before_appear / after_appear / before_disappear / after_disappear.
+    def before_load; end
+    def after_load; end
+    def before_appear; end
+    def after_appear; end
+    def before_disappear; end
+    def after_disappear; end
   end
 end

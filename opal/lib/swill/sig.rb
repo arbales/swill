@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# TODO: This seems too bloated to me; Need to look for opportunities
+# to trim and make more streamlined and readable.
+#
+# TODO: We need to support DateTime as well.
+#
 # Swill::Sig — a tiny, Swill-owned signature decorator for the shared
 # client/server wire surface. It is deliberately *not* Sorbet:
 #

@@ -18,6 +18,10 @@ module Swill
 
         `#{element}.__swill_action__ = true`
         `#{element}.addEventListener(#{event_name}, #{listener})`
+        controller.register_teardown do
+          `#{element}.removeEventListener(#{event_name}, #{listener})`
+          `#{element}.__swill_action__ = false`
+        end
       end
     end
 

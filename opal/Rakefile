@@ -6,11 +6,14 @@ ROOT = File.expand_path(__dir__)
 LIB = File.join(ROOT, "lib")
 DIST = File.join(ROOT, "dist")
 EXAMPLE = File.join(ROOT, "examples", "static")
+SPEC = File.join(ROOT, "spec")
+SPEC_DIST = File.join(SPEC, "dist")
 
 def build_framework
+  # The runtime (opal/mini) is pulled in by swill.rb itself, so building
+  # "swill" yields the whole bundle — core plus framework.
   builder = Opal::Builder.new
   builder.append_paths(LIB)
-  builder.build("opal")
   builder.build("swill")
   File.write(File.join(DIST, "swill.js"), builder.to_s)
 end
@@ -21,6 +24,15 @@ def build_example
   File.write(File.join(EXAMPLE, "dist", "app.js"), javascript)
 end
 
+def build_integration
+  # integration_app.rb requires "swill", which pulls the runtime in turn.
+  builder = Opal::Builder.new
+  builder.append_paths(LIB)
+  builder.append_paths(File.join(SPEC, "support"))
+  builder.build("integration_app")
+  File.write(File.join(SPEC_DIST, "integration.js"), builder.to_s)
+end
+
 desc "Compile Swill and the static example"
 task :build do
   FileUtils.mkdir_p(DIST)
@@ -28,5 +40,22 @@ task :build do
   build_framework
   build_example
 end
+
+desc "Run the pure-Ruby MRI specs"
+task :spec do
+  Dir[File.join(SPEC, "*_spec.rb")].sort.each do |file|
+    ruby file or raise "spec failed: #{file}"
+  end
+end
+
+desc "Build and run the Opal + DOM-shim integration check under Node"
+task :integration do
+  FileUtils.mkdir_p(SPEC_DIST)
+  build_integration
+  sh "node", File.join(SPEC, "integration.js")
+end
+
+desc "Run all checks: MRI specs and the Node integration"
+task test: %i[spec integration]
 
 task default: :build

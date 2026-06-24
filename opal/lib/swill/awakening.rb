@@ -10,15 +10,15 @@ module Swill
       walk(root, parent, controllers)
 
       controllers.reverse_each do |controller|
-        controller.view_did_load
+        controller.before_load
+        Outlets.connect(controller)
         Bindings.wire(controller)
         Actions.wire(controller)
-        controller.awake_from_dom
+        controller.after_load
       end
 
-      controllers.each(&:controller_did_load)
-      controllers.reverse_each(&:view_will_appear)
-      controllers.reverse_each(&:view_did_appear)
+      controllers.reverse_each(&:before_appear)
+      controllers.reverse_each(&:after_appear)
 
       if controllers.empty? && parent
         Bindings.wire(parent, root)
@@ -41,6 +41,9 @@ module Swill
         controller = controller_class.new
         controller.parent = parent
         controller.attach(element)
+        # Link the child's root view into the parent's sparse view tree so
+        # owner() and the view hierarchy mirror the controller nesting.
+        parent.view.adopt_subview(controller.view) if parent
         controllers << controller
       end
 
@@ -52,6 +55,47 @@ module Swill
       `console.warn("[Swill] " + #{error.message}, #{element})`
     end
 
+    # Tear down a subtree being removed from the DOM: clear the first responder
+    # if it lives inside, then for every controller in the subtree fire
+    # before_disappear, release its bindings/actions, and fire after_disappear.
+    # The symmetric counterpart to wire.
+    def detach(node)
+      controllers = controllers_within(node)
+      return controllers if controllers.empty?
+
+      clear_first_responder_within(node)
+
+      controllers.each do |controller|
+        controller.before_disappear
+        controller.teardown!
+        controller.view&.remove_from_superview if controller.view&.superview
+        controller.after_disappear
+      end
+
+      controllers
+    end
+
+    def controllers_within(node)
+      found = []
+      own = View.controller_for(node)
+      found << own if own
+      `Array.from(#{node}.querySelectorAll("[controller]"))`.each do |element|
+        nested = View.controller_for(element)
+        found << nested if nested
+      end
+      found
+    end
+
+    def clear_first_responder_within(node)
+      responder = FirstResponder.current
+      return unless responder
+
+      element = Focus.responder_element(responder)
+      return unless element
+
+      FirstResponder.install(nil) if `#{node} === #{element} || #{node}.contains(#{element})`
+    end
+
     def constant(name)
       name.split("::").reject(&:empty?).inject(Object) do |scope, part|
         scope.const_get(part)
@@ -59,9 +103,7 @@ module Swill
     end
 
     def controller_for(element)
-      return nil unless element
-
-      `#{element}.__swill_controller__ || nil`
+      View.controller_for(element)
     end
 
     def nearest_controller(element)

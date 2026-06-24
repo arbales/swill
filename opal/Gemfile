@@ -2,3 +2,9 @@ source "https://rubygems.org"
 
 gem "opal", "~> 1.8"
 gem "rake", "~> 13.0"
+
+group :test do
+  # Pure-Ruby MRI specs (spec/*_spec.rb). The DOM-side layers are exercised
+  # through the Opal build + Node shim instead (rake integration).
+  gem "minitest", "~> 5.0"
+end

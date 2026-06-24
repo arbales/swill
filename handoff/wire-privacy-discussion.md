@@ -133,6 +133,8 @@ is safe; trusting the caller to author execution is not.
 Named scopes live in a Sequel `dataset_module` on the model:
 
 ```ruby
+# TODO: It might be useful to have the client dataset methods in their
+# own module that's combined with the main dataset module(s). 
 class Brewery < Sequel::Model
   dataset_module do
     def in_state(state) = where(state: state)
@@ -190,6 +192,19 @@ module MailingList::Commands
     update(archived_at: Time.now)
   end
 end
+```
+
+```ruby
+# TODO: What about using...
+class MailingList
+  module Swill
+    module Commands
+    end
+    module DatasetMethods
+    end
+  end
+end
+# then on the server we can include these modules into the appropriate scopes for use there, and the same on the client.
 ```
 
 There is no `authorize!` call. sequel-privacy enforces permissions during the
