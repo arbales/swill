@@ -113,9 +113,9 @@
 
       <section>
         <h2>Template-backed list</h2>
-        <p>Click a row to select it; shift-click selects a range.</p>
+        <p>Click a row to select it; shift-click selects a range. Double-click or press Enter to activate it.</p>
         <table class="people-table" controller="Swill::List" outlet="people_list" tabindex="0" multiple>
-          <thead>
+          <thead outlet="header_view">
             <tr><th>Name</th><th>Role</th></tr>
           </thead>
           <tbody outlet="rows">
@@ -130,6 +130,10 @@
         <p>
           Selected:
           <output bind="selected_people"></output>
+        </p>
+        <p>
+          Activated:
+          <output bind="activated_person"></output>
         </p>
       </section>
 

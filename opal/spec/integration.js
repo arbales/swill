@@ -15,6 +15,8 @@ globalThis.__panes__ = [];
 globalThis.__wire_url__ = null;
 globalThis.__wire_requests__ = [];
 globalThis.__editor_events__ = [];
+globalThis.__activated_list_item__ = null;
+globalThis.__row_pinged__ = false;
 globalThis.fetch = (url, options = {}) => {
   globalThis.__wire_url__ = url;
   const method = options.method || "GET";
@@ -71,7 +73,10 @@ const body = build([
     ["section", { controller: "ListHostController" }, [
       ["div", { controller: "Swill::List", outlet: "item_list", tabindex: "0", multiple: "" }, [
         ["section", { outlet: "rows" }],
-        ["template", { for: "row" }, [["div", { class: "source-row" }, [["span", { bind: "name" }]]]]],
+        ["template", { for: "row" }, [["div", { class: "source-row" }, [
+          ["span", { bind: "name" }],
+          ["button", { type: "button", "data-action": "row_ping" }],
+        ]]]],
       ]],
       ["p", { bind: "item_list.selected_object.name" }],
       ["p", { bind: "selection_summary" }],
@@ -207,6 +212,11 @@ assert.strictEqual(listRows.children[1].children[0].textContent, "Grace", "secon
 listRows.dispatch("click", { target: listRows.children[1], shiftKey: false });
 assert.strictEqual(selectedName.textContent, "Grace", "selected object remains observable through parent outlet");
 assert.strictEqual(listRows.children[1].classList.contains("selected"), true, "selection applies row CSS state");
+assert.strictEqual(globalThis.__list_row_owner_ok__, true, "generated row views belong to the list controller");
+listRows.dispatch("dblclick", { target: listRows.children[1] });
+assert.strictEqual(globalThis.__activated_list_item__, "Grace", "double-click activates through the responder chain");
+listRows.children[1].children[1].dispatch("click");
+assert.strictEqual(globalThis.__row_pinged__, true, "generated row actions route through the list responder chain");
 listRows.dispatch("click", { target: listRows.children[2], shiftKey: true });
 assert.strictEqual(selectionSummary.textContent, "Grace, Katherine", "shift-click selects anchor range");
 const removedRow = listRows.children[0];
@@ -215,6 +225,8 @@ assert.strictEqual(listRows.children.length, 1, "replacing collection rerenders 
 assert.strictEqual(listRows.children[0].children[0].textContent, "Katherine", "replacement row binds new item");
 globalThis.__mutateRemovedRow__();
 assert.strictEqual(removedRow.children[0].textContent, "Ada", "removed row bindings are disposed");
+globalThis.__selectFirstListItem__();
+assert.strictEqual(listRows.children[0].classList.contains("selected"), true, "selected_object= selects by Ruby equality");
 assert.strictEqual(componentValue.textContent, "Control", "klass component exposes its initial observable value");
 componentInput.value = "Changed control";
 componentInput.dispatch("input");

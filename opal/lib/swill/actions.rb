@@ -5,7 +5,23 @@ module Swill
     module_function
 
     def wire(controller, root = controller.view.element)
-      Bindings.owned_elements(controller, root, "[data-action]").each do |element|
+      disposers = wire_elements(controller, Bindings.owned_elements(controller, root, "[data-action]"))
+      controller.register_teardown { disposers.each(&:call) }
+    end
+
+    # Wire actions in a generated subtree, returning a disposer owned by the
+    # caller. Lists use this for rows whose lifetime is shorter than their
+    # controller's lifetime.
+    def wire_object(controller, root)
+      elements = []
+      elements << root if `#{root}.matches("[data-action]")`
+      `Array.from(#{root}.querySelectorAll("[data-action]"))`.each { |element| elements << element }
+      disposers = wire_elements(controller, elements)
+      -> { disposers.each(&:call) }
+    end
+
+    def wire_elements(controller, elements)
+      elements.filter_map do |element|
         next if `#{element}.__swill_action__`
 
         specification = `#{element}.getAttribute("data-action")`.to_s.strip
@@ -18,7 +34,7 @@ module Swill
 
         `#{element}.__swill_action__ = true`
         `#{element}.addEventListener(#{event_name}, #{listener})`
-        controller.register_teardown do
+        lambda do
           `#{element}.removeEventListener(#{event_name}, #{listener})`
           `#{element}.__swill_action__ = false`
         end

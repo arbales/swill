@@ -57,6 +57,7 @@ class HelloController < Swill::Controller
   property :saving, default: false
   property :first_responder_debug, default: "None"
   property :selected_person, default: "ada"
+  property :activated_person, default: "None"
 
   outlet :name_field
   outlet :people_list
@@ -126,6 +127,10 @@ class HelloController < Swill::Controller
   def clear(_sender, _event)
     user.name = ""
     user.email = ""
+  end
+
+  def activate_selection(sender, _event)
+    self.activated_person = sender.selected_object&.name || "None"
   end
 
   def fake_save(_sender, _event)

@@ -172,6 +172,8 @@ class El {
       globalThis.document.activeElement = null;
     }
   }
+
+  scrollIntoView() {}
 }
 
 class Fragment {

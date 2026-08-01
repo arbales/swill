@@ -47,6 +47,17 @@ class ListHostController < Swill::Controller
     ]
     `globalThis.__replaceList__ = #{lambda { item_list.represented_object = [RowItem.new("Katherine")] }}`
     `globalThis.__mutateRemovedRow__ = #{lambda { @old_item.name = "Removed" }}`
+    `globalThis.__selectFirstListItem__ = #{lambda { item_list.selected_object = item_list.represented_object.first }}`
+    first_row = item_list.send(:row_elements).first
+    `globalThis.__list_row_owner_ok__ = #{Swill::View.for(first_row)&.owner.equal?(item_list)}`
+  end
+
+  def activate_selection(sender, _event)
+    `globalThis.__activated_list_item__ = #{sender.selected_object&.name}`
+  end
+
+  def row_ping(_sender, _event)
+    `globalThis.__row_pinged__ = true`
   end
 end
 

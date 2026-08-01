@@ -140,7 +140,8 @@ The Opal implementation currently includes:
 - composable model persistence with create, update, reload, delete, validation,
   dirty serialization, and canonical identity refresh;
 - template-backed `Swill::List` collection controllers with direct row binding,
-  observable selection, multiple-selection ranges, and deterministic teardown;
+  owned row views, row actions, observable selection, multiple-selection
+  ranges, keyboard/double-click activation, and deterministic teardown;
 - `Swill::Editor` represented-object binding roots with responder-driven
   commit and discard hooks;
 - `klass`-awakened view components plus `Swill::Control`, observable
