@@ -61,7 +61,7 @@ const body = build([
     ["section", { window: "workspace", name: "pane-one" }],
     ["template", { for: "window", name: "pane-one" }, [
       ["article", { controller: "PaneOneController" }, [
-        ["input", { outlet: "pane_one_field" }],
+        ["input", { outlet: "pane_one_field", bind: "query" }],
         ["button", { type: "button", "data-action": "swap" }],
       ]],
     ]],
@@ -97,6 +97,15 @@ const body = build([
         ["input", { bind: "name" }],
       ]],
       ["p", { bind: "editor.represented_object.name" }],
+    ]],
+    ["section", { controller: "EditableHostController" }, [
+      ["div", { controller: "Swill::Controller::EditableList", outlet: "editable_list" }, [
+        ["section", { outlet: "rows" }],
+        ["template", { for: "row" }, [["div", {}, [["span", { bind: "name" }]]]]],
+        ["template", { for: "editor" }, [["div", { controller: "Swill::Controller::InlineEditor" }, [
+          ["input", { bind: "name" }],
+        ]]]],
+      ]],
     ]],
   ],
 ]);
@@ -139,7 +148,10 @@ const customSelectValue = listHost.children[8];
 const editorHost = body.children[6];
 const editorInput = editorHost.children[0].children[0];
 const editorValue = editorHost.children[1];
-const baseChildCount = 7;
+const editableHost = body.children[7];
+const editableRoot = editableHost.children[0];
+const editableRows = editableRoot.children[0];
+const baseChildCount = 8;
 
 // 1. Lifecycle hook ordering.
 assert.deepStrictEqual(
@@ -213,6 +225,11 @@ assert.strictEqual(rootedButton.disabled, true, "@ path should ignore binding_ro
 assert.strictEqual(listRows.children.length, 3, "list renders one row per item");
 assert.strictEqual(listRows.children[0].children[0].textContent, "Ada", "first row binding");
 assert.strictEqual(listRows.children[1].children[0].textContent, "Grace", "second row binding");
+assert.strictEqual(
+  globalThis.__restoreListSelection__(),
+  "Grace",
+  "a restored selection ID should survive rendering records that arrive later",
+);
 listRows.dispatch("click", { target: listRows.children[1], shiftKey: false });
 assert.strictEqual(selectedName.textContent, "Grace", "selected object remains observable through parent outlet");
 assert.strictEqual(listRows.children[1].classList.contains("selected"), true, "selection applies row CSS state");
@@ -273,6 +290,21 @@ editorInput.value = "Edited draft";
 editorInput.dispatch("input");
 assert.strictEqual(editorValue.textContent, "Edited draft", "late-assigned editor input writes to represented object");
 
+assert.strictEqual(editableRows.children[0].children[0].textContent, "Original", "editable list renders its row");
+globalThis.__beginEditable__();
+assert.strictEqual(editableRows.children.length, 2, "editable list mounts one loaned editor");
+const editableInput = editableRows.children[1].children[0];
+editableInput.value = "Committed";
+editableInput.dispatch("input");
+globalThis.__commitEditable__();
+assert.strictEqual(editableRows.children.length, 1, "commit removes the loaned editor");
+assert.strictEqual(editableRows.children[0].children[0].textContent, "Committed", "commit replaces a plain object");
+globalThis.__beginEditable__();
+editableRows.children[1].children[0].value = "Discarded";
+editableRows.children[1].children[0].dispatch("input");
+globalThis.__cancelEditable__();
+assert.strictEqual(editableRows.children[0].children[0].textContent, "Committed", "discard preserves the canonical row");
+
 // 8c. Window containers load default content before the launch wire pass, and
 // content swapping tears down the old subtree before wiring the new one.
 assert.strictEqual(workspace.getAttribute("name"), "pane-one", "window container should keep content name");
@@ -282,9 +314,15 @@ const paneOneInput = paneOne.children[0];
 const paneSwap = paneOne.children[1];
 assert.strictEqual(paneOne.tagName, "ARTICLE", "default window content should be cloned");
 assert.strictEqual(globalThis.__panes__.join(","), "one:load", "default window content should load");
+assert.strictEqual(paneOneInput.value, "restored", "window controller state should restore before appearance");
+paneOneInput.value = "updated";
+paneOneInput.dispatch("input");
+assert.match(window.location.hash, /workspace.q=updated/, "restorable state should replace the fragment value");
 paneSwap.dispatch("click");
 assert.strictEqual(workspace.getAttribute("name"), "pane-two", "load_window_content should update content name");
 assert.strictEqual(workspace.children.length, 1, "load_window_content should replace old content");
+assert.match(window.location.hash, /workspace=pane-two/, "window navigation should update the fragment");
+assert.doesNotMatch(window.location.hash, /workspace.q=/, "replacement content should prune stale state keys");
 const paneTwo = workspace.children[0];
 const paneTwoInput = paneTwo.children[0];
 assert.strictEqual(paneTwo.tagName, "ARTICLE", "replacement window content should be cloned");
@@ -296,6 +334,11 @@ assert.strictEqual(
 assert.ok(document.activeElement === paneTwoInput, "replacement window content should take focus");
 paneSwap.dispatch("click");
 assert.strictEqual(globalThis.__panes__.join(","), "one:load,one:before,one:after,two:load", "old action listener removed");
+window.location.hash = "#workspace=pane-one&workspace.q=back";
+window.dispatch("popstate");
+assert.strictEqual(workspace.getAttribute("name"), "pane-one", "Back/Forward routing restores window content");
+const backPaneInput = workspace.children[0].children[0];
+assert.strictEqual(backPaneInput.value, "back", "Back/Forward routing restores controller state");
 
 // 8c. Window templates stay inert until shown, then wire like normal subtrees.
 assert.strictEqual(body.children.length, baseChildCount, "templates should be inert at launch");
@@ -330,7 +373,7 @@ assert.strictEqual(
   "after_load,after_load,before_disappear,after_disappear,before_disappear,after_disappear",
   "dismiss should run window disappear hooks",
 );
-assert.ok(document.activeElement === paneTwoInput, "dismiss should restore previous first responder focus");
+assert.ok(document.activeElement === backPaneInput, "dismiss should restore previous first responder focus");
 
 // 9. Detach: removing the nested subtree fires its disappear hooks and tears
 // down its bindings/actions (the increment action stops working).

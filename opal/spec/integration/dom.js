@@ -45,6 +45,14 @@ class El {
     return child;
   }
 
+  after(sibling) {
+    const parent = this.parentElement;
+    if (!parent) return;
+    const index = parent.children.indexOf(this);
+    sibling.parentElement = parent;
+    parent.children.splice(index + 1, 0, sibling);
+  }
+
   replaceChildren(...children) {
     for (const child of this.children) child.parentElement = null;
     this.children = [];
@@ -225,6 +233,7 @@ class MutationObserver {
 // Install the globals the bundle expects, with `body` as the document root.
 function install(body) {
   const listeners = {};
+  const windowListeners = {};
   const document = {
     body,
     activeElement: null,
@@ -248,6 +257,27 @@ function install(body) {
   };
   globalThis.document = document;
   globalThis.MutationObserver = MutationObserver;
+  const location = { pathname: "/example", search: "", hash: "#workspace=pane-one&workspace.q=restored" };
+  const applyURL = (url) => {
+    const hashIndex = url.indexOf("#");
+    location.hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
+  };
+  globalThis.window = {
+    location,
+    history: {
+      pushes: [], replacements: [],
+      pushState(_state, _title, url) { this.pushes.push(url); applyURL(url); },
+      replaceState(_state, _title, url) { this.replacements.push(url); applyURL(url); },
+    },
+    addEventListener(type, listener) {
+      (windowListeners[type] || (windowListeners[type] = [])).push(listener);
+    },
+    dispatch(type) {
+      for (const listener of windowListeners[type] || []) listener({ type });
+    },
+    confirm() { return true; },
+    getSelection() { return { removeAllRanges() {} }; },
+  };
   return document;
 }
 

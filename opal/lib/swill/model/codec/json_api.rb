@@ -81,6 +81,43 @@ module Swill
       data = fetch(document, :data)
       resources = included + (data.nil? ? [] : (data.is_a?(Array) ? data : [data]))
       resources.each { |resource| pool_resource(resource) }
+      resources.each { |resource| hydrate_relationships(resource) }
+    end
+
+    def hydrate_relationships(resource)
+      owner_type = fetch(resource, :type)
+      owner_id = fetch(resource, :id)
+      owner_class = class_for_type(owner_type)
+      owner = owner_class&.get(owner_id)
+      relationships = fetch(resource, :relationships)
+      return unless owner && relationships.is_a?(Hash) && owner.class.respond_to?(:model_relationships)
+
+      owner.class.model_relationships.each_value do |descriptor|
+        linkage = fetch(relationships, descriptor.key) || fetch(relationships, descriptor.name)
+        next unless linkage.is_a?(Hash) && key?(linkage, :data)
+
+        data = fetch(linkage, :data)
+        if descriptor.kind == :one
+          if data.nil?
+            owner.public_send("#{descriptor.name}=", nil)
+          elsif data.is_a?(Hash)
+            related = pooled_linkage(data, descriptor)
+            owner.public_send("#{descriptor.name}=", related) if related
+          end
+        elsif data.is_a?(Array)
+          related = data.map { |item| pooled_linkage(item, descriptor) }
+          owner.public_send("#{descriptor.name}=", related) unless related.any?(&:nil?)
+        end
+      end
+    end
+
+    def pooled_linkage(linkage, descriptor)
+      type = fetch(linkage, :type)
+      id = fetch(linkage, :id)
+      klass = descriptor.model_class
+      return nil unless klass.respond_to?(:json_api_type) && klass.json_api_type == type.to_s
+
+      klass.get(id)
     end
 
     def pool_resource(resource)

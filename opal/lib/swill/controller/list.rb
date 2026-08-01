@@ -6,6 +6,16 @@ module Swill
   class Controller::List < Controller
     property :represented_object, default: -> { [] }
     property :selected_indexes, default: -> { [] }
+    property :allows_multiple_selection, default: false
+    property :selected_object_id
+
+    alias assign_represented_object represented_object=
+
+    def represented_object=(objects)
+      self.assign_represented_object(objects || [])
+    end
+
+    html_attribute :multiple, to: :allows_multiple_selection, value: true
 
     property :selected_objects do
       selected_indexes.map { |index| arranged_objects[index] }.compact
@@ -28,18 +38,28 @@ module Swill
       self.selected_indexes = index ? [index] : []
     end
 
+    def selected_object_id_did_change(_previous, identifier)
+      return if @synchronizing_selected_object_id
+
+      object = arranged_objects.find do |candidate|
+        candidate.respond_to?(:id) && candidate.id.to_s == identifier.to_s
+      end
+      self.selected_object = object if object
+    end
+
     def after_load
       super
-      @allows_multiple_selection = `#{view.element}.hasAttribute("multiple")`
       `#{view.element}.tabIndex = 0` unless `#{view.element}.hasAttribute("tabindex")`
       render_all
       install_selection
     end
 
     def represented_object_did_change(_previous, _value)
+      pending_identifier = selected_object_id
       self.selected_indexes = []
       @selection_anchor = nil
       render_all if view
+      self.selected_object_id = pending_identifier if pending_identifier
     end
 
     def selected_indexes_did_change(_previous, indexes)
@@ -54,6 +74,12 @@ module Swill
       `#{row_elements[first]}.scrollIntoView({ block: "nearest" })` if first && row_elements[first]
       selected_object_did_change(previous_object, next_object) if respond_to?(:selected_object_did_change) &&
                                                                   previous_object != next_object
+      identifier = next_object.respond_to?(:id) ? next_object.id&.to_s : nil
+      if selected_object_id != identifier
+        @synchronizing_selected_object_id = true
+        self.selected_object_id = identifier
+        @synchronizing_selected_object_id = false
+      end
     end
 
     def select_first_if_nothing_selected
@@ -173,7 +199,7 @@ module Swill
         index = event_row_index(event)
         next if index.negative?
 
-        if @allows_multiple_selection && `#{event}.shiftKey` && !@selection_anchor.nil?
+        if allows_multiple_selection && `#{event}.shiftKey` && !@selection_anchor.nil?
           low, high = [@selection_anchor, index].minmax
           self.selected_indexes = (low..high).to_a
         else
@@ -190,7 +216,7 @@ module Swill
         activate_selection
       end
       mouse_down_listener = lambda do |event|
-        next unless @allows_multiple_selection && `#{event}.shiftKey`
+        next unless allows_multiple_selection && `#{event}.shiftKey`
         next if event_row_index(event).negative?
 
         `#{event}.preventDefault && #{event}.preventDefault()`

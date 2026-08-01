@@ -22,7 +22,7 @@ end
 
 def build_example(directory, source_name)
   source = File.read(File.join(directory, "app.rb"))
-  javascript = Opal.compile(source, file: source_name)
+  javascript = Opal.compile(source, file: source_name).gsub(/[ \t]+$/, "")
   File.write(File.join(directory, "dist", "app.js"), javascript)
 end
 

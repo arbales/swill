@@ -9,6 +9,7 @@ module Swill
       include Attributes
       include DirtyTracking
       include Identity
+      include Relationships
       include Drafts
       include Datasets
       include Persistence

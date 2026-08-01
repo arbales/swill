@@ -5,28 +5,127 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Giraffic — Swill in Ruby</title>
     <link rel="stylesheet" href="/examples/shared/shared.css" />
-    <style>
-      body { margin: 2rem; max-width: 52rem; }
-      main { display: grid; gap: 1rem; }
-      .card { border: 1px solid var(--rule); padding: 1rem; }
-    </style>
+    <link rel="stylesheet" href="./giraffic.css" />
   </head>
   <body>
-    <main controller="GirafficListsController">
-      <header>
-        <h1>Giraffic mailing lists</h1>
-        <p>Read-only dataset checkpoint through the shared backend proxy.</p>
-        <button type="button" data-action="reload" bind-disabled="lists.loading">Reload</button>
+    <section window="toolbar">
+      <header controller="GirafficMenubarController" class="toolbar">
+        <button type="button" data-action="show_lists">Lists</button>
+        <button type="button" data-action="show_members">Members</button>
+        <button type="button" data-action="show_profile">Me</button>
       </header>
+    </section>
 
-      <p bind="status"></p>
+    <section window="main" name="lists"></section>
 
-      <section class="card">
-        <h2 bind="first_name"></h2>
-        <p bind="first_description"></p>
-        <p bind="first_address"></p>
+    <template for="window" name="lists">
+      <section class="mailing-lists-app" controller="GirafficListsController">
+        <aside class="source">
+          <header class="source-header">
+            <strong>Mailing Lists</strong>
+            <button type="button" data-action="reload" bind-disabled="lists.loading">Reload</button>
+          </header>
+          <p class="status" bind="status"></p>
+          <div class="source-list" controller="Swill::Controller::List" outlet="source_list" tabindex="0">
+            <section outlet="rows"></section>
+            <template for="row">
+              <div class="source-row"><span bind="name"></span></div>
+            </template>
+          </div>
+        </aside>
+
+        <main class="detail">
+          <h2>Mailing List</h2>
+          <section class="list-detail" controller="Swill::Controller::Editor" outlet="detail_editor"
+                   bind-hidden="@represented_object.nil?">
+            <label>Name <input bind="name" /></label>
+            <label>Description <textarea bind="description"></textarea></label>
+            <label>Address <input bind="address" /></label>
+            <label>Webhook URL <input bind="webhook_url" /></label>
+            <fieldset class="list-options">
+              <legend>Options</legend>
+              <label><input type="checkbox" bind="notifications_enabled" /> Notifications enabled</label>
+              <label><input type="checkbox" bind="hidden" /> Hidden</label>
+              <label><input type="checkbox" bind="open" /> Open</label>
+              <label><input type="checkbox" bind="history_enabled" /> History enabled</label>
+            </fieldset>
+            <div class="profile-actions">
+              <button type="button" data-action="save_changes" bind-disabled="clean?">Save Changes</button>
+              <button type="button" data-action="discard_changes" bind-disabled="clean?">Reset</button>
+            </div>
+          </section>
+          <p class="profile-error" bind="save_error"></p>
+
+          <section class="members-column">
+            <h3>Members</h3>
+            <div class="member-list" controller="Swill::Controller::List" outlet="member_list" tabindex="0" multiple>
+              <header outlet="header_view" class="member-header"><div>Email</div><div>Name</div></header>
+              <section outlet="rows"></section>
+              <template for="row">
+                <div class="member-row"><div bind="email"></div><div bind="name"></div></div>
+              </template>
+            </div>
+          </section>
+        </main>
       </section>
-    </main>
+    </template>
+
+    <template for="window" name="members">
+      <section controller="MembersController" class="members-app">
+        <h2>Members</h2>
+        <p bind="status"></p>
+        <div class="member-list" controller="Swill::Controller::List" outlet="members_list" tabindex="0">
+          <header outlet="header_view" class="member-header"><div>Email</div><div>Name</div></header>
+          <section outlet="rows"></section>
+          <template for="row">
+            <div class="member-row"><div bind="email"></div><div bind="name"></div></div>
+          </template>
+        </div>
+      </section>
+    </template>
+
+    <template for="window" name="profile">
+      <section controller="ProfileController" class="profile-app">
+        <header class="profile-header" bind-hidden="member.nil?">
+          <div class="profile-photo"><img bind-src="member.photo_url" alt="" /></div>
+          <div><h2 bind="member.name"></h2><p bind="member.email"></p></div>
+        </header>
+
+        <section class="profile-sections" bind-hidden="draft_member.nil?">
+          <section>
+            <h3>Edit</h3>
+            <div class="profile-form">
+              <label>Nickname <input bind="draft_member.nickname" /></label>
+              <label>Phone <input bind="draft_member.phone_number" type="tel" /></label>
+              <label>
+                Phone Visibility
+                <div klass="Swill::Control::CustomSelect" outlet="phone_visibility_select"
+                     bind="draft_member.phone_visibility"></div>
+              </label>
+              <label>Venmo <input bind="draft_member.venmo_handle" /></label>
+              <label><input bind="draft_member.robodial_opt_out" type="checkbox" /> Robodial opt-out</label>
+            </div>
+            <div class="profile-actions">
+              <button type="button" data-action="save_profile" bind-disabled="profile_actions_disabled?">Save</button>
+              <button type="button" data-action="discard_profile" bind-disabled="profile_actions_disabled?">Reset</button>
+            </div>
+            <p class="profile-error" bind="save_error"></p>
+          </section>
+
+          <section>
+            <h3>Mailing Address</h3>
+            <dl class="profile-fields">
+              <dt>Address</dt><dd bind="member.mailing_address.address_1"></dd>
+              <dt>Address 2</dt><dd bind="member.mailing_address.address_2"></dd>
+              <dt>City</dt><dd bind="member.mailing_address.city"></dd>
+              <dt>State</dt><dd bind="member.mailing_address.state"></dd>
+              <dt>Postal Code</dt><dd bind="member.mailing_address.postal_code"></dd>
+              <dt>Country</dt><dd bind="member.mailing_address.country"></dd>
+            </dl>
+          </section>
+        </section>
+      </section>
+    </template>
 
     <script src="../../dist/swill.js"></script>
     <script src="./dist/app.js"></script>

@@ -9,6 +9,8 @@ module Swill
     include Observable
     include ObjectBindings
     include Outlets
+    include Restoration::ControllerState
+    include HTMLAttributes
 
     attr_reader :view
     attr_accessor :parent
@@ -30,6 +32,7 @@ module Swill
     def attach(element)
       @view = View.for(element) || View.new(element)
       @view.controller = self
+      apply_html_attributes(element)
       self
     end
 
@@ -65,6 +68,12 @@ module Swill
       (@teardowns || []).each(&:call)
       @teardowns = []
       unbind_all
+    end
+
+    def observe_notification(name, object: nil, center: NotificationCenter.default, &block)
+      token = center.observe(name, object: object, &block)
+      register_teardown { token.remove }
+      token
     end
 
     # Lifecycle hooks — Sequel's hook structure (override the method, call

@@ -4,7 +4,7 @@ module Swill
   module Awakening
     module_function
 
-    def wire(root)
+    def wire(root, appear: true)
       controllers = []
       parent = nearest_controller(`#{root}.parentElement`)
       walk(root, parent, controllers)
@@ -17,8 +17,7 @@ module Swill
         controller.after_load
       end
 
-      controllers.reverse_each(&:before_appear)
-      controllers.reverse_each(&:after_appear)
+      activate(controllers) if appear
 
       if controllers.empty? && parent
         Bindings.wire(parent, root)
@@ -26,6 +25,11 @@ module Swill
       end
 
       controllers
+    end
+
+    def activate(controllers)
+      controllers.reverse_each(&:before_appear)
+      controllers.reverse_each(&:after_appear)
     end
 
     def walk(element, parent, controllers)

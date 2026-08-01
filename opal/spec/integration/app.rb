@@ -22,7 +22,12 @@ end
 class RowItem
   include Swill::Observable
   property :name
-  def initialize(name) = self.name = name
+  property :id
+
+  def initialize(name)
+    self.name = name
+    self.id = name.downcase
+  end
 end
 
 class ListHostController < Swill::Controller
@@ -48,6 +53,13 @@ class ListHostController < Swill::Controller
     `globalThis.__replaceList__ = #{lambda { item_list.represented_object = [RowItem.new("Katherine")] }}`
     `globalThis.__mutateRemovedRow__ = #{lambda { @old_item.name = "Removed" }}`
     `globalThis.__selectFirstListItem__ = #{lambda { item_list.selected_object = item_list.represented_object.first }}`
+    `globalThis.__restoreListSelection__ = #{lambda do
+      records = item_list.represented_object
+      item_list.represented_object = []
+      item_list.selected_object_id = "grace"
+      item_list.represented_object = records
+      item_list.selected_object&.name
+    end}`
     `globalThis.__rewireFirstListRow__ = #{lambda do
       first_row = item_list.send(:row_elements).first
       Swill::Awakening.wire(first_row)
@@ -83,6 +95,17 @@ class EditorHostController < Swill::Controller
     editor.represented_object = RowItem.new("Draft")
     `globalThis.__commitEditor__ = #{lambda { editor.insert_newline(nil) }}`
     `globalThis.__discardEditor__ = #{lambda { editor.cancel_operation(nil) }}`
+  end
+end
+
+class EditableHostController < Swill::Controller
+  outlet :editable_list
+
+  def after_load
+    editable_list.represented_object = [RowItem.new("Original")]
+    `globalThis.__beginEditable__ = #{lambda { editable_list.begin_editing(0) }}`
+    `globalThis.__commitEditable__ = #{lambda { editable_list.end_editing(true) }}`
+    `globalThis.__cancelEditable__ = #{lambda { editable_list.end_editing(false) }}`
   end
 end
 
@@ -202,6 +225,9 @@ class PaletteController < Swill::Controller
 end
 
 class PaneOneController < Swill::Controller
+  property :query, default: "default"
+  restorable_state :query, key: :q
+
   outlet :pane_one_field
 
   def after_load

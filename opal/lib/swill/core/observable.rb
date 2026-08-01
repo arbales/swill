@@ -210,6 +210,17 @@ module Swill
       -> { observers_for(name).delete(observer) }
     end
 
+    # Observable objects are often used as lightweight editing values. Ruby's
+    # default dup is shallow, so explicitly detach reactive storage and never
+    # copy subscriptions or computed dependency disposers into the clone.
+    def initialize_dup(other)
+      super
+      @properties = other.instance_variable_get(:@properties)&.dup
+      @observers = {}
+      @computed = {}
+      @computed_disposers = {}
+    end
+
     def notify_change(name, previous, value)
       name = name.to_sym
       callback = "#{name}_did_change"

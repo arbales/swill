@@ -58,6 +58,7 @@ class HelloController < Swill::Controller
   property :first_responder_debug, default: "None"
   property :selected_person, default: "ada"
   property :activated_person, default: "None"
+  property :last_notification, default: "None"
 
   outlet :name_field
   outlet :people_list
@@ -84,6 +85,9 @@ class HelloController < Swill::Controller
   # Make the field the first responder rather than poking the DOM: the View
   # focuses itself as it becomes first responder, so DOM access stays in View.
   def after_load
+    observe_notification(:counter_changed) do |notification|
+      self.last_notification = "Counter changed to #{notification.user_info[:count]}"
+    end
     update_first_responder_debug(Swill::FirstResponder.current)
     register_teardown do
       @first_responder_observer&.call
@@ -198,6 +202,7 @@ class CounterController < Swill::Controller
 
   def increment(_sender, _event)
     self.count = count + 1
+    Swill::NotificationCenter.default.post(:counter_changed, object: self, user_info: { count: count })
   end
 end
 
@@ -240,6 +245,12 @@ class PaletteController < Swill::Controller
 end
 
 class IntroPaneController < Swill::Controller
+  property :query, default: "Opal"
+  property :page, default: 1
+
+  restorable_state :query, key: :q
+  restorable_state :page, codec: Swill::Restoration::Codecs::Integer
+
   outlet :field
 
   def after_load
@@ -248,6 +259,10 @@ class IntroPaneController < Swill::Controller
 end
 
 class DetailsPaneController < Swill::Controller
+  property :query, default: "Details"
+
+  restorable_state :query, key: :q
+
   outlet :field
 
   def after_load

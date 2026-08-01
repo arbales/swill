@@ -2,6 +2,7 @@
 
 module Swill
   class View < Responder
+    include HTMLAttributes
     FOCUSABLE = "input, select, textarea, button, [tabindex]"
 
     attr_reader :element, :subviews
@@ -12,6 +13,7 @@ module Swill
       @controller = nil
       @superview = nil
       @subviews = []
+      apply_html_attributes(element)
       `#{element}.__swill_view__ = #{self}`
     end
 

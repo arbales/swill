@@ -1,9 +1,8 @@
 # Swill, Again
 
 This directory contains the active Opal version of Swill. It is an early alpha:
-the framework kernel and first Ruby-native model layer work, build, and have
-automated coverage. Model relationships and typed command dispatch are not
-implemented yet. It is not a gem and does not need to become one.
+the framework kernel and Ruby-native model layer work, build, and have
+automated coverage. It is not a gem and does not need to become one.
 
 The TypeScript implementation remains at the repository root. Documentation in
 the root `docs/` directory describes that implementation unless it explicitly
@@ -123,6 +122,28 @@ with `json_api_type "members"`. Object bindings use
 `bind :target, to: source, key_path: "address.city"`; standalone models must
 unbind explicitly, while controllers release bindings during teardown.
 
+Relationships name their Ruby class directly; `json_api_type` remains only the
+wire label used by the JSON:API codec:
+
+```ruby
+has_many :members,
+  type: -> { Member },
+  url: ->(list) { "/api/lists/#{list.id}/members" }
+```
+
+Named window controllers can preserve keyed state in the URL without knowing
+that the active coder uses the browser fragment:
+
+```ruby
+restorable_state :query, key: :q
+restorable_state "people.selected_object_id", key: :selected
+
+def restore_state(coder)
+  super
+  reload
+end
+```
+
 The base class is only the standard composition. Generated or shared classes
 can select the model behavior they need:
 
@@ -148,6 +169,10 @@ The Opal implementation currently includes:
 - responder-chain actions, keyboard routing, and first-responder focus;
 - element, controller, template, and JSON-payload outlets;
 - template-backed dialogs and named window containers with replaceable content;
+- Cocoa-style keyed controller restoration, typed restoration codecs, and
+  Back/Forward-aware named window content;
+- inherited Ruby-native HTML attribute declarations and a Cocoa-shaped
+  `Swill::NotificationCenter`;
 - ISO-8601 dates on MRI and Opal;
 - observable models with inherited declarations, validation hooks, dirty
   tracking, identity stores, and plain JSON and JSON:API codecs;
@@ -166,35 +191,33 @@ The Opal implementation currently includes:
   Ruby-native comparisons, and selection preservation across reordering;
 - `Swill::Controller::Editor` represented-object binding roots with
   responder-driven commit and discard hooks;
+- `Swill::Controller::InlineEditor` and `EditableList` with detached drafts,
+  validation refusal, canonical application, and optional persistence policy;
 - `klass`-awakened view components plus `Swill::Control`, observable
   `Swill::Control::TextField`, native `Swill::Control::Select`, and stylable
   `Swill::Control::CustomSelect` wrappers;
 - object-to-object bindings over observable nested key paths; and
-- `Swill::Sig`, a small typed signature and coercion layer for the future
-  command boundary.
+- explicit-class `has_one` and `has_many` relationships with lazy loading,
+  loading state, reload methods, and JSON:API included hydration;
+- `Swill::Sig` plus `Swill::CommandDispatcher`, which validates a trusted
+  signature manifest before issuing promise-returning wire commands.
 
 The static example exercises bindings, derived properties, nested controllers,
 binding roots, actions, outlets, focus, dialogs, replaceable window content,
-detached model drafts, native and custom select controls, a template-backed
-selectable list, and a backend-backed Open Brewery DB dataset search.
+detached model drafts, native and custom select controls, an inline-editable
+sortable table, URL-restored window content, notifications, and a
+backend-backed Open Brewery DB dataset search. The Giraffic example now
+exercises restored list selection, detached detail editing, persistence, and a
+lazy-loaded member relationship against the shared TypeScript backend.
 
 ## Project Status
 
-The framework kernel is coherent enough to build applications against, but the
-Opal port is not at feature parity with the TypeScript framework. The main
-missing pieces are:
-
-- a typed command dispatcher connecting `Swill::Sig` declarations to server
-  operations;
-- model relationships and relationship hydration;
-- URL/window restoration;
-- inline and editable collection controllers; and
-- broader real-browser coverage, especially for dynamic DOM observation,
-  native dialogs, and focus transitions.
-
-`Swill::Sig` defines and validates the proposed command surface, but it does not
-send or dispatch commands yet. Datasets and instance persistence use the wire
-adapter directly; models do not yet hydrate relationships.
+The major TypeScript framework surfaces now have Ruby-native counterparts. The
+remaining work is depth rather than a missing foundation: broaden real-browser
+automation for dynamic DOM observation, native dialogs, focus transitions,
+history traversal, and editable rows; expand the Giraffic screens; and connect
+the generic command dispatcher to a concrete server command endpoint and
+manifest delivery flow.
 
 ## Server Alignment
 

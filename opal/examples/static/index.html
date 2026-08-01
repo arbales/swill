@@ -23,6 +23,7 @@
   </head>
   <body>
     <main controller="HelloController">
+      <p><strong>Notification center:</strong> <span bind="last_notification"></span></p>
       <aside class="first-responder-debug" aria-live="polite">
         <strong>First responder:</strong>
         <output bind="first_responder_debug"></output>
@@ -116,8 +117,8 @@
 
       <section>
         <h2>Template-backed list</h2>
-        <p>Click a row to select it; shift-click selects a range. Double-click or press Enter to activate it.</p>
-        <table class="people-table" controller="Swill::Controller::SortableList" outlet="people_list" tabindex="0" multiple>
+        <p>Click a row to select it; shift-click selects a range. Double-click or press Enter to edit it.</p>
+        <table class="people-table" controller="Swill::Controller::EditableList" outlet="people_list" tabindex="0" multiple>
           <thead outlet="header_view">
             <tr>
               <th data-column="name" data-action="sort_by" bind-aria-sort="sort_states.name">Name</th>
@@ -129,6 +130,12 @@
               <tr>
                 <td bind="name"></td>
                 <td bind="role"></td>
+              </tr>
+            </template>
+            <template for="editor">
+              <tr controller="Swill::Controller::InlineEditor">
+                <td><input bind="name" aria-label="Name" /></td>
+                <td><input bind="role" aria-label="Role" /></td>
               </tr>
             </template>
           </tbody>
@@ -167,14 +174,17 @@
     <template for="window" name="intro-pane">
       <section controller="IntroPaneController">
         <h2>Intro</h2>
-        <input outlet="field" value="Default pane" />
+        <p>Window content and these fields are restored from the URL fragment.</p>
+        <input outlet="field" bind="query" />
+        <input type="number" bind="page" />
+        <output bind="page"></output>
       </section>
     </template>
 
     <template for="window" name="details-pane">
       <section controller="DetailsPaneController">
         <h2>Details</h2>
-        <input outlet="field" value="Replacement pane" />
+        <input outlet="field" bind="query" />
       </section>
     </template>
 
