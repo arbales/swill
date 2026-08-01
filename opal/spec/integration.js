@@ -37,6 +37,8 @@ const body = build([
       ["input", { bind: "message", outlet: "message_field" }],
       ["h2", { bind: "greeting" }],
       ["input", { bind: "user.name" }],
+      ["input", { readonly: "", bind: "user.name.upcase" }],
+      ["p", { bind: "user.name.blank?" }],
       ["button", { type: "button", "data-action": "clear" }],
       ["section", { controller: "CounterController" }, [
         ["p", { bind: "count" }],
@@ -79,8 +81,8 @@ const body = build([
         ["option", { value: "" }],
       ]],
       ["p", { bind: "select_control.value" }],
-      ["div", { klass: "Swill::CustomSelect", outlet: "custom_select" }],
-      ["p", { bind: "custom_select.value" }],
+      ["div", { klass: "Swill::CustomSelect", outlet: "custom_select", bind: "selected_person" }],
+      ["p", { bind: "selected_person" }],
     ]],
     ["section", { controller: "EditorHostController" }, [
       ["section", { controller: "RecordingEditor", outlet: "editor" }, [
@@ -103,11 +105,13 @@ const h1 = main.children[0]; // bind="message"
 const messageInput = main.children[1]; // bind="message", outlet="message_field"
 const greeting = main.children[2]; // bind="greeting" (derived from user.name)
 const nameInput = main.children[3]; // bind="user.name" (key path)
-const button = main.children[4]; // data-action="clear"
-const counterSection = main.children[5]; // controller="CounterController"
+const readonlyName = main.children[4]; // readonly derived binding
+const nameBlank = main.children[5]; // Ruby predicate expression
+const button = main.children[6]; // data-action="clear"
+const counterSection = main.children[7]; // controller="CounterController"
 const counterValue = counterSection.children[0]; // bind="count"
 const counterButton = counterSection.children[1]; // data-action="increment"
-const rootedSection = main.children[6]; // controller="RootedController"
+const rootedSection = main.children[8]; // controller="RootedController"
 const rootedName = rootedSection.children[0]; // bind="name" via binding_root
 const rootedInput = rootedSection.children[1]; // bind="name" via binding_root
 const rootedButton = rootedSection.children[2]; // bind-disabled="@local_message.strip.empty?"
@@ -141,6 +145,8 @@ assert.strictEqual(h1.textContent, "hi", "h1 should show initial message");
 assert.strictEqual(messageInput.value, "hi", "input should show initial message");
 assert.strictEqual(greeting.textContent, "Hi world", "derived greeting initial value");
 assert.strictEqual(nameInput.value, "world", "key-path input shows user.name");
+assert.strictEqual(readonlyName.value, "WORLD", "readonly form binding evaluates a Ruby method chain");
+assert.strictEqual(nameBlank.textContent, "false", "Ruby predicate expression renders its result");
 
 // 2b. after_load made the outlet the first responder; becoming FR focuses the
 // View's element (the shim records focus on the underlying element).
@@ -156,6 +162,13 @@ assert.strictEqual(h1.textContent, "yo", "editing input should update h1");
 nameInput.value = "ada";
 nameInput.dispatch("input");
 assert.strictEqual(greeting.textContent, "Hi ada", "key-path write should recompute greeting");
+assert.strictEqual(readonlyName.value, "ADA", "method expression updates when its receiver changes");
+assert.strictEqual(nameBlank.textContent, "false", "predicate expression updates from the same dependency");
+assert.match(
+  globalThis.__invalidBinding__(),
+  /not writable; add readonly/,
+  "two-way method expressions should fail during wiring",
+);
 
 // 5. data-action walks the responder chain to the controller method.
 button.dispatch("click");
@@ -213,13 +226,13 @@ selectControl.value = "Ada";
 selectControl.dispatch("change");
 assert.strictEqual(selectValue.textContent, "Ada", "select observes native change events");
 assert.strictEqual(customSelect.getAttribute("role"), "combobox", "custom select exposes combobox semantics");
-assert.strictEqual(customSelectValue.textContent, "ada", "custom select exposes its initial value");
+assert.strictEqual(customSelectValue.textContent, "ada", "binding writes controller state into a custom control");
 const customTrigger = customSelect.children[0];
 const customPopup = customSelect.children[1];
 customTrigger.dispatch("click", { detail: 1 });
 assert.strictEqual(customSelect.getAttribute("aria-expanded"), "true", "custom select opens from its trigger");
 customPopup.children[1].dispatch("click", { detail: 1 });
-assert.strictEqual(customSelectValue.textContent, "grace", "custom option click changes observable value");
+assert.strictEqual(customSelectValue.textContent, "grace", "custom control input writes back through its binding");
 assert.strictEqual(customSelect.getAttribute("aria-expanded"), "false", "choosing an option closes the popup");
 
 globalThis.__commitEditor__();

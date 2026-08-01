@@ -65,6 +65,16 @@ Markup names ordinary Ruby constants:
 
 `Swill::Awakening` resolves that with `Object.const_get`; there is no class registry. Controllers own their markup subtree, `data-action` walks the responder chain, and `bind` connects elements to observable controller properties.
 
+Bindings use Ruby reader chains for derived display values. Form controls are
+two-way only when their path resolves to a writer; derived form values must be
+declared `readonly`, otherwise wiring raises `Swill::BindingError`:
+
+```html
+<input bind="user.email">
+<input readonly bind="user.email.strip.upcase">
+<output bind="user.email.blank?"></output>
+```
+
 ```ruby
 class HelloController < Swill::Controller
   property :message, default: "Hello."

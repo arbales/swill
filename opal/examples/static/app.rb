@@ -56,6 +56,7 @@ class HelloController < Swill::Controller
   property :draft, default: -> { user.draft }
   property :saving, default: false
   property :first_responder_debug, default: "None"
+  property :selected_person, default: "ada"
 
   outlet :name_field
   outlet :people_list
@@ -104,7 +105,6 @@ class HelloController < Swill::Controller
       { value: "grace", label: "Grace Hopper", description: "Computer scientist" },
       { value: "katherine", label: "Katherine Johnson", description: "Engineer" }
     ]
-    custom_select.value = "ada"
   end
 
   def update_first_responder_debug(responder)

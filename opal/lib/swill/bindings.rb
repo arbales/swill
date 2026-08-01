@@ -1,6 +1,8 @@
 # backtick_javascript: true
 
 module Swill
+  class BindingError < StandardError; end
+
   module Bindings
     module_function
 
@@ -56,6 +58,7 @@ module Swill
 
     def wire_value_binding(controller, root_prefix, element, path)
       segments = resolve_segments(root_prefix, path)
+      validate_writable_binding!(controller, element, segments, path)
       sync = -> { write_value(element, KeyPath.read(controller, segments)) }
       sync.call
 
@@ -78,11 +81,15 @@ module Swill
     end
 
     def wire_input(controller, element, segments)
-      return unless form_control?(element)
+      return if read_only?(element)
+      return unless writable_control?(element)
 
       event_name = `#{element}.tagName === "SELECT" || #{element}.type === "checkbox" ? "change" : "input"`
       listener = lambda do |_event|
-        KeyPath.write(controller, segments, read_element(element))
+        unless KeyPath.writable?(controller, segments)
+          raise BindingError, %(binding "#{segments.join('.')}" is not writable)
+        end
+        KeyPath.write!(controller, segments, read_element(element))
       end
       `#{element}.addEventListener(#{event_name}, #{listener})`
       -> { `#{element}.removeEventListener(#{event_name}, #{listener})` }
@@ -148,8 +155,32 @@ module Swill
       `#{element}.matches("input, textarea, select")`
     end
 
+    def writable_control?(element)
+      form_control?(element) || (View.for(element)&.respond_to?(:value=))
+    end
+
+    def read_only?(element)
+      `#{element}.hasAttribute("readonly")`
+    end
+
+    def validate_writable_binding!(controller, element, segments, path)
+      return unless writable_control?(element)
+      return if read_only?(element)
+      return unless KeyPath.writable?(controller, segments) == false
+
+      raise BindingError,
+            %(#{element_name(element)} binding "#{path}" is not writable; add readonly or bind to an assignable property)
+    end
+
+    def element_name(element)
+      `#{element}.tagName`.to_s.downcase
+    end
+
     def read_element(element)
       return `#{element}.checked` if `#{element}.type === "checkbox"`
+
+      component = View.for(element)
+      return component.value if component&.respond_to?(:value)
 
       `#{element}.value`
     end
@@ -158,6 +189,13 @@ module Swill
       controller = View.controller_for(element)
       if controller && controller.respond_to?(:represented_object=)
         controller.represented_object = value unless value.nil?
+        return
+      end
+
+
+      component = View.for(element)
+      if component&.respond_to?(:value=)
+        component.value = value.nil? ? "" : value.to_s
         return
       end
 

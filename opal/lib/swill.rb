@@ -25,6 +25,7 @@ require "native" # DOM and JavaScript interop
 require "json"   # JSON-payload outlets (Swill::Outlets)
 require "promise"
 
+require "swill/core_ext"
 require "swill/responder"
 require "swill/observable"
 require "swill/key_path"

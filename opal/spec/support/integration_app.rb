@@ -30,6 +30,7 @@ class ListHostController < Swill::Controller
   outlet :text_control
   outlet :select_control
   outlet :custom_select
+  property :selected_person, default: "ada"
 
   property :selection_summary do
     item_list ? item_list.selected_objects.map(&:name).join(", ") : ""
@@ -44,7 +45,6 @@ class ListHostController < Swill::Controller
       { value: "ada", label: "Ada" },
       { value: "grace", label: "Grace" }
     ]
-    custom_select.value = "ada"
     `globalThis.__replaceList__ = #{lambda { item_list.represented_object = [RowItem.new("Katherine")] }}`
     `globalThis.__mutateRemovedRow__ = #{lambda { @old_item.name = "Removed" }}`
   end
@@ -111,6 +111,19 @@ class RecordingController < Swill::Controller
     # owner() walks the sparse view tree: the outlet View was adopted into this
     # controller's view, so its owner is this controller.
     `globalThis.__owner_ok__ = #{message_field.owner.equal?(self)}`
+    `globalThis.__invalidBinding__ = #{lambda do
+      input = `document.createElement("input")`
+      `#{input}.setAttribute("bind", "user.name.upcase")`
+      `#{view.element}.appendChild(#{input})`
+      begin
+        Swill::Bindings.wire(self, input)
+      rescue Swill::BindingError => error
+        `#{input}.remove()`
+        next error.message
+      end
+      `#{input}.remove()`
+      nil
+    end}`
   end
 
   def before_appear = `globalThis.__hooks__.push("before_appear")`

@@ -37,6 +37,11 @@
 
       <p bind="summary"></p>
       <p bind-hidden="user.present_email?">Email is missing.</p>
+      <label>
+        Derived read-only email
+        <input readonly bind="user.email.strip.upcase" />
+      </label>
+      <p>Email blank: <output bind="user.email.blank?"></output></p>
 
       <label>
         Saving
@@ -102,8 +107,8 @@
 
       <section>
         <h2>Custom select control</h2>
-        <div klass="Swill::CustomSelect" outlet="custom_select"></div>
-        <p>Selected value: <output bind="custom_select.value"></output></p>
+        <div klass="Swill::CustomSelect" outlet="custom_select" bind="selected_person"></div>
+        <p>Selected value: <output bind="selected_person"></output></p>
       </section>
 
       <section>

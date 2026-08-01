@@ -9,6 +9,7 @@
 
 require "minitest/autorun"
 require_relative "../lib/swill/observable"
+require_relative "../lib/swill/core_ext"
 require_relative "../lib/swill/key_path"
 
 class KeyPathTest < Minitest::Test
@@ -62,6 +63,25 @@ class KeyPathTest < Minitest::Test
   def test_write_without_setter_is_noop
     # `address` has a setter, but reading-only leaf with no setter is a no-op.
     Swill::KeyPath.write(@person, %w[missing], "x") # must not raise
+  end
+
+  def test_writable_distinguishes_properties_from_method_results
+    assert_equal true, Swill::KeyPath.writable?(@person, %w[address city])
+    assert_equal false, Swill::KeyPath.writable?(@person, %w[name upcase])
+    @person.address = nil
+    assert_nil Swill::KeyPath.writable?(@person, %w[address city])
+  end
+
+  def test_write_bang_rejects_method_expression
+    assert_raises(NoMethodError) do
+      Swill::KeyPath.write!(@person, %w[name upcase], "GRACE")
+    end
+  end
+
+  def test_ruby_predicates_can_be_read_as_expression_segments
+    assert_equal false, Swill::KeyPath.read(@person, %w[name blank?])
+    @person.name = "  "
+    assert_equal true, Swill::KeyPath.read(@person, %w[name blank?])
   end
 
   # --- observe --------------------------------------------------------------

@@ -39,6 +39,28 @@ module Swill
       target.public_send(setter, value) if target.respond_to?(setter)
     end
 
+    # Whether the path currently resolves to a Ruby writer. +nil+ means an
+    # intermediate object has not appeared yet, so callers should validate
+    # again when accepting a future write.
+    def writable?(root, segments)
+      return false if segments.empty?
+
+      *leading, last = segments
+      target = read(root, leading)
+      return nil if target.nil?
+
+      target.respond_to?("#{last}=")
+    end
+
+    def write!(root, segments, value)
+      writable = writable?(root, segments)
+      raise NoMethodError, "binding path #{segments.join('.').inspect} is not writable" if writable == false
+      return if writable.nil?
+
+      *leading, last = segments
+      read(root, leading).public_send("#{last}=", value)
+    end
+
     # Subscribe to changes anywhere along the path. +on_change+ is called when
     # the leaf value may have changed — either because the leaf itself changed
     # or because an intermediate was reassigned, in which case the downstream
