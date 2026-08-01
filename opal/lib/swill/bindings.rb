@@ -33,6 +33,27 @@ module Swill
       end
     end
 
+    # Wire a generated subtree directly to an ordinary observable object.
+    # The caller owns the returned disposer and must invoke it before removal.
+    def wire_object(object, root)
+      disposers = []
+      object_bound_elements(root).each do |element|
+        value_path = `#{element}.getAttribute("bind")`
+        if value_path && !value_path.to_s.empty?
+          disposers << wire_value_binding(object, "", element, value_path.to_s)
+        end
+
+        attribute_names(element).each do |name|
+          next unless name.start_with?("bind-")
+
+          prop = name.delete_prefix("bind-")
+          path = `#{element}.getAttribute(#{name})`.to_s
+          disposers << wire_property_binding(object, "", element, prop, path)
+        end
+      end
+      -> { disposers.each(&:call) }
+    end
+
     def wire_value_binding(controller, root_prefix, element, path)
       segments = resolve_segments(root_prefix, path)
       sync = -> { write_value(element, KeyPath.read(controller, segments)) }
@@ -57,7 +78,7 @@ module Swill
     end
 
     def wire_input(controller, element, segments)
-      return unless writable?(controller, segments) && form_control?(element)
+      return unless form_control?(element)
 
       event_name = `#{element}.tagName === "SELECT" || #{element}.type === "checkbox" ? "change" : "input"`
       listener = lambda do |_event|
@@ -69,6 +90,18 @@ module Swill
 
     def owned_bound_elements(controller, root)
       owned_elements(controller, root, "*").select { |element| binding_element?(element) }
+    end
+
+    def object_bound_elements(root)
+      elements = []
+      elements << root if binding_element?(root)
+      `Array.from(#{root}.querySelectorAll("*"))`.each do |element|
+        boundary = `#{element}.closest("[controller]")`
+        next if boundary && `#{boundary} !== #{root} && #{root}.contains(#{boundary})`
+
+        elements << element if binding_element?(element)
+      end
+      elements
     end
 
     def owned_elements(controller, root, selector)
@@ -113,15 +146,6 @@ module Swill
 
     def form_control?(element)
       `#{element}.matches("input, textarea, select")`
-    end
-
-    # Two-way only when the leaf's owner currently exists and exposes a setter.
-    # Evaluated once at wire time; a path whose intermediate appears later stays
-    # read-only until rewired.
-    def writable?(controller, segments)
-      *leading, last = segments
-      target = KeyPath.read(controller, leading)
-      !target.nil? && target.respond_to?("#{last}=")
     end
 
     def read_element(element)

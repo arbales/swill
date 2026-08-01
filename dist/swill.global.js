@@ -1,4 +1,4 @@
-// Swill 0.0.0
+// Swill 0.0.1
 "use strict";
 var Swill = (() => {
   var __create = Object.create;
@@ -3678,7 +3678,7 @@ ${lines.join("\n")}`;
   }
 
   // src/version.ts
-  var version = "0.0.0";
+  var version = "0.0.1";
   return __toCommonJS(index_exports);
 })();
 //# sourceMappingURL=swill.global.js.map

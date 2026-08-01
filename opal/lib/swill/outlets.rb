@@ -90,6 +90,9 @@ module Swill
       child = View.controller_for(element)
       return child if child
 
+      existing = View.for(element)
+      return existing if existing
+
       # Wrap the element in a View and adopt it into the owning controller's
       # view tree, so owner() resolves and key events bubble from the outlet up
       # to the controller.

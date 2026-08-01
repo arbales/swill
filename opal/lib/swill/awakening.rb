@@ -48,11 +48,28 @@ module Swill
       end
 
       owner = controller || parent
+      awaken_component(element, owner) unless controller
       `Array.from(#{element}.children)`.each do |child|
         walk(child, owner, controllers)
       end
     rescue NameError => error
       `console.warn("[Swill] " + #{error.message}, #{element})`
+    end
+
+    def awaken_component(element, owner)
+      name = `#{element}.getAttribute("klass")`
+      return unless name
+      return if View.for(element)
+
+      component_class = constant(name.to_s)
+      unless component_class <= View
+        raise TypeError, "#{name} is not a Swill::View"
+      end
+
+      component = component_class.new(element)
+      owner.view.adopt_subview(component) if owner
+      owner.register_teardown { component.teardown! } if owner && component.respond_to?(:teardown!)
+      component
     end
 
     # Tear down a subtree being removed from the DOM: clear the first responder

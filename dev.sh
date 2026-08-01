@@ -47,6 +47,7 @@ fi
 
 # Initial build so the first browser hit doesn't 404 if it beats --watch.
 ./build.sh
+(cd opal && bundle exec rake build)
 
 # Watch in the background; foreground the static/proxy server for visible logs.
 ./build.sh --watch &
@@ -72,6 +73,7 @@ echo "  http://localhost:$PORT/examples/movies/demo.html    (Movies)"
 echo "  http://localhost:$PORT/examples/giraffic/giraffic.html    (Giraffic)"
 echo "  http://localhost:$PORT/examples/breweries/breweries.html    (Breweries)"
 echo "  http://localhost:$PORT/examples/static/static.html    (Static)"
+echo "  http://localhost:$PORT/opal/examples/giraffic/index.html    (Giraffic, Opal)"
 echo "  dev coordinator pid: $$  (recorded in $PIDFILE)"
 echo "  esbuild --watch pid: $ESBUILD_PID  (recorded in $ESBUILD_PIDFILE)"
 echo "  python dev server pid: $PYTHON_PID  (recorded in $PYTHON_PIDFILE)"

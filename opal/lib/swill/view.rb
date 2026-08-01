@@ -75,10 +75,17 @@ module Swill
       `document.activeElement === #{first_focusable_element}`
     end
 
-    # Becoming first responder focuses the view's element. Returning the
-    # predicate lets a subclass refuse by overriding can_become_first_responder?.
+    # A view wraps a focusable element, so unlike a bare responder it accepts
+    # first responder status by default — Cocoa controls likewise override
+    # acceptsFirstResponder to true. Subclasses override to refuse.
+    def accepts_first_responder?
+      true
+    end
+
+    # Becoming first responder focuses the view's element. Gated on
+    # accepts_first_responder? so a refusing subclass neither focuses nor claims.
     def become_first_responder
-      return false unless can_become_first_responder?
+      return false unless accepts_first_responder?
 
       focus_element
       true

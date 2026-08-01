@@ -11,6 +11,7 @@ module Swill
   module FirstResponder
     @current = nil
     @chain_top = nil
+    @observers = []
 
     class << self
       # The current first responder, or nil.
@@ -25,21 +26,23 @@ module Swill
       # Record the first responder after DOM focus has already moved. Internal;
       # the focus adapter uses it. Prefer `make`.
       def install(responder)
+        previous = @current
         @current = responder
+        notify_observers(previous, responder) unless previous.equal?(responder)
       end
 
-      # Cocoa NSWindow#makeFirstResponder — the single orchestrator. Verified
-      # against Apple's documented contract:
-      #
-      #   1. already the FR             -> true, do nothing
-      #   2. ask current FR to resign   -> refusal ABORTS (FR unchanged, false)
-      #   3. resigned, target is nil    -> FR = chain_top, true
-      #   4. ask target to become       -> refusal does NOT abort: FR = chain_top, true
-      #   5. accepted                   -> FR = target, true
-      #
-      # The outgoing/incoming asymmetry is deliberate: only an outgoing
-      # resign-refusal aborts. We do not pre-gate on can_become_first_responder?
-      # — per Apple that is the caller's check.
+      # Observe successful first-responder transitions. The callback receives
+      # the new responder and the previous responder. Returns an unsubscribe
+      # callback so controllers can tie diagnostics to their own lifecycle.
+      def observe(&observer)
+        @observers << observer
+        -> { @observers.delete(observer) }
+      end
+
+      # If responder isn’t already the first responder, this method first sends a resignFirstResponder message to the object that is the first responder. If that object refuses to resign, it remains the first responder, and this method immediately returns false. If the current first responder resigns, this method sends a becomeFirstResponder message to responder. If responder does not accept first responder status, the NSWindow object becomes first responder; in this case, the method returns true even if responder refuses first responder status.
+      # If responder is nil, this method still sends resignFirstResponder to the current first responder. If the current first responder refuses to resign, it remains the first responder and this method immediately returns false. If the current first responder returns true from resignFirstResponder, the window is made its own first responder and this method returns true.
+      # The Application Kit framework uses this method to alter the first responder in response to mouse-down events; you can also use it to explicitly set the first responder from within your program. The responder object is typically an NSView object in the window’s view hierarchy. If this method is called explicitly, first send acceptsFirstResponder to responder, and do not call makeFirstResponder: if acceptsFirstResponder returns false.
+      # Use initialFirstResponder to the set the first responder to be used when the window is brought onscreen for the first time.
       def make(responder)
         return true if responder.equal?(@current) # 1
 
@@ -51,62 +54,67 @@ module Swill
         @current = nil
 
         if responder.nil? # 3
-          @current = @chain_top
+          complete_transition(current, @chain_top)
           return true
         end
 
         if responder.become_first_responder # 5
-          @current = responder
+          complete_transition(current, responder)
           return true
         end
 
-        @current = @chain_top # 4
+        complete_transition(current, @chain_top) # 4
         true
+      end
+
+      private
+
+      def notify_observers(previous, responder)
+        @observers.dup.each { |observer| observer.call(responder, previous) }
+      end
+
+      def complete_transition(previous, responder)
+        @current = responder
+        notify_observers(previous, responder) unless previous.equal?(responder)
       end
     end
   end
 
-  # Base for anything in the responder chain (Cocoa NSResponder). Pure chain
-  # mechanics: first-responder protocol, key-event routing, and target-action
-  # lookup. Nothing here touches the DOM — View and Controller add that.
+
   class Responder
-    # Next link in the chain; nil at the root. Subclasses provide it.
+    # Override
     def next_responder
       nil
     end
 
-    # Override to gate transitions declaratively; become/resign consult these.
-    def can_become_first_responder?
-      true
+    # Cocoa NSResponder#acceptsFirstResponder: the policy gate for being *made*
+    # first responder by a click or the key-view loop. Default false; a control
+    # overrides it to true. NSWindow#makeFirstResponder does not consult it (nor
+    # does `make` above) — honoring the gate is the focus machinery's job.
+    # `can_become_first_responder?` is UIKit's spelling for the same gate.
+    def accepts_first_responder?
+      false
     end
-
-    def can_resign_first_responder?
-      true
-    end
+    alias can_become_first_responder? accepts_first_responder?
 
     def first_responder?
       FirstResponder.current.equal?(self)
     end
 
-    # Request that +responder+ become the first responder. Delegates to the
-    # orchestrator so any responder can initiate (a controller asking in
-    # after_load, say). Returns whether the FR now reflects the request.
-    def make_first_responder(responder)
-      FirstResponder.make(responder)
-    end
-
-    # Pure protocol (Cocoa becomeFirstResponder): accept-or-refuse plus the
-    # "about to become" setup. Return false to refuse. Does not touch the
-    # global FR — that is the orchestrator's job; there is no separate did* hook.
+    # Cocoa NSResponder#becomeFirstResponder: default accepts (true). Override
+    # to set up state — highlight a selection, focus an element — or return
+    # false to refuse. Never invoke directly; ask the application to make the
+    # responder first responder.
     def become_first_responder
-      can_become_first_responder?
+      true
     end
 
-    # Pure protocol (Cocoa resignFirstResponder). Return false to refuse, which
-    # aborts the transition and keeps this responder first. +next_responder+ is
-    # the proposed incoming responder (nil when focus is going nowhere).
+    # Cocoa NSResponder#resignFirstResponder: default resigns (true). Override
+    # to tear down state or return false to refuse relinquishing. Never invoke
+    # directly. +next_responder+ is a Swill extension carrying the incoming
+    # responder; Cocoa's resignFirstResponder takes no argument.
     def resign_first_responder(_next_responder = nil)
-      can_resign_first_responder?
+      true
     end
 
     # ---- key-event chain ----

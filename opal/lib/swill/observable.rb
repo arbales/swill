@@ -40,42 +40,56 @@ module Swill
   end
 
   # Observable state for any Swill object: declared properties with change
-  # notification, ad-hoc observers, and computed properties whose dependencies
-  # are discovered automatically. Mixed into Controller (and, later, View and
-  # model value objects).
+  # notification, ad-hoc observers, and block-backed properties whose
+  # dependencies are discovered automatically. Mixed into Controller (and,
+  # later, View and model value objects).
   #
   #   class Person
   #     include Swill::Observable
   #     property :first
   #     property :last
-  #     computed :full_name do
+  #     property :full_name do
   #       "#{first} #{last}"
   #     end
   #   end
   #
   # The do/end form is canonical. A `{ }` block cannot follow a paren-less call
-  # with an argument in Ruby, so `computed :full_name { ... }` will not parse;
-  # use do/end, or parenthesize as `computed(:full_name) { ... }`.
+  # with an argument in Ruby, so `property :full_name { ... }` will not parse;
+  # use do/end, or parenthesize as `property(:full_name) { ... }`.
   #
   # Reading +full_name+ records reads of +first+ and +last+; writing either one
   # invalidates the cache and, if anything observes +full_name+, recomputes and
   # notifies. No dependency array.
   #
   # property vs attr_accessor: a `property` is an *observable* accessor — the
-  # reactive surface that bindings and computeds depend on. Plain
+  # reactive surface that bindings and derived properties depend on. Plain
   # `attr_accessor` (and attr_reader/attr_writer) stay available for ordinary
   # non-reactive state. To make a hand-written accessor reactive, call
   # `notify_change(name, previous, value)` in its setter. Declaring the same
-  # name both as a property/computed and as a plain accessor warns, because the
+  # name both as a reactive property and as a plain accessor warns, because the
   # plain accessor silently bypasses notification.
   module Observable
+    DEFAULT_UNSET = Object.new
+    private_constant :DEFAULT_UNSET
+
     def self.included(base)
       base.extend(ClassMethods)
     end
 
     module ClassMethods
-      def property(name, default: nil)
+      def property(name, default: DEFAULT_UNSET, &block)
+        if block
+          raise ArgumentError, "derived property cannot also have a default" unless default.equal?(DEFAULT_UNSET)
+
+          return computed(name, &block)
+        end
+
         name = name.to_sym
+        if name.to_s.end_with?("?")
+          raise ArgumentError, "predicate properties must be block-backed: property :#{name} do ..."
+        end
+
+        default = nil if default.equal?(DEFAULT_UNSET)
         warn_reactive_overlap(name) if observable_plain_accessors.key?(name)
         observable_properties[name] = { default: default }
 
@@ -105,9 +119,7 @@ module Swill
         end
       end
 
-      # A read-only derived property. Dependencies are discovered by running the
-      # block once and recording every property it reads; the result is cached
-      # until one of those dependencies changes.
+      # Backward-compatible alias for block-backed property declarations.
       def computed(name, &block)
         name = name.to_sym
         warn_reactive_overlap(name) if observable_plain_accessors.key?(name)
@@ -139,7 +151,7 @@ module Swill
       end
 
       # Plain attr_* accessors remain available for non-reactive state. We wrap
-      # them only to detect a name that is also a reactive property/computed: a
+      # them only to detect a name that is also a reactive property: a
       # plain accessor bypasses change notification, so that overlap silently
       # breaks observation and earns a warning. (To make a hand-written
       # accessor reactive, call notify_change in its setter — that is the
@@ -181,16 +193,16 @@ module Swill
 
       def warn_reactive_overlap(name)
         warn("[Swill] #{self}: :#{name} is declared both as a reactive " \
-             "property/computed and a plain accessor; the plain accessor does " \
+             "property and a plain accessor; the plain accessor does " \
              "not notify observers. Use `property` for reactive state.")
       end
     end
 
     # Subscribe to changes of +name+. Returns a lambda that unsubscribes.
     #
-    # Observing a computed forces it to compute now if it hasn't already, so its
-    # dependency subscriptions exist; otherwise a change to a dependency that
-    # happens before the first read would never reach this observer.
+    # Observing a derived property forces it to compute now if it hasn't
+    # already, so its dependency subscriptions exist; otherwise a dependency
+    # change before the first read would never reach this observer.
     def observe(name, &observer)
       name = name.to_sym
       ensure_computed(name)
@@ -223,8 +235,8 @@ module Swill
       (@observers ||= {})[name.to_sym] ||= []
     end
 
-    # If +name+ is a computed that hasn't been computed yet, compute it so its
-    # dependency subscriptions are established. No-op for plain properties.
+    # If +name+ is a derived property that has not run yet, compute it so its
+    # dependency subscriptions are established. No-op for stored properties.
     def ensure_computed(name)
       return unless self.class.respond_to?(:computed_block) && self.class.computed_block(name)
 
@@ -246,9 +258,9 @@ module Swill
     end
 
     # A dependency changed. Drop the cache. If anything is watching this
-    # computed (a binding, or another computed that depends on it), recompute
-    # eagerly and push the change so observers stay live; otherwise stay lazy
-    # and let the next read recompute.
+    # derived property (a binding, or another derived property that depends on
+    # it), recompute eagerly and push the change so observers stay live;
+    # otherwise stay lazy and let the next read recompute.
     def invalidate_computed(name)
       slot = computed_store[name]
       return unless slot && slot[:valid]

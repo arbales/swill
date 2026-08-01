@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Giraffic — Swill in Ruby</title>
+    <link rel="stylesheet" href="/examples/shared/shared.css" />
+    <style>
+      body { margin: 2rem; max-width: 52rem; }
+      main { display: grid; gap: 1rem; }
+      .card { border: 1px solid var(--rule); padding: 1rem; }
+    </style>
+  </head>
+  <body>
+    <main controller="GirafficListsController">
+      <header>
+        <h1>Giraffic mailing lists</h1>
+        <p>Read-only dataset checkpoint through the shared backend proxy.</p>
+        <button type="button" data-action="reload" bind-disabled="lists.loading">Reload</button>
+      </header>
+
+      <p bind="status"></p>
+
+      <section class="card">
+        <h2 bind="first_name"></h2>
+        <p bind="first_description"></p>
+        <p bind="first_address"></p>
+      </section>
+    </main>
+
+    <script src="../../dist/swill.js"></script>
+    <script src="./dist/app.js"></script>
+  </body>
+</html>

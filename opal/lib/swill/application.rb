@@ -20,12 +20,23 @@ module Swill
       @window_templates = {}
       @windows = []
       scan_window_templates
+      prepare_window_containers(root)
       before_launch
       Awakening.wire(root)
+      register_window_containers(root)
       watch(root)
       install_event_listeners(root)
       after_launch
       self
+    end
+
+    # Cocoa puts this transition on NSWindow. Until Swill has a Window object,
+    # the application owns it. Explicit requests honor the responder's policy
+    # gate before entering the first-responder state machine.
+    def make_first_responder(responder)
+      return false if responder && !responder.accepts_first_responder?
+
+      FirstResponder.make(responder)
     end
 
     def show_window(name, into: `document.body`)
@@ -50,14 +61,53 @@ module Swill
       promise
     end
 
+    def load_window_content(window_name, content_name)
+      scan_window_templates
+      container = window_container(window_name.to_s)
+      raise ArgumentError, %(Application: no window container "#{window_name}") unless container
+
+      previous = FirstResponder.current
+      detach_window_content(container)
+      `#{container}.replaceChildren()`
+
+      node = clone_window_content(content_name.to_s)
+      `#{container}.appendChild(#{node})`
+      controllers = Awakening.wire(container)
+      controller = top_controller_in(container, controllers)
+
+      entry = window_entry_for_root(container)
+      if entry
+        entry[:controller] = controller
+        entry[:content_name] = content_name.to_s
+      else
+        @windows << {
+          name: window_name.to_s,
+          content_name: content_name.to_s,
+          root: container,
+          controller: controller,
+          saved_first_responder: nil,
+          resolve: nil
+        }
+      end
+
+      `#{container}.setAttribute("name", #{content_name.to_s})`
+      if controller
+        FirstResponder.make(controller)
+      elsif previous && Focus.responder_element(previous) && `#{Focus.responder_element(previous)}.parentElement`
+        FirstResponder.make(previous)
+      end
+
+      controller
+    end
+
     def dismiss(controller)
-      entry = @windows.find do |window|
+      index = @windows.find_index do |window|
         window[:controller].equal?(controller) ||
           `#{window[:root]}.contains(#{controller.view.element})`
       end
-      return unless entry
+      return unless index
 
-      @windows.delete(entry)
+      entry = @windows.delete_at(index)
       root = entry[:root]
       `#{root}.close && #{root}.close()`
       Awakening.detach(root)
@@ -97,11 +147,61 @@ module Swill
       end
     end
 
+    def prepare_window_containers(root)
+      window_containers(root).each do |container|
+        next if `#{container}.children.length > 0`
+
+        window_name = element_attribute(container, "window")
+        content_name = element_attribute(container, "name") || window_name
+        next unless content_name && @window_templates[content_name.to_s]
+
+        `#{container}.appendChild(#{clone_window_content(content_name.to_s)})`
+        `#{container}.setAttribute("name", #{content_name.to_s})`
+      end
+    end
+
+    def register_window_containers(root)
+      window_containers(root).each do |container|
+        name = element_attribute(container, "window")
+        next unless name
+
+        entry = window_entry_for_root(container)
+        next if entry
+
+        @windows << {
+          name: name.to_s,
+          content_name: element_attribute(container, "name")&.to_s,
+          root: container,
+          controller: top_controller_in(container, Awakening.controllers_within(container)),
+          saved_first_responder: nil,
+          resolve: nil
+        }
+      end
+    end
+
+    def window_containers(root)
+      containers = []
+      containers << root if `#{root}.hasAttribute && #{root}.hasAttribute("window")`
+      `Array.from(#{root}.querySelectorAll("[window]"))`.each { |container| containers << container }
+      containers
+    end
+
+    def window_container(name)
+      found = nil
+      window_containers(@root).each do |container|
+        if element_attribute(container, "window") == name
+          found = container
+          break
+        end
+      end
+      found
+    end
+
     def instantiate_window(name, into)
       template = @window_templates[name]
       raise ArgumentError, %(Application: no window template "#{name}") unless template
 
-      node = clone_template_root(template)
+      node = clone_window_content(name)
       raise ArgumentError, %(Application: empty window template "#{name}") unless node
 
       `#{into}.appendChild(#{node})`
@@ -112,12 +212,41 @@ module Swill
       controller
     end
 
-    def clone_template_root(template)
+    def clone_window_content(name)
+      template = @window_templates[name]
+      raise ArgumentError, %(Application: no window content template "#{name}") unless template
+
       `const content = #{template}.content;
        const node = content && content.firstElementChild
          ? content.firstElementChild
          : #{template}.children[0];
        return node ? node.cloneNode(true) : null;`
+    end
+
+    def detach_window_content(container)
+      Awakening.controllers_within(container).each do |controller|
+        next if `#{controller.view.element} === #{container}`
+
+        Awakening.detach(controller.view.element)
+      end
+    end
+
+    def top_controller_in(container, controllers)
+      controllers.find do |controller|
+        element = controller.view.element
+        parent = controller.parent
+        `#{container}.contains(#{element})` &&
+          (parent.nil? || !`#{container}.contains(#{parent.view.element})`)
+      end
+    end
+
+    def window_entry_for_root(root)
+      @windows.find { |window| `#{window[:root]} === #{root}` }
+    end
+
+    def element_attribute(element, name)
+      value = `#{element}.getAttribute(#{name})`
+      value && value.to_s
     end
 
     # Reconcile the first responder with DOM focus changes, and route key

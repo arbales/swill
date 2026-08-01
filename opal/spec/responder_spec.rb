@@ -9,6 +9,7 @@
 
 require "minitest/autorun"
 require_relative "../lib/swill/responder"
+require_relative "../lib/swill/application"
 
 class ResponderTest < Minitest::Test
   include Swill
@@ -16,16 +17,19 @@ class ResponderTest < Minitest::Test
   # A test responder with a settable next link, controllable predicates, and
   # recorded key-event handling.
   class Node < Responder
-    attr_accessor :link, :becomes, :resigns, :events
+    attr_accessor :link, :becomes, :resigns, :accepts, :events
     attr_reader :became, :resigned_toward, :seen_during_become
 
-    def initialize(becomes: true, resigns: true)
+    def initialize(becomes: true, resigns: true, accepts: true)
       @becomes = becomes
       @resigns = resigns
+      @accepts = accepts
       @events = []
     end
 
     def next_responder = @link
+
+    def accepts_first_responder? = @accepts
 
     def become_first_responder
       @became = true
@@ -97,6 +101,40 @@ class ResponderTest < Minitest::Test
     FirstResponder.make(node)
     assert_nil node.seen_during_become,
                "FR must be nil during become so a focus event won't re-resign"
+  end
+
+  def test_observers_receive_transitions_and_can_unsubscribe
+    transitions = []
+    dispose = FirstResponder.observe do |current, previous|
+      transitions << [current, previous]
+    end
+    node = Node.new
+
+    FirstResponder.make(node)
+    dispose.call
+    FirstResponder.make(nil)
+
+    assert_equal [[node, nil]], transitions
+  end
+
+  # --- application-owned explicit transition --------------------------------
+
+  def test_explicit_call_skips_non_accepting_target
+    target = Node.new(accepts: false)
+    refute Application.new.make_first_responder(target), "refused target returns false"
+    assert_nil FirstResponder.current, "non-accepting target is not made FR"
+  end
+
+  def test_explicit_call_makes_accepting_target
+    target = Node.new(accepts: true)
+    assert Application.new.make_first_responder(target)
+    assert_same target, FirstResponder.current
+  end
+
+  def test_explicit_call_passes_nil_through
+    FirstResponder.make(Node.new)
+    assert Application.new.make_first_responder(nil), "nil target resigns to the window"
+    assert_same @top, FirstResponder.current
   end
 
   # --- key-event routing -----------------------------------------------------

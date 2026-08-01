@@ -12,6 +12,83 @@ class User
   property :name, default: "world"
 end
 
+class ReactiveMember < Swill::Model::Base
+  codec Swill::Model::JSONAPI
+  json_api_type "members"
+  endpoint "/members"
+  attribute :name, default: "Ada"
+end
+
+class RowItem
+  include Swill::Observable
+  property :name
+  def initialize(name) = self.name = name
+end
+
+class ListHostController < Swill::Controller
+  outlet :item_list
+  outlet :text_control
+  outlet :select_control
+  outlet :custom_select
+
+  property :selection_summary do
+    item_list ? item_list.selected_objects.map(&:name).join(", ") : ""
+  end
+
+  def after_load
+    @old_item = RowItem.new("Ada")
+    item_list.represented_object = [@old_item, RowItem.new("Grace"), RowItem.new("Katherine")]
+    select_control.options = ["Ada", "Grace"]
+    select_control.value = "Grace"
+    custom_select.options = [
+      { value: "ada", label: "Ada" },
+      { value: "grace", label: "Grace" }
+    ]
+    custom_select.value = "ada"
+    `globalThis.__replaceList__ = #{lambda { item_list.represented_object = [RowItem.new("Katherine")] }}`
+    `globalThis.__mutateRemovedRow__ = #{lambda { @old_item.name = "Removed" }}`
+  end
+end
+
+class RecordingEditor < Swill::Editor
+  def commit
+    `globalThis.__editor_events__.push("commit")`
+    super
+  end
+
+  def discard
+    `globalThis.__editor_events__.push("discard")`
+  end
+end
+
+class EditorHostController < Swill::Controller
+  outlet :editor
+
+  def after_load
+    editor.represented_object = RowItem.new("Draft")
+    `globalThis.__commitEditor__ = #{lambda { editor.insert_newline(nil) }}`
+    `globalThis.__discardEditor__ = #{lambda { editor.cancel_operation(nil) }}`
+  end
+end
+
+
+integration_member = ReactiveMember.new
+integration_model_values = []
+integration_member.observe(:name) { |value| integration_model_values << value }
+integration_member.name = "Grace"
+`globalThis.__model__ = #{[integration_member.name, integration_member.dirty?, integration_model_values.last]}`
+
+integration_dataset = ReactiveMember.dataset(url: "/members", params: { page: 2 })
+integration_dataset.reload.then do
+  `globalThis.__dataset__ = #{[integration_dataset.records.first.name, integration_dataset.loading,
+                               integration_dataset.error.nil?]}`
+  persisted_member = integration_dataset.records.first
+  persisted_member.name = "Local edit"
+  persisted_member.save.then do
+    `globalThis.__persistence__ = #{[persisted_member.name, persisted_member.dirty?]}`
+  end
+end
+
 class RecordingController < Swill::Controller
   property :message, default: "hi"
   property :user, default: -> { User.new }
@@ -21,7 +98,7 @@ class RecordingController < Swill::Controller
 
   # Reads user.name across the object boundary; the key-path binding writes
   # user.name, which must recompute this and push to its binding.
-  computed :greeting do
+  property :greeting do
     "Hi #{user.name}"
   end
 
@@ -30,7 +107,7 @@ class RecordingController < Swill::Controller
   def after_load
     `globalThis.__hooks__.push("after_load")`
     # Make the outlet the first responder; the View focuses itself.
-    make_first_responder(message_field)
+    application.make_first_responder(message_field)
     # owner() walks the sparse view tree: the outlet View was adopted into this
     # controller's view, so its owner is this controller.
     `globalThis.__owner_ok__ = #{message_field.owner.equal?(self)}`
@@ -53,6 +130,10 @@ end
 class CounterController < Swill::Controller
   property :count, default: 0
 
+  def after_load
+    bind(:count, to: COUNTER_SOURCE, key_path: "value")
+  end
+
   def increment(_sender, _event)
     self.count = count + 1
   end
@@ -60,6 +141,14 @@ class CounterController < Swill::Controller
   def before_disappear = `globalThis.__disappeared__.push("counter:before")`
   def after_disappear = `globalThis.__disappeared__.push("counter:after")`
 end
+
+class CounterSource
+  include Swill::Observable
+  property :value, default: 0
+end
+
+COUNTER_SOURCE = CounterSource.new
+`globalThis.__setCounterSource__ = #{lambda { |value| COUNTER_SOURCE.value = value }}`
 
 class RootedController < Swill::Controller
   property :represented_object, default: -> { User.new.tap { |user| user.name = "rooted" } }
@@ -73,7 +162,7 @@ class PaletteController < Swill::Controller
 
   def after_load
     `globalThis.__palette__.push("after_load")`
-    make_first_responder(palette_field)
+    application.make_first_responder(palette_field)
   end
 
   def before_disappear = `globalThis.__palette__.push("before_disappear")`
@@ -82,6 +171,34 @@ class PaletteController < Swill::Controller
   def close(_sender, _event)
     TestApp.shared.dismiss(self)
   end
+end
+
+class PaneOneController < Swill::Controller
+  outlet :pane_one_field
+
+  def after_load
+    `globalThis.__panes__.push("one:load")`
+    application.make_first_responder(pane_one_field)
+  end
+
+  def before_disappear = `globalThis.__panes__.push("one:before")`
+  def after_disappear = `globalThis.__panes__.push("one:after")`
+
+  def swap(_sender, _event)
+    TestApp.shared.load_window_content("workspace", "pane-two")
+  end
+end
+
+class PaneTwoController < Swill::Controller
+  outlet :pane_two_field
+
+  def after_load
+    `globalThis.__panes__.push("two:load")`
+    application.make_first_responder(pane_two_field)
+  end
+
+  def before_disappear = `globalThis.__panes__.push("two:before")`
+  def after_disappear = `globalThis.__panes__.push("two:after")`
 end
 
 class TestApp < Swill::Application

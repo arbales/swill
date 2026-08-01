@@ -3,13 +3,12 @@ class Movie < Sequel::Model
   plugin :privacy
 
   client_commands do
-    sig { params() }
     def mark_watched
       update(watched: true)
     end
 
-    sig { params(verdict: T.enum('favorite', 'liked', 'neutral', 'disliked')) }
-    def update_verdict(verdict)
+    § verdict: T.enum('favorite', 'liked', 'neutral', 'disliked')
+    def update_verdict(verdict:)
       update(verdict: verdict)
     end
   end

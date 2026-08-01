@@ -25,6 +25,19 @@ class El {
   getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
   hasAttribute(name) { return name in this.attributes; }
   removeAttribute(name) { delete this.attributes[name]; }
+  get classList() {
+    const element = this;
+    return {
+      add(name) { this.toggle(name, true); },
+      remove(name) { this.toggle(name, false); },
+      toggle(name, force) {
+        const names = new Set((element.getAttribute("class") || "").split(/\s+/).filter(Boolean));
+        if (force) names.add(name); else names.delete(name);
+        element.setAttribute("class", Array.from(names).join(" "));
+      },
+      contains(name) { return (element.getAttribute("class") || "").split(/\s+/).includes(name); },
+    };
+  }
 
   appendChild(child) {
     child.parentElement = this;
@@ -139,6 +152,12 @@ class El {
     for (const listener of this._listeners[type] || []) listener(event);
   }
 
+  dispatchEvent(event) {
+    if (!event.target) Object.defineProperty(event, "target", { value: this, configurable: true });
+    this.dispatch(event.type, event);
+    return true;
+  }
+
   focus() {
     if (globalThis.document && globalThis.document.activeElement && globalThis.document.activeElement !== this) {
       globalThis.document.activeElement._focused = false;
@@ -203,9 +222,19 @@ class MutationObserver {
 
 // Install the globals the bundle expects, with `body` as the document root.
 function install(body) {
+  const listeners = {};
   const document = {
     body,
     activeElement: null,
+    createElement(tag) { return createElement(tag); },
+    addEventListener(type, listener) {
+      (listeners[type] || (listeners[type] = [])).push(listener);
+    },
+    removeEventListener(type, listener) {
+      const list = listeners[type] || [];
+      const index = list.indexOf(listener);
+      if (index >= 0) list.splice(index, 1);
+    },
     querySelector(selector) {
       if (body.matches && body.matches(selector)) return body;
       return body.querySelector(selector);

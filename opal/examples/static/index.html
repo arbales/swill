@@ -4,9 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Swill, in Ruby</title>
+    <style>
+      .people-table { border-collapse: collapse; min-width: 28rem; }
+      .people-table th, .people-table td { border: 1px solid #888; padding: 0.35rem 0.6rem; text-align: left; }
+      .people-table tbody tr { cursor: default; }
+      .people-table tbody tr.selected { background: Highlight; color: HighlightText; }
+      .custom-select { display: inline-block; min-width: 18rem; position: relative; }
+      .custom-select-button { align-items: center; background: white; border: 1px solid #888; display: flex; justify-content: space-between; padding: 0.45rem 0.65rem; width: 100%; }
+      .custom-select-popup { background: white; border: 1px solid #888; box-shadow: 0 0.25rem 0.75rem #0003; left: 0; min-width: 100%; position: absolute; top: 100%; z-index: 2; }
+      .custom-select-popup[hidden] { display: none; }
+      .custom-select-option { background: white; border: 0; display: block; padding: 0.45rem 0.65rem; text-align: left; width: 100%; }
+      .custom-select-option[aria-selected="true"] { background: #def; }
+      .custom-select-option-description { color: #666; display: block; font-size: 0.85em; }
+    </style>
   </head>
   <body>
     <main controller="HelloController">
+      <aside class="first-responder-debug" aria-live="polite">
+        <strong>First responder:</strong>
+        <output bind="first_responder_debug"></output>
+      </aside>
       <h1 bind="greeting"></h1>
       <label>
         Name
@@ -29,6 +46,33 @@
       <button type="button" data-action="fake_save" bind-disabled="user.blank_email?">Save</button>
       <button type="button" data-action="clear" bind-disabled="user.name.strip.empty?">Clear</button>
       <button type="button" data-action="show_palette">Show Palette</button>
+      <button type="button" data-action="show_intro">Intro Pane</button>
+      <button type="button" data-action="show_details">Details Pane</button>
+
+      <section>
+        <h2>Model editing draft</h2>
+        <p>
+          Canonical model dirty:
+          <output bind="user.dirty?"></output>
+        </p>
+        <section controller="DemoDraftEditor" outlet="draft_editor">
+          <p>Enter applies this editor; Escape resets it.</p>
+          <label>
+            Draft name
+            <input bind="name" />
+          </label>
+          <label>
+            Draft email
+            <input bind="email" />
+          </label>
+          <p>
+            Draft dirty:
+            <output bind="dirty?"></output>
+          </p>
+          <button type="button" data-action="apply_draft" bind-disabled="clean?">Apply Draft</button>
+          <button type="button" data-action="reset_draft" bind-disabled="clean?">Reset Draft</button>
+        </section>
+      </section>
 
       <section controller="CardController">
         <h2 bind="name"></h2>
@@ -41,7 +85,61 @@
         <p bind="count"></p>
         <button type="button" data-action="increment">Increment</button>
       </section>
+
+      <section>
+        <h2>Text field control</h2>
+        <input klass="Swill::TextField" outlet="standalone_text_field" value="Observable control" />
+        <p>Control value: <output bind="standalone_text_field.value"></output></p>
+      </section>
+
+      <section>
+        <h2>Select control</h2>
+        <select klass="Swill::Select" outlet="standalone_select">
+          <option value="">Choose a person</option>
+        </select>
+        <p>Selected value: <output bind="standalone_select.value"></output></p>
+      </section>
+
+      <section>
+        <h2>Custom select control</h2>
+        <div klass="Swill::CustomSelect" outlet="custom_select"></div>
+        <p>Selected value: <output bind="custom_select.value"></output></p>
+      </section>
+
+      <section>
+        <h2>Template-backed list</h2>
+        <p>Click a row to select it; shift-click selects a range.</p>
+        <table class="people-table" controller="Swill::List" outlet="people_list" tabindex="0" multiple>
+          <thead>
+            <tr><th>Name</th><th>Role</th></tr>
+          </thead>
+          <tbody outlet="rows">
+            <template for="row">
+              <tr>
+                <td bind="name"></td>
+                <td bind="role"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <p>
+          Selected:
+          <output bind="selected_people"></output>
+        </p>
+      </section>
+
+      <section controller="BrewerySearchController">
+        <h2>Backend dataset</h2>
+        <p>This searches Open Brewery DB through an observable model dataset.</p>
+        <input bind="query" placeholder="City or brewery" />
+        <button type="button" data-action="search" bind-disabled="search_disabled?">Search</button>
+        <p bind-hidden="results.loading">Ready.</p>
+        <p bind="result_summary"></p>
+        <p bind="error_message"></p>
+      </section>
     </main>
+
+    <section window="workspace" name="intro-pane"></section>
 
     <template for="window" name="palette">
       <dialog controller="PaletteController">
@@ -49,6 +147,20 @@
         <input outlet="field" placeholder="Focus lands here" />
         <button type="button" data-action="close">Close</button>
       </dialog>
+    </template>
+
+    <template for="window" name="intro-pane">
+      <section controller="IntroPaneController">
+        <h2>Intro</h2>
+        <input outlet="field" value="Default pane" />
+      </section>
+    </template>
+
+    <template for="window" name="details-pane">
+      <section controller="DetailsPaneController">
+        <h2>Details</h2>
+        <input outlet="field" value="Replacement pane" />
+      </section>
     </template>
 
     <script src="../../dist/swill.js"></script>

@@ -2,11 +2,12 @@
 
 module Swill
   class Controller < Responder
-    # `property`, `computed`, `observe`, and `notify_change` all come from
-    # Observable. `property` is the observable accessor; plain `attr_accessor`
-    # remains for non-reactive state, and Observable warns if a name is
-    # declared both ways (see its docs).
+    # `property`, `observe`, and `notify_change` all come from Observable.
+    # `property` is the reactive accessor; plain `attr_accessor` remains for
+    # non-reactive state, and Observable warns if a name is declared both ways
+    # (see its docs).
     include Observable
+    include ObjectBindings
     include Outlets
 
     attr_reader :view
@@ -36,6 +37,24 @@ module Swill
       parent || FirstResponder.chain_top
     end
 
+    def application
+      FirstResponder.chain_top
+    end
+
+    def become_first_responder
+      return false unless super
+
+      view.focus_element
+      true
+    end
+
+    def resign_first_responder(next_responder = nil)
+      return false unless super
+
+      view.blur_element
+      true
+    end
+
     # Bindings and actions register undo callbacks here so detaching the
     # controller's subtree can release observers and DOM listeners.
     def register_teardown(&block)
@@ -45,6 +64,7 @@ module Swill
     def teardown!
       (@teardowns || []).each(&:call)
       @teardowns = []
+      unbind_all
     end
 
     # Lifecycle hooks — Sequel's hook structure (override the method, call

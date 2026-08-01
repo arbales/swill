@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-# TODO: This seems too bloated to me; Need to look for opportunities
-# to trim and make more streamlined and readable.
-#
 # TODO: We need to support DateTime as well.
 #
 # Swill::Sig — a tiny, Swill-owned signature decorator for the shared
@@ -11,10 +8,9 @@
 # - It records signatures as introspectable metadata; it does not wrap
 #   methods. Validation happens once, at the wire dispatch boundary, where
 #   untrusted input enters. Trusted internal calls pay nothing.
-# - Authoring (`sig { ... }` + `method_added`) runs on the server (MRI). The
-#   client never authors sigs; it receives a plain-data manifest (`sig_manifest`)
-#   and rebuilds signatures from it. So Opal's `method_added` support is not
-#   load-bearing.
+# - Authoring (`§ name: String` + `method_added`) runs on the server (MRI).
+#   The client never authors sigs; it receives a plain-data manifest
+#   (`sig_manifest`) and rebuilds signatures from it.
 # - A declared type both *enforces structure* (a scalar type rejects arrays and
 #   hashes — the scalar-smuggling guard) and *coerces* (via the value's own
 #   rules). There is no type that means "column name" or "operator", so params
@@ -25,8 +21,8 @@
 #   module MailingList::Commands
 #     extend Swill::Sig
 #
-#     sig { params(name: String).void }
-#     def rename(name)
+#     § name: String
+#     def rename(name:)
 #       self.name = name
 #       save_changes
 #     end
@@ -42,22 +38,16 @@ module Swill
     class Error < StandardError; end
 
     # Base class for the small type vocabulary. A Type knows how to coerce a
-    # raw decoded value and how to describe itself as plain data.
+    # raw decoded value (#coerce) and describe itself as plain data
+    # (#descriptor); both are defined by the concrete types below.
     class Type
-      def coerce(_value)
-        raise NotImplementedError
-      end
-
-      def descriptor
-        raise NotImplementedError
-      end
-
       # Resolve a token used in a sig (a Ruby class like String, or a Type
       # instance from Swill::T) into a Type.
       def self.of(token)
         return token if token.is_a?(Type)
 
-        PRIMITIVES[token] or
+        name = SCALAR_CLASSES[token]
+        name && SCALARS[name] or
           raise Error, "unknown sig type: #{token.inspect} (use a primitive class or Swill::T.*)"
       end
 
@@ -87,14 +77,15 @@ module Swill
           end
         else
           name = desc.is_a?(String) ? desc.to_sym : desc
-          PRIMITIVES_BY_NAME[name] or
+          SCALARS[name] or
             raise Error, "unknown type descriptor: #{desc.inspect}"
         end
       end
     end
 
-    # A scalar primitive backed by a coercion block. The block must be an
-    # expression (no `return`) — it is stored and called later.
+    # Every scalar leaf type is a Primitive: a wire-descriptor name plus a
+    # coercion block. The scalar-smuggling guard runs once here, so a block
+    # only ever sees a scalar. The block must be an expression (no `return`).
     class Primitive < Type
       def initialize(name, &coercer)
         @name = name
@@ -102,63 +93,11 @@ module Swill
       end
 
       def coerce(value)
-        @coercer.call(value)
+        @coercer.call(Type.scalar!(value))
       end
 
       def descriptor
         @name
-      end
-    end
-
-    class Boolean < Type
-      def coerce(value)
-        value = Type.scalar!(value)
-        return value if value == true || value == false
-
-        raise Error, "expected a boolean, got #{value.inspect}"
-      end
-
-      def descriptor
-        :boolean
-      end
-    end
-
-    class DateType < Type
-      def coerce(value)
-        value = Type.scalar!(value)
-        raise Error, "expected an ISO-8601 date string, got #{value.class}" unless value.is_a?(String)
-
-        require "date"
-        begin
-          Date.iso8601(value)
-        rescue ArgumentError
-          raise Error, "invalid date: #{value.inspect}"
-        end
-      end
-
-      def descriptor
-        :date
-      end
-    end
-
-    # Money and other exact decimals. Rejects Float input to avoid binary
-    # floating-point drift.
-    class DecimalType < Type
-      def coerce(value)
-        value = Type.scalar!(value)
-        require "bigdecimal"
-
-        if value.is_a?(Integer)
-          BigDecimal(value.to_s)
-        elsif value.is_a?(String) && value.match?(/\A-?\d+(\.\d+)?\z/)
-          BigDecimal(value)
-        else
-          raise Error, "expected a decimal string, got #{value.inspect}"
-        end
-      end
-
-      def descriptor
-        :decimal
       end
     end
 
@@ -212,15 +151,16 @@ module Swill
       end
     end
 
-    PRIMITIVES = {
-      String => Primitive.new(:string) do |value|
-        value = Type.scalar!(value)
+    # The scalar vocabulary, defined once and keyed by wire descriptor. Stored
+    # instances are stateless, so they are shared (Type.of, from_descriptor, and
+    # Swill::T all hand back the same object).
+    SCALARS = {
+      string: Primitive.new(:string) do |value|
         raise Error, "expected a string, got #{value.class}" unless value.is_a?(String)
 
         value
       end,
-      Integer => Primitive.new(:integer) do |value|
-        value = Type.scalar!(value)
+      integer: Primitive.new(:integer) do |value|
         if value.is_a?(Integer)
           value
         elsif value.is_a?(String) && value.match?(/\A-?\d+\z/)
@@ -229,8 +169,7 @@ module Swill
           raise Error, "expected an integer, got #{value.inspect}"
         end
       end,
-      Float => Primitive.new(:float) do |value|
-        value = Type.scalar!(value)
+      float: Primitive.new(:float) do |value|
         if value.is_a?(Numeric)
           value.to_f
         elsif value.is_a?(String) && value.match?(/\A-?\d+(\.\d+)?\z/)
@@ -239,55 +178,48 @@ module Swill
           raise Error, "expected a float, got #{value.inspect}"
         end
       end,
-    }.freeze
-
-    PRIMITIVES_BY_NAME = {
-      string: PRIMITIVES[String],
-      integer: PRIMITIVES[Integer],
-      float: PRIMITIVES[Float],
-      boolean: Boolean.new,
-      date: DateType.new,
-      decimal: DecimalType.new,
-    }.freeze
-
-    # Collects the result of a `sig { ... }` block. `params`, `returns`, and
-    # `void` chain and return self.
-    class SigBuilder
-      def params(**types)
-        @params = types
-        self
-      end
-
-      def returns(type)
-        @returns = type
-        self
-      end
-
-      def void
-        @returns = :void
-        self
-      end
-
-      def to_signature
-        resolved = (@params || {}).each_with_object({}) do |(name, token), out|
-          out[name] = Type.of(token)
+      boolean: Primitive.new(:boolean) do |value|
+        if value == true || value == false
+          value
+        else
+          raise Error, "expected a boolean, got #{value.inspect}"
         end
+      end,
+      date: Primitive.new(:date) do |value|
+        raise Error, "expected an ISO-8601 date string, got #{value.class}" unless value.is_a?(String)
 
-        result = @returns
-        result = Type.of(result) unless result.nil? || result == :void
+        require "date"
+        begin
+          Date.iso8601(value)
+        rescue ArgumentError
+          raise Error, "invalid date: #{value.inspect}"
+        end
+      end,
+      # Money and other exact decimals. Rejects Float to avoid binary
+      # floating-point drift.
+      decimal: Primitive.new(:decimal) do |value|
+        require "bigdecimal"
+        if value.is_a?(Integer)
+          BigDecimal(value.to_s)
+        elsif value.is_a?(String) && value.match?(/\A-?\d+(\.\d+)?\z/)
+          BigDecimal(value)
+        else
+          raise Error, "expected a decimal string, got #{value.inspect}"
+        end
+      end,
+    }.freeze
 
-        Signature.new(resolved, result)
-      end
-    end
+    # The Ruby classes that may be written directly in a sig, mapped to their
+    # descriptor. Everything else comes through Swill::T.
+    SCALAR_CLASSES = { String => :string, Integer => :integer, Float => :float }.freeze
 
-    # A resolved signature: typed params plus a return marker. The wire layer's
-    # only job at the boundary is `coerce`.
+    # A resolved signature: typed params. The wire layer's only job at the
+    # boundary is `coerce`.
     class Signature
-      attr_reader :params, :returns
+      attr_reader :params
 
-      def initialize(params, returns)
-        @params = params   # { Symbol => Type }
-        @returns = returns # Type | :void | nil
+      def initialize(params)
+        @params = params # { Symbol => Type }
       end
 
       # Coerce an untrusted wire hash (string- or symbol-keyed) into a typed
@@ -309,7 +241,6 @@ module Swill
       def descriptor
         {
           params: @params.each_with_object({}) { |(name, type), out| out[name] = type.descriptor },
-          returns: @returns.is_a?(Type) ? @returns.descriptor : @returns,
         }
       end
 
@@ -320,11 +251,7 @@ module Swill
           out[name.to_sym] = Type.from_descriptor(type_desc)
         end
 
-        result = desc[:returns] || desc["returns"]
-        result = result.to_sym if result.is_a?(String)
-        result = Type.from_descriptor(result) unless result.nil? || result == :void
-
-        new(params, result)
+        new(params)
       end
 
       private
@@ -341,13 +268,15 @@ module Swill
       base.instance_variable_set(:@__swill_signatures__, {})
     end
 
-    def sig(&block)
-      builder = SigBuilder.new
-      builder.instance_exec(&block)
-      @__swill_pending_sig__ = builder.to_signature
+    def params(**types)
+      @__swill_pending_sig__ = Signature.new(resolve_params(types))
     end
 
-    # Binds a pending `sig` to the method defined immediately after it. Only
+    def §(**types)
+      params(**types)
+    end
+
+    # Binds pending params to the method defined immediately after them. Only
     # ever runs on MRI; the client builds from the manifest instead.
     def method_added(name)
       if @__swill_pending_sig__
@@ -372,6 +301,14 @@ module Swill
         out[name] = signature.descriptor
       end
     end
+
+    private
+
+    def resolve_params(types)
+      types.each_with_object({}) do |(name, token), out|
+        out[name] = Type.of(token)
+      end
+    end
   end
 
   # The type combinators. Primitive classes (String, Integer, Float) are used
@@ -379,28 +316,12 @@ module Swill
   module T
     module_function
 
-    def boolean
-      Sig::Boolean.new
-    end
+    def boolean = Sig::SCALARS[:boolean]
+    def date    = Sig::SCALARS[:date]
+    def decimal = Sig::SCALARS[:decimal]
 
-    def date
-      Sig::DateType.new
-    end
-
-    def decimal
-      Sig::DecimalType.new
-    end
-
-    def nilable(inner)
-      Sig::Nilable.new(Sig::Type.of(inner))
-    end
-
-    def array(inner)
-      Sig::ArrayOf.new(Sig::Type.of(inner))
-    end
-
-    def enum(*values)
-      Sig::Enum.new(values)
-    end
+    def nilable(inner) = Sig::Nilable.new(Sig::Type.of(inner))
+    def array(inner)   = Sig::ArrayOf.new(Sig::Type.of(inner))
+    def enum(*values)  = Sig::Enum.new(values)
   end
 end

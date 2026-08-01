@@ -19,7 +19,7 @@ class ObservableTest < Minitest::Test
     property :last
     property :tags, default: -> { [] }
 
-    computed(:full_name) { "#{first} #{last}" }
+    property(:full_name) { "#{first} #{last}" }
 
     attr_reader :full_name_changes
 
@@ -87,22 +87,21 @@ class ObservableTest < Minitest::Test
     # full_name depends on first/last; callback only fires once it's observed.
   end
 
-  # --- computed -------------------------------------------------------------
+  # --- derived properties ---------------------------------------------------
 
-  def test_computed_value
+  def test_derived_property_value
     @person.last = "Lovelace"
     assert_equal "Ada Lovelace", @person.full_name
   end
 
-  def test_computed_memoizes
-    calls = 0
+  def test_derived_property_memoizes
     klass = Class.new do
       include Swill::Observable
       property :n, default: 1
       define_singleton_method(:bump) {} # no-op, keep shape obvious
     end
     counter = []
-    klass.computed(:doubled) do
+    klass.property(:doubled) do
       counter << :compute
       n * 2
     end
@@ -111,20 +110,20 @@ class ObservableTest < Minitest::Test
     assert_equal [:compute], counter, "second read should hit the cache"
   end
 
-  def test_computed_recomputes_after_dependency_changes
+  def test_derived_property_recomputes_after_dependency_changes
     @person.last = "Lovelace"
     assert_equal "Ada Lovelace", @person.full_name
     @person.first = "Grace"
     assert_equal "Grace Lovelace", @person.full_name
   end
 
-  def test_computed_lazy_until_read
+  def test_derived_property_lazy_until_read
     counter = []
     klass = Class.new do
       include Swill::Observable
       property :n, default: 1
     end
-    klass.computed(:doubled) do
+    klass.property(:doubled) do
       counter << :compute
       n * 2
     end
@@ -137,7 +136,7 @@ class ObservableTest < Minitest::Test
     assert_equal %i[compute compute], counter
   end
 
-  def test_computed_pushes_to_observers_eagerly
+  def test_derived_property_pushes_to_observers_eagerly
     @person.last = "Lovelace"
     seen = []
     @person.observe(:full_name) { |value| seen << value }
@@ -146,13 +145,13 @@ class ObservableTest < Minitest::Test
     assert_equal [["Ada Lovelace", "Grace Lovelace"]], @person.full_name_changes
   end
 
-  def test_computed_on_computed_chain
+  def test_derived_property_chain
     klass = Class.new do
       include Swill::Observable
       property :base, default: 1
     end
-    klass.computed(:doubled) { base * 2 }
-    klass.computed(:quadrupled) { doubled * 2 }
+    klass.property(:doubled) { base * 2 }
+    klass.property(:quadrupled) { doubled * 2 }
     obj = klass.new
 
     seen = []
@@ -161,6 +160,48 @@ class ObservableTest < Minitest::Test
     obj.base = 5
     assert_equal [20], seen, "change must propagate base -> doubled -> quadrupled"
     assert_equal 20, obj.quadrupled
+  end
+
+  def test_computed_alias_still_works
+    klass = Class.new do
+      include Swill::Observable
+      property :n, default: 2
+      computed(:doubled) { n * 2 }
+    end
+
+    assert_equal 4, klass.new.doubled
+  end
+
+  def test_derived_property_can_use_predicate_name
+    klass = Class.new do
+      include Swill::Observable
+      property :email, default: ""
+
+      property :email_blank? do
+        email.strip.empty?
+      end
+    end
+
+    assert_equal true, klass.new.email_blank?
+    refute_respond_to klass.new, :"email_blank?="
+  end
+
+  def test_derived_property_rejects_default
+    assert_raises(ArgumentError) do
+      Class.new do
+        include Swill::Observable
+        property(:answer, default: 42) { 1 }
+      end
+    end
+  end
+
+  def test_stored_property_rejects_predicate_name
+    assert_raises(ArgumentError) do
+      Class.new do
+        include Swill::Observable
+        property :ready?
+      end
+    end
   end
 
   # --- inherited configuration ---------------------------------------------
@@ -174,7 +215,7 @@ class ObservableTest < Minitest::Test
     refute_includes Person.observable_properties.keys, :email, "parent is not polluted"
   end
 
-  def test_subclass_inherits_computed
+  def test_subclass_inherits_derived_property
     child = Class.new(Person)
     obj = child.new
     obj.last = "Hopper"
@@ -223,12 +264,12 @@ class ObservableTest < Minitest::Test
     end
   end
 
-  def test_computed_over_plain_accessor_warns
+  def test_derived_property_over_plain_accessor_warns
     assert_output(nil, /:total.*plain accessor/m) do
       Class.new do
         include Swill::Observable
         attr_reader :total
-        computed(:total) { 1 }
+        property(:total) { 1 }
       end
     end
   end

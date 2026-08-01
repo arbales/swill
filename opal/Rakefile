@@ -5,7 +5,8 @@ require "opal/builder"
 ROOT = File.expand_path(__dir__)
 LIB = File.join(ROOT, "lib")
 DIST = File.join(ROOT, "dist")
-EXAMPLE = File.join(ROOT, "examples", "static")
+STATIC_EXAMPLE = File.join(ROOT, "examples", "static")
+GIRAFFIC_EXAMPLE = File.join(ROOT, "examples", "giraffic")
 SPEC = File.join(ROOT, "spec")
 SPEC_DIST = File.join(SPEC, "dist")
 
@@ -18,10 +19,10 @@ def build_framework
   File.write(File.join(DIST, "swill.js"), builder.to_s)
 end
 
-def build_example
-  source = File.read(File.join(EXAMPLE, "app.rb"))
-  javascript = Opal.compile(source, file: "examples/static/app.rb")
-  File.write(File.join(EXAMPLE, "dist", "app.js"), javascript)
+def build_example(directory, source_name)
+  source = File.read(File.join(directory, "app.rb"))
+  javascript = Opal.compile(source, file: source_name)
+  File.write(File.join(directory, "dist", "app.js"), javascript)
 end
 
 def build_integration
@@ -33,12 +34,14 @@ def build_integration
   File.write(File.join(SPEC_DIST, "integration.js"), builder.to_s)
 end
 
-desc "Compile Swill and the static example"
+desc "Compile Swill and the examples"
 task :build do
   FileUtils.mkdir_p(DIST)
-  FileUtils.mkdir_p(File.join(EXAMPLE, "dist"))
+  FileUtils.mkdir_p(File.join(STATIC_EXAMPLE, "dist"))
+  FileUtils.mkdir_p(File.join(GIRAFFIC_EXAMPLE, "dist"))
   build_framework
-  build_example
+  build_example(STATIC_EXAMPLE, "examples/static/app.rb")
+  build_example(GIRAFFIC_EXAMPLE, "examples/giraffic/app.rb")
 end
 
 desc "Run the pure-Ruby MRI specs"

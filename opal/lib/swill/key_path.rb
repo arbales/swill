@@ -16,13 +16,14 @@ module Swill
     # Walk the path from +root+. Returns nil if any intermediate is nil or does
     # not expose the next segment.
     def read(root, segments)
-      node = root
-      segments.each do |segment|
-        return nil if node.nil?
+      segments.reduce(root) { |node, segment| step(node, segment) }
+    end
 
-        node = node.respond_to?(segment) ? node.public_send(segment) : nil
-      end
-      node
+    # Read one segment off +node+. nil if +node+ is nil or has no such reader.
+    def step(node, segment)
+      return nil if node.nil?
+
+      node.respond_to?(segment) ? node.public_send(segment) : nil
     end
 
     # Assign +value+ at the end of the path. No-op when the path is empty, an
@@ -49,26 +50,24 @@ module Swill
       disposers = Array.new(segments.length)
 
       rehook = nil
-      rehook = lambda do |start_level|
-        (start_level...segments.length).each do |level|
+      rehook = lambda do |from|
+        (from...segments.length).each do |level|
           disposers[level]&.call
           disposers[level] = nil
         end
 
-        owner = read(root, segments[0...start_level])
-        (start_level...segments.length).each do |level|
+        owner = read(root, segments[0...from])
+        (from...segments.length).each do |level|
           break if owner.nil?
 
           if owner.respond_to?(:observe)
-            captured = owner
-            disposers[level] = captured.observe(segments[level]) do
+            disposers[level] = owner.observe(segments[level]) do
               on_change.call
               rehook.call(level + 1)
             end
           end
 
-          segment = segments[level]
-          owner = owner.respond_to?(segment) ? owner.public_send(segment) : nil
+          owner = step(owner, segments[level])
         end
       end
 

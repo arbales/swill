@@ -37,8 +37,10 @@ Performance you ask?! Yes, Swill performs -- with majesty.
 Maybe I should try Pheonix LiveView? Maybe.
 But I'm going to continue writing Ruby without Rails things.
 
-I regret using Typescript for this, there's so much mumbo jumbo in Typescript. 
-I think I will try again in Opal. 
+I regret using Typescript for this, there's so much mumbo jumbo in Typescript.
+The active experiment is now an [Opal port](opal/README.md). Its framework
+kernel is working and tested, while its model and client/server layers are still
+under development.
 
 ### But there's been so much progress since the mid 2010s!?!
 
@@ -62,6 +64,10 @@ Load other things on the side if you want.
 ### The Responder Chain
 
 ## Framework Docs
+
+These documents describe the TypeScript implementation. See the
+[Opal README](opal/README.md) for the Opal implementation's current surface,
+setup, checks, and remaining work.
 
 - [Awakening, Hydration, and Templates](docs/awakening.md)
 - [Bindings](docs/bindings.md)
