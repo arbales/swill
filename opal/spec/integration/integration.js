@@ -2,10 +2,10 @@
 // awakening resolves the controller, lifecycle hooks fire in order, the
 // initial binding renders, input propagates back, and data-action dispatches.
 //
-//   node spec/integration.js   (after building spec/dist/integration.js)
+//   node spec/integration/integration.js
 
 const assert = require("assert");
-const { build, install } = require("./support/dom");
+const { build, install } = require("./dom");
 
 globalThis.__hooks__ = [];
 globalThis.__escaped__ = false;
@@ -71,7 +71,7 @@ const body = build([
       ]],
     ]],
     ["section", { controller: "ListHostController" }, [
-      ["div", { controller: "Swill::SortableList", outlet: "item_list", tabindex: "0", multiple: "" }, [
+      ["div", { controller: "Swill::Controller::SortableList", outlet: "item_list", tabindex: "0", multiple: "" }, [
         ["header", { outlet: "header_view" }, [
           ["button", { type: "button", "data-column": "name", "data-action": "sort_by", "bind-aria-sort": "sort_states.name" }],
         ]],
@@ -83,13 +83,13 @@ const body = build([
       ]],
       ["p", { bind: "item_list.selected_object.name" }],
       ["p", { bind: "selection_summary" }],
-      ["input", { klass: "Swill::TextField", outlet: "text_control", value: "Control" }],
+      ["input", { klass: "Swill::Control::TextField", outlet: "text_control", value: "Control" }],
       ["p", { bind: "text_control.value" }],
-      ["select", { klass: "Swill::Select", outlet: "select_control" }, [
+      ["select", { klass: "Swill::Control::Select", outlet: "select_control" }, [
         ["option", { value: "" }],
       ]],
       ["p", { bind: "select_control.value" }],
-      ["div", { klass: "Swill::CustomSelect", outlet: "custom_select", bind: "selected_person" }],
+      ["div", { klass: "Swill::Control::CustomSelect", outlet: "custom_select", bind: "selected_person" }],
       ["p", { bind: "selected_person" }],
     ]],
     ["section", { controller: "EditorHostController" }, [

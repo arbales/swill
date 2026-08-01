@@ -96,13 +96,13 @@
 
       <section>
         <h2>Text field control</h2>
-        <input klass="Swill::TextField" outlet="standalone_text_field" value="Observable control" />
+        <input klass="Swill::Control::TextField" outlet="standalone_text_field" value="Observable control" />
         <p>Control value: <output bind="standalone_text_field.value"></output></p>
       </section>
 
       <section>
         <h2>Select control</h2>
-        <select klass="Swill::Select" outlet="standalone_select">
+        <select klass="Swill::Control::Select" outlet="standalone_select">
           <option value="">Choose a person</option>
         </select>
         <p>Selected value: <output bind="standalone_select.value"></output></p>
@@ -110,14 +110,14 @@
 
       <section>
         <h2>Custom select control</h2>
-        <div klass="Swill::CustomSelect" outlet="custom_select" bind="selected_person"></div>
+        <div klass="Swill::Control::CustomSelect" outlet="custom_select" bind="selected_person"></div>
         <p>Selected value: <output bind="selected_person"></output></p>
       </section>
 
       <section>
         <h2>Template-backed list</h2>
         <p>Click a row to select it; shift-click selects a range. Double-click or press Enter to activate it.</p>
-        <table class="people-table" controller="Swill::SortableList" outlet="people_list" tabindex="0" multiple>
+        <table class="people-table" controller="Swill::Controller::SortableList" outlet="people_list" tabindex="0" multiple>
           <thead outlet="header_view">
             <tr>
               <th data-column="name" data-action="sort_by" bind-aria-sort="sort_states.name">Name</th>

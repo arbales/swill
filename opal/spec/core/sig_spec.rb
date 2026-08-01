@@ -8,8 +8,8 @@
 # vocabulary, descriptor round-tripping (server -> client manifest -> client),
 # and the decorator surface.
 
-require "minitest/autorun"
-require_relative "../lib/swill/sig"
+require_relative "../spec_helper"
+require "swill/core"
 
 class SigTest < Minitest::Test
   include Swill

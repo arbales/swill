@@ -165,7 +165,7 @@ class HelloController < Swill::Controller
   end
 end
 
-class DemoDraftEditor < Swill::Editor
+class DemoDraftEditor < Swill::Controller::Editor
   def commit
     parent.apply_draft(self, nil)
     super

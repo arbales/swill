@@ -2,8 +2,8 @@
 
 This directory contains the active Opal version of Swill. It is an early alpha:
 the framework kernel and first Ruby-native model layer work, build, and have
-automated coverage. Transport and relationships are not implemented yet.
-It is not a gem and does not need to become one.
+automated coverage. Model relationships and typed command dispatch are not
+implemented yet. It is not a gem and does not need to become one.
 
 The TypeScript implementation remains at the repository root. Documentation in
 the root `docs/` directory describes that implementation unless it explicitly
@@ -54,6 +54,25 @@ bundle exec rake build
 `rake test` runs the DOM-free specs under MRI, then compiles Swill with Opal and
 runs the integration harness under Node. The integration harness uses a small
 DOM shim; important UI changes should also be exercised in a real browser.
+
+## Source Layout
+
+`lib/swill.rb` loads six subsystem entrypoints. Implementation and specs mirror
+the same boundaries:
+
+- `core`: DOM-free observation, key paths, responder behavior, signatures, and
+  Ruby extensions;
+- `view`: DOM views, focus, bindings, actions, outlets, awakening, and the
+  application lifecycle;
+- `controller`: the base controller plus list, sortable-list, and editor
+  specializations;
+- `control`: the base control plus text and select components;
+- `model`: the standard base composition, optional concerns, identity, codecs,
+  datasets, and persistence; and
+- `transport`: the browser wire boundary.
+
+Applications normally use `require "swill"`. The subsystem entrypoints are
+available for MRI specs and focused tooling.
 
 ## Shape
 
@@ -139,24 +158,25 @@ The Opal implementation currently includes:
 - observable read datasets with injectable wire adapters and browser `fetch`;
 - composable model persistence with create, update, reload, delete, validation,
   dirty serialization, and canonical identity refresh;
-- template-backed `Swill::List` collection controllers with direct row binding,
+- template-backed `Swill::Controller::List` collection controllers with direct
+  row binding,
   owned row views, row actions, observable selection, multiple-selection
   ranges, keyboard/double-click activation, and deterministic teardown;
-- `Swill::SortableList` header actions, observable sort state, Ruby-native
-  comparisons, and selection preservation across reordering;
-- `Swill::Editor` represented-object binding roots with responder-driven
-  commit and discard hooks;
+- `Swill::Controller::SortableList` header actions, observable sort state,
+  Ruby-native comparisons, and selection preservation across reordering;
+- `Swill::Controller::Editor` represented-object binding roots with
+  responder-driven commit and discard hooks;
 - `klass`-awakened view components plus `Swill::Control`, observable
-  `Swill::TextField`, native `Swill::Select`, and stylable
-  `Swill::CustomSelect` wrappers;
+  `Swill::Control::TextField`, native `Swill::Control::Select`, and stylable
+  `Swill::Control::CustomSelect` wrappers;
 - object-to-object bindings over observable nested key paths; and
 - `Swill::Sig`, a small typed signature and coercion layer for the future
   command boundary.
 
 The static example exercises bindings, derived properties, nested controllers,
 binding roots, actions, outlets, focus, dialogs, replaceable window content,
-detached model drafts, native and custom select controls, a template-backed selectable
-list, and a backend-backed Open Brewery DB dataset search.
+detached model drafts, native and custom select controls, a template-backed
+selectable list, and a backend-backed Open Brewery DB dataset search.
 
 ## Project Status
 
@@ -168,7 +188,7 @@ missing pieces are:
   operations;
 - model relationships and relationship hydration;
 - URL/window restoration;
-- editable/sortable collection controllers and reusable form controls; and
+- inline and editable collection controllers; and
 - broader real-browser coverage, especially for dynamic DOM observation,
   native dialogs, and focus transitions.
 

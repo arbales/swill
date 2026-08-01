@@ -3,7 +3,7 @@
 module Swill
   # Base object editor. Descendant bindings resolve against represented_object;
   # Enter commits and Escape discards through the responder chain.
-  class Editor < Controller
+  class Controller::Editor < Controller
     property :represented_object
 
     def binding_root

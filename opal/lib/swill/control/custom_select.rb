@@ -3,7 +3,7 @@
 module Swill
   # Fully stylable combobox control. Options are hashes with +value+, +label+,
   # and optional +description+ and +icon+ entries.
-  class CustomSelect < Control
+  class Control::CustomSelect < Control
     include Observable
 
     property :options, default: -> { [] }

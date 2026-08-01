@@ -8,8 +8,8 @@
 # DOM-touching layers (bindings, outlets, responder/focus) get exercised
 # separately through the Opal build + Node DOM shim.
 
-require "minitest/autorun"
-require_relative "../lib/swill/observable"
+require_relative "../spec_helper"
+require "swill/core"
 
 class ObservableTest < Minitest::Test
   class Person

@@ -2,7 +2,7 @@
 
 module Swill
   # NSTextField-style observable wrapper for an input or input-containing view.
-  class TextField < Control
+  class Control::TextField < Control
     include Observable
 
     property :value, default: ""

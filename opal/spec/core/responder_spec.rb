@@ -7,9 +7,8 @@
 # DOM-free; focus syncing and key listeners are exercised through the Opal
 # integration check.
 
-require "minitest/autorun"
-require_relative "../lib/swill/responder"
-require_relative "../lib/swill/application"
+require_relative "../spec_helper"
+require "swill/view"
 
 class ResponderTest < Minitest::Test
   include Swill

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require_relative "../lib/swill/wire"
+require_relative "../spec_helper"
+require "swill/transport"
 
 class WireTest < Minitest::Test
   def teardown

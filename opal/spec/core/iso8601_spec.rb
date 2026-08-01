@@ -11,9 +11,8 @@
 # (native exists), so this exercises our implementation directly against the
 # reference.
 
-require "minitest/autorun"
-require "date"
-require_relative "../lib/swill/iso8601"
+require_relative "../spec_helper"
+require "swill/core"
 
 class ISO8601Test < Minitest::Test
   def parse(string) = Swill::ISO8601.parse(string)

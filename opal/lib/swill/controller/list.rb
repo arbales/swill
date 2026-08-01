@@ -3,7 +3,7 @@
 module Swill
   # NSTableView-style controller backed by a <template for="row">. Generated
   # rows bind directly to collection items and are disposed on every rerender.
-  class List < Controller
+  class Controller::List < Controller
     property :represented_object, default: -> { [] }
     property :selected_indexes, default: -> { [] }
 

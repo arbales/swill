@@ -4,7 +4,7 @@ module Swill
   # Observable wrapper for a native <select>. Options already present in the
   # markup are retained as a prefix; assigning +options+ replaces only the
   # programmatic suffix, matching the TypeScript control.
-  class Select < Control
+  class Control::Select < Control
     include Observable
 
     property :options, default: -> { [] }

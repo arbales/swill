@@ -1,7 +1,7 @@
 # backtick_javascript: true
 
 module Swill
-  class SortableList < List
+  class Controller::SortableList < Controller::List
     property :sort_key
     property :sort_dir, default: "asc"
     property :sort_states, default: -> { {} }

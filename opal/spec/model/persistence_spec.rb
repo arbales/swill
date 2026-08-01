@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "model_dataset_spec"
-require_relative "../lib/swill/json_api_codec"
-require_relative "../lib/swill/wire"
+require_relative "dataset_spec"
 
 class ModelPersistenceTest < Minitest::Test
   class Record < Swill::Model::Base

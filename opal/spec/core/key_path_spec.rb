@@ -7,10 +7,8 @@
 # KeyPath is DOM-free; the bindings layer on top is exercised through the Opal
 # integration check.
 
-require "minitest/autorun"
-require_relative "../lib/swill/observable"
-require_relative "../lib/swill/core_ext"
-require_relative "../lib/swill/key_path"
+require_relative "../spec_helper"
+require "swill/core"
 
 class KeyPathTest < Minitest::Test
   class Address

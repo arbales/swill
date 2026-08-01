@@ -65,7 +65,7 @@ class ListHostController < Swill::Controller
   end
 end
 
-class RecordingEditor < Swill::Editor
+class RecordingEditor < Swill::Controller::Editor
   def commit
     `globalThis.__editor_events__.push("commit")`
     super

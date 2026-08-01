@@ -1,19 +1,7 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require_relative "../lib/swill/observable"
-require_relative "../lib/swill/key_path"
-require_relative "../lib/swill/object_bindings"
-require_relative "../lib/swill/model_store"
-require_relative "../lib/swill/model_codec"
-require_relative "../lib/swill/model_drafts"
-require_relative "../lib/swill/model_attributes"
-require_relative "../lib/swill/model_dirty_tracking"
-require_relative "../lib/swill/model_identity"
-require_relative "../lib/swill/model_dataset"
-require_relative "../lib/swill/model_persistence"
-require_relative "../lib/swill/model"
-require_relative "../lib/swill/json_api_codec"
+require_relative "../spec_helper"
+require "swill/model"
 
 class ModelTest < Minitest::Test
   class DraftableValue
