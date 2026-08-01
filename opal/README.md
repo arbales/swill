@@ -142,6 +142,8 @@ The Opal implementation currently includes:
 - template-backed `Swill::List` collection controllers with direct row binding,
   owned row views, row actions, observable selection, multiple-selection
   ranges, keyboard/double-click activation, and deterministic teardown;
+- `Swill::SortableList` header actions, observable sort state, Ruby-native
+  comparisons, and selection preservation across reordering;
 - `Swill::Editor` represented-object binding roots with responder-driven
   commit and discard hooks;
 - `klass`-awakened view components plus `Swill::Control`, observable

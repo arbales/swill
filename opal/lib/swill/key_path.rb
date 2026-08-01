@@ -23,6 +23,13 @@ module Swill
     def step(node, segment)
       return nil if node.nil?
 
+      if node.is_a?(Hash)
+        return node[segment] if node.key?(segment)
+
+        symbol = segment.to_sym
+        return node[symbol] if node.key?(symbol)
+      end
+
       node.respond_to?(segment) ? node.public_send(segment) : nil
     end
 

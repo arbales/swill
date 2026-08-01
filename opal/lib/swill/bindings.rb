@@ -39,10 +39,16 @@ module Swill
     # The caller owns the returned disposer and must invoke it before removal.
     def wire_object(object, root)
       disposers = []
+      wired_elements = []
       object_bound_elements(root).each do |element|
+        next if `#{element}.__swill_bindings__`
+
+        element_disposers = []
+        `#{element}.__swill_bindings__ = #{element_disposers}`
+        wired_elements << element
         value_path = `#{element}.getAttribute("bind")`
         if value_path && !value_path.to_s.empty?
-          disposers << wire_value_binding(object, "", element, value_path.to_s)
+          element_disposers << wire_value_binding(object, "", element, value_path.to_s)
         end
 
         attribute_names(element).each do |name|
@@ -50,10 +56,14 @@ module Swill
 
           prop = name.delete_prefix("bind-")
           path = `#{element}.getAttribute(#{name})`.to_s
-          disposers << wire_property_binding(object, "", element, prop, path)
+          element_disposers << wire_property_binding(object, "", element, prop, path)
         end
+        disposers.concat(element_disposers)
       end
-      -> { disposers.each(&:call) }
+      lambda do
+        disposers.each(&:call)
+        wired_elements.each { |element| `#{element}.__swill_bindings__ = null` }
+      end
     end
 
     def wire_value_binding(controller, root_prefix, element, path)

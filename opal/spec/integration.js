@@ -71,7 +71,10 @@ const body = build([
       ]],
     ]],
     ["section", { controller: "ListHostController" }, [
-      ["div", { controller: "Swill::List", outlet: "item_list", tabindex: "0", multiple: "" }, [
+      ["div", { controller: "Swill::SortableList", outlet: "item_list", tabindex: "0", multiple: "" }, [
+        ["header", { outlet: "header_view" }, [
+          ["button", { type: "button", "data-column": "name", "data-action": "sort_by", "bind-aria-sort": "sort_states.name" }],
+        ]],
         ["section", { outlet: "rows" }],
         ["template", { for: "row" }, [["div", { class: "source-row" }, [
           ["span", { bind: "name" }],
@@ -123,7 +126,8 @@ const rootedButton = rootedSection.children[2]; // bind-disabled="@local_message
 const workspace = body.children[2]; // window="workspace"
 const listHost = body.children[5];
 const listRoot = listHost.children[0];
-const listRows = listRoot.children[0];
+const listHeader = listRoot.children[0];
+const listRows = listRoot.children[1];
 const selectedName = listHost.children[1];
 const selectionSummary = listHost.children[2];
 const componentInput = listHost.children[3];
@@ -217,14 +221,28 @@ listRows.dispatch("dblclick", { target: listRows.children[1] });
 assert.strictEqual(globalThis.__activated_list_item__, "Grace", "double-click activates through the responder chain");
 listRows.children[1].children[1].dispatch("click");
 assert.strictEqual(globalThis.__row_pinged__, true, "generated row actions route through the list responder chain");
+listHeader.children[0].dispatch("click");
+assert.strictEqual(listRows.children[0].children[0].textContent, "Ada", "first sort orders rows ascending");
+assert.strictEqual(listHeader.children[0].getAttribute("aria-sort"), "asc", "header exposes ascending sort state");
+listHeader.children[0].dispatch("click");
+assert.strictEqual(listRows.children[0].children[0].textContent, "Katherine", "second sort reverses row order");
+assert.strictEqual(listHeader.children[0].getAttribute("aria-sort"), "desc", "header exposes descending sort state");
+assert.strictEqual(listRows.children[1].classList.contains("selected"), true, "sorting preserves selected object");
+globalThis.__rewireFirstListRow__();
+assert.strictEqual(
+  listRows.children[0].children[0].textContent,
+  "Katherine",
+  "mutation awakening must not rebind generated rows against the list controller",
+);
 listRows.dispatch("click", { target: listRows.children[2], shiftKey: true });
-assert.strictEqual(selectionSummary.textContent, "Grace, Katherine", "shift-click selects anchor range");
+assert.strictEqual(selectionSummary.textContent, "Grace, Ada", "shift-click selects anchor range in arranged order");
 const removedRow = listRows.children[0];
+const removedRowText = removedRow.children[0].textContent;
 globalThis.__replaceList__();
 assert.strictEqual(listRows.children.length, 1, "replacing collection rerenders rows");
 assert.strictEqual(listRows.children[0].children[0].textContent, "Katherine", "replacement row binds new item");
 globalThis.__mutateRemovedRow__();
-assert.strictEqual(removedRow.children[0].textContent, "Ada", "removed row bindings are disposed");
+assert.strictEqual(removedRow.children[0].textContent, removedRowText, "removed row bindings are disposed");
 globalThis.__selectFirstListItem__();
 assert.strictEqual(listRows.children[0].classList.contains("selected"), true, "selected_object= selects by Ruby equality");
 assert.strictEqual(componentValue.textContent, "Control", "klass component exposes its initial observable value");

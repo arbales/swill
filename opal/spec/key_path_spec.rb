@@ -47,6 +47,13 @@ class KeyPathTest < Minitest::Test
     assert_nil Swill::KeyPath.read(@person, %w[address nonexistent])
   end
 
+  def test_read_hash_keys_in_method_style_paths
+    root = Person.new
+    root.define_singleton_method(:states) { { "name" => "asc", role: "desc" } }
+    assert_equal "asc", Swill::KeyPath.read(root, %w[states name])
+    assert_equal "desc", Swill::KeyPath.read(root, %w[states role])
+  end
+
   # --- write ----------------------------------------------------------------
 
   def test_write_nested

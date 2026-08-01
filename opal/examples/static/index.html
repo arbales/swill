@@ -9,6 +9,9 @@
       .people-table th, .people-table td { border: 1px solid #888; padding: 0.35rem 0.6rem; text-align: left; }
       .people-table tbody tr { cursor: default; }
       .people-table tbody tr.selected { background: Highlight; color: HighlightText; }
+      .people-table [data-column] { cursor: pointer; }
+      .people-table [aria-sort="asc"]::after { content: " \2191"; }
+      .people-table [aria-sort="desc"]::after { content: " \2193"; }
       .custom-select { display: inline-block; min-width: 18rem; position: relative; }
       .custom-select-button { align-items: center; background: white; border: 1px solid #888; display: flex; justify-content: space-between; padding: 0.45rem 0.65rem; width: 100%; }
       .custom-select-popup { background: white; border: 1px solid #888; box-shadow: 0 0.25rem 0.75rem #0003; left: 0; min-width: 100%; position: absolute; top: 100%; z-index: 2; }
@@ -114,9 +117,12 @@
       <section>
         <h2>Template-backed list</h2>
         <p>Click a row to select it; shift-click selects a range. Double-click or press Enter to activate it.</p>
-        <table class="people-table" controller="Swill::List" outlet="people_list" tabindex="0" multiple>
+        <table class="people-table" controller="Swill::SortableList" outlet="people_list" tabindex="0" multiple>
           <thead outlet="header_view">
-            <tr><th>Name</th><th>Role</th></tr>
+            <tr>
+              <th data-column="name" data-action="sort_by" bind-aria-sort="sort_states.name">Name</th>
+              <th data-column="role" data-action="sort_by" bind-aria-sort="sort_states.role">Role</th>
+            </tr>
           </thead>
           <tbody outlet="rows">
             <template for="row">

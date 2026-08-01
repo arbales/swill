@@ -48,6 +48,10 @@ class ListHostController < Swill::Controller
     `globalThis.__replaceList__ = #{lambda { item_list.represented_object = [RowItem.new("Katherine")] }}`
     `globalThis.__mutateRemovedRow__ = #{lambda { @old_item.name = "Removed" }}`
     `globalThis.__selectFirstListItem__ = #{lambda { item_list.selected_object = item_list.represented_object.first }}`
+    `globalThis.__rewireFirstListRow__ = #{lambda do
+      first_row = item_list.send(:row_elements).first
+      Swill::Awakening.wire(first_row)
+    end}`
     first_row = item_list.send(:row_elements).first
     `globalThis.__list_row_owner_ok__ = #{Swill::View.for(first_row)&.owner.equal?(item_list)}`
   end
