@@ -4,6 +4,10 @@ module Swill
   module Restoration
     Declaration = Struct.new(:path, :key, :codec, keyword_init: true)
 
+    # Fragment storage is string-typed, so these codecs convert to and from
+    # strings. They are deliberately separate from Swill::Sig's wire types:
+    # the wire guard rejects "true"/"1" where a boolean is declared, while a
+    # URL fragment has nothing else to offer.
     module Codecs
       module String
         module_function
@@ -64,24 +68,17 @@ module Swill
       end
 
       module ClassMethods
+        extend Declarations
+
+        inheritable_registry :restorable_state_declarations, :array
+
         def restorable_state(path, key: nil, codec: Codecs::String)
           path = path.to_s
-          own_restorable_state << Declaration.new(
+          restorable_state_declarations << Declaration.new(
             path: path,
             key: (key || path).to_s,
             codec: codec
           )
-        end
-
-        def restorable_state_declarations
-          inherited = superclass.respond_to?(:restorable_state_declarations) ? superclass.restorable_state_declarations : []
-          inherited + own_restorable_state
-        end
-
-        private
-
-        def own_restorable_state
-          @own_restorable_state ||= []
         end
       end
 

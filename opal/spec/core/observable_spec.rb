@@ -273,4 +273,60 @@ class ObservableTest < Minitest::Test
       end
     end
   end
+
+  def test_did_change_hook_reads_fresh_derived_values
+    klass = Class.new do
+      include Swill::Observable
+      attr_reader :seen
+
+      property :items, default: -> { [] }
+      property :count do
+        items.length
+      end
+
+      def items_did_change(_previous, _value)
+        (@seen ||= []) << count
+      end
+    end
+
+    instance = klass.new
+    instance.count # prime the derived cache so staleness is possible
+    instance.items = [1]
+    instance.items = [1, 2]
+    assert_equal [1, 2], instance.seen
+  end
+
+  def test_invalidation_reaches_chained_derived_properties_lazily
+    klass = Class.new do
+      include Swill::Observable
+      property :base, default: 1
+      property :doubled do
+        base * 2
+      end
+      property :quadrupled do
+        doubled * 2
+      end
+    end
+
+    instance = klass.new
+    assert_equal 4, instance.quadrupled
+    instance.base = 3
+    assert_equal 12, instance.quadrupled
+  end
+
+  def test_coerce_runs_before_comparison_and_storage
+    klass = Class.new do
+      include Swill::Observable
+      property :items, default: -> { [] }, coerce: ->(value) { value || [] }
+    end
+
+    instance = klass.new
+    changes = []
+    instance.observe(:items) { |value| changes << value }
+    instance.items = nil
+    assert_equal [], instance.items
+    assert_empty changes # nil coerced to [] equals the default; no change
+    instance.items = [1]
+    assert_equal [[1]], changes
+  end
 end

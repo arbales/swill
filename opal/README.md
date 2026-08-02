@@ -62,7 +62,10 @@ the same boundaries:
 - `core`: DOM-free observation, key paths, responder behavior, signatures, and
   Ruby extensions;
 - `view`: DOM views, focus, bindings, actions, outlets, awakening, and the
-  application lifecycle;
+  application lifecycle. Presented windows and URL-fragment state are objects
+  (`Swill::Window`, `Swill::FragmentRouter`) rather than the TypeScript side's
+  entry records inside `application.ts` — intended structural divergence; the
+  per-window first-responder TODO lands on `Window` when it arrives;
 - `controller`: the base controller plus list, sortable-list, and editor
   specializations;
 - `control`: the base control plus text and select components;
@@ -173,7 +176,9 @@ The Opal implementation currently includes:
   Back/Forward-aware named window content;
 - inherited Ruby-native HTML attribute declarations and a Cocoa-shaped
   `Swill::NotificationCenter`;
-- ISO-8601 dates on MRI and Opal;
+- ISO-8601 dates on MRI and Opal (an opt-in on the client: require
+  `corelib/time` before `swill`, then `swill/core/iso8601` — the default
+  bundle ships without Opal's date/time/bigdecimal stdlib);
 - observable models with inherited declarations, validation hooks, dirty
   tracking, identity stores, and plain JSON and JSON:API codecs;
 - independently composable `Swill::Model::Attributes`, `DirtyTracking`, and
@@ -187,6 +192,11 @@ The Opal implementation currently includes:
   row binding,
   owned row views, row actions, observable selection, multiple-selection
   ranges, keyboard/double-click activation, and deterministic teardown;
+- identity-based list selection: the selected objects are the stored
+  primitive, indexes and the leading id derive from them, and selection
+  survives reordering and data refreshes. (Intended divergence from the
+  TypeScript `List`, which stores indexes and clears selection when
+  `representedObject` changes; a TS backport is the eventual reconciliation.)
 - `Swill::Controller::SortableList` header actions, observable sort state,
   Ruby-native comparisons, and selection preservation across reordering;
 - `Swill::Controller::Editor` represented-object binding roots with

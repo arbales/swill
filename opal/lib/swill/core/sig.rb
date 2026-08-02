@@ -38,9 +38,15 @@ module Swill
     class Error < StandardError; end
 
     # Base class for the small type vocabulary. A Type knows how to coerce a
-    # raw decoded value (#coerce) and describe itself as plain data
-    # (#descriptor); both are defined by the concrete types below.
+    # raw decoded value (#coerce), encode a coerced value back to a wire-safe
+    # JSON value (#encode), and describe itself as plain data (#descriptor).
     class Type
+      # Most scalars are JSON-native and pass through; date and decimal
+      # override with their canonical string forms.
+      def encode(value)
+        value
+      end
+
       # Resolve a token used in a sig (a Ruby class like String, or a Type
       # instance from Swill::T) into a Type.
       def self.of(token)
@@ -87,13 +93,18 @@ module Swill
     # coercion block. The scalar-smuggling guard runs once here, so a block
     # only ever sees a scalar. The block must be an expression (no `return`).
     class Primitive < Type
-      def initialize(name, &coercer)
+      def initialize(name, encode: nil, &coercer)
         @name = name
         @coercer = coercer
+        @encoder = encode
       end
 
       def coerce(value)
         @coercer.call(Type.scalar!(value))
+      end
+
+      def encode(value)
+        @encoder ? @encoder.call(value) : value
       end
 
       def descriptor
@@ -112,6 +123,10 @@ module Swill
         @inner.coerce(value)
       end
 
+      def encode(value)
+        value.nil? ? nil : @inner.encode(value)
+      end
+
       def descriptor
         [:nilable, @inner.descriptor]
       end
@@ -126,6 +141,10 @@ module Swill
         raise Error, "expected an array, got #{value.class}" unless value.is_a?(Array)
 
         value.map { |element| @inner.coerce(element) }
+      end
+
+      def encode(value)
+        value.map { |element| @inner.encode(element) }
       end
 
       def descriptor
@@ -144,6 +163,10 @@ module Swill
         # intern the untrusted client string (symbol-table DoS guard).
         match = @values.find { |allowed| allowed.to_s == candidate }
         match or raise Error, "expected one of #{@values.inspect}, got #{candidate.inspect}"
+      end
+
+      def encode(value)
+        value.to_s
       end
 
       def descriptor
@@ -185,10 +208,14 @@ module Swill
           raise Error, "expected a boolean, got #{value.inspect}"
         end
       end,
-      date: Primitive.new(:date) do |value|
+      # Date and BigDecimal are resolved at coerce time and deliberately not
+      # required here — a static require would compile Opal's date and
+      # bigdecimal stdlibs into every client bundle. Callers using these
+      # types require "date"/"bigdecimal" (and, on the client,
+      # "swill/core/iso8601" for the Date.iso8601 polyfill) themselves.
+      date: Primitive.new(:date, encode: ->(value) { value.iso8601 }) do |value|
         raise Error, "expected an ISO-8601 date string, got #{value.class}" unless value.is_a?(String)
 
-        require "date"
         begin
           Date.iso8601(value)
         rescue ArgumentError
@@ -197,8 +224,7 @@ module Swill
       end,
       # Money and other exact decimals. Rejects Float to avoid binary
       # floating-point drift.
-      decimal: Primitive.new(:decimal) do |value|
-        require "bigdecimal"
+      decimal: Primitive.new(:decimal, encode: ->(value) { value.to_s("F") }) do |value|
         if value.is_a?(Integer)
           BigDecimal(value.to_s)
         elsif value.is_a?(String) && value.match?(/\A-?\d+(\.\d+)?\z/)
@@ -237,6 +263,15 @@ module Swill
         end
       end
 
+      # Encode a coerced params hash back to wire-safe JSON values, each
+      # param through its own type.
+      def encode(params)
+        params.each_with_object({}) do |(name, value), out|
+          type = @params[name]
+          out[name] = type ? type.encode(value) : value
+        end
+      end
+
       # Plain-data form for the client manifest.
       def descriptor
         {
@@ -257,58 +292,14 @@ module Swill
       private
 
       def value_for(raw, name)
-        raw.key?(name) ? raw[name] : raw[name.to_s]
+        Indifferent.fetch(raw, name)
       end
     end
 
-    # ---- the decorator surface (extended into a command/query module) ----
-
-    def self.extended(base)
-      base.instance_variable_set(:@__swill_pending_sig__, nil)
-      base.instance_variable_set(:@__swill_signatures__, {})
-    end
-
-    def params(**types)
-      @__swill_pending_sig__ = Signature.new(resolve_params(types))
-    end
-
-    def §(**types)
-      params(**types)
-    end
-
-    # Binds pending params to the method defined immediately after them. Only
-    # ever runs on MRI; the client builds from the manifest instead.
-    def method_added(name)
-      if @__swill_pending_sig__
-        @__swill_signatures__[name] = @__swill_pending_sig__
-        @__swill_pending_sig__ = nil
-      end
-      super
-    end
-
-    def signature_for(name)
-      @__swill_signatures__[name]
-    end
-
-    def signatures
-      @__swill_signatures__.dup
-    end
-
-    # Plain-data manifest of every sig in this module, for shipping to the
-    # client. { method_name => signature_descriptor }.
-    def sig_manifest
-      @__swill_signatures__.each_with_object({}) do |(name, signature), out|
-        out[name] = signature.descriptor
-      end
-    end
-
-    private
-
-    def resolve_params(types)
-      types.each_with_object({}) do |(name, token), out|
-        out[name] = Type.of(token)
-      end
-    end
+    # The decorator surface (`extend Swill::Sig`, `§ name: String`,
+    # sig_manifest) lives in swill/core/sig/authoring — required by server
+    # code and specs, never from swill/core, so the client bundle carries
+    # only the types and Signature.
   end
 
   # The type combinators. Primitive classes (String, Integer, Float) are used

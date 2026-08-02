@@ -5,24 +5,14 @@ module Swill
     # Promise-returning instance commands over an injectable wire boundary.
     # Endpoints are explicit; no route convention is imposed on model names.
     module Persistence
-      ENDPOINT_UNSET = Object.new
-      private_constant :ENDPOINT_UNSET
-
       def self.included(base)
         base.extend(ClassMethods)
       end
 
       module ClassMethods
-        def endpoint(value = ENDPOINT_UNSET)
-          if value.equal?(ENDPOINT_UNSET)
-            return @model_endpoint if instance_variable_defined?(:@model_endpoint)
-            return superclass.endpoint if superclass.respond_to?(:endpoint)
+        extend Declarations
 
-            return nil
-          end
-
-          @model_endpoint = value.to_s
-        end
+        class_setting(:endpoint, &:to_s)
       end
 
       def save(wire: Wire)

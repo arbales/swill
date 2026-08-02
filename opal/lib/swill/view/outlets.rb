@@ -27,19 +27,14 @@ module Swill
     end
 
     module ClassMethods
+      extend Declarations
+
+      inheritable_registry :outlets
+
       def outlet(name, optional: false)
         name = name.to_sym
         outlets[name] = { optional: optional }
         attr_accessor name
-      end
-
-      def outlets
-        @outlets ||= {}
-      end
-
-      def inherited(subclass)
-        super
-        subclass.instance_variable_set(:@outlets, outlets.dup)
       end
     end
 
@@ -69,15 +64,8 @@ module Swill
     # child controller, and the `outlet` and `controller` attributes share that
     # element.
     def owned_outlet_elements(controller)
-      found = []
-      collect = lambda do |element|
-        `Array.from(#{element}.children)`.each do |child|
-          found << child if `#{child}.hasAttribute("outlet")`
-          collect.call(child) unless `#{child}.hasAttribute("controller")`
-        end
-      end
-      collect.call(controller.view.element)
-      found
+      Ownership.owned_matching(controller.view.element, "[outlet]",
+                               include_root: false, include_boundaries: true)
     end
 
     def value_for(controller, name, element)

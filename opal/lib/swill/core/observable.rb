@@ -69,17 +69,21 @@ module Swill
   # name both as a reactive property and as a plain accessor warns, because the
   # plain accessor silently bypasses notification.
   module Observable
-    DEFAULT_UNSET = Object.new
-    private_constant :DEFAULT_UNSET
-
     def self.included(base)
       base.extend(ClassMethods)
     end
 
     module ClassMethods
-      def property(name, default: DEFAULT_UNSET, &block)
+      extend Declarations
+
+      inheritable_registry :observable_properties
+      inheritable_registry :observable_computeds
+      inheritable_registry :observable_plain_accessors
+
+      def property(name, default: UNSET, coerce: nil, &block)
         if block
-          raise ArgumentError, "derived property cannot also have a default" unless default.equal?(DEFAULT_UNSET)
+          raise ArgumentError, "derived property cannot also have a default" unless default.equal?(UNSET)
+          raise ArgumentError, "derived property cannot also have a coerce" if coerce
 
           return computed(name, &block)
         end
@@ -89,9 +93,9 @@ module Swill
           raise ArgumentError, "predicate properties must be block-backed: property :#{name} do ..."
         end
 
-        default = nil if default.equal?(DEFAULT_UNSET)
+        default = nil if default.equal?(UNSET)
         warn_reactive_overlap(name) if observable_plain_accessors.key?(name)
-        observable_properties[name] = { default: default }
+        observable_properties[name] = { default: default, coerce: coerce }
 
         # Resolve the stored value, materializing the default on first touch.
         # Used by both the getter (which also records a dependency) and the
@@ -109,17 +113,25 @@ module Swill
           resolve.call(self)
         end
 
+        # The one canonical mutation path. Declaration-level coerce runs
+        # first, then the instance-side hooks that concerns override
+        # (validation via coerce_property_value, dirty marking via
+        # property_will_change) — nothing redefines this setter.
         define_method("#{name}=") do |value|
           previous = resolve.call(self)
+          value = instance_exec(value, &coerce) if coerce
+          value = coerce_property_value(name, value, previous)
           return value if previous == value
 
+          property_will_change(name, previous, value)
           property_store[name] = value
           notify_change(name, previous, value)
           value
         end
       end
 
-      # Backward-compatible alias for block-backed property declarations.
+      # Implementation of block-backed property declarations. Internal —
+      # `property :name do ... end` is the public spelling.
       def computed(name, &block)
         name = name.to_sym
         warn_reactive_overlap(name) if observable_plain_accessors.key?(name)
@@ -133,18 +145,7 @@ module Swill
           recompute_computed(name)
         end
       end
-
-      def observable_properties
-        @observable_properties ||= {}
-      end
-
-      def observable_computeds
-        @observable_computeds ||= {}
-      end
-
-      def observable_plain_accessors
-        @observable_plain_accessors ||= {}
-      end
+      private :computed
 
       def computed_block(name)
         observable_computeds[name.to_sym]
@@ -169,16 +170,6 @@ module Swill
       def attr_accessor(*names)
         register_plain_accessors(names)
         super
-      end
-
-      # Sequel-style inherited configuration: copy the declaration registries
-      # into the subclass once, explicitly, rather than walking metadata up the
-      # ancestry on every lookup.
-      def inherited(subclass)
-        super
-        subclass.instance_variable_set(:@observable_properties, observable_properties.dup)
-        subclass.instance_variable_set(:@observable_computeds, observable_computeds.dup)
-        subclass.instance_variable_set(:@observable_plain_accessors, observable_plain_accessors.dup)
       end
 
       private
@@ -210,25 +201,48 @@ module Swill
       -> { observers_for(name).delete(observer) }
     end
 
+    # Internal: a derived property's dependency subscription. Dependents run
+    # before the did-change hook and public observers (see notify_change), so
+    # a hook that reads a derived property sees a fresh value, never the
+    # pre-change cache.
+    def observe_dependent(name, &observer)
+      name = name.to_sym
+      ensure_computed(name)
+      dependents_for(name) << observer
+      -> { dependents_for(name).delete(observer) }
+    end
+
     # Observable objects are often used as lightweight editing values. Ruby's
     # default dup is shallow, so explicitly detach reactive storage and never
     # copy subscriptions or computed dependency disposers into the clone.
     def initialize_dup(other)
       super
-      @properties = other.instance_variable_get(:@properties)&.dup
+      @properties = @properties&.dup
       @observers = {}
+      @dependent_observers = {}
       @computed = {}
       @computed_disposers = {}
     end
 
     def notify_change(name, previous, value)
       name = name.to_sym
+      dependents_for(name).dup.each { |dependent| dependent.call(value) }
       callback = "#{name}_did_change"
       public_send(callback, previous, value) if respond_to?(callback)
       observers_for(name).dup.each { |observer| observer.call(value) }
     end
 
     private
+
+    # Setter hooks, called for every declared property. Concerns override
+    # these (and call super) instead of redefining the generated setter:
+    # coerce_property_value transforms the incoming value before the equality
+    # check; property_will_change runs after it, just before storage.
+    def coerce_property_value(_name, value, _previous)
+      value
+    end
+
+    def property_will_change(_name, _previous, _value); end
 
     def property_store
       @properties ||= {}
@@ -244,6 +258,10 @@ module Swill
 
     def observers_for(name)
       (@observers ||= {})[name.to_sym] ||= []
+    end
+
+    def dependents_for(name)
+      (@dependent_observers ||= {})[name.to_sym] ||= []
     end
 
     # If +name+ is a derived property that has not run yet, compute it so its
@@ -262,22 +280,25 @@ module Swill
       deps, value = Computation.capture { instance_exec(&block) }
 
       computed_disposers[name] = deps.map do |object, dependency|
-        object.observe(dependency) { invalidate_computed(name) }
+        object.observe_dependent(dependency) { invalidate_computed(name) }
       end
       computed_store[name] = { value: value, valid: true }
       value
     end
 
-    # A dependency changed. Drop the cache. If anything is watching this
-    # derived property (a binding, or another derived property that depends on
-    # it), recompute eagerly and push the change so observers stay live;
-    # otherwise stay lazy and let the next read recompute.
+    # A dependency changed. Drop the cache and propagate the invalidation to
+    # derived properties built on this one. If anything public is watching (a
+    # binding, or a did-change hook via notify), recompute eagerly and push
+    # the change so observers stay live; otherwise stay lazy and let the next
+    # read recompute.
     def invalidate_computed(name)
       slot = computed_store[name]
       return unless slot && slot[:valid]
 
       previous = slot[:value]
       slot[:valid] = false
+
+      dependents_for(name).dup.each { |dependent| dependent.call(nil) }
 
       return if observers_for(name).empty?
 

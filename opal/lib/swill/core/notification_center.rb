@@ -4,19 +4,6 @@ module Swill
   Notification = Struct.new(:name, :object, :user_info, keyword_init: true)
 
   class NotificationCenter
-    class Token
-      def initialize(&removal)
-        @removal = removal
-      end
-
-      def remove
-        removal = @removal
-        @removal = nil
-        removal&.call
-        nil
-      end
-    end
-
     class << self
       def default
         @default ||= new
@@ -27,12 +14,14 @@ module Swill
       @observers = Hash.new { |hash, name| hash[name] = [] }
     end
 
+    # Returns a lambda that unsubscribes — the same token shape as
+    # Observable#observe and FirstResponder.observe.
     def observe(name, object: nil, &handler)
       raise ArgumentError, "notification observer requires a block" unless handler
 
       entry = { object: object, handler: handler }
       @observers[name.to_sym] << entry
-      Token.new { @observers[name.to_sym].delete(entry) }
+      -> { @observers[name.to_sym].delete(entry) }
     end
 
     def post(name, object: nil, user_info: nil)

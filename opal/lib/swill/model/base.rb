@@ -15,15 +15,10 @@ module Swill
       include Persistence
       include ObjectBindings
 
-      DEFAULT_UNSET = Object.new
-      private_constant :DEFAULT_UNSET
-
       class << self
-        def codec(value = DEFAULT_UNSET)
-          return @model_codec if value.equal?(DEFAULT_UNSET)
+        extend Declarations
 
-          @model_codec = value
-        end
+        class_setting :codec
 
         def parse_one(payload)
           (codec || PlainJSON).parse_one(self, payload)
@@ -31,11 +26,6 @@ module Swill
 
         def parse_many(payload)
           (codec || PlainJSON).parse_many(self, payload)
-        end
-
-        def inherited(subclass)
-          super
-          subclass.instance_variable_set(:@model_codec, @model_codec)
         end
       end
 

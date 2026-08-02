@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+# Client opt-in ordering: Opal's date stdlib needs the real (bridged) Time
+# class, and Opal's native/json stdlibs — loaded by swill.rb — reopen
+# `class Time`, which would otherwise create an unbridged placeholder that
+# corelib/time cannot repair. A client bundle that uses dates must therefore
+# require "corelib/time" BEFORE "swill" (see spec/integration/app.rb).
 require "date"
 
 module Swill

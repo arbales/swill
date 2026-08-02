@@ -2,21 +2,39 @@
 
 module Swill
   class Controller::SortableList < Controller::List
-    property :sort_key
-    property :sort_dir, default: "asc"
+    # One stored sort descriptor; key and direction derive from it, so a
+    # toggle is a single change notification and selection — identity-based
+    # in List — survives the reorder with no bookkeeping.
+    property :sort, default: -> { {} }
     property :sort_states, default: -> { {} }
+
+    # Plain readers, not computeds: the did-change hook runs before computed
+    # invalidation, so a cached reader would be stale inside sort_did_change.
+    # Reads still auto-track — they record the underlying :sort property.
+    def sort_key
+      sort[:key]
+    end
+
+    def sort_dir
+      sort[:dir] || "asc"
+    end
+
+    def sort_key=(key)
+      self.sort = { key: key, dir: sort_dir }
+    end
+
+    def sort_dir=(dir)
+      self.sort = { key: sort_key, dir: dir }
+    end
 
     def after_load
       super
-      self.sort_states = sort_state_map
+      sync_sort_states
     end
 
-    def sort_key_did_change(_previous, _value)
-      sort_did_change
-    end
-
-    def sort_dir_did_change(_previous, _value)
-      sort_did_change
+    def sort_did_change(_previous, _value)
+      sync_sort_states
+      render_all if view
     end
 
     def sort_by(sender, _event = nil)
@@ -25,17 +43,11 @@ module Swill
     end
 
     def toggle_sort(key)
-      selected = selected_object
-      @changing_sort = true
-      if sort_key == key
-        self.sort_dir = sort_dir == "asc" ? "desc" : "asc"
-      else
-        self.sort_key = key
-        self.sort_dir = "asc"
-      end
-      @changing_sort = false
-      sort_did_change
-      self.selected_object = selected
+      self.sort = if sort_key == key
+                    { key: key, dir: sort_dir == "asc" ? "desc" : "asc" }
+                  else
+                    { key: key, dir: "asc" }
+                  end
     end
 
     protected
@@ -51,22 +63,8 @@ module Swill
 
     private
 
-    def sort_did_change
-      return if @changing_sort
-
-      self.sort_states = sort_state_map
-      render_all
-    end
-
-    def sort_state_map
-      return {} unless header_view && sort_key
-
-      states = {}
-      `Array.from(#{header_view.element}.querySelectorAll("[data-column]"))`.each do |element|
-        key = `#{element}.getAttribute("data-column")`.to_s
-        states[key] = sort_dir if key == sort_key
-      end
-      states
+    def sync_sort_states
+      self.sort_states = sort_key ? { sort_key => sort_dir } : {}
     end
 
     def value_for_sort(object, key)

@@ -5,7 +5,7 @@ module Swill
     module_function
 
     def wire(controller, root = controller.view.element)
-      disposers = wire_elements(controller, Bindings.owned_elements(controller, root, "[data-action]"))
+      disposers = wire_elements(controller, Ownership.owned_matching(root, "[data-action]"))
       controller.register_teardown { disposers.each(&:call) }
     end
 

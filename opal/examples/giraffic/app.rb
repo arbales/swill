@@ -70,7 +70,7 @@ class MailingList < Swill::Model::Base
 
   has_many :members,
            type: -> { Member },
-           url: ->(list) { "/api/collections/#{Swill::Wire.escape_component(list.id)}/members" }
+           url: ->(list) { "/api/lists/#{Swill::Wire.escape_component(list.id)}/members" }
 
   property :clean? do
     !dirty?

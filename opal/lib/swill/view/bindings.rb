@@ -9,24 +9,11 @@ module Swill
     def wire(controller, root = controller.view.element)
       root_prefix = controller.respond_to?(:binding_root) ? controller.binding_root.to_s : ""
 
-      owned_bound_elements(controller, root).each do |element|
-        next if `#{element}.__swill_bindings__`
+      Ownership.each_owned(root) do |element|
+        next unless binding_element?(element)
 
-        disposers = []
-        `#{element}.__swill_bindings__ = #{disposers}`
-
-        value_path = `#{element}.getAttribute("bind")`
-        if value_path && !value_path.to_s.empty?
-          disposers << wire_value_binding(controller, root_prefix, element, value_path.to_s)
-        end
-
-        attribute_names(element).each do |name|
-          next unless name.start_with?("bind-")
-
-          prop = name.delete_prefix("bind-")
-          path = `#{element}.getAttribute(#{name})`.to_s
-          disposers << wire_property_binding(controller, root_prefix, element, prop, path)
-        end
+        disposers = wire_element(controller, root_prefix, element)
+        next unless disposers
 
         controller.register_teardown do
           disposers.each(&:call)
@@ -38,32 +25,44 @@ module Swill
     # Wire a generated subtree directly to an ordinary observable object.
     # The caller owns the returned disposer and must invoke it before removal.
     def wire_object(object, root)
-      disposers = []
-      wired_elements = []
-      object_bound_elements(root).each do |element|
-        next if `#{element}.__swill_bindings__`
+      wired = []
+      Ownership.each_owned(root) do |element|
+        next unless binding_element?(element)
 
-        element_disposers = []
-        `#{element}.__swill_bindings__ = #{element_disposers}`
-        wired_elements << element
-        value_path = `#{element}.getAttribute("bind")`
-        if value_path && !value_path.to_s.empty?
-          element_disposers << wire_value_binding(object, "", element, value_path.to_s)
-        end
-
-        attribute_names(element).each do |name|
-          next unless name.start_with?("bind-")
-
-          prop = name.delete_prefix("bind-")
-          path = `#{element}.getAttribute(#{name})`.to_s
-          element_disposers << wire_property_binding(object, "", element, prop, path)
-        end
-        disposers.concat(element_disposers)
+        disposers = wire_element(object, "", element)
+        wired << [element, disposers] if disposers
       end
       lambda do
-        disposers.each(&:call)
-        wired_elements.each { |element| `#{element}.__swill_bindings__ = null` }
+        wired.each do |element, disposers|
+          disposers.each(&:call)
+          `#{element}.__swill_bindings__ = null`
+        end
       end
+    end
+
+    # Wire one element's bind/bind-* attributes against +target+. Returns the
+    # element's disposers, or nil when it is already wired. The element also
+    # carries the disposers as __swill_bindings__, which doubles as the
+    # already-wired marker.
+    def wire_element(target, root_prefix, element)
+      return nil if `#{element}.__swill_bindings__`
+
+      disposers = []
+      `#{element}.__swill_bindings__ = #{disposers}`
+
+      value_path = `#{element}.getAttribute("bind")`
+      if value_path && !value_path.to_s.empty?
+        disposers << wire_value_binding(target, root_prefix, element, value_path.to_s)
+      end
+
+      attribute_names(element).each do |name|
+        next unless name.start_with?("bind-")
+
+        prop = name.delete_prefix("bind-")
+        path = `#{element}.getAttribute(#{name})`.to_s
+        disposers << wire_property_binding(target, root_prefix, element, prop, path)
+      end
+      disposers
     end
 
     def wire_value_binding(controller, root_prefix, element, path)
@@ -103,36 +102,6 @@ module Swill
       end
       `#{element}.addEventListener(#{event_name}, #{listener})`
       -> { `#{element}.removeEventListener(#{event_name}, #{listener})` }
-    end
-
-    def owned_bound_elements(controller, root)
-      owned_elements(controller, root, "*").select { |element| binding_element?(element) }
-    end
-
-    def object_bound_elements(root)
-      elements = []
-      elements << root if binding_element?(root)
-      `Array.from(#{root}.querySelectorAll("*"))`.each do |element|
-        boundary = `#{element}.closest("[controller]")`
-        next if boundary && `#{boundary} !== #{root} && #{root}.contains(#{boundary})`
-
-        elements << element if binding_element?(element)
-      end
-      elements
-    end
-
-    def owned_elements(controller, root, selector)
-      elements = []
-      elements << root if `#{root}.matches(#{selector})`
-      nodes = `Array.from(#{root}.querySelectorAll(#{selector}))`
-
-      nodes.each do |element|
-        boundary = `#{element}.closest("[controller]")`
-        owner = boundary ? View.controller_for(boundary) : controller
-        elements << element if owner == controller
-      end
-
-      elements
     end
 
     def binding_element?(element)

@@ -60,7 +60,7 @@ module Swill
       options = `({ method: #{method}, headers: { "Accept": "application/vnd.api+json, application/json" } })`
       unless body.nil?
         `#{options}.headers["Content-Type"] = #{content_type}` if content_type
-        encoded_body = content_type == "application/x-www-form-urlencoded" ? form_encode(body) : JSON.generate(body)
+        encoded_body = content_type == "application/x-www-form-urlencoded" ? encode_params(body) : JSON.generate(body)
         `#{options}.body = #{encoded_body}`
       end
       fetch_promise = `fetch(#{request_url}, #{options})`
@@ -71,11 +71,8 @@ module Swill
     def url_with_params(url, params)
       return url if params.empty?
 
-      encoded = params.map do |key, value|
-        "#{escape(key)}=#{escape(value)}"
-      end.join("&")
       separator = url.include?("?") ? "&" : "?"
-      "#{url}#{separator}#{encoded}"
+      "#{url}#{separator}#{encode_params(params)}"
     end
 
     def resolve_url(url)
@@ -106,12 +103,14 @@ module Swill
       escape_component(value)
     end
 
-    def form_encode(values)
-      values.each_with_object([]) do |(key, value), encoded|
-        encoded << "#{escape(key)}=#{escape(value)}" unless value.nil?
+    # k=v&k=v with URL escaping, for query strings and form bodies alike.
+    # nil values are omitted rather than sent as empty strings.
+    def encode_params(values)
+      values.filter_map do |key, value|
+        "#{escape(key)}=#{escape(value)}" unless value.nil?
       end.join("&")
     end
     private_class_method :escape
-    private_class_method :form_encode
+    private_class_method :encode_params
   end
 end

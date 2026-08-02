@@ -17,25 +17,9 @@ module Swill
       signature = @signatures[name]
       raise Sig::Error, "unknown command: #{name}" unless signature
 
-      payload = { command: name.to_s, params: encode(signature.coerce(params)) }
+      payload = { command: name.to_s, params: signature.encode(signature.coerce(params)) }
       payload[:context] = context unless context.nil?
       @wire.request_json("POST", @endpoint, body: payload)
-    end
-
-    private
-
-    def encode(value)
-      case value
-      when Hash
-        value.transform_values { |item| encode(item) }
-      when Array
-        value.map { |item| encode(item) }
-      else
-        return value.iso8601 if value.respond_to?(:iso8601)
-        return value.to_s("F") if defined?(BigDecimal) && value.is_a?(BigDecimal)
-
-        value
-      end
     end
   end
 end

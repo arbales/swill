@@ -54,20 +54,21 @@ class KeyPathTest < Minitest::Test
 
   # --- write ----------------------------------------------------------------
 
-  def test_write_nested
-    Swill::KeyPath.write(@person, %w[address city], "Salem")
+  def test_write_bang_nested
+    Swill::KeyPath.write!(@person, %w[address city], "Salem")
     assert_equal "Salem", @person.address.city
   end
 
-  def test_write_through_nil_intermediate_is_noop
+  def test_write_bang_through_nil_intermediate_is_noop
     @person.address = nil
-    Swill::KeyPath.write(@person, %w[address city], "Salem") # must not raise
+    Swill::KeyPath.write!(@person, %w[address city], "Salem") # must not raise
     assert_nil @person.address
   end
 
-  def test_write_without_setter_is_noop
-    # `address` has a setter, but reading-only leaf with no setter is a no-op.
-    Swill::KeyPath.write(@person, %w[missing], "x") # must not raise
+  def test_write_bang_without_setter_raises
+    assert_raises(NoMethodError) do
+      Swill::KeyPath.write!(@person, %w[missing], "x")
+    end
   end
 
   def test_writable_distinguishes_properties_from_method_results

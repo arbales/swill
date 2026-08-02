@@ -24,26 +24,11 @@ module Swill
       return nil if node.nil?
 
       if node.is_a?(Hash)
-        return node[segment] if node.key?(segment)
-
-        symbol = segment.to_sym
-        return node[symbol] if node.key?(symbol)
+        key = Indifferent.locate(node, segment)
+        return node[key] unless key.nil?
       end
 
       node.respond_to?(segment) ? node.public_send(segment) : nil
-    end
-
-    # Assign +value+ at the end of the path. No-op when the path is empty, an
-    # intermediate is nil, or the leaf owner has no setter.
-    def write(root, segments, value)
-      return if segments.empty?
-
-      *leading, last = segments
-      target = read(root, leading)
-      return if target.nil?
-
-      setter = "#{last}="
-      target.public_send(setter, value) if target.respond_to?(setter)
     end
 
     # Whether the path currently resolves to a Ruby writer. +nil+ means an

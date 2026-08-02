@@ -197,7 +197,7 @@ module Swill
     end
 
     def option_entry(option, name)
-      option[name] || option[name.to_s]
+      Indifferent.fetch(option, name)
     end
   end
 end

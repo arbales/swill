@@ -6,25 +6,18 @@ module Swill
     extend Codec
     module_function
 
-    TYPE_UNSET = Object.new
-    private_constant :TYPE_UNSET
-
     @type_registry = {}
 
     # JSON:API resource type configuration is deliberately owned by this
     # codec. Plain JSON and future transports do not need or consult it.
     module ModelClassMethods
-      def json_api_type(value = TYPE_UNSET)
-        if value.equal?(TYPE_UNSET)
-          return @json_api_type if instance_variable_defined?(:@json_api_type)
-          return superclass.json_api_type if superclass.respond_to?(:json_api_type)
+      extend Declarations
 
-          return nil
-        end
-
+      class_setting :json_api_type do |value|
         JSONAPI.unregister_type(@json_api_type, self) if instance_variable_defined?(:@json_api_type)
-        @json_api_type = value.to_s
-        JSONAPI.register_type(@json_api_type, self)
+        value = value.to_s
+        JSONAPI.register_type(value, self)
+        value
       end
     end
 
@@ -63,7 +56,7 @@ module Swill
       type = model.class.json_api_type
       raise ArgumentError, "#{model.class} has no json_api_type" if type.nil? || type.empty?
 
-      resource = { type: type, attributes: serialize_attributes(model, dirty_only) }
+      resource = { type: type, attributes: PlainJSON.serialize(model, dirty_only: dirty_only) }
       resource[:id] = model.id unless model.id.nil?
       { data: resource }
     end
@@ -149,19 +142,12 @@ module Swill
       klass.get(id) || raise(ArgumentError, "resource was not pooled")
     end
 
-    def serialize_attributes(model, dirty_only)
-      selected = dirty_only ? model.dirty : nil
-      model.class.model_attributes.each_with_object({}) do |(name, descriptor), result|
-        result[descriptor.key] = model.public_send(name) if selected.nil? || selected.include?(name)
-      end
-    end
-
     def key?(hash, key)
-      hash.key?(key) || hash.key?(key.to_s)
+      Indifferent.key?(hash, key)
     end
 
     def fetch(hash, key)
-      hash.key?(key) ? hash[key] : hash[key.to_s]
+      Indifferent.fetch(hash, key)
     end
   end
 

@@ -4,7 +4,14 @@
 # hook into globalThis.__hooks__ so the Node harness can assert ordering, and
 # exposes a `clear` action plus a two-way `message` binding.
 
+# The integration bundle opts into the date layer to exercise the Date.iso8601
+# polyfill under real Opal; the default client bundle ships without it. The
+# runtime must boot first, then the bridged Time class must load before
+# swill's native/json requires reopen it.
+require "opal/mini"
+require "corelib/time"
 require "swill"
+require "swill/core/iso8601"
 
 class User
   include Swill::Observable

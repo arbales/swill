@@ -18,13 +18,7 @@ module Swill
       return false if editing? && !end_editing(true)
 
       original = arranged_objects[index]
-      copy = if original.respond_to?(:draft)
-               original.draft
-             elsif original.respond_to?(:dup)
-               original.dup
-             else
-               original
-             end
+      copy = original.respond_to?(:draft) ? original.draft : original.dup
       open_editor(index, original, copy)
     end
 
@@ -108,10 +102,10 @@ module Swill
       error
     end
 
+    # Whether a focus-out commit should proceed. Defaults to committing;
+    # applications override to interpose their own confirmation UI.
     def confirm_edit?(_copy, _original)
-      return true unless `typeof window !== "undefined" && window.confirm`
-
-      `window.confirm("Save changes?")`
+      true
     end
 
     def edited_object_has_changes?(copy, original)
@@ -133,10 +127,13 @@ module Swill
       super && (!@editor || `#{element} !== #{@editor.view.element}`)
     end
 
+    # Direct child first so a nested list's editor template is not grabbed;
+    # plain iteration rather than :scope>/[for=…] selectors keeps the DOM
+    # shim's minimal selector engine sufficient.
     def editor_template_element
-      direct = `Array.from(#{view.element}.children).find(function(element) {
-        return element.tagName === "TEMPLATE" && element.getAttribute("for") === "editor";
-      })`
+      direct = `Array.from(#{view.element}.children)`.find do |child|
+        `#{child}.tagName === "TEMPLATE" && #{child}.getAttribute("for") === "editor"`
+      end
       direct || `#{view.element}.querySelector('template[for="editor"]')`
     end
 
@@ -162,6 +159,11 @@ module Swill
         raise TypeError, "editable-list editor must use Swill::Controller::InlineEditor"
       end
       editor.bind(:represented_object, to: self, key_path: "edited_object")
+      # Controls inside the editor delegate resignation to it, so a focus-out
+      # commit consults editor_should_end_editing before letting go.
+      editor.view.subviews.each do |subview|
+        subview.delegate = editor if subview.is_a?(Control)
+      end
       @editor = editor
       @editing_index = index
       @editing_original = original

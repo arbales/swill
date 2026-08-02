@@ -71,9 +71,9 @@ module Swill
     end
 
     def observe_notification(name, object: nil, center: NotificationCenter.default, &block)
-      token = center.observe(name, object: object, &block)
-      register_teardown { token.remove }
-      token
+      off = center.observe(name, object: object, &block)
+      register_teardown { off.call }
+      off
     end
 
     # Lifecycle hooks — Sequel's hook structure (override the method, call

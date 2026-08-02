@@ -15,15 +15,10 @@ module Swill
 
       # Apply an editing buffer through the public attribute writers. Unlike
       # server/codec application, accepting a draft is a user mutation and
-      # therefore intentionally participates in dirty tracking.
+      # therefore intentionally participates in dirty tracking — this requires
+      # the Attributes concern's write_attributes.
       def apply_draft(copy)
-        source = copy.collect_attributes
-        self.class.model_attributes.each_value do |descriptor|
-          keys = [descriptor.key, descriptor.key.to_s, descriptor.name, descriptor.name.to_s]
-          key = keys.find { |candidate| source.key?(candidate) }
-          public_send("#{descriptor.name}=", source[key]) if key
-        end
-        self
+        write_attributes(copy, track_dirty: true)
       end
     end
   end

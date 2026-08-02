@@ -16,11 +16,6 @@ require "corelib/unsupported"
 # full Opal runtime.
 require "corelib/struct"
 
-# Opal's `date` stdlib (used by the ISO-8601 date polyfill and Swill::Sig)
-# requires the Time class, which lives in corelib/time and is omitted by
-# opal/mini. Pull it back so Date works on the client.
-require "corelib/time"
-
 require "native" # DOM and JavaScript interop
 require "json"   # JSON-payload outlets (Swill::Outlets)
 require "promise"
@@ -33,5 +28,5 @@ require "swill/controller"
 require "swill/control"
 
 module Swill
-  VERSION = "0.0.0"
+  VERSION = "0.0.1"
 end

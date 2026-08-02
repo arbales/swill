@@ -3,9 +3,6 @@
 
 module Swill
   module HTMLAttributes
-    UNSET = Object.new
-    private_constant :UNSET
-
     Mapping = Struct.new(:attribute, :property, :codec, :value, keyword_init: true)
 
     def self.included(base)
@@ -13,24 +10,17 @@ module Swill
     end
 
     module ClassMethods
+      extend Declarations
+
+      inheritable_registry :html_attribute_mappings, :array
+
       def html_attribute(attribute, to:, codec: Restoration::Codecs::String, value: UNSET)
-        own_html_attribute_mappings << Mapping.new(
+        html_attribute_mappings << Mapping.new(
           attribute: attribute.to_s,
           property: to.to_sym,
           codec: codec,
           value: value
         )
-      end
-
-      def html_attribute_mappings
-        inherited = superclass.respond_to?(:html_attribute_mappings) ? superclass.html_attribute_mappings : []
-        inherited + own_html_attribute_mappings
-      end
-
-      private
-
-      def own_html_attribute_mappings
-        @own_html_attribute_mappings ||= []
       end
     end
 

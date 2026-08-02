@@ -3,9 +3,11 @@
 module Swill
   module Model
     # Observable ids and one lazily-created identity store per including class.
+    # Includers must be Observable: the id is an ordinary declared property.
     module Identity
       def self.included(base)
         base.extend(ClassMethods)
+        base.property(:id)
       end
 
       module ClassMethods
@@ -38,16 +40,6 @@ module Swill
         end
       end
 
-      attr_reader :id
-
-      def id=(value)
-        previous = @id
-        return value if previous == value
-
-        @id = value
-        notify_change(:id, previous, value)
-        value
-      end
     end
   end
 end

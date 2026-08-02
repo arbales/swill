@@ -13,6 +13,7 @@
 
 require_relative "../spec_helper"
 require "swill/core"
+require "swill/core/iso8601"
 
 class ISO8601Test < Minitest::Test
   def parse(string) = Swill::ISO8601.parse(string)

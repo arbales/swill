@@ -10,6 +10,7 @@
 
 require_relative "../spec_helper"
 require "swill/core"
+require "swill/core/sig/authoring"
 
 class SigTest < Minitest::Test
   include Swill

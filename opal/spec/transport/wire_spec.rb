@@ -19,8 +19,8 @@ class WireTest < Minitest::Test
     assert_equal "https://example.com/lists", Swill::Wire.resolve_url("https://example.com/lists")
   end
 
-  def test_form_encoding_uses_url_encoding_and_omits_nil
-    encoded = Swill::Wire.send(:form_encode, member_id: "a b", email: "a+b@example.test", omitted: nil)
+  def test_param_encoding_uses_url_encoding_and_omits_nil
+    encoded = Swill::Wire.send(:encode_params, member_id: "a b", email: "a+b@example.test", omitted: nil)
     assert_equal "member_id=a%20b&email=a%2Bb%40example.test", encoded
   end
 end

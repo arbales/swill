@@ -4,8 +4,10 @@ module Swill
   module Model
     module Relationships
       Descriptor = Struct.new(:name, :key, :kind, :type, :url, keyword_init: true) do
+        # A lambda defers constant resolution for forward references; classes
+        # do not respond to call, so no further guard is needed.
         def model_class
-          type.respond_to?(:call) && !type.is_a?(Class) ? type.call : type
+          type.respond_to?(:call) ? type.call : type
         end
 
         def url_for(owner)
@@ -18,6 +20,10 @@ module Swill
       end
 
       module ClassMethods
+        extend Declarations
+
+        inheritable_registry :model_relationships
+
         def has_one(name, key: name, type:, url: nil)
           define_relationship(name, key: key, type: type, url: url, kind: :one, default: nil)
         end
@@ -26,27 +32,18 @@ module Swill
           define_relationship(name, key: key, type: type, url: url, kind: :many, default: -> { [] })
         end
 
-        def model_relationships
-          inherited = superclass.respond_to?(:model_relationships) ? superclass.model_relationships : {}
-          inherited.merge(own_model_relationships)
-        end
-
         private
-
-        def own_model_relationships
-          @own_model_relationships ||= {}
-        end
 
         def define_relationship(name, key:, type:, url:, kind:, default:)
           name = name.to_sym
-          own_model_relationships[name] = Descriptor.new(name: name, key: key.to_sym, kind: kind, type: type, url: url)
+          model_relationships[name] = Descriptor.new(name: name, key: key.to_sym, kind: kind, type: type, url: url)
           property(name, default: default)
           property("#{name}_loading".to_sym, default: false)
 
-          base_reader = instance_method(name)
-          base_writer = instance_method("#{name}=")
-          define_method(name) do
-            value = base_reader.bind_call(self)
+          # Lazy loading wraps the generated property accessors via a
+          # prepended module, so `super` reaches the observable accessor.
+          relationship_accessors.define_method(name) do
+            value = super()
             if id && !relationship_loaded?(name) && !public_send("#{name}_loading")
               load_relationship(name).fail do |error|
                 warn("[Swill] #{self.class}.#{name} load failed: #{error.message}")
@@ -55,14 +52,18 @@ module Swill
             end
             value
           end
-          define_method("#{name}=") do |value|
-            base_writer.bind_call(self, value)
+          relationship_accessors.define_method("#{name}=") do |value|
+            super(value)
             mark_relationship_loaded(name)
             value
           ensure
             public_send("#{name}_loading=", false)
           end
           define_method("reload_#{name}") { |wire: Wire| load_relationship(name, reload: true, wire: wire) }
+        end
+
+        def relationship_accessors
+          @relationship_accessors ||= Module.new.tap { |accessors| prepend accessors }
         end
       end
 

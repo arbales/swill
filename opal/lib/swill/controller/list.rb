@@ -4,47 +4,49 @@ module Swill
   # NSTableView-style controller backed by a <template for="row">. Generated
   # rows bind directly to collection items and are disposed on every rerender.
   class Controller::List < Controller
-    property :represented_object, default: -> { [] }
-    property :selected_indexes, default: -> { [] }
+    property :represented_object, default: -> { [] }, coerce: ->(objects) { objects || [] }
     property :allows_multiple_selection, default: false
-    property :selected_object_id
-
-    alias assign_represented_object represented_object=
-
-    def represented_object=(objects)
-      self.assign_represented_object(objects || [])
-    end
 
     html_attribute :multiple, to: :allows_multiple_selection, value: true
 
-    property :selected_objects do
-      selected_indexes.map { |index| arranged_objects[index] }.compact
+    # Selection is identity-based: the selected objects themselves are the
+    # stored primitive. Indexes and the leading object's id derive from them,
+    # so a reorder or rerender preserves selection with no bookkeeping.
+    property :selected_objects, default: -> { [] }, coerce: ->(objects) { objects || [] }
+
+    property :selected_indexes do
+      arranged = arranged_objects
+      selected_objects.map { |object| arranged.index(object) }.compact.sort
     end
 
     property :selected_object do
       selected_objects.first
     end
 
+    property :selected_object_id do
+      identifier_for(selected_object)
+    end
+
     outlet :header_view, optional: true
     outlet :rows, optional: true
 
-    def selected_object=(object)
-      if object.nil?
-        self.selected_indexes = []
-        return
-      end
-
-      index = arranged_objects.index(object)
-      self.selected_indexes = index ? [index] : []
+    def selected_indexes=(indexes)
+      arranged = arranged_objects
+      self.selected_objects = (indexes || []).map { |index| arranged[index] }.compact
     end
 
-    def selected_object_id_did_change(_previous, identifier)
-      return if @synchronizing_selected_object_id
+    def selected_object=(object)
+      self.selected_objects = object.nil? ? [] : [object]
+    end
 
-      object = arranged_objects.find do |candidate|
-        candidate.respond_to?(:id) && candidate.id.to_s == identifier.to_s
-      end
-      self.selected_object = object if object
+    # Select by model id. An id no arranged object carries yet (state restored
+    # before the data arrived) is remembered and resolves when the collection
+    # changes.
+    def selected_object_id=(identifier)
+      identifier = identifier&.to_s
+      @requested_selected_object_id = identifier
+      object = object_with_id(identifier)
+      self.selected_objects = [object] if object
     end
 
     def after_load
@@ -55,31 +57,24 @@ module Swill
     end
 
     def represented_object_did_change(_previous, _value)
-      pending_identifier = selected_object_id
-      self.selected_indexes = []
       @selection_anchor = nil
+      survivors = selected_objects.select { |object| arranged_objects.include?(object) }
+      if survivors.empty?
+        requested = object_with_id(@requested_selected_object_id)
+        survivors = [requested] if requested
+      end
+      self.selected_objects = survivors
       render_all if view
-      self.selected_object_id = pending_identifier if pending_identifier
     end
 
-    def selected_indexes_did_change(_previous, indexes)
-      previous_object = object_at(_previous.first)
-      next_object = object_at(indexes.first)
-      row_elements.each_with_index do |element, index|
-        selected = indexes.include?(index)
-        `#{element}.classList.toggle("selected", #{selected})`
-        `#{element}.setAttribute("aria-selected", #{selected ? "true" : "false"})`
-      end
-      first = indexes.first
-      `#{row_elements[first]}.scrollIntoView({ block: "nearest" })` if first && row_elements[first]
-      selected_object_did_change(previous_object, next_object) if respond_to?(:selected_object_did_change) &&
-                                                                  previous_object != next_object
-      identifier = next_object.respond_to?(:id) ? next_object.id&.to_s : nil
-      if selected_object_id != identifier
-        @synchronizing_selected_object_id = true
-        self.selected_object_id = identifier
-        @synchronizing_selected_object_id = false
-      end
+    def selected_objects_did_change(previous, objects)
+      sync_selected_rows
+      previous_object = previous ? previous.first : nil
+      next_object = objects.first
+      @requested_selected_object_id = identifier_for(next_object) if next_object
+      return if previous_object == next_object
+
+      selected_object_did_change(previous_object, next_object) if respond_to?(:selected_object_did_change)
     end
 
     def select_first_if_nothing_selected
@@ -147,7 +142,20 @@ module Swill
         end
         configure_row(element, item)
       end
-      selected_indexes_did_change([], selected_indexes)
+      sync_selected_rows
+    end
+
+    # Reflect the derived indexes onto the rendered rows.
+    def sync_selected_rows
+      indexes = selected_indexes
+      elements = row_elements
+      elements.each_with_index do |element, index|
+        selected = indexes.include?(index)
+        `#{element}.classList.toggle("selected", #{selected})`
+        `#{element}.setAttribute("aria-selected", #{selected ? "true" : "false"})`
+      end
+      first = indexes.first
+      `#{elements[first]}.scrollIntoView({ block: "nearest" })` if first && elements[first]
     end
 
     def make_row_element(_item)
@@ -241,8 +249,14 @@ module Swill
       row_elements.index { |element| `#{element} === #{node}` } || -1
     end
 
-    def object_at(index)
-      index.nil? ? nil : arranged_objects[index]
+    def identifier_for(object)
+      object.respond_to?(:id) ? object.id&.to_s : nil
+    end
+
+    def object_with_id(identifier)
+      return nil if identifier.nil? || identifier.empty?
+
+      arranged_objects.find { |candidate| identifier_for(candidate) == identifier }
     end
   end
 end
