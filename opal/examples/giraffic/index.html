@@ -50,14 +50,35 @@
               <label><input type="checkbox" bind="history_enabled" /> History enabled</label>
             </fieldset>
             <div class="profile-actions">
-              <button type="button" data-action="save_changes" bind-disabled="clean?">Save Changes</button>
-              <button type="button" data-action="discard_changes" bind-disabled="clean?">Reset</button>
+              <button type="button" data-action="save_changes">Save Changes</button>
+              <button type="button" data-action="discard_changes">Reset</button>
             </div>
           </section>
           <p class="profile-error" bind="save_error"></p>
 
           <section class="members-column">
             <h3>Members</h3>
+            <div class="add-member" controller="MemberPickerController" outlet="member_picker">
+              <input bind="@query" type="search" placeholder="Find or add member" autocomplete="off" />
+              <div class="member-candidates" controller="Swill::Controller::List" outlet="results" tabindex="0">
+                <section outlet="rows"></section>
+                <template for="row">
+                  <button type="button" class="member-candidate" data-action="activate_selection">
+                    <span bind="label"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+            <div class="pending-members" controller="Swill::Controller::List" outlet="pending_additions_list" tabindex="0">
+              <section outlet="rows"></section>
+              <template for="row">
+                <button type="button" class="pending-member" data-action="remove_pending_addition">
+                  <span bind="label"></span><span>Remove</span>
+                </button>
+              </template>
+            </div>
+            <button type="button" data-action="remove_selected_members"
+                    bind-disabled="member_list.selected_objects.empty?">Remove Selected</button>
             <div class="member-list" controller="Swill::Controller::List" outlet="member_list" tabindex="0" multiple>
               <header outlet="header_view" class="member-header"><div>Email</div><div>Name</div></header>
               <section outlet="rows"></section>
