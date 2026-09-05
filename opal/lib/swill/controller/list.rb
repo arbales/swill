@@ -102,11 +102,12 @@ module Swill
         event.prevent_default
         index = [[current + 1, 0].max, arranged_objects.length - 1].min
         self.selected_indexes = [index]
+        @selection_anchor = index
       when "ArrowUp"
         event.prevent_default
-        return cancel_operation(event) if current <= 0
-
-        self.selected_indexes = [current - 1]
+        index = [[current - 1, 0].max, arranged_objects.length - 1].min
+        self.selected_indexes = [index]
+        @selection_anchor = index
       else
         super
       end
@@ -203,6 +204,7 @@ module Swill
     private
 
     def install_selection
+      focus_listener = ->(_event) { select_first_if_nothing_selected }
       click_listener = lambda do |event|
         index = event_row_index(event)
         next if index.negative?
@@ -214,6 +216,7 @@ module Swill
           self.selected_indexes = [index]
           @selection_anchor = index
         end
+        application.make_first_responder(self)
       end
       double_click_listener = lambda do |event|
         index = event_row_index(event)
@@ -221,6 +224,7 @@ module Swill
 
         self.selected_indexes = [index]
         @selection_anchor = index
+        application.make_first_responder(self)
         activate_selection
       end
       mouse_down_listener = lambda do |event|
@@ -230,10 +234,12 @@ module Swill
         `#{event}.preventDefault && #{event}.preventDefault()`
         `window.getSelection && window.getSelection().removeAllRanges()`
       end
+      `#{view.element}.addEventListener("focus", #{focus_listener})`
       `#{container}.addEventListener("click", #{click_listener}, true)`
       `#{container}.addEventListener("dblclick", #{double_click_listener})`
       `#{container}.addEventListener("mousedown", #{mouse_down_listener})`
       register_teardown do
+        `#{view.element}.removeEventListener("focus", #{focus_listener})`
         `#{container}.removeEventListener("click", #{click_listener}, true)`
         `#{container}.removeEventListener("dblclick", #{double_click_listener})`
         `#{container}.removeEventListener("mousedown", #{mouse_down_listener})`

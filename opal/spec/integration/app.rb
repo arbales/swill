@@ -55,11 +55,12 @@ class ListHostController < Swill::Controller
     select_control.value = "Grace"
     custom_select.options = [
       { value: "ada", label: "Ada" },
-      { value: "grace", label: "Grace" }
+      { value: "grace", label: "Grace", icon: "star" }
     ]
     `globalThis.__replaceList__ = #{lambda { item_list.represented_object = [RowItem.new("Katherine")] }}`
     `globalThis.__mutateRemovedRow__ = #{lambda { @old_item.name = "Removed" }}`
     `globalThis.__selectFirstListItem__ = #{lambda { item_list.selected_object = item_list.represented_object.first }}`
+    `globalThis.__clearListSelection__ = #{lambda { item_list.selected_indexes = [] }}`
     `globalThis.__restoreListSelection__ = #{lambda do
       records = item_list.represented_object
       item_list.represented_object = []
@@ -269,6 +270,7 @@ end
 
 TestApp.shared.start
 `globalThis.__showPalette__ = #{lambda { TestApp.shared.show_window("palette") }}`
+`globalThis.__firstResponderClass__ = #{lambda { Swill::FirstResponder.current&.class&.name }}`
 
 # Let the Node harness drive detach (the shim's MutationObserver is a no-op).
 `globalThis.__swillDetach__ = #{lambda { |node| Swill::Awakening.detach(node) }}`

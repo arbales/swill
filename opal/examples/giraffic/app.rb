@@ -252,10 +252,30 @@ class ProfileController < Swill::Controller
 
   def after_load
     phone_visibility_select.options = [
-      { value: "Authenticated", label: "Giraffes, Guests & Invitees", description: "Members and invited guests" },
-      { value: "Members", label: "Giraffes", description: "Current and former members" },
-      { value: "Organizers", label: "Organizers & Leads", description: "Planning and camp leads" },
-      { value: "Owner", label: "Only You", description: "Private" }
+      {
+        value: "Authenticated",
+        icon: "handshake",
+        label: "Giraffes, Guests & Invitees",
+        description: "Including guests and friends on our mailing lists or events"
+      },
+      {
+        value: "Members",
+        icon: "tent",
+        label: "Giraffes",
+        description: "People who're burning or have burned with us"
+      },
+      {
+        value: "Organizers",
+        icon: "hard-hat",
+        label: "Organizers & Leads",
+        description: "People helping to plan camp or organize the Giraffes"
+      },
+      {
+        value: "Owner",
+        icon: "venetian-mask",
+        label: "Only You",
+        description: "No one else can see it"
+      }
     ]
     load_profile
   end

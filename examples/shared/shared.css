@@ -139,6 +139,57 @@ label > input:where([type="checkbox"], [type="radio"]) {
   margin: 0 6px 0 0;
 }
 
+.control-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 0;
+  border: 0;
+}
+
+.control-group > legend {
+  margin: 0 0 6px;
+  padding: 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.control-group > :where(label, p) {
+  margin-block: 0;
+}
+
+.control-group--framed {
+  padding: 8px 10px 10px;
+  border: 1px solid var(--rule);
+}
+
+.control-group--framed > legend {
+  margin-left: -4px;
+  padding: 0 4px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  max-width: 100%;
+  border: 1px solid var(--rule);
+}
+
+.segmented-control > button {
+  min-width: 0;
+  border: 0;
+  border-right: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+.segmented-control > button:last-child {
+  border-right: 0;
+}
+
+.segmented-control > button[aria-pressed="true"] {
+  background: var(--selected);
+}
+
 h2,
 h3 {
   font-size: 1em;
@@ -179,7 +230,7 @@ dialog.window .actions {
 
 .custom-select-button {
   display: grid;
-  grid-template-columns: 18px 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -187,6 +238,10 @@ dialog.window .actions {
   padding-right: 28px;
   text-align: left;
   position: relative;
+}
+
+.custom-select-button.has-icon {
+  grid-template-columns: 18px minmax(0, 1fr);
 }
 
 .custom-select-button::after {
@@ -224,12 +279,16 @@ dialog.window .actions {
 
 .custom-select-option {
   display: grid;
-  grid-template-columns: 18px 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   width: 100%;
   padding: 6px 8px;
   text-align: left;
   border: 0;
+}
+
+.custom-select-option.has-icon {
+  grid-template-columns: 18px minmax(0, 1fr);
 }
 
 .custom-select-option[aria-selected="true"] {

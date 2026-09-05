@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Giraffic</title>
     <link rel="stylesheet" href="../shared/shared.css" />
     <link rel="stylesheet" href="../shared/lucide.css" />
@@ -18,7 +19,9 @@
       </header>
     </section>
 
-    <section window="main" name="lists">
+    <section window="main" name="lists"></section>
+
+    <template for="window" name="lists">
       <section controller="MailingListsApp" class="mailing-lists-app">
         <aside class="source">
           <div class="source-list" controller="MailingListSourceList" outlet="sourceList" bind="lists" tabindex="0">
@@ -34,12 +37,13 @@
         <main class="detail" controller="MailingListDetailView" bind="@sourceList.selectedObject">
           <h2>Mailing List</h2>
 
-          <section class="list-detail">
+          <section class="list-detail" bind-hidden="@representedObject:isEmpty">
             <label>Name <input bind="name" type="text" /></label>
+            <label>Description <textarea bind="description"></textarea></label>
             <label>Address <input bind="address" bind-readonly="id:isPresent" type="text" /></label>
             <label>Webhook URL <input bind="webhookUrl" type="text" /></label>
 
-            <fieldset class="list-options">
+            <fieldset class="control-group control-group--framed">
               <legend>Options</legend>
               <label><input bind="notificationsEnabled" type="checkbox" /> Notifications enabled </label>
               <label><input bind="hidden" type="checkbox" /> Hidden </label>
@@ -55,25 +59,27 @@
 
             <div class="add-member" controller="MemberPicker" outlet="memberPicker">
               <input bind="@query" type="search" placeholder="Find or add member" autocomplete="off" />
-              <section class="member-candidates" controller="List" outlet="results" bind="@candidates" tabindex="0">
+              <div class="member-candidates" controller="List" outlet="results" bind="@candidates" tabindex="0">
+                <section outlet="rows"></section>
                 <template for="row">
                   <button type="button" class="member-candidate" data-action="activateSelection">
                     <span bind="label"></span>
                   </button>
                 </template>
-              </section>
+              </div>
             </div>
-            <section class="pending-members" controller="List" outlet="pendingAdditionsList" bind="@pendingMemberAdditions" tabindex="0">
+            <div class="pending-members" controller="List" outlet="pendingAdditionsList" bind="@pendingMemberAdditions" tabindex="0">
+              <section outlet="rows"></section>
               <template for="row">
                 <button type="button" class="pending-member" data-action="removePendingAddition">
                   <span bind="label"></span>
                   <span>Remove</span>
                 </button>
               </template>
-            </section>
+            </div>
             <button data-action="removeMember" bind-disabled="@memberList.selectedIndexes:isEmpty">Remove Selected</button>
 
-            <section class="member-list" controller="List" outlet="memberList" bind="members" tabindex="0" multiple>
+            <div class="member-list" controller="List" outlet="memberList" bind="members" tabindex="0" multiple>
               <header outlet="headerView" class="member-header">
                 <div>Email</div>
                 <div>Name</div>
@@ -86,16 +92,16 @@
                   <div bind="name"></div>
                 </div>
               </template>
-            </section>
+            </div>
           </section>
         </main>
       </section>
-    </section>
+    </template>
 
     <template for="window" name="members">
       <section controller="MembersApp" class="members-app">
         <h2>Members</h2>
-        <section class="member-list" controller="List" outlet="membersList" bind="members" tabindex="0">
+        <div class="member-list" controller="List" outlet="membersList" bind="members" tabindex="0">
           <header outlet="headerView" class="member-header">
             <div>Email</div>
             <div>Name</div>
@@ -107,13 +113,13 @@
               <div bind="name"></div>
             </div>
           </template>
-        </section>
+        </div>
       </section>
     </template>
 
     <template for="window" name="profile">
       <section controller="MeProfileApp" class="profile-app">
-        <header class="profile-header">
+        <header class="profile-header" bind-hidden="member:isEmpty">
           <div class="profile-photo"><img bind-src="member.photoUrl" alt="" /></div>
           <div>
             <h2 bind="member.name"></h2>
@@ -121,7 +127,7 @@
           </div>
         </header>
 
-        <section class="profile-sections">
+        <section class="profile-sections" bind-hidden="draftMember:isEmpty">
           <section>
             <h3>Edit</h3>
             <div class="profile-form">

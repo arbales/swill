@@ -220,6 +220,17 @@ backend-backed Open Brewery DB dataset search. The Giraffic example now
 exercises restored list selection, detached detail editing, persistence, and a
 lazy-loaded member relationship against the shared TypeScript backend.
 
+The TypeScript and Opal Giraffic markup intentionally uses each language's
+native naming: registered PascalCase classes, camelCase actions and outlets,
+and transformed bindings in TypeScript; Ruby constants, snake-case methods,
+and reader chains in Opal. The Opal screen composes the framework's generic
+`List` and `Editor` controllers with explicit object bindings, while TypeScript
+keeps small application-specific subclasses and declarative root bindings. Opal currently
+also exposes dataset reload/status and detached mailing-list reset controls;
+TypeScript alone exposes the diagnostic Object Browser. The remaining fields,
+member management, profile drafts, persistence, restoration, and navigation
+exercise equivalent framework features.
+
 ## Project Status
 
 The major TypeScript framework surfaces now have Ruby-native counterparts. The

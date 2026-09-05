@@ -225,6 +225,9 @@ assert.strictEqual(rootedButton.disabled, true, "@ path should ignore binding_ro
 assert.strictEqual(listRows.children.length, 3, "list renders one row per item");
 assert.strictEqual(listRows.children[0].children[0].textContent, "Ada", "first row binding");
 assert.strictEqual(listRows.children[1].children[0].textContent, "Grace", "second row binding");
+globalThis.__clearListSelection__();
+listRoot.dispatch("focus");
+assert.strictEqual(selectedName.textContent, "Ada", "tab focus initializes selection on the first row");
 assert.strictEqual(
   globalThis.__restoreListSelection__(),
   "Grace",
@@ -233,6 +236,14 @@ assert.strictEqual(
 listRows.dispatch("click", { target: listRows.children[1], shiftKey: false });
 assert.strictEqual(selectedName.textContent, "Grace", "selected object remains observable through parent outlet");
 assert.strictEqual(listRows.children[1].classList.contains("selected"), true, "selection applies row CSS state");
+assert.strictEqual(globalThis.__firstResponderClass__(), "Swill::Controller::SortableList", "click makes the list first responder");
+body.dispatch("keydown", { key: "ArrowDown", preventDefault() {} });
+assert.strictEqual(selectedName.textContent, "Katherine", "a clicked list receives subsequent keyboard navigation");
+body.dispatch("keydown", { key: "ArrowUp", preventDefault() {} });
+assert.strictEqual(selectedName.textContent, "Grace", "ArrowUp moves selection to the previous row");
+body.dispatch("keydown", { key: "ArrowUp", preventDefault() {} });
+body.dispatch("keydown", { key: "ArrowUp", preventDefault() {} });
+assert.strictEqual(selectedName.textContent, "Ada", "ArrowUp remains on the first row at the upper boundary");
 assert.strictEqual(globalThis.__list_row_owner_ok__, true, "generated row views belong to the list controller");
 listRows.dispatch("dblclick", { target: listRows.children[1] });
 assert.strictEqual(globalThis.__activated_list_item__, "Grace", "double-click activates through the responder chain");
@@ -276,10 +287,14 @@ assert.strictEqual(customSelect.getAttribute("role"), "combobox", "custom select
 assert.strictEqual(customSelectValue.textContent, "ada", "binding writes controller state into a custom control");
 const customTrigger = customSelect.children[0];
 const customPopup = customSelect.children[1];
+assert.strictEqual(customTrigger.classList.contains("has-icon"), false, "iconless trigger uses one text column");
+assert.strictEqual(customPopup.children[0].classList.contains("has-icon"), false, "iconless option uses one text column");
+assert.strictEqual(customPopup.children[1].classList.contains("has-icon"), true, "icon option enables its icon column");
 customTrigger.dispatch("click", { detail: 1 });
 assert.strictEqual(customSelect.getAttribute("aria-expanded"), "true", "custom select opens from its trigger");
 customPopup.children[1].dispatch("click", { detail: 1 });
 assert.strictEqual(customSelectValue.textContent, "grace", "custom control input writes back through its binding");
+assert.strictEqual(customTrigger.classList.contains("has-icon"), true, "selected icon enables the trigger icon column");
 assert.strictEqual(customSelect.getAttribute("aria-expanded"), "false", "choosing an option closes the popup");
 
 globalThis.__commitEditor__();

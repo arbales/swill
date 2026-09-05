@@ -51,21 +51,57 @@ class DemoContact
   end
 end
 
-class HelloController < Swill::Controller
+class ExamplesMenubar < Swill::Controller
+  def after_load
+    observe_notification(:example_did_change) do |notification|
+      sync_selected_example(notification.user_info[:name])
+    end
+    main = `document.querySelector('[window="main"]')`
+    sync_selected_example(`#{main}.getAttribute("name")`.to_s) if main
+  end
+
+  def show_example(sender, _event)
+    name = `#{sender}.getAttribute("data-example")`.to_s
+    application.load_window_content("main", name)
+  end
+
+  def show_palette(_sender, _event)
+    application.show_window("palette")
+  end
+
+    application.load_window_content("workspace", "details-pane")
+  end
+
+  private
+
+  def sync_selected_example(name)
+    `Array.from(#{view.element}.querySelectorAll("[data-example]")).forEach((button) => {
+       button.setAttribute("aria-pressed", button.getAttribute("data-example") === #{name} ? "true" : "false");
+     })`
+  end
+end
+
+class ExamplePaneController < Swill::Controller
+  def after_load
+    Swill::NotificationCenter.default.post(
+      :example_did_change,
+      object: self,
+      user_info: { name: example_name }
+    )
+  end
+end
+
+class BindingsExampleController < ExamplePaneController
   property :user, default: -> { User.parse_one(id: "demo", name: "world", email_address: "") }
   property :draft, default: -> { user.draft }
   property :saving, default: false
   property :first_responder_debug, default: "None"
-  property :selected_person, default: "ada"
-  property :activated_person, default: "None"
   property :last_notification, default: "None"
 
   outlet :name_field
-  outlet :people_list
   outlet :draft_editor
-  outlet :standalone_text_field
-  outlet :standalone_select
-  outlet :custom_select
+
+  def example_name = "bindings"
 
   # Auto-tracked: it reads user.name, so it recomputes whenever the name
   # changes through the key-path binding below — no dependency list.
@@ -78,13 +114,10 @@ class HelloController < Swill::Controller
     email.empty? ? "No email." : "Email: #{email}"
   end
 
-  property :selected_people do
-    people_list ? people_list.selected_objects.map(&:name).join(", ") : ""
-  end
-
   # Make the field the first responder rather than poking the DOM: the View
   # focuses itself as it becomes first responder, so DOM access stays in View.
   def after_load
+    super
     observe_notification(:counter_changed) do |notification|
       self.last_notification = "Counter changed to #{notification.user_info[:count]}"
     end
@@ -97,19 +130,7 @@ class HelloController < Swill::Controller
       update_first_responder_debug(responder)
     end
     application.make_first_responder(name_field)
-    people_list.represented_object = [
-      DemoContact.new("Ada", "Mathematician"),
-      DemoContact.new("Grace", "Computer scientist"),
-      DemoContact.new("Katherine", "Engineer")
-    ]
     draft_editor.represented_object = draft
-    standalone_select.options = ["Ada", "Grace", "Katherine"]
-    standalone_select.value = "Grace"
-    custom_select.options = [
-      { value: "ada", label: "Ada Lovelace", description: "Mathematician" },
-      { value: "grace", label: "Grace Hopper", description: "Computer scientist" },
-      { value: "katherine", label: "Katherine Johnson", description: "Engineer" }
-    ]
   end
 
   def update_first_responder_debug(responder)
@@ -133,10 +154,6 @@ class HelloController < Swill::Controller
     user.email = ""
   end
 
-  def activate_selection(sender, _event)
-    self.activated_person = sender.selected_object&.name || "None"
-  end
-
   def fake_save(_sender, _event)
     self.saving = true
     user.mark_clean!
@@ -155,17 +172,51 @@ class HelloController < Swill::Controller
     self.draft = user.draft
     draft_editor.represented_object = draft
   end
+end
 
-  def show_palette(_sender, _event)
-    DemoApplication.shared.show_window("palette")
+class ControlsExampleController < ExamplePaneController
+  property :selected_person, default: "ada"
+
+  outlet :standalone_text_field
+  outlet :standalone_select
+  outlet :custom_select
+
+  def example_name = "controls"
+
+  def after_load
+    super
+    standalone_select.options = ["Ada", "Grace", "Katherine"]
+    standalone_select.value = "Grace"
+    custom_select.options = [
+      { value: "ada", label: "Ada Lovelace", description: "Mathematician" },
+      { value: "grace", label: "Grace Hopper", description: "Computer scientist" },
+      { value: "katherine", label: "Katherine Johnson", description: "Engineer" }
+    ]
+  end
+end
+
+class DataExampleController < ExamplePaneController
+  property :activated_person, default: "None"
+
+  outlet :people_list
+
+  def example_name = "data"
+
+  property :selected_people do
+    people_list ? people_list.selected_objects.map(&:name).join(", ") : ""
   end
 
-  def show_intro(_sender, _event)
-    DemoApplication.shared.load_window_content("workspace", "intro-pane")
+  def after_load
+    super
+    people_list.represented_object = [
+      DemoContact.new("Ada", "Mathematician"),
+      DemoContact.new("Grace", "Computer scientist"),
+      DemoContact.new("Katherine", "Engineer")
+    ]
   end
 
-  def show_details(_sender, _event)
-    DemoApplication.shared.load_window_content("workspace", "details-pane")
+  def activate_selection(sender, _event)
+    self.activated_person = sender.selected_object&.name || "None"
   end
 end
 
@@ -195,7 +246,7 @@ class CardController < Swill::Controller
 end
 
 # A nested controller. It owns its own subtree and state; its bindings and
-# actions don't leak to HelloController, and anything it doesn't handle bubbles
+# actions don't leak to BindingsExampleController, and anything it doesn't handle bubbles
 # up the responder chain to its parent.
 class CounterController < Swill::Controller
   property :count, default: 0

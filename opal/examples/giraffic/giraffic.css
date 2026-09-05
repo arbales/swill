@@ -1,9 +1,6 @@
 :root { --member-cols: 1fr 1fr; }
 
 [hidden] { display: none !important; }
-body { margin: 0; }
-.toolbar { display: flex; gap: 8px; padding: 8px; border-bottom: 1px solid var(--rule); }
-[window="main"] { padding: 16px; }
 
 .mailing-lists-app {
   display: grid;
@@ -76,18 +73,7 @@ body { margin: 0; }
 
 .detail > h2 { grid-column: 1 / -1; margin: 0; }
 .list-detail, .members-column { min-width: 0; }
-.list-detail label:not(.list-options label) { display: grid; gap: 4px; margin-bottom: 8px; }
 .members-column h3 { margin-top: 0; }
-
-.list-options {
-  display: grid;
-  gap: 6px;
-  margin: 10px 0;
-  padding: 8px;
-  border: 1px solid var(--rule);
-}
-
-.list-options label { display: flex; align-items: center; gap: 8px; }
 
 .member-list {
   max-height: 54vh;
@@ -105,8 +91,8 @@ body { margin: 0; }
 .member-header { color: var(--dim); border-bottom: 1px solid var(--rule); }
 .member-row { border-bottom: 1px solid var(--rule); }
 
-.add-member { position: relative; margin: 8px 0; }
-.add-member input { box-sizing: border-box; width: 100%; padding: 4px 8px; }
+.add-member { position: relative; margin-top: 8px; }
+.add-member input { width: 100%; padding: 4px 8px; }
 .member-candidates {
   position: absolute;
   z-index: 20;
@@ -124,7 +110,7 @@ body { margin: 0; }
 }
 .member-candidates:has([outlet="rows"]:empty) { display: none; }
 .member-candidate { text-align: left; }
-.pending-members { display: grid; gap: 2px; margin-bottom: 8px; }
+.pending-members { display: grid; gap: 2px; }
 .pending-member { display: flex; justify-content: space-between; text-align: left; }
 
 @media (max-width: 760px) {

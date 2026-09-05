@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Giraffic — Swill in Ruby</title>
     <link rel="stylesheet" href="/examples/shared/shared.css" />
+    <link rel="stylesheet" href="/examples/shared/lucide.css" />
     <link rel="stylesheet" href="./giraffic.css" />
   </head>
   <body>
@@ -38,11 +39,11 @@
           <h2>Mailing List</h2>
           <section class="list-detail" controller="Swill::Controller::Editor" outlet="detail_editor"
                    bind-hidden="@represented_object.nil?">
-            <label>Name <input bind="name" /></label>
+            <label>Name <input bind="name" type="text" /></label>
             <label>Description <textarea bind="description"></textarea></label>
-            <label>Address <input bind="address" /></label>
-            <label>Webhook URL <input bind="webhook_url" /></label>
-            <fieldset class="list-options">
+            <label>Address <input bind="address" bind-readonly="id.present?" type="text" /></label>
+            <label>Webhook URL <input bind="webhook_url" type="text" /></label>
+            <fieldset class="control-group control-group--framed">
               <legend>Options</legend>
               <label><input type="checkbox" bind="notifications_enabled" /> Notifications enabled</label>
               <label><input type="checkbox" bind="hidden" /> Hidden</label>
@@ -116,14 +117,14 @@
           <section>
             <h3>Edit</h3>
             <div class="profile-form">
-              <label>Nickname <input bind="draft_member.nickname" /></label>
+              <label>Nickname <input bind="draft_member.nickname" type="text" /></label>
               <label>Phone <input bind="draft_member.phone_number" type="tel" /></label>
               <label>
                 Phone Visibility
                 <div klass="Swill::Control::CustomSelect" outlet="phone_visibility_select"
                      bind="draft_member.phone_visibility"></div>
               </label>
-              <label>Venmo <input bind="draft_member.venmo_handle" /></label>
+              <label>Venmo <input bind="draft_member.venmo_handle" type="text" /></label>
               <label><input bind="draft_member.robodial_opt_out" type="checkbox" /> Robodial opt-out</label>
             </div>
             <div class="profile-actions">

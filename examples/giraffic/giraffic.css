@@ -129,20 +129,6 @@
   margin-top: 0;
 }
 
-.list-options {
-  display: grid;
-  gap: 6px;
-  margin: 10px 0;
-  padding: 8px;
-  border: 1px solid var(--rule);
-}
-
-.list-options label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 /* ---- member list ------------------------------------------------ */
 
 .member-list {
@@ -194,7 +180,7 @@
   box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
 }
 
-.member-candidates:empty {
+.member-candidates:has([outlet="rows"]:empty) {
   display: none;
 }
 
@@ -211,4 +197,21 @@
   display: flex;
   justify-content: space-between;
   text-align: left;
+}
+
+@media (max-width: 760px) {
+  .mailing-lists-app,
+  .profile-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .detail {
+    min-width: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .members-app,
+  .profile-app {
+    min-width: 0;
+  }
 }

@@ -98,6 +98,7 @@ module Swill
 
         icon = option_entry(option, :icon)
         if icon
+          `#{row}.classList.add("has-icon")`
           icon_node = create_element("span", class: "custom-select-icon icon-#{icon}", "aria-hidden": "true")
           `#{row}.appendChild(#{icon_node})`
         end
@@ -132,6 +133,7 @@ module Swill
       option = selected_option
       icon = option && option_entry(option, :icon)
       icon_class = icon ? "custom-select-trigger-icon icon-#{icon}" : "custom-select-trigger-icon"
+      `#{@button}.classList.toggle("has-icon", #{!!icon})`
       `#{@icon}.setAttribute("class", #{icon_class})`
       `#{@icon}.hidden = #{!icon}`
       `#{@label}.textContent = #{option ? option_entry(option, :label).to_s : ""}`

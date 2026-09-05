@@ -40,6 +40,15 @@ module Swill
       parent || FirstResponder.chain_top
     end
 
+    # A controller can become first responder when its view has a focusable
+    # element. Application#make_first_responder consults this gate before
+    # calling become_first_responder; without it, focusable controller-backed
+    # controls such as lists and inline editors are incorrectly rejected.
+    def accepts_first_responder?
+      target = view&.first_focusable_element
+      `!!#{target}`
+    end
+
     def application
       FirstResponder.chain_top
     end
