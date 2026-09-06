@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Swill Ruby2JS semantic spike</title>
+<main controller="Demo::Controller">
+  <h1>Ruby2JS spike</h1>
+  <label>Name <input bind="person.name"></label>
+  <p bind="title"></p>
+  <button data-action="clear">Clear person</button>
+  <p>This is a binding/lookup smoke test, not the Swill awakening implementation.</p>
+</main>
+<script src="../dist/swill.js"></script>
+<script src="../dist/app.js"></script>
+<script>
+  const {Runtime} = Swill;
+  const root = document.querySelector("[controller]");
+  const controller = new (Runtime.resolve(root.getAttribute("controller")))();
+  controller.person = new (Runtime.resolve("Demo::Person"))();
+  controller.person.name = "Ada";
+  const disposers = [...root.querySelectorAll("[bind]")].map(element =>
+    Runtime.bindElement(controller, element.getAttribute("bind"), element, {twoWay: element.matches("input")})
+  );
+  const button = root.querySelector("[data-action]");
+  const action = () => {
+    Runtime.invoke(controller, button.getAttribute("data-action"));
+    root.querySelector("input").disabled = true;
+  };
+  button.addEventListener("click", action);
+  window.addEventListener("pagehide", () => {
+    disposers.forEach(dispose => dispose());
+    button.removeEventListener("click", action);
+    controller.dispose();
+  }, {once: true});
+</script>
+</html>

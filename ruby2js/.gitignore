@@ -1,0 +1,6 @@
+/.bundle/
+/vendor/
+/build/
+/.DS_Store
+/sorbet/rbi/generated.rbi
+/sorbet/checks/

@@ -1,0 +1,486 @@
+require "minitest/autorun"
+require "open3"
+require_relative "../lib/swill-ruby2js/compiler"
+
+class CompilerTest < Minitest::Test
+  def compile(body)
+    Swill::Ruby2JS::Compiler.new.add("class Example < ReactiveObject\n#{body}\nend")
+  end
+
+  def javascript(body)
+    compile(body).javascript(runtime: "../lib/swill/runtime.mjs")
+  end
+
+  def test_declarations_generate_lookup_data_and_typed_readers_and_writers
+    compiler = compile('property :name, type: String, default: ""')
+    assert_includes compiler.javascript(runtime: "./runtime.mjs"), 'Runtime.install(meta);'
+    assert_includes compiler.rbi, "sig { params(value: String).returns(String) }"
+    assert_includes compiler.rbi, "def name=(value)"
+    assert_equal "String", compiler.knowledge.interface.first["properties"].first["type"]
+  end
+
+  def test_computed_has_no_writer_and_gets_a_typed_expression_probe
+    compiler = compile("property :label, type: String do\n42\nend")
+    refute_includes compiler.rbi, "def label="
+    assert_includes compiler.type_probes, "sig { returns(String) }"
+    assert_includes compiler.type_probes, "42"
+  end
+
+  def test_annotations_are_erased
+    js = javascript("extend T::Sig\nsig { returns(String) }\ndef name; \"Ada\"; end")
+    refute_match(/\bT\b|\bsig\b/, js)
+    assert_includes js, "name()"
+  end
+
+  def test_runtime_sorbet_constructs_are_not_silently_erased
+    %w[must cast let unsafe].each do |operation|
+      assert_raises(Spike::CompileError) { javascript("def name; T.#{operation}(nil); end") }
+    end
+    assert_raises(Spike::CompileError) { javascript("def name; T::Struct.new; end") }
+    assert_raises(Spike::CompileError) do
+      javascript("def name; value = T.let([], T::Array[String]); value; end")
+    end
+    assert_raises(Spike::CompileError) do
+      javascript("property :name, type: String do\nvalue = T.let('Ada', String)\nvalue\nend")
+    end
+  end
+
+  def test_dynamic_declarations_and_mutable_defaults_are_rejected
+    ['property field, type: String', 'property :names, type: Array, default: []',
+     'property :name, type: String, nonsense: true', 'prepend Other'].each do |body|
+      assert_raises(Spike::CompileError) { javascript(body) }
+    end
+  end
+
+  def test_attribute_requires_an_explicit_default
+    error = assert_raises(Spike::CompileError) do
+      javascript("attribute :name, type: String")
+    end
+    assert_equal "attribute declaration requires default:", error.message
+  end
+
+  def test_missing_include_and_reopened_class_are_rejected
+    assert_raises(Spike::CompileError) { javascript("include Missing") }
+    compiler = compile("")
+    assert_raises(Spike::CompileError) { compiler.add("class Example < ReactiveObject; end") }
+  end
+
+  def test_included_hooks_reject_dynamic_code_and_colliding_declarations
+    [
+      'base.attribute field, type: String',
+      'base.attribute :name, type: String, default: []',
+      'base.extend(ClassMethods)',
+      'other.attribute :name, type: String',
+      'base.property(:name, type: String) { "Ada" }',
+      'base.attribute :name, type: String, default: ""; base.attribute :name, type: String, default: ""'
+    ].each do |body|
+      assert_raises(Spike::CompileError) do
+        Spike::Compiler.new.add("module Feature\ndef self.included(base)\n#{body}\nend\nend")
+      end
+    end
+    assert_raises(Spike::CompileError) do
+      Spike::Compiler.new.add(<<~RUBY)
+        module Feature
+          def self.included(base)
+            base.attribute :name, type: String, default: ""
+          end
+        end
+        class Example < ReactiveObject
+          include Feature
+          attribute :name, type: String, default: ""
+        end
+      RUBY
+    end
+  end
+
+  def test_included_declarations_survive_compiler_interfaces_without_sharing_descriptors
+    framework = Spike::Compiler.new.add(<<~RUBY)
+      module Feature
+        def self.included(base)
+          base.attribute :name, type: String, default: "Ada"
+        end
+        def label; name; end
+      end
+    RUBY
+    application = Spike::Compiler.new(imports: framework.knowledge.interface).add(<<~RUBY)
+      class First < ReactiveObject
+        include Feature
+      end
+      class Second < ReactiveObject
+        include Feature
+      end
+    RUBY
+    first, second = application.knowledge.local
+    assert_equal ["name"], first["properties"].map { |property| property["name"] }
+    refute_same first["properties"].first, second["properties"].first
+    refute_same first["properties"].first, framework.knowledge.local.first["included_properties"].first
+    assert_includes application.rbi, "def name=(value)"
+    assert_includes application.javascript(runtime: "./runtime.mjs", framework: "./framework.mjs"),
+      'mixins: [Feature]'
+    refute_includes framework.javascript(runtime: "./runtime.mjs"), "included("
+  end
+
+  def test_class_methods_emit_a_separate_factory_and_typed_configuration
+    compiler = Spike::Compiler.new.add(<<~RUBY)
+      module Feature
+        def self.included(base)
+          base.extend(ClassMethods)
+        end
+        module ClassMethods
+          extend Swill::Declarations
+          inheritable_registry :items, :array
+          class_setting :mode
+          def add(item); items << item; end
+        end
+      end
+      class Example < ReactiveObject
+        include Feature
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "classFactory: Feature_ClassMethods"
+    assert_includes js, 'Runtime.inheritableRegistry(this, "items", "array")'
+    assert_includes js, 'Runtime.classSetting(this, "mode", values)'
+    assert_includes compiler.rbi, "def items"
+    assert_includes compiler.rbi, "def mode(*values)"
+  end
+
+  def test_class_method_protocol_rejects_dynamic_configuration
+    [
+      "inheritable_registry name",
+      "inheritable_registry :items, :set",
+      "class_setting(:mode) { |value| value }"
+    ].each do |declaration|
+      assert_raises(Spike::CompileError) do
+        Spike::Compiler.new.add(<<~RUBY)
+          module Feature
+            def self.included(base); base.extend(ClassMethods); end
+            module ClassMethods
+              extend Swill::Declarations
+              #{declaration}
+            end
+          end
+        RUBY
+      end
+    end
+  end
+
+  def test_unsupported_reflection_is_a_build_error
+    %w[public_send const_get define_method instance_exec].each do |method|
+      assert_raises(Spike::CompileError) { javascript("def read(value); #{method}(value); end") }
+    end
+  end
+
+  def test_forward_superclasses_and_duplicate_inherited_includes_are_rejected
+    source = "class Child < Parent; end\nclass Parent < ReactiveObject; end"
+    assert_raises(Spike::CompileError) { Spike::Compiler.new.add(source).javascript(runtime: "./runtime.mjs") }
+    source = <<~RUBY
+      module Feature
+        def label; "feature"; end
+      end
+      class Parent < ReactiveObject
+        include Feature
+      end
+      class Child < Parent
+        include Feature
+      end
+    RUBY
+    assert_raises(Spike::CompileError) { Spike::Compiler.new.add(source).javascript(runtime: "./runtime.mjs") }
+  end
+
+  def test_both_ruby_include_orders_and_mixin_reflection_execute_correctly
+    source = <<~'RUBY'
+      class Base < ReactiveObject
+        def token(value); value; end
+      end
+      module A
+        def token(value); "A(#{super(value)})"; end
+      end
+      module B
+        def token(value); "B(#{super(value)})"; end
+      end
+      class Together < Base
+        include A, B
+      end
+      class Apart < Base
+        include A
+        include B
+      end
+    RUBY
+    js = Spike::Compiler.new.add(source).javascript(runtime: "../lib/swill/runtime.mjs")
+    js += <<~JS
+      console.log(JSON.stringify(["Together", "Apart"].map(name =>
+        Runtime.invoke(new (Runtime.resolve(name))(), "token", "x"))));
+    JS
+    assert_equal ["A(B(x))", "B(A(x))"], execute(js)
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-e",
+      "class ReactiveObject; end\n#{source}\nputs JSON.generate([Together.new.token('x'), Apart.new.token('x')])")
+    assert status.success?, ruby
+    assert_equal ["A(B(x))", "B(A(x))"], JSON.parse(ruby)
+  end
+
+  def test_value_semantics_are_lowered_in_executable_code
+    js = javascript(<<~RUBY)
+      def choose(value); value && "yes"; end
+      def negate(value); !value; end
+      def same(left, right); left == right; end
+      def operands(value); [value || "fallback", value && "right"]; end
+      def nested(value); (value || false) ? "truthy" : "falsey"; end
+      def lazy(value); value || raise("evaluated"); end
+    RUBY
+    assert_includes js, "let $T ="
+    assert_includes js, "let $ror ="
+    assert_includes js, "let $rand ="
+    refute_includes js, "Runtime.or("
+    refute_includes js, "Runtime.and("
+    js += <<~JS
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.choose(0), object.choose(false),
+        object.negate(""), object.negate(null), object.same([1, [2]], [1, [2]]),
+        object.operands(""), object.operands(false), object.operands(0),
+        object.nested(""), object.nested(false), object.lazy("ok")]));
+    JS
+    assert_equal ["yes", false, false, true, true, ["", "right"],
+                  ["fallback", false], [0, "right"], "truthy", "falsey", "ok"], execute(js)
+  end
+
+  def test_builtin_pragmas_preserve_trailing_comments_and_execute_on_mri_and_js
+    body = <<~RUBY
+      def copy_array(value)
+        value.dup # Pragma: array
+      end
+      def copy_hash(value)
+        value.dup # Pragma: hash
+      end
+      def keys(value)
+        value.keys # Pragma: hash
+      end
+      def inferred
+        value = [1, 2]
+        value.dup
+      end
+      def arithmetic(value)
+        value[0] + 2
+      end
+      property :copy, type: String do
+        "Ada".dup # Pragma: string
+      end
+    RUBY
+    js = javascript(body)
+    assert_includes js, ".slice()"
+    assert_includes js, "Object.keys("
+    assert_equal [[1, 2], {"name" => "Ada"}, ["name"], [1, 2], 5, "Ada", true, true], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      const array = [1, 2], hash = {name: "Ada"};
+      console.log(JSON.stringify([object.copy_array(array), object.copy_hash(hash),
+        object.keys(hash), object.inferred(), object.arithmetic([3]), object.copy,
+        object.copy_array(array) !== array, object.copy_hash(hash) !== hash]));
+    JS
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-e", <<~RUBY)
+      class Example
+        def self.property(name, **options, &block); define_method(name, &block); end
+        #{body}
+      end
+      object = Example.new
+      array = [1, 2]; hash = {"name" => "Ada"}
+      puts JSON.generate([object.copy_array(array), object.copy_hash(hash),
+        object.keys(hash), object.inferred, object.arithmetic([3]), object.copy,
+        !object.copy_array(array).equal?(array), !object.copy_hash(hash).equal?(hash)])
+    RUBY
+    assert status.success?, ruby
+    assert_equal [[1, 2], {"name" => "Ada"}, ["name"], [1, 2], 5, "Ada", true, true], JSON.parse(ruby)
+  end
+
+  def test_filters_do_not_rewrite_framework_methods_or_leak_inferred_types
+    js = javascript(<<~RUBY)
+      def empty?; "ordinary method"; end
+      def keys; "ordinary keys"; end
+      def first
+        value = {}
+        value.keys
+      end
+      def second(value)
+        value.keys
+      end
+      def third(value)
+        value.empty?
+      end
+    RUBY
+    assert_equal [[], "ordinary keys", "ordinary method"], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.first(), object.second(object), object.third(object)]));
+    JS
+  end
+
+  def test_non_type_pragmas_cannot_silently_desynchronize_metadata
+    %w[skip extend nullish logical unknown].each do |pragma|
+      error = assert_raises(Spike::CompileError) do
+        javascript("def name # Pragma: #{pragma}\n\"Ada\"\nend")
+      end
+      assert_includes error.message, "unsupported spike pragma #{pragma}"
+    end
+  end
+
+  def test_pragma_intrinsics_do_not_capture_source_constants_or_lose_mixin_comments
+    compiler = Spike::Compiler.new.add(<<~RUBY)
+      class Object < ReactiveObject
+        def label; "source Object"; end
+      end
+      module Keys
+        def keys(value)
+          value.keys # Pragma: hash
+        end
+        def make; Object.new; end
+      end
+      class Example < ReactiveObject
+        include Keys
+      end
+    RUBY
+    assert_equal [["name"], "source Object"], execute(
+      compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS)
+        const object = new (Runtime.resolve("Example"))();
+        console.log(JSON.stringify([object.keys({name: "Ada"}), object.make().label()]));
+      JS
+  end
+
+  def test_a_property_name_on_one_class_does_not_turn_another_classes_method_into_a_getter
+    compiler = Spike::Compiler.new.add(<<~RUBY)
+      class PropertyOwner < ReactiveObject
+        property :name, type: String, default: "property"
+      end
+      class MethodOwner < ReactiveObject
+        def name; "method"; end
+        def own_name; name; end
+        def other_name(other); other.name; end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS
+      const method = new (Runtime.resolve("MethodOwner"))();
+      const property = new (Runtime.resolve("PropertyOwner"))();
+      console.log(JSON.stringify([method.own_name(), method.other_name(method), method.other_name(property)]));
+    JS
+    assert_equal ["method", "method", "property"], execute(js)
+  end
+
+  def test_identifier_encoding_does_not_conflate_namespace_and_underscores
+    assert_equal "Record", Spike::Knowledge.identifier("Record")
+    assert_equal "Demo__Person", Spike::Knowledge.identifier("Demo::Person")
+    refute_equal Spike::Knowledge.identifier("A::B"), Spike::Knowledge.identifier("A__B")
+    names = %w[A::B A__B A_uB A_u::B Runtime Ruby_Runtime Superclass Ruby_Superclass]
+    assert_equal names.length, names.map { |name| Spike::Knowledge.identifier(name) }.uniq.length
+  end
+
+  def test_readable_class_headers_and_reference_based_wiring
+    framework = Spike::Compiler.new
+      .add(File.read("lib/swill/model/attributes.rb"))
+      .add(File.read("spec/fixtures/framework.rb"))
+    compiler = Spike::Compiler.new(imports: framework.knowledge.interface)
+    compiler.add(File.read("spec/fixtures/models.rb"))
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs", framework: "./framework.mjs")
+    assert_includes js, "class Demo__Person extends Record {"
+    assert_includes js, "export { Demo__Person };"
+    assert_includes js, "mixins: [StripName, DecorateName]"
+    assert_includes js, "constructor: Demo__Person"
+    refute_includes js, "Runtime.include("
+    refute_match(/class Generated|extends .*?\(|^\s*;\s*$/, js)
+    assert_includes js, '"name": {'
+    assert_includes js, "function compute_label()"
+    assert_equal js, Spike::Compiler.format_javascript(js)
+  end
+
+  def test_source_constants_do_not_capture_runtime_or_mixin_plumbing_names
+    compiler = Spike::Compiler.new.add(<<~RUBY)
+      class Runtime < ReactiveObject
+        def label; "source runtime"; end
+      end
+      class Superclass < ReactiveObject
+        def label; "source superclass"; end
+      end
+      module Feature
+        def make; Superclass.new; end
+      end
+      class Example < ReactiveObject
+        include Feature
+        def make_runtime; Runtime.new; end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.make().label(), object.make_runtime().label()]));
+    JS
+    assert_equal ["source superclass", "source runtime"], execute(js)
+  end
+
+  def test_build_is_deterministic
+    compiler = compile('property :name, type: String, default: ""')
+    assert_equal compiler.javascript(runtime: "./runtime.mjs"), compiler.javascript(runtime: "./runtime.mjs")
+  end
+
+  def test_modules_separate_inert_definitions_and_meta_from_initialization
+    compiler = compile(<<~RUBY)
+      property :name, type: String, default: "Ada"
+      property :label, type: String do
+        name.upcase
+      end
+    RUBY
+    modules = compiler.modules(name: "fixture", runtime: "../lib/swill/runtime.mjs")
+    classes = modules.fetch("fixture.classes.mjs")
+    meta = modules.fetch("fixture.meta.mjs")
+    entry = modules.fetch("fixture.mjs")
+    refute_includes classes, "Runtime.install"
+    refute_includes classes, "Runtime.include"
+    refute_includes meta, "Runtime.install"
+    assert_includes meta, "export const meta"
+    assert_includes meta, "constructor: Example"
+    assert_equal 1, entry.scan("Runtime.install(meta)").length
+    assert_equal modules, compiler.modules(name: "fixture", runtime: "../lib/swill/runtime.mjs")
+    modules.each { |name, source| File.write("build/#{name}", source) }
+    assert_equal [true, true, "ADA"], execute(<<~JS)
+      import {Runtime} from "../lib/swill/runtime.mjs";
+      import {Example} from "./fixture.classes.mjs";
+      import {meta} from "./fixture.meta.mjs";
+      let uninstalled = false;
+      try { Runtime.resolve("Example"); } catch { uninstalled = true; }
+      Runtime.install(meta);
+      console.log(JSON.stringify([uninstalled, meta.classes.Example.constructor === Example,
+        new Example().label]));
+    JS
+  ensure
+    modules&.each_key { |name| File.delete("build/#{name}") if File.exist?("build/#{name}") }
+  end
+
+  def test_proto_is_an_ordinary_metadata_key
+    js = javascript('property :__proto__, type: String, default: "safe"') + <<~JS
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify(Runtime.read(object, "__proto__")));
+    JS
+    assert_equal "safe", execute(js)
+  end
+
+  def test_sorbet_rejects_wrong_generated_writer_type_and_computed_return
+    path = "build/negative_typecheck.rb"
+    compiler = compile("property :label, type: String do\n42\nend")
+    File.write(path, <<~RUBY + compiler.type_probes.lines.drop(2).join)
+      # typed: true
+      Demo::Person.new.name = 42
+    RUBY
+    output, status = Open3.capture2e("bundle", "exec", "srb", "tc", path)
+    refute status.success?, output
+    assert_includes output, "Expected `String`"
+    assert_includes output, "__spike_check_label"
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  private
+
+  def execute(js)
+    path = "build/compiler-test.mjs"
+    File.write(path, js)
+    output, status = Open3.capture2e("node", path)
+    assert status.success?, output
+    JSON.parse(output)
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+end

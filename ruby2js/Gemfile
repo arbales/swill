@@ -1,0 +1,9 @@
+source "https://rubygems.org"
+
+# Pragma is not in the latest published release. Gemfile.lock pins upstream
+# to a reproducible commit; bundle update advances it along with the other gems.
+gem "ruby2js", git: "https://github.com/ruby2js/ruby2js.git", branch: "master"
+gem "sorbet"
+gem "sorbet-runtime"
+gem "rake"
+gem "minitest"

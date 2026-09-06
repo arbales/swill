@@ -1,0 +1,5 @@
+--dir=examples
+--dir=spec/fixtures
+--dir=sorbet/rbi
+--dir=sorbet/checks
+--silence-dev-message
