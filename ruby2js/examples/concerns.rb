@@ -5,7 +5,7 @@
 module NameTracking
   extend T::Sig
 
-  sig { params(base: T.class_of(ReactiveObject)).void }
+  sig { params(base: T.class_of(Swill::Object)).void }
   def self.included(base)
     base.attribute :name, type: String, default: "Ada"
     base.property :baseline, type: T.nilable(String), default: nil
@@ -40,7 +40,7 @@ module NameValidation
   end
 end
 
-class ConcernRecord < ReactiveObject
+class ConcernRecord < Swill::Object
   include NameTracking
   include NameValidation
 end
@@ -49,7 +49,7 @@ class SpecializedRecord < ConcernRecord
   attribute :name, type: String, default: "Grace"
 end
 
-class OtherConcernRecord < ReactiveObject
+class OtherConcernRecord < Swill::Object
   include NameTracking
   include NameValidation
 end

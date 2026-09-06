@@ -7,29 +7,33 @@
   <label>Name <input bind="person.name"></label>
   <p bind="title"></p>
   <button data-action="clear">Clear person</button>
-  <p>This is a binding/lookup smoke test, not the Swill awakening implementation.</p>
+  <p>Controller awakening, binding, action, and teardown smoke test.</p>
 </main>
 <script src="../dist/swill.js"></script>
 <script src="../dist/app.js"></script>
 <script>
+try {
   const {Runtime} = Swill;
   const root = document.querySelector("[controller]");
-  const controller = new (Runtime.resolve(root.getAttribute("controller")))();
+  const awakening = new (Runtime.resolve("Swill::Awakening"))();
+  const [controller] = awakening.wire(document);
   controller.person = new (Runtime.resolve("Demo::Person"))();
   controller.person.name = "Ada";
   const disposers = [...root.querySelectorAll("[bind]")].map(element =>
     Runtime.bindElement(controller, element.getAttribute("bind"), element, {twoWay: element.matches("input")})
   );
   const button = root.querySelector("[data-action]");
-  const action = () => {
-    Runtime.invoke(controller, button.getAttribute("data-action"));
+  button.addEventListener("click", () => {
     root.querySelector("input").disabled = true;
-  };
-  button.addEventListener("click", action);
+  }, {once: true});
+  disposers.forEach(dispose => controller.register_teardown(dispose));
   window.addEventListener("pagehide", () => {
-    disposers.forEach(dispose => dispose());
-    button.removeEventListener("click", action);
+    controller.teardown();
     controller.dispose();
   }, {once: true});
+} catch (error) {
+  document.body.dataset.swillError = error.stack || String(error);
+  throw error;
+}
 </script>
 </html>

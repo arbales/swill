@@ -83,7 +83,9 @@ try {
     const deadline = Date.now() + 5000;
     const poll = () => {
       if (document.querySelector("p[bind]")?.textContent === "Hello Ada") resolve(true);
-      else if (Date.now() > deadline) reject(new Error("Application did not awaken"));
+      else if (Date.now() > deadline) reject(new Error(
+        document.body.dataset.swillError || "Application did not awaken"
+      ));
       else setTimeout(poll, 20);
     };
     poll();

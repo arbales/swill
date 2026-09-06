@@ -27,6 +27,14 @@ module Swill
         end
       end
 
+      def collect_attributes
+        Swill::Runtime.collect_attributes(self)
+      end
+
+      def apply_attributes(source)
+        Swill::Runtime.apply_attributes(self, source)
+      end
+
       def coerce_property_value(name, value, previous)
         super
       end

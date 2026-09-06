@@ -108,7 +108,7 @@ function invalidate(object, descriptor) {
   for (const callback of [...listeners(object, descriptor.name, "dependents")]) callback();
   if (listeners(object, descriptor.name, "observers").size) {
     const value = computedValue(object, descriptor);
-    if (!Runtime.equal(previous, value)) notify(object, descriptor.name, previous, value);
+    if (!Runtime.isEqual(previous, value)) notify(object, descriptor.name, previous, value);
   }
 }
 
@@ -122,7 +122,7 @@ function notify(object, name, previous, value) {
 function writeProperty(object, descriptor, value) {
   const previous = storedValue(object, descriptor);
   value = object.coerce_property_value(descriptor.name, value, previous);
-  if (Runtime.equal(previous, value)) return value;
+  if (Runtime.isEqual(previous, value)) return value;
   object.property_will_change(descriptor.name, previous, value);
   state(object).values.set(descriptor.name, value);
   notify(object, descriptor.name, previous, value);
@@ -269,28 +269,52 @@ export const Runtime = {
     return classes.get(name);
   },
 
-  truthy(value) { return value !== false && value !== null && value !== undefined; },
+  isTruthy(value) { return value !== false && value !== null && value !== undefined; },
+
+  logicalAnd(left, right) {
+    return this.isTruthy(left) ? right() : left;
+  },
+
+  logicalOr(left, right) {
+    return this.isTruthy(left) ? left : right();
+  },
 
   // Spike contract: scalar values and acyclic arrays have Ruby value equality;
   // framework objects retain identity. General Hash/custom == is not implemented.
-  equal(left, right) {
+  isEqual(left, right) {
     if (left === right) return true;
     return Array.isArray(left) && Array.isArray(right) &&
-      left.length === right.length && left.every((value, index) => this.equal(value, right[index]));
+      left.length === right.length && left.every((value, index) => this.isEqual(value, right[index]));
+  },
+
+  isBlank(value) {
+    if (value == null || value === false) return true;
+    if (typeof value === "string") return strip(value).length === 0;
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  },
+
+  strip(value) {
+    if (typeof value !== "string") throw new TypeError("strip requires a string");
+    return strip(value);
+  },
+
+  upcase(value) {
+    if (typeof value !== "string") throw new TypeError("upcase requires a string");
+    return value.toUpperCase();
+  },
+
+  downcase(value) {
+    if (typeof value !== "string") throw new TypeError("downcase requires a string");
+    return value.toLowerCase();
   },
 
   valueRead(value, name) {
-    if (name === "blank?") {
-      if (value == null || value === false) return true;
-      if (typeof value === "string") return strip(value).length === 0;
-      if (Array.isArray(value)) return value.length === 0;
-      return false;
-    }
-    if (typeof value !== "string") throw new TypeError(`${name} requires a string`);
     switch (name) {
-      case "strip": return strip(value);
-      case "upcase": return value.toUpperCase();
-      case "downcase": return value.toLowerCase();
+      case "blank?": return this.isBlank(value);
+      case "strip": return this.strip(value);
+      case "upcase": return this.upcase(value);
+      case "downcase": return this.downcase(value);
       default: throw new Error(`Unknown value reader: ${name}`);
     }
   },
@@ -321,6 +345,12 @@ export const Runtime = {
     return object[method.js](...args);
   },
 
+  performAction(object, name, sender, event) {
+    const method = declarations(object.constructor, "methods").get(name);
+    if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
+    return object[method.js](...[sender, event].slice(0, method.arity));
+  },
+
   observePath(object, path, callback) {
     let disposers = [];
     let active = true;
@@ -346,7 +376,44 @@ export const Runtime = {
     };
   },
 
-  // Minimal DOM boundary for the browser slice; not a port of Awakening.
+  observe(object, name, callback) {
+    return subscribe(object, name, callback, "observers");
+  },
+
+  dispose(object) {
+    const current = states.get(object);
+    if (!current) return;
+    for (const slot of current.computed.values()) {
+      slot.disposers.splice(0).forEach(dispose => dispose());
+    }
+    current.computed.clear();
+    current.observers.clear();
+    current.dependents.clear();
+  },
+
+  collect_attributes(object) {
+    const result = {};
+    for (const descriptor of declarations(object.constructor, "properties").values()) {
+      if (descriptor.attribute && !descriptor.computed) {
+        result[descriptor.key] = object[descriptor.js];
+      }
+    }
+    return result;
+  },
+
+  apply_attributes(object, source) {
+    for (const descriptor of declarations(object.constructor, "properties").values()) {
+      if (!descriptor.attribute || descriptor.computed) continue;
+      if (Object.hasOwn(source, descriptor.key)) {
+        object[descriptor.js] = source[descriptor.key];
+      } else if (Object.hasOwn(source, descriptor.name)) {
+        object[descriptor.js] = source[descriptor.name];
+      }
+    }
+    return object;
+  },
+
+  // DOM binding primitive used by the compiled Awakening/browser slice.
   bindElement(object, path, element, {twoWay = false} = {}) {
     if (twoWay) pathWriter(object, path);
     const render = () => {
@@ -364,27 +431,3 @@ export const Runtime = {
     };
   }
 };
-
-export class ReactiveObject {
-  coerce_property_value(_name, value, _previous) { return value; }
-  property_will_change(_name, _previous, _value) {}
-
-  observe(name, callback) { return subscribe(this, name, callback, "observers"); }
-
-  draft() {
-    const copy = new this.constructor();
-    for (const descriptor of declarations(this.constructor, "properties").values()) {
-      if (descriptor.attribute && !descriptor.computed) copy[descriptor.js] = this[descriptor.js];
-    }
-    return copy;
-  }
-
-  dispose() {
-    const current = states.get(this);
-    if (!current) return;
-    for (const slot of current.computed.values()) slot.disposers.splice(0).forEach(dispose => dispose());
-    current.computed.clear();
-    current.observers.clear();
-    current.dependents.clear();
-  }
-}

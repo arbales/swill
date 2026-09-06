@@ -2,21 +2,22 @@ require "minitest/autorun"
 require "json"
 require_relative "mri_adapter"
 require_relative "../lib/swill/model/attributes"
-require_relative "fixtures/framework"
-require_relative "fixtures/models"
-require_relative "fixtures/concerns"
+require_relative "../lib/swill/model/drafts"
+require_relative "../lib/swill/model/base"
+require_relative "../examples/models"
+require_relative "../examples/concerns"
 
 class SharedTest < Minitest::Test
   def test_model_attribute_registry_on_mri
     result = {
-      record: Record.model_attributes.keys,
+      record: Swill::Model::Base.model_attributes.keys,
       person: Demo::Person.model_attributes.keys,
       special: Demo::SpecialPerson.model_attributes.keys
     }
     assert_equal [:id], result[:record]
     assert_equal %i[id name], result[:person]
     assert_equal %i[id name role], result[:special]
-    refute_same Record.model_attributes, Demo::Person.model_attributes
+    refute_same Swill::Model::Base.model_attributes, Demo::Person.model_attributes
     refute_same Demo::Person.model_attributes, Demo::SpecialPerson.model_attributes
     assert_equal :job, Demo::SpecialPerson.model_attributes[:role][:key]
     File.write("build/mri-attributes.json", JSON.pretty_generate(result) + "\n")
@@ -45,6 +46,20 @@ class SharedTest < Minitest::Test
     end
     assert_equal ["Ada", "Grace", "Ada"], records.map { |record| record[:initial] }
     File.write("build/mri-concerns.json", JSON.pretty_generate(records) + "\n")
+  end
+
+  def test_draft_is_shared_ruby_orchestration
+    person = Demo::SpecialPerson.new
+    person.id = "42"
+    person.name = "Ada"
+    person.loud = true
+    draft = person.draft
+
+    assert_instance_of Demo::SpecialPerson, draft
+    assert_equal "42", draft.id
+    assert_equal "Ada", draft.name
+    assert_equal "editor", draft.role
+    assert_equal false, draft.loud
   end
 
   def test_shared_model_contract_on_mri

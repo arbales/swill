@@ -1,7 +1,7 @@
 # typed: true
 
 module Demo
-  class Controller < Record
+  class Controller < Swill::Controller
     extend T::Sig
 
     property :person, type: T.nilable(Demo::Person), default: nil

@@ -1,8 +1,36 @@
 # typed: true
 
+module NormalizeName
+  extend T::Sig
+
+  sig { params(value: String).returns(String) }
+  def normalize(value)
+    value
+  end
+end
+
+module StripName
+  extend T::Sig
+
+  sig { params(value: String).returns(String) }
+  def normalize(value)
+    super(value).strip
+  end
+end
+
+module DecorateName
+  extend T::Sig
+
+  sig { params(value: String).returns(String) }
+  def normalize(value)
+    "<#{super(value)}>"
+  end
+end
+
 module Demo
-  class Person < Record
+  class Person < Swill::Model::Base
     extend T::Sig
+    include NormalizeName
     include StripName
     include DecorateName
 

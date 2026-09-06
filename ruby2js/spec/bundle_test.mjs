@@ -9,17 +9,17 @@ test("script loading installs both artifacts using a single runtime", () => {
   const environment = bundleEnvironment({minified});
   const Swill = environment.load("swill");
   const {Runtime} = Swill;
-  const Record = Runtime.resolve("Record");
+  const Base = Runtime.resolve("Swill::Model::Base");
   assert.throws(() => Runtime.resolve("Demo::Person"), /Unknown class/);
   assert.equal(environment.load("app"), Swill);
-  assert.equal(Runtime.resolve("Record"), Record);
+  assert.equal(Runtime.resolve("Swill::Model::Base"), Base);
   assert.equal(Swill.Runtime, Runtime);
-  assert.equal(Swill.Record, Record);
+  assert.equal(Swill.Swill__Model__Base, Base);
   assert.deepEqual(Object.keys(environment.context), ["Swill"]);
   const controller = new (Runtime.resolve("Demo::Controller"))();
   const person = new (Runtime.resolve("Demo::SpecialPerson"))();
-  assert.ok(person instanceof Record);
-  assert.ok(person instanceof Swill.ReactiveObject);
+  assert.ok(person instanceof Base);
+  assert.ok(person instanceof Runtime.resolve("Swill::Object"));
   assert.equal(Runtime.invoke(person, "rename", " Ada "), "[<Ada>]");
   controller.person = person;
   const changes = [];
@@ -30,7 +30,7 @@ test("script loading installs both artifacts using a single runtime", () => {
   assert.equal(Runtime.read(person, "role"), "editor");
   dispose();
 
-  class Addon extends Record {}
+  class Addon extends Base {}
   Swill.install({classes: {"Test::Addon": {constructor: Addon}}});
   assert.equal(Runtime.resolve("Test::Addon"), Addon);
 });
@@ -57,7 +57,7 @@ test("the application contains neither the framework implementation nor another 
   const map = JSON.parse(readFileSync(new URL(`../dist/app${suffix}.js.map`, import.meta.url)));
   assert.ok(map.sources.some(source => source.endsWith("application.meta.mjs")));
   assert.ok(map.sources.some(source => source.endsWith("framework.external.mjs")));
-  assert.ok(!map.sources.some(source => source.endsWith("runtime/runtime.mjs")));
+  assert.ok(!map.sources.some(source => source.endsWith("runtime.mjs")));
   assert.ok(!map.sources.some(source => source.endsWith("framework.classes.mjs")));
   assert.equal(map.sources.length, map.sourcesContent.length);
 });

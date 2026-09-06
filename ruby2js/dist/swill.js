@@ -102,7 +102,7 @@
     for (const callback of [...listeners(object, descriptor.name, "dependents")]) callback();
     if (listeners(object, descriptor.name, "observers").size) {
       const value = computedValue(object, descriptor);
-      if (!Runtime.equal(previous, value)) notify(object, descriptor.name, previous, value);
+      if (!Runtime.isEqual(previous, value)) notify(object, descriptor.name, previous, value);
     }
   }
   function notify(object, name, previous, value) {
@@ -114,7 +114,7 @@
   function writeProperty(object, descriptor, value) {
     const previous = storedValue(object, descriptor);
     value = object.coerce_property_value(descriptor.name, value, previous);
-    if (Runtime.equal(previous, value)) return value;
+    if (Runtime.isEqual(previous, value)) return value;
     object.property_will_change(descriptor.name, previous, value);
     state(object).values.set(descriptor.name, value);
     notify(object, descriptor.name, previous, value);
@@ -243,30 +243,49 @@
       if (!classes.has(name)) throw new Error(`Unknown class: ${name}`);
       return classes.get(name);
     },
-    truthy(value) {
+    isTruthy(value) {
       return value !== false && value !== null && value !== void 0;
+    },
+    logicalAnd(left, right) {
+      return this.isTruthy(left) ? right() : left;
+    },
+    logicalOr(left, right) {
+      return this.isTruthy(left) ? left : right();
     },
     // Spike contract: scalar values and acyclic arrays have Ruby value equality;
     // framework objects retain identity. General Hash/custom == is not implemented.
-    equal(left, right) {
+    isEqual(left, right) {
       if (left === right) return true;
-      return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => this.equal(value, right[index]));
+      return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => this.isEqual(value, right[index]));
+    },
+    isBlank(value) {
+      if (value == null || value === false) return true;
+      if (typeof value === "string") return strip(value).length === 0;
+      if (Array.isArray(value)) return value.length === 0;
+      return false;
+    },
+    strip(value) {
+      if (typeof value !== "string") throw new TypeError("strip requires a string");
+      return strip(value);
+    },
+    upcase(value) {
+      if (typeof value !== "string") throw new TypeError("upcase requires a string");
+      return value.toUpperCase();
+    },
+    downcase(value) {
+      if (typeof value !== "string") throw new TypeError("downcase requires a string");
+      return value.toLowerCase();
     },
     valueRead(value, name) {
-      if (name === "blank?") {
-        if (value == null || value === false) return true;
-        if (typeof value === "string") return strip(value).length === 0;
-        if (Array.isArray(value)) return value.length === 0;
-        return false;
-      }
-      if (typeof value !== "string") throw new TypeError(`${name} requires a string`);
       switch (name) {
+        case "blank?":
+          return this.isBlank(value);
         case "strip":
-          return strip(value);
+          return this.strip(value);
         case "upcase":
-          return value.toUpperCase();
+          return this.upcase(value);
         case "downcase":
-          return value.toLowerCase();
+          return this.downcase(value);
         default:
           throw new Error(`Unknown value reader: ${name}`);
       }
@@ -293,6 +312,11 @@
       if (!method || method.arity !== args.length) throw new Error(`Unknown action or wrong arity: ${name}`);
       return object[method.js](...args);
     },
+    performAction(object, name, sender, event) {
+      const method = declarations(object.constructor, "methods").get(name);
+      if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
+      return object[method.js](...[sender, event].slice(0, method.arity));
+    },
     observePath(object, path, callback) {
       let disposers = [];
       let active = true;
@@ -317,7 +341,40 @@
         disposers.splice(0).forEach((dispose) => dispose());
       };
     },
-    // Minimal DOM boundary for the browser slice; not a port of Awakening.
+    observe(object, name, callback) {
+      return subscribe(object, name, callback, "observers");
+    },
+    dispose(object) {
+      const current = states.get(object);
+      if (!current) return;
+      for (const slot of current.computed.values()) {
+        slot.disposers.splice(0).forEach((dispose) => dispose());
+      }
+      current.computed.clear();
+      current.observers.clear();
+      current.dependents.clear();
+    },
+    collect_attributes(object) {
+      const result = {};
+      for (const descriptor of declarations(object.constructor, "properties").values()) {
+        if (descriptor.attribute && !descriptor.computed) {
+          result[descriptor.key] = object[descriptor.js];
+        }
+      }
+      return result;
+    },
+    apply_attributes(object, source) {
+      for (const descriptor of declarations(object.constructor, "properties").values()) {
+        if (!descriptor.attribute || descriptor.computed) continue;
+        if (Object.hasOwn(source, descriptor.key)) {
+          object[descriptor.js] = source[descriptor.key];
+        } else if (Object.hasOwn(source, descriptor.name)) {
+          object[descriptor.js] = source[descriptor.name];
+        }
+      }
+      return object;
+    },
+    // DOM binding primitive used by the compiled Awakening/browser slice.
     bindElement(object, path, element, { twoWay = false } = {}) {
       if (twoWay) pathWriter(object, path);
       const render = () => {
@@ -335,43 +392,149 @@
       };
     }
   };
-  var ReactiveObject = class {
-    coerce_property_value(_name, value, _previous) {
-      return value;
-    }
-    property_will_change(_name, _previous, _value) {
-    }
-    observe(name, callback) {
-      return subscribe(this, name, callback, "observers");
-    }
-    draft() {
-      const copy = new this.constructor();
-      for (const descriptor of declarations(this.constructor, "properties").values()) {
-        if (descriptor.attribute && !descriptor.computed) copy[descriptor.js] = this[descriptor.js];
-      }
-      return copy;
-    }
-    dispose() {
-      const current = states.get(this);
-      if (!current) return;
-      for (const slot of current.computed.values()) slot.disposers.splice(0).forEach((dispose) => dispose());
-      current.computed.clear();
-      current.observers.clear();
-      current.dependents.clear();
-    }
-  };
 
   // build/framework.classes.mjs
   var framework_classes_exports = {};
   __export(framework_classes_exports, {
-    DecorateName: () => DecorateName,
-    Record: () => Record,
-    StripName: () => StripName,
+    Swill__Awakening: () => Swill__Awakening,
+    Swill__Controller: () => Swill__Controller,
     Swill__Model__Attributes: () => Swill__Model__Attributes,
-    Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods
+    Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
+    Swill__Model__Base: () => Swill__Model__Base,
+    Swill__Model__Drafts: () => Swill__Model__Drafts,
+    Swill__Object: () => Swill__Object,
+    Swill__Observable: () => Swill__Observable,
+    Swill__Responder: () => Swill__Responder,
+    Swill__View: () => Swill__View
   });
+  function Swill__Observable(Superclass) {
+    class Swill__Observable_Layer extends Superclass {
+      observe(name, callback) {
+        return Runtime.observe(this, name, callback);
+      }
+      dispose() {
+        return Runtime.dispose(this);
+      }
+      coerce_property_value(name, value, previous) {
+        return value;
+      }
+      property_will_change(name, previous, value) {
+        return null;
+      }
+    }
+    return Swill__Observable_Layer;
+  }
+  var Swill__Object = class extends Object {
+  };
+  var Swill__Responder = class extends Swill__Object {
+    next_responder() {
+      return null;
+    }
+    perform_action(name, sender, event) {
+      return Runtime.performAction(this, name, sender, event);
+    }
+  };
+  var Swill__View = class extends Swill__Responder {
+    constructor(element) {
+      super();
+      this._element = element;
+      this._controller = null;
+      element.__swill_view__ = this;
+    }
+    element() {
+      return this._element;
+    }
+    controller_value() {
+      return this._controller;
+    }
+    set controller(controller) {
+      this._controller = controller;
+      return this._controller;
+    }
+    next_responder() {
+      return this._controller;
+    }
+  };
+  var Swill__Controller = class extends Swill__Responder {
+    attach(element) {
+      this._view = element.__swill_view__ ?? new Swill__View(element);
+      this._view.controller = this;
+      this._teardowns = [];
+      return this;
+    }
+    view() {
+      return this._view;
+    }
+    register_teardown(dispose) {
+      return this._teardowns.push(dispose);
+    }
+    teardown() {
+      this.view_will_disappear();
+      this._teardowns.forEach((dispose) => dispose.call());
+      this._teardowns = [];
+      this._view.controller = null;
+      return this.view_did_disappear();
+    }
+    view_did_load() {
+      return null;
+    }
+    awake_from_dom() {
+      return null;
+    }
+    controller_did_load() {
+      return null;
+    }
+    view_will_appear() {
+      return null;
+    }
+    view_did_appear() {
+      return null;
+    }
+    view_will_disappear() {
+      return null;
+    }
+    view_did_disappear() {
+      return null;
+    }
+  };
+  var Swill__Awakening = class extends Swill__Object {
+    wire(root) {
+      let controllers = [];
+      root.querySelectorAll("[controller]").forEach((element) => {
+        let name = element.getAttribute("controller");
+        let controller_class = Runtime.resolve(name);
+        let controller = new controller_class();
+        controller.attach(element);
+        controllers.push(controller);
+        this.awaken(controller);
+        this.wire_actions(controller);
+      });
+      return controllers;
+    }
+    awaken(controller) {
+      controller.view_did_load();
+      controller.awake_from_dom();
+      controller.controller_did_load();
+      controller.view_will_appear();
+      return controller.view_did_appear();
+    }
+    wire_actions(controller) {
+      return controller.view().element().querySelectorAll("[data-action]").forEach((element) => {
+        let action = element.getAttribute("data-action");
+        let handler = (event) => controller.perform_action(action, element, event);
+        element.addEventListener("click", handler);
+        controller.register_teardown(() => element.removeEventListener("click", handler));
+      });
+    }
+  };
   function Swill__Model__Attributes(Superclass) {
     class Swill__Model__Attributes_Layer extends Superclass {
+      collect_attributes() {
+        return Runtime.collect_attributes(this);
+      }
+      apply_attributes(source) {
+        return Runtime.apply_attributes(this, source);
+      }
       coerce_property_value(name, value, previous) {
         return super.coerce_property_value(name, value, previous);
       }
@@ -390,35 +553,31 @@
     Object.setPrototypeOf(Swill__Model__Attributes_ClassMethods_Layer.prototype, Superclass);
     return Swill__Model__Attributes_ClassMethods_Layer.prototype;
   }
-  function StripName(Superclass) {
-    class StripName_Layer extends Superclass {
-      normalize(value) {
-        return Runtime.valueRead(super.normalize(value), "strip");
+  function Swill__Model__Drafts(Superclass) {
+    class Swill__Model__Drafts_Layer extends Superclass {
+      draft() {
+        let copy = new this.constructor();
+        copy.apply_attributes(this.collect_attributes());
+        return copy;
       }
     }
-    return StripName_Layer;
+    return Swill__Model__Drafts_Layer;
   }
-  function DecorateName(Superclass) {
-    class DecorateName_Layer extends Superclass {
-      normalize(value) {
-        return `<${super.normalize(value)}>`;
-      }
-    }
-    return DecorateName_Layer;
-  }
-  var Record = class extends ReactiveObject {
-    normalize(value) {
-      return value;
-    }
+  var Swill__Model__Base = class extends Swill__Object {
   };
 
   // build/framework.meta.mjs
   var meta = {
     mixins: {
-      "Swill::Model::Attributes": {
-        factory: Swill__Model__Attributes,
-        classFactory: Swill__Model__Attributes_ClassMethods,
+      "Swill::Observable": {
+        factory: Swill__Observable,
         methods: {
+          "observe": {
+            "arity": 2
+          },
+          "dispose": {
+            "arity": 0
+          },
           "coerce_property_value": {
             "arity": 3
           },
@@ -427,27 +586,130 @@
           }
         }
       },
-      "StripName": {
-        factory: StripName,
+      "Swill::Model::Attributes": {
+        factory: Swill__Model__Attributes,
+        classFactory: Swill__Model__Attributes_ClassMethods,
         methods: {
-          "normalize": {
+          "collect_attributes": {
+            "arity": 0
+          },
+          "apply_attributes": {
             "arity": 1
+          },
+          "coerce_property_value": {
+            "arity": 3
+          },
+          "property_will_change": {
+            "arity": 3
           }
         }
       },
-      "DecorateName": {
-        factory: DecorateName,
+      "Swill::Model::Drafts": {
+        factory: Swill__Model__Drafts,
         methods: {
-          "normalize": {
-            "arity": 1
+          "draft": {
+            "arity": 0
           }
         }
       }
     },
     classes: {
-      "Record": {
-        constructor: Record,
-        mixins: [Swill__Model__Attributes],
+      "Swill::Object": {
+        constructor: Swill__Object,
+        mixins: [Swill__Observable],
+        properties: {},
+        methods: {}
+      },
+      "Swill::Responder": {
+        constructor: Swill__Responder,
+        properties: {},
+        methods: {
+          "next_responder": {
+            "arity": 0
+          },
+          "perform_action": {
+            "arity": 3
+          }
+        }
+      },
+      "Swill::View": {
+        constructor: Swill__View,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "element": {
+            "arity": 0
+          },
+          "controller_value": {
+            "arity": 0
+          },
+          "controller=": {
+            "arity": 1
+          },
+          "next_responder": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Controller": {
+        constructor: Swill__Controller,
+        properties: {},
+        methods: {
+          "attach": {
+            "arity": 1
+          },
+          "view": {
+            "arity": 0
+          },
+          "register_teardown": {
+            "arity": 1
+          },
+          "teardown": {
+            "arity": 0
+          },
+          "view_did_load": {
+            "arity": 0
+          },
+          "awake_from_dom": {
+            "arity": 0
+          },
+          "controller_did_load": {
+            "arity": 0
+          },
+          "view_will_appear": {
+            "arity": 0
+          },
+          "view_did_appear": {
+            "arity": 0
+          },
+          "view_will_disappear": {
+            "arity": 0
+          },
+          "view_did_disappear": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Awakening": {
+        constructor: Swill__Awakening,
+        properties: {},
+        methods: {
+          "wire": {
+            "arity": 1
+          },
+          "awaken": {
+            "arity": 1
+          },
+          "wire_actions": {
+            "arity": 1
+          }
+        }
+      },
+      "Swill::Model::Base": {
+        constructor: Swill__Model__Base,
+        mixins: [Swill__Model__Attributes, Swill__Model__Drafts],
         properties: {
           "id": {
             type: "T.nilable(String)",
@@ -461,11 +723,7 @@
         registries: { model_attributes: {
           "id": { property: "id", key: "id" }
         } },
-        methods: {
-          "normalize": {
-            "arity": 1
-          }
-        }
+        methods: {}
       }
     }
   };
@@ -473,6 +731,6 @@
   // build/framework.mjs
   if (globalThis["Swill"]) throw new Error("Framework already loaded");
   Runtime.install(meta);
-  globalThis["Swill"] = Object.freeze({ ...framework_classes_exports, Runtime, ReactiveObject, install: (meta2) => Runtime.install(meta2) });
+  globalThis["Swill"] = Object.freeze({ ...framework_classes_exports, Runtime, install: (meta2) => Runtime.install(meta2) });
 })();
 //# sourceMappingURL=swill.js.map

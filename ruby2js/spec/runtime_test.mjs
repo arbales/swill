@@ -3,21 +3,22 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {loadBundles} from "./load_bundles.mjs";
 
-const {Runtime, ReactiveObject} = loadBundles();
+const {Runtime} = loadBundles();
 
+const SwillObject = Runtime.resolve("Swill::Object");
 const Person = Runtime.resolve("Demo::Person");
 const SpecialPerson = Runtime.resolve("Demo::SpecialPerson");
 const Controller = Runtime.resolve("Demo::Controller");
 
 test("real Attributes concern builds isolated inherited registries", () => {
-  const Record = Runtime.resolve("Record");
+  const Base = Runtime.resolve("Swill::Model::Base");
   const result = {
-    record: Object.keys(Record.model_attributes()),
+    record: Object.keys(Base.model_attributes()),
     person: Object.keys(Person.model_attributes()),
     special: Object.keys(SpecialPerson.model_attributes())
   };
   assert.deepEqual(result, JSON.parse(readFileSync("build/mri-attributes.json")));
-  assert.notEqual(Person.model_attributes(), Record.model_attributes());
+  assert.notEqual(Person.model_attributes(), Base.model_attributes());
   assert.notEqual(SpecialPerson.model_attributes(), Person.model_attributes());
   assert.equal(Person.model_attributes().name.type, "String");
   assert.equal(SpecialPerson.model_attributes().role.key, "job");
@@ -65,7 +66,7 @@ test("shared Ruby model has the same result on MRI and compiled JavaScript", () 
 });
 
 test("generated registry crosses artifact boundaries without exposing globals", () => {
-  assert.equal(Object.getPrototypeOf(Person.prototype) instanceof ReactiveObject, true);
+  assert.equal(Object.getPrototypeOf(Person.prototype) instanceof SwillObject, true);
   assert.equal(globalThis.Demo, undefined);
   assert.throws(() => Runtime.resolve("Object"), /Unknown class/);
   assert.throws(() => Runtime.resolve("__proto__"), /Unknown class/);
@@ -87,7 +88,7 @@ test("mixin ordering and class super override survive factory lowering", () => {
 });
 
 test("reference-based wiring preserves construction, instanceof, and native super", () => {
-  class Base extends ReactiveObject {
+  class Base extends SwillObject {
     constructor(value) { super(); this.value = value; }
     label() { return this.value; }
   }
@@ -190,10 +191,11 @@ test("drafts copy inherited attributes but never observers or computed state", (
 test("action dispatch uses generated method names and validates arity", () => {
   const controller = new Controller();
   controller.person = new Person();
-  assert.equal(Runtime.invoke(controller, "clear"), "Nobody");
+  assert.equal(Runtime.performAction(controller, "clear", {}, {}), "Nobody");
   assert.equal(controller.person, null);
   assert.throws(() => Runtime.invoke(controller, "clear", 1), /wrong arity/);
   assert.throws(() => Runtime.invoke(controller, "toString"), /Unknown action/);
+  assert.throws(() => Runtime.performAction(controller, "toString", {}, {}), /Unknown action/);
 });
 
 test("DOM-shaped bindings are two-way and release listeners", () => {
@@ -221,7 +223,7 @@ test("DOM-shaped bindings are two-way and release listeners", () => {
 
 test("the shared setter coerces before equality and invalidates before hooks", () => {
   const events = [];
-  class Hooks extends ReactiveObject {
+  class Hooks extends SwillObject {
     coerce_property_value(_name, value) { return value.trim(); }
     property_will_change(name, previous, value) { events.push(["will", previous, value]); }
     name_did_change(previous, value) { events.push(["did", this.label]); }
@@ -254,17 +256,17 @@ test("disposing computed state releases dependencies without erasing stored valu
 });
 
 test("remaining runtime semantic helpers preserve Ruby values", () => {
-  assert.equal(Runtime.truthy(0), true);
-  assert.equal(Runtime.truthy(""), true);
-  assert.equal(Runtime.truthy(false), false);
-  assert.equal(Runtime.truthy(null), false);
-  assert.equal(Runtime.equal([1, [2]], [1, [2]]), true);
-  assert.equal(Runtime.equal([1], [2]), false);
-  assert.equal(Runtime.equal(new Person(), new Person()), false);
+  assert.equal(Runtime.isTruthy(0), true);
+  assert.equal(Runtime.isTruthy(""), true);
+  assert.equal(Runtime.isTruthy(false), false);
+  assert.equal(Runtime.isTruthy(null), false);
+  assert.equal(Runtime.isEqual([1, [2]], [1, [2]]), true);
+  assert.equal(Runtime.isEqual([1], [2]), false);
+  assert.equal(Runtime.isEqual(new Person(), new Person()), false);
 });
 
 test("computed cycles and exceptions do not leak capture state", () => {
-  class Broken extends ReactiveObject {}
+  class Broken extends SwillObject {}
   Runtime.installClass(Broken, "Test::Broken", [
     {name: "cycle", js: "cycle", computed: true, compute() { return this.cycle; }},
     {name: "error", js: "error", computed: true, compute() { throw new Error("expected"); }}
@@ -282,7 +284,7 @@ test("duplicate registry installation is rejected", () => {
 });
 
 test("one meta object installs parents before children, including mixin metadata", () => {
-  class Parent extends ReactiveObject {
+  class Parent extends SwillObject {
     describe() { return this.value; }
   }
   class Child extends Parent {
@@ -313,8 +315,8 @@ test("one meta object installs parents before children, including mixin metadata
 });
 
 test("invalid meta is rejected before registering preceding valid classes", () => {
-  class Valid extends ReactiveObject {}
-  class Invalid extends ReactiveObject {}
+  class Valid extends SwillObject {}
+  class Invalid extends SwillObject {}
   assert.throws(() => Runtime.install({classes: {
     "Test::Valid": {constructor: Valid},
     "Test::Invalid": {constructor: Invalid, mixins: [() => {}]}

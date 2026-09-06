@@ -27,7 +27,7 @@ module Swill
       # Ordinary names stay ordinary; namespaces use __. Escape source
       # underscores first so A::B and A__B remain distinct. The single
       # underscore in Ruby_Runtime cannot occur in an encoded source name.
-      return "Ruby_#{name}" if (%w[Runtime ReactiveObject Superclass] + JS_INTRINSICS).include?(name)
+      return "Ruby_#{name}" if (%w[Runtime Superclass] + JS_INTRINSICS).include?(name)
       name.split("::").map { |part| part.gsub("_", "_u") }.join("__")
     end
 
@@ -35,7 +35,7 @@ module Swill
       name.to_s.gsub("?", "_predicate").gsub("!", "_bang")
     end
 
-    def collect(source, file)
+    def collect(source, file, javascript_only: false)
       ast, comments = ::Ruby2JS.parse(source, file)
       # This shared-Ruby spike accepts type hints, not JavaScript-only control
       # pragmas (notably skip/extend, which would invalidate collected metadata).
@@ -46,7 +46,7 @@ module Swill
           end
         end
       end
-      collect_scope(statements(ast), [])
+      collect_scope(statements(ast), [], javascript_only)
       self
     end
 
@@ -59,8 +59,6 @@ module Swill
     end
 
     def resolve(name, scope)
-      return name if name == "ReactiveObject"
-
       parts = scope.dup
       loop do
         candidate = (parts + [name]).join("::")
@@ -82,9 +80,17 @@ module Swill
       node.type == :begin ? node.children : [node]
     end
 
+    def method_defined?(type, method)
+      entry = entries.find { |candidate| candidate["name"] == type }
+      return false unless entry
+      return true if entry["methods"].any? { |candidate| candidate["name"] == method.to_s }
+      return false unless entry["parent"]
+      method_defined?(resolve(entry["parent"], entry["scope"]), method)
+    end
+
     private
 
-    def collect_scope(nodes, scope)
+    def collect_scope(nodes, scope, javascript_only)
       nodes.each do |node|
         if node.type == :module
           name, body = node.children
@@ -93,43 +99,50 @@ module Swill
             child.type == :module && constant(child.children.first) == "ClassMethods"
           end
           if children.any? { |child| %i[class module].include?(child.type) } && !has_class_methods
-            collect_scope(children, scope + [constant(name)])
+            collect_scope(children, scope + [constant(name)], javascript_only)
           else
-            collect_entry(node, scope, "mixin")
+            collect_entry(node, scope, "mixin", javascript_only)
           end
         elsif node.type == :class
-          collect_entry(node, scope, "class")
+          collect_entry(node, scope, "class", javascript_only)
         else
           raise CompileError, "unsupported top-level #{node.type}: #{node.loc.expression.source}"
         end
       end
     end
 
-    def collect_entry(node, scope, kind)
+    def collect_entry(node, scope, kind, javascript_only)
       name = (scope + [constant(node.children.first)]).join("::")
       raise CompileError, "reopened/duplicate constant #{name}" if entries.any? { |e| e["name"] == name }
 
       entry = {
         "name" => name, "identifier" => self.class.identifier(name),
-        "kind" => kind, "scope" => scope, "node" => node,
-        "parent" => kind == "class" ? constant(node.children[1]) : nil,
+        "kind" => kind, "scope" => scope, "node" => node, "javascript_only" => javascript_only,
+        "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
         "includes" => [], "properties" => [], "methods" => [], "included_properties" => [],
         "class_methods" => [], "registries" => [], "settings" => []
       }
+      pending_signature = nil
       statements(node.children.last).each do |child|
         if child.type == :def
           method, args, = child.children
-          unless method.to_s.match?(/\A[a-z_]\w*[!?]?\z/) && !%i[initialize method_missing].include?(method)
+          unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) &&
+                 method != :method_missing && (javascript_only || method != :initialize)
             raise CompileError, "unsupported method definition #{method}"
           end
           unless args.children.all? { |arg| arg.type == :arg }
             raise CompileError, "only positional required method arguments are supported"
           end
           validate_expression!(child.children.last)
-          entry["methods"] << { "name" => method.to_s, "js" => self.class.member(method),
-                                 "arity" => args.children.length }
+          entry["methods"] << {
+            "name" => method.to_s, "js" => self.class.member(method),
+            "arity" => args.children.length,
+            "parameters" => signature_parameters(pending_signature)
+          }
+          pending_signature = nil
         elsif signature?(child)
           # Sorbet checks these; executable definitions omit annotations.
+          pending_signature = child
         elsif child.type == :send && child.children[0..1] == [nil, :extend] &&
               child.children[2..] == [::Ruby2JS.parse("T::Sig").first]
           # Annotation-only extension.
@@ -243,6 +256,27 @@ module Swill
       node.type == :block && node.children.first.children[0..1] == [nil, :sig]
     end
 
+    def signature_parameters(signature)
+      return {} unless signature
+      params = find_send(signature.children.last, :params)
+      hash = params&.children&.find { |child| child.respond_to?(:children) && child.type == :hash }
+      return {} unless hash
+      hash.children.to_h do |pair|
+        name, type = pair.children
+        [name.children.first.to_s, type.loc.expression.source]
+      end.compact
+    end
+
+    def find_send(node, method)
+      return unless node.respond_to?(:children)
+      return node if node.type == :send && node.children[1] == method
+      node.children.each do |child|
+        found = find_send(child, method)
+        return found if found
+      end
+      nil
+    end
+
     def declaration?(node)
       call = node.type == :block ? node.children.first : node
       call.type == :send && call.children.first.nil? && %i[property attribute].include?(call.children[1])
@@ -326,9 +360,12 @@ module Swill
       # Ruby2JS reserves :scope for an object supplying instance variables.
       @scope = options.fetch(:spike_scope)
       @properties = options.fetch(:properties)
+      @property_types = options.fetch(:property_types)
       @all_properties = options.fetch(:all_properties)
       @compiled_class = options[:compiled_class]
       @compiled_parent = options[:compiled_parent]
+      @entry = options.fetch(:entry)
+      @local_types = {}
     end
 
     def on_class(node)
@@ -350,30 +387,63 @@ module Swill
 
     def on_def(node)
       name, args, body = node.children
+      method = @entry["methods"].find { |candidate| candidate["name"] == name.to_s }
+      previous = @local_types
+      @local_types = method ? method["parameters"].dup : {}
+      infer_local_types(body).each do |local, type|
+        @local_types[local] = type
+      end
       # Ruby2JS's explicit method node preserves source locations for filters.
       super(node.updated(:defm, [Knowledge.member(name).to_sym, args, body]))
+    ensure
+      @local_types = previous
     end
 
     def on_const(node)
       name = @knowledge.constant(node)
+      return s(:const, nil, :Runtime) if name == "Swill::Runtime"
       # Built-in filters introduce JS intrinsics as locationless nodes. Source
       # constants still use the spike's namespace rules, even with these names.
       return node if !node.loc && JS_INTRINSICS.include?(name)
       resolved = @knowledge.resolve(name, @scope)
-      s(:const, nil, resolved == "ReactiveObject" ? :ReactiveObject : Knowledge.identifier(resolved).to_sym)
+      s(:const, nil, Knowledge.identifier(resolved).to_sym)
+    end
+
+    def on_if(node)
+      condition, if_true, if_false = node.children
+      s(:if, ruby_truthy(condition),
+        if_true && process(if_true), if_false && process(if_false))
+    end
+
+    def on_and(node)
+      left, right = node.children
+      logical_expression(:and, left, right)
+    end
+
+    def on_or(node)
+      left, right = node.children
+      logical_expression(:or, left, right)
     end
 
     def on_send(node)
       receiver, method, *args = node.children
+      if receiver&.type == :self && method == :class && args.empty?
+        return s(:attr, s(:self), :constructor)
+      end
       if %i[strip upcase downcase blank?].include?(method) && args.empty? && receiver
-        return s(:call, s(:const, nil, :Runtime), :valueRead, process(receiver), s(:str, method.to_s))
+        runtime_method = method == :blank? ? :isBlank : method
+        return s(:call, s(:const, nil, :Runtime), runtime_method, process(receiver))
       end
       if %i[== !=].include?(method)
-        equality = s(:call, s(:const, nil, :Runtime), :equal, process(receiver), process(args.fetch(0)))
+        right = args.fetch(0)
+        if native_equality?(static_type(receiver), static_type(right))
+          return s(:send, process(receiver), method, process(right))
+        end
+        equality = s(:call, s(:const, nil, :Runtime), :isEqual, process(receiver), process(right))
         return method == :== ? equality : s(:send, equality, :!)
       end
       if method == :!
-        return s(:send, s(:call, s(:const, nil, :Runtime), :truthy, process(receiver)), :!)
+        return s(:send, ruby_truthy(receiver), :!)
       end
       if receiver && receiver.type != :self && @all_properties.include?(method.to_s) && args.empty?
         # The receiver's class may only become known at runtime. A name used
@@ -387,6 +457,133 @@ module Swill
         return s(:send, receiver ? process(receiver) : s(:self), Knowledge.member(method).to_sym, *process_all(args))
       end
       super
+    end
+
+    private
+
+    def infer_local_types(node)
+      all_assignments = Hash.new { |hash, name| hash[name] = [] }
+      collect_local_assignments(node, all_assignments)
+      direct_assignments = @knowledge.statements(node).select { |statement| statement.type == :lvasgn }
+        .group_by { |statement| statement.children.first.to_s }
+      # Parameter signatures describe entry values, not later assignments.
+      # Without full flow analysis, an assigned parameter is no longer static.
+      all_assignments.each_key { |name| @local_types.delete(name) }
+      assignments = direct_assignments.select do |name, values|
+        values.length == all_assignments[name].length && first_local_reference(node, name) >= values.first.loc.expression.begin_pos
+      end.transform_values { |values| values.map { |assignment| assignment.children.last } }
+      inferred = {}
+      loop do
+        additions = assignments.filter_map do |name, values|
+          types = values.map { |value| static_type(value) }.uniq
+          [name, types.first] if types.length == 1 && types.first && @local_types[name] != types.first
+        end.to_h
+        break if additions.empty?
+        @local_types.merge!(additions)
+        inferred.merge!(additions)
+      end
+      inferred
+    end
+
+    def first_local_reference(node, name)
+      positions = []
+      collect_local_references(node, name, positions)
+      positions.min || Float::INFINITY
+    end
+
+    def collect_local_references(node, name, positions)
+      return unless node.respond_to?(:type)
+      if node.type == :lvar && node.children.first.to_s == name
+        positions << node.loc.expression.begin_pos
+      end
+      node.children.each { |child| collect_local_references(child, name, positions) }
+    end
+
+    def collect_local_assignments(node, assignments)
+      return unless node.respond_to?(:type)
+      if node.type == :lvasgn
+        name, value = node.children
+        assignments[name.to_s] << value
+      end
+      node.children.each { |child| collect_local_assignments(child, assignments) }
+    end
+
+    def literal_type(node)
+      return unless node.respond_to?(:type)
+      {
+        str: "String", int: "Integer", true: "T::Boolean", false: "T::Boolean",
+        nil: "NilClass", sym: "Symbol", array: "Array", hash: "Hash"
+      }[node.type]
+    end
+
+    def static_type(node)
+      return unless node.respond_to?(:type)
+      return literal_type(node) if literal_type(node)
+      return @local_types[node.children.first.to_s] if node.type == :lvar
+      return "T::Boolean" if node.type == :send && %i[== != !].include?(node.children[1])
+      if node.type == :send
+        receiver, method, *args = node.children
+        if args.empty? && (receiver.nil? || receiver.type == :self)
+          return @property_types[method.to_s]
+        end
+      end
+      nil
+    end
+
+    def truthiness_kind(type)
+      return :unknown unless type
+      return :boolean if type == "T::Boolean"
+      return :nil if type == "NilClass"
+      if (match = type.match(/\AT\.nilable\((.+)\)\z/))
+        return %w[String Integer Symbol].include?(match[1]) ? :nullable_scalar : :native
+      end
+      return :scalar if %w[String Integer Symbol].include?(type)
+      return :native if type.match?(/\A(?:Array|Hash|[A-Z]\w*(?:::\w+)*)\z/)
+      :unknown
+    end
+
+    def ruby_truthy(node)
+      case truthiness_kind(static_type(node))
+      when :boolean, :native
+        process(node)
+      when :nil
+        s(:false)
+      when :scalar, :nullable_scalar
+        s(:send, process(node), :!=, s(:nil))
+      else
+        s(:call, s(:const, nil, :Runtime), :isTruthy, process(node))
+      end
+    end
+
+    def logical_expression(operator, left, right)
+      kind = truthiness_kind(static_type(left))
+      if %i[boolean nil native].include?(kind)
+        return s(operator, process(left), process(right))
+      end
+      if stable_value?(left) && kind == :scalar
+        return operator == :and ? process(right) : process(left)
+      end
+      if stable_value?(left) && kind == :nullable_scalar
+        condition = ruby_truthy(left)
+        return operator == :and ?
+          s(:if, condition, process(right), process(left)) :
+          s(:if, condition, process(left), process(right))
+      end
+      runtime_method = operator == :and ? :logicalAnd : :logicalOr
+      s(:call, s(:const, nil, :Runtime), runtime_method,
+        process(left), deferred(process(right)))
+    end
+
+    def stable_value?(node)
+      node && (%i[lvar str int true false nil sym].include?(node.type))
+    end
+
+    def native_equality?(left_type, right_type)
+      [left_type, right_type].any? { |type| type && type != "Array" && type != "T.untyped" }
+    end
+
+    def deferred(value)
+      s(:block, s(:send, nil, :lambda), s(:args), value)
     end
 
   end
@@ -407,6 +604,82 @@ module Swill
     end
   end
 
+  # Browser-only framework source uses Ruby as JavaScript syntax. It keeps
+  # Ruby2JS's native DOM property/call behavior while retaining Swill's
+  # collision-safe class names.
+  module JavaScriptSurface
+    include ::Ruby2JS::Filter::SEXP
+
+    def options=(options)
+      super
+      @knowledge = options.fetch(:knowledge)
+      @scope = options.fetch(:spike_scope)
+      @compiled_class = options[:compiled_class]
+      @compiled_parent = options[:compiled_parent]
+      @entry = options.fetch(:entry)
+      @parameter_types = {}
+    end
+
+    def on_class(node)
+      return super unless @compiled_class
+
+      body = @knowledge.statements(node.children.last).select { |statement| statement.type == :def }
+        .map { |statement| process(statement) }
+      s(:class, s(:const, nil, @compiled_class.to_sym),
+        s(:const, nil, @compiled_parent.to_sym), s(:begin, *body))
+    end
+
+    def on_module(node)
+      on_class(node)
+    end
+
+    def on_def(node)
+      name, args, body = node.children
+      method = @entry["methods"].find { |candidate| candidate["name"] == name.to_s }
+      previous = @parameter_types
+      @parameter_types = method ? method["parameters"] : {}
+      super(node.updated(:defm, [Knowledge.member(name).to_sym, args, body]))
+    ensure
+      @parameter_types = previous
+    end
+
+    def on_send(node)
+      receiver, method, *args = node.children
+      ruby_call =
+        if receiver.nil?
+          @knowledge.method_defined?(@entry["name"], method)
+        elsif receiver.type == :lvar && (type = @parameter_types[receiver.children.first.to_s])
+          resolved = resolve_parameter_class(type)
+          resolved && @knowledge.method_defined?(resolved, method)
+        else
+          false
+        end
+      if ruby_call
+        return s(:call, receiver ? process(receiver) : s(:self),
+          Knowledge.member(method).to_sym, *process_all(args))
+      end
+      super
+    end
+
+    def on_const(node)
+      name = @knowledge.constant(node)
+      return node if !node.loc && JS_INTRINSICS.include?(name)
+      return s(:const, nil, :Runtime) if name == "Runtime"
+
+      resolved = @knowledge.resolve(name, @scope)
+      s(:const, nil, Knowledge.identifier(resolved).to_sym)
+    end
+
+    private
+
+    def resolve_parameter_class(type)
+      return unless type.match?(/\A[A-Z]\w*(?:::\w+)*\z/)
+      @knowledge.resolve(type, @entry["scope"])
+    rescue CompileError
+      nil
+    end
+  end
+
   class Compiler
     attr_reader :knowledge
 
@@ -414,8 +687,8 @@ module Swill
       @knowledge = Knowledge.new(imports)
     end
 
-    def add(source, file: "(spike)")
-      knowledge.collect(source, file)
+    def add(source, file: "(spike)", javascript_only: false)
+      knowledge.collect(source, file, javascript_only: javascript_only)
       self
     end
 
@@ -435,7 +708,7 @@ module Swill
         [entry["identifier"], *(entry["extends_class_methods"] ? ["#{entry['identifier']}_ClassMethods"] : [])]
       end.join(", ")
       entrypoint = [
-        "import {Runtime, ReactiveObject} from #{runtime.to_json};",
+        "import {Runtime} from #{runtime.to_json};",
         "import {meta} from './#{name}.meta.mjs';"
       ]
       if publish
@@ -445,7 +718,7 @@ module Swill
       entrypoint << "Runtime.install(meta);"
       if publish
         entrypoint << "globalThis[#{publish.to_json}] = Object.freeze({" \
-          "...definitions, Runtime, ReactiveObject, install: meta => Runtime.install(meta)});"
+          "...definitions, Runtime, install: meta => Runtime.install(meta)});"
       end
       entrypoint << "export * from './#{name}.classes.mjs';"
       {
@@ -462,7 +735,7 @@ module Swill
     end
 
     def imports(runtime, framework)
-      lines = [%{import {Runtime, ReactiveObject} from #{runtime.to_json};}]
+      lines = [%{import {Runtime} from #{runtime.to_json};}]
       imported = knowledge.entries.select { |entry| entry["imported"] }
       if imported.any?
         raise CompileError, "framework import required" unless framework
@@ -480,7 +753,7 @@ module Swill
         scope = entry["scope"]
         id = entry["identifier"]
         mixin = entry["kind"] == "mixin"
-        parent = mixin ? "Superclass" : reference(entry["parent"], scope)
+        parent = mixin ? "Superclass" : (entry["parent"] ? reference(entry["parent"], scope) : "Object")
         class_name = mixin ? "#{id}_Layer" : id
         source = entry["node"].loc.expression.source
         js = convert(source, entry, compiled_class: class_name, compiled_parent: parent)
@@ -551,7 +824,11 @@ module Swill
         mixin = entry["kind"] == "mixin"
         properties = mixin ? entry["included_properties"] : entry["properties"]
         unless mixin && properties.empty?
-          lines << "#{mixin ? 'module' : 'class'} #{entry['name']}"
+          declaration = "#{mixin ? 'module' : 'class'} #{entry['name']}"
+          if !mixin && entry["parent"]
+            declaration << " < #{knowledge.resolve(entry['parent'], entry['scope'])}"
+          end
+          lines << declaration
           lines << "  extend T::Sig"
           properties.each do |property|
             name, type = property.values_at("name", "type")
@@ -615,10 +892,10 @@ module Swill
       knowledge.local.each do |entry|
         parent = nil
         parent_name = entry["parent"] && knowledge.resolve(entry["parent"], entry["scope"])
-        if parent_name && parent_name != "ReactiveObject" && !available.include?(parent_name)
+        if parent_name && !available.include?(parent_name)
           raise CompileError, "superclass must be defined before #{entry['name']}"
         end
-        if parent_name && parent_name != "ReactiveObject"
+        if parent_name
           parent = knowledge.entries.find { |candidate| candidate["name"] == parent_name }
           raise CompileError, "superclass must be a class" unless parent["kind"] == "class"
         end
@@ -650,16 +927,21 @@ module Swill
 
     def reference(name, scope)
       resolved = knowledge.resolve(name, scope)
-      resolved == "ReactiveObject" ? resolved : Knowledge.identifier(resolved)
+      Knowledge.identifier(resolved)
     end
 
     def convert(source, entry, compiled_class: nil, compiled_parent: nil)
-      ::Ruby2JS.convert(source, filters: [RubySurface, ::Ruby2JS::Filter::Return, RubyCalls],
-                      eslevel: 2022, comparison: :identity, truthy: :ruby,
+      filters = entry["javascript_only"] ?
+        [JavaScriptSurface, ::Ruby2JS::Filter::Return] :
+        [RubySurface, ::Ruby2JS::Filter::Return, RubyCalls]
+      ::Ruby2JS.convert(source, filters: filters,
+                      eslevel: 2022, comparison: :identity, truthy: :js,
                       underscored_private: true,
                       knowledge: knowledge, spike_scope: entry["scope"],
+                      entry: entry,
                       compiled_class: compiled_class, compiled_parent: compiled_parent,
                       properties: inherited_properties(entry),
+                      property_types: inherited_property_types(entry),
                       all_properties: knowledge.entries.flat_map do |e|
                         (e["properties"] + e.fetch("included_properties", [])).map { |p| p["name"] }
                       end).to_s
@@ -667,15 +949,24 @@ module Swill
 
     def inherited_properties(entry)
       own = (entry["properties"] + entry.fetch("included_properties", [])).map { |property| property["name"] }
-      return own if entry["parent"].nil? || entry["parent"] == "ReactiveObject"
+      return own if entry["parent"].nil?
       parent_name = knowledge.resolve(entry["parent"], entry["scope"])
       parent = knowledge.entries.find { |candidate| candidate["name"] == parent_name }
       inherited_properties(parent) + own
     end
 
+    def inherited_property_types(entry)
+      own = (entry["properties"] + entry.fetch("included_properties", []))
+        .to_h { |property| [property["name"], property["type"]] }
+      return own if entry["parent"].nil?
+      parent_name = knowledge.resolve(entry["parent"], entry["scope"])
+      parent = knowledge.entries.find { |candidate| candidate["name"] == parent_name }
+      inherited_property_types(parent).merge(own)
+    end
+
     def included_modules(entry)
       own = entry["includes"].map { |name| knowledge.resolve(name, entry["scope"]) }
-      return own if entry["parent"].nil? || entry["parent"] == "ReactiveObject"
+      return own if entry["parent"].nil?
       parent_name = knowledge.resolve(entry["parent"], entry["scope"])
       parent = knowledge.entries.find { |candidate| candidate["name"] == parent_name }
       included_modules(parent) + own
@@ -684,9 +975,9 @@ module Swill
     def property_js(property, entry)
       function = "#{property['computed'] ? 'compute' : 'default'}_#{property['js']}"
       expression = convert("def #{function}()\n#{property['expression']}\nend", entry)
-      # truthy: :ruby may prepend local $T/$rand/$ror declarations. A converted
-      # property function is embedded as an object value rather than emitted at
-      # module scope, so contain any prelude and return the named function.
+      # A converted property function is embedded as an object value rather than
+      # emitted at module scope, so contain any converter prelude and return the
+      # named function.
       unless expression.lstrip.start_with?("function ")
         expression = "(() => {\n#{expression}\nreturn #{function};\n})()"
       end

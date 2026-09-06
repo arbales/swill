@@ -6,9 +6,22 @@ ROOT = __dir__
 DIST = File.join(ROOT, "dist")
 
 def compile_spike
-  framework_path = "spec/fixtures/framework.rb"
   framework = Swill::Ruby2JS::Compiler.new
-  %w[lib/swill/model/attributes.rb spec/fixtures/framework.rb].each do |path|
+  %w[
+    lib/swill/core/observable.rb
+    lib/swill/core/object.rb
+    lib/swill/core/responder.rb
+    lib/swill/core/view.rb
+    lib/swill/core/controller.rb
+    lib/swill/core/awakening.rb
+  ].each do |path|
+    framework.add(File.read(path), file: path, javascript_only: true)
+  end
+  %w[
+    lib/swill/model/attributes.rb
+    lib/swill/model/drafts.rb
+    lib/swill/model/base.rb
+  ].each do |path|
     framework.add(File.read(path), file: path)
   end
   FileUtils.mkdir_p(DIST)
@@ -20,7 +33,7 @@ def compile_spike
   # Compiler facts stay in memory. The application bundle imports references
   # from the initialized framework, never another copy of its implementation.
   interface = framework.knowledge.interface
-  exports = %w[Runtime ReactiveObject] + interface.flat_map do |entry|
+  exports = %w[Runtime] + interface.flat_map do |entry|
     [entry["identifier"], *(entry["extends_class_methods"] ? ["#{entry['identifier']}_ClassMethods"] : [])]
   end
   shim = [
@@ -31,7 +44,7 @@ def compile_spike
   File.write("build/framework.external.mjs", Swill::Ruby2JS::Compiler.format_javascript(shim))
 
   application = Swill::Ruby2JS::Compiler.new(imports: interface)
-  %w[spec/fixtures/models.rb spec/fixtures/concerns.rb examples/application.rb].each do |path|
+  %w[examples/models.rb examples/concerns.rb examples/application.rb].each do |path|
     application.add(File.read(path), file: path)
   end
   application.modules(name: "application", runtime: "./framework.external.mjs",

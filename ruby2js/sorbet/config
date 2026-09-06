@@ -1,5 +1,13 @@
 --dir=examples
---dir=spec/fixtures
+lib/swill/core/responder.rb
+lib/swill/core/view.rb
+lib/swill/core/controller.rb
+lib/swill/core/awakening.rb
+lib/swill/core/observable.rb
+lib/swill/core/object.rb
+lib/swill/model/attributes.rb
+lib/swill/model/drafts.rb
+lib/swill/model/base.rb
 --dir=sorbet/rbi
 --dir=sorbet/checks
 --silence-dev-message
