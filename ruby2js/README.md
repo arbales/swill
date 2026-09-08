@@ -115,9 +115,19 @@ event selection, action parsing, and listener ownership stay in those classes.
 The handwritten runtime only resolves metadata-aware key paths and dispatches
 generated method names.
 
-Ownership follows a sparse view tree. Only controller roots become `View`
-objects; elements with only `bind` or `data-action` stay raw DOM. A controller's
-`parent` and `child_controllers` are derived from that tree. Binding and action
+Ownership follows a sparse view tree. An element becomes a `View` only when it
+carries `klass`, `controller`, or `outlet`; elements with only `bind` or
+`data-action` stay raw DOM, and templates and JSON scripts are inert content.
+`klass` names a `View` subclass and may share an element with `controller`. A
+controller's `parent` and `child_controllers` are derived from that tree.
+
+Controllers declare `outlet :name, type: ...` and markup names the element with
+`outlet="name"`. Outlets connect between `view_did_load` and bindings, only from
+the controller's owned region including child-controller roots. The value is
+the child controller, the element's view, an inert `<template>`, or JSON from a
+`<script type="application/json">` passed through `decode_outlet_data`.
+Undeclared, duplicate, and unresolved required outlets raise; `optional: true`
+outlets may be absent. Binding and action
 scans stop at nested `[controller]` boundaries, so each element is wired by its
 direct owner only. Awakening runs `view_did_load`, wiring, and `awake_from_dom`
 for each controller children first, then `controller_did_load`, then the
@@ -167,13 +177,15 @@ The implementation covers:
   chain actions, children-first lifecycle, and recursive teardown;
 - a markup-declared application that launches on `DOMContentLoaded`, tops the
   responder chain, and terminates on unload;
+- managed elements: `klass` views, plain outlet views, declared outlets
+  connected to their direct owner, and JSON outlets decoded through a hook;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
 runtime Sorbet operations, dynamic class mutation, `bind-*` DOM property
-bindings, outlets, `klass` components, first-responder focus, or a complete
-Awakening and model-layer port. Unsupported forms fail compilation.
+bindings, binding roots, first-responder focus, templates as content, or a
+complete model-layer port. Unsupported forms fail compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.

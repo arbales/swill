@@ -378,6 +378,9 @@
       current.observers.clear();
       current.dependents.clear();
     },
+    outlets(object) {
+      return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
+    },
     collect_attributes(object) {
       const result = {};
       for (const descriptor of declarations(object.constructor, "properties").values()) {
@@ -415,6 +418,7 @@
     Swill__Model__Drafts: () => Swill__Model__Drafts,
     Swill__Object: () => Swill__Object,
     Swill__Observable: () => Swill__Observable,
+    Swill__Outlets: () => Swill__Outlets,
     Swill__Ownership: () => Swill__Ownership,
     Swill__Responder: () => Swill__Responder,
     Swill__View: () => Swill__View
@@ -585,9 +589,15 @@
       this._teardowns = [];
       this.dispose();
       this.child_controllers().forEach((child) => child.teardown());
+      this._view.subviews().forEach((subview) => this._view.release_subview(subview));
       this._view.remove_from_superview();
       this._view.controller = null;
       return this.view_did_disappear();
+    }
+    // Coercion hook for JSON outlets: turn parsed data into value objects
+    // before the outlet is assigned. nil means the script was empty.
+    decode_outlet_data(name, value) {
+      return value;
     }
     view_did_load() {
       return null;
@@ -689,16 +699,66 @@
       };
     }
   };
+  var Swill__Outlets = class extends Swill__Object {
+    connect(controller) {
+      let declared = Runtime.outlets(controller);
+      if (declared.length === 0) return controller;
+      let by_name = {};
+      declared.forEach((descriptor) => by_name[descriptor.name] = descriptor);
+      let connected = {};
+      this.candidates(controller.view().element()).forEach((element) => {
+        let name = element.getAttribute("outlet");
+        if (!by_name[name]) throw new Error(`Undeclared outlet: ${name}`);
+        if (connected[name]) throw new Error(`Duplicate outlet: ${name}`);
+        connected[name] = true;
+        Runtime.write(
+          controller,
+          name,
+          this.value_for(controller, name, element)
+        );
+      });
+      declared.forEach((descriptor) => {
+        if (!descriptor.optional && !connected[descriptor.name]) {
+          throw new Error(`Unresolved outlet: ${descriptor.name}`);
+        }
+      });
+      return controller;
+    }
+    // Owned descendants carrying an outlet attribute, plus boundary elements
+    // themselves. The root is never its own outlet.
+    candidates(root) {
+      let found = [];
+      this.collect(root, found);
+      return found;
+    }
+    collect(element, found) {
+      return this.each_child(element, (child) => {
+        if (child.hasAttribute("outlet")) found.push(child);
+        if (!child.hasAttribute("controller")) return this.collect(child, found);
+      });
+    }
+    value_for(controller, name, element) {
+      if (element.tagName === "SCRIPT" && element.type === "application/json") {
+        let text = element.textContent.trim();
+        return controller.decode_outlet_data(
+          name,
+          text.length === 0 ? null : JSON.parse(text)
+        );
+      }
+      ;
+      if (element.tagName === "TEMPLATE") return element;
+      let view = element.__swill_view__;
+      if (!view) throw new Error(`Outlet ${name} is not a managed element`);
+      let owner = view.controller_value();
+      return owner ? owner : view;
+    }
+  };
   var Swill__Awakening = class extends Swill__Object {
     // Returns the new controllers in document order. Awakening a fragment that
-    // already sits under a live controller adopts it into that controller.
+    // already sits under a live view adopts it into that view's tree.
     wire(root) {
       let controllers = [];
-      this.walk(
-        root,
-        this.nearest_controller(root.parentElement),
-        controllers
-      );
+      this.walk(root, this.nearest_view(root.parentElement), controllers);
       this.each_reversed(controllers, (controller) => this.load(controller));
       this.each_reversed(
         controllers,
@@ -716,34 +776,56 @@
     }
     load(controller) {
       controller.view_did_load();
+      new Swill__Outlets().connect(controller);
       new Swill__Bindings().wire(controller);
       new Swill__Actions().wire(controller);
       return controller.awake_from_dom();
     }
-    walk(element, parent, controllers) {
-      let controller = null;
-      if (element.nodeType === 1 && element.hasAttribute("controller") && !this.controller_for(element)) {
-        let controller_class = Runtime.resolve(element.getAttribute("controller"));
-        controller = new controller_class();
-        controller.attach(element);
-        if (parent) parent.view().adopt_subview(controller.view());
-        controllers.push(controller);
+    walk(element, owner, controllers) {
+      let view = null;
+      if (this.managed_predicate(element)) {
+        view = element.__swill_view__ ?? this.create_view(element);
+        if (owner && !view.superview()) owner.adopt_subview(view);
+        if (element.hasAttribute("controller") && !view.controller_value()) {
+          let controller_class = Runtime.resolve(element.getAttribute("controller"));
+          let controller = new controller_class();
+          controller.attach(element);
+          controllers.push(controller);
+        }
       }
       ;
-      let owner = controller ?? parent;
+      let next_owner = view ?? owner;
       return this.each_child(
         element,
-        (child) => this.walk(child, owner, controllers)
+        (child) => this.walk(child, next_owner, controllers)
       );
     }
-    controller_for(element) {
-      let view = element.__swill_view__;
-      return view ? view.controller_value() : null;
+    // A live element with klass, controller, or outlet. Templates and JSON
+    // scripts are inert content, never objects.
+    managed_predicate(element) {
+      if (element.nodeType !== 1) return false;
+      if (element.tagName === "TEMPLATE" || element.tagName === "SCRIPT") {
+        return false;
+      }
+      ;
+      return element.hasAttribute("klass") || element.hasAttribute("controller") || element.hasAttribute("outlet");
     }
-    nearest_controller(element) {
+    // klass names a View subclass; a plain managed element gets a plain View.
+    create_view(element) {
+      let name = element.getAttribute("klass");
+      if (!name) return new Swill__View(element);
+      let view_class = Runtime.resolve(name);
+      let view = new view_class(element);
+      if (!(view instanceof Swill__View)) {
+        throw new Error(`${name} is not a Swill::View`);
+      }
+      ;
+      return view;
+    }
+    nearest_view(element) {
       if (!element) return null;
-      let controller = this.controller_for(element);
-      return controller ? controller : this.nearest_controller(element.parentElement);
+      let view = element.__swill_view__;
+      return view ? view : this.nearest_view(element.parentElement);
     }
     each_reversed(controllers, callback) {
       let index = controllers.length - 1;
@@ -994,6 +1076,9 @@
           "teardown": {
             "arity": 0
           },
+          "decode_outlet_data": {
+            "arity": 2
+          },
           "view_did_load": {
             "arity": 0
           },
@@ -1049,6 +1134,25 @@
           }
         }
       },
+      "Swill::Outlets": {
+        constructor: Swill__Outlets,
+        mixins: [Swill__Ownership],
+        properties: {},
+        methods: {
+          "connect": {
+            "arity": 1
+          },
+          "candidates": {
+            "arity": 1
+          },
+          "collect": {
+            "arity": 2
+          },
+          "value_for": {
+            "arity": 3
+          }
+        }
+      },
       "Swill::Awakening": {
         constructor: Swill__Awakening,
         mixins: [Swill__Ownership],
@@ -1063,10 +1167,14 @@
           "walk": {
             "arity": 3
           },
-          "controller_for": {
+          "managed?": {
+            "arity": 1,
+            "js": "managed_predicate"
+          },
+          "create_view": {
             "arity": 1
           },
-          "nearest_controller": {
+          "nearest_view": {
             "arity": 1
           },
           "each_reversed": {

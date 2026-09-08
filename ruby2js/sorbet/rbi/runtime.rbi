@@ -24,6 +24,9 @@ module Swill
     sig { params(object: T.untyped, path: String, value: T.untyped).returns(T.untyped) }
     def self.writePath(object, path, value); end
 
+    sig { params(object: T.untyped, name: String, value: T.untyped).returns(T.untyped) }
+    def self.write(object, name, value); end
+
     sig { params(object: T.untyped, path: String).void }
     def self.assertWritablePath(object, path); end
 
@@ -35,6 +38,9 @@ module Swill
 
     sig { params(object: T.untyped).void }
     def self.dispose(object); end
+
+    sig { params(object: T.untyped).returns(T.untyped) }
+    def self.outlets(object); end
 
     sig { params(object: T.untyped).returns(T::Hash[T.untyped, T.untyped]) }
     def self.collect_attributes(object); end
@@ -62,6 +68,13 @@ class Swill::Object
 
   sig { params(name: Symbol, type: T.untyped, default: T.untyped, key: T.any(Symbol, String)).void }
   def self.attribute(name, type:, default:, key: name); end
+end
+
+class Swill::Controller
+  extend T::Sig
+
+  sig { params(name: Symbol, type: T.untyped, optional: T::Boolean).void }
+  def self.outlet(name, type:, optional: false); end
 end
 
 module Swill::Model::Drafts

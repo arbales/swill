@@ -80,7 +80,7 @@ A class or mixin body may contain only:
 | `sig { ... }` | Parameter and return types are recorded for lowering, then erased |
 | `extend T::Sig` | Erased |
 | `include A, B` / `include A` | Recorded; targets must be previously defined mixins |
-| `property` / `attribute` | Collected as declarations (below) |
+| `property` / `attribute` / `outlet` | Collected as declarations (below) |
 | `def self.included(base)` | Mixins only; see [Included hooks](#included-hooks) |
 | `module ClassMethods` | Mixins only; see [Class methods](#class-methods) |
 | nested `class` / `module` | Mixins only; collected as namespaced entries |
@@ -96,13 +96,17 @@ attribute :name, type: String, default: "", key: :display_name
 property :label, type: String do
   loud ? name.upcase : name
 end
+
+outlet :name_field, type: Swill::View
+outlet :seed, type: T.untyped, optional: true
 ```
 
 | Rule | Detail |
 | --- | --- |
 | Name | Literal symbol matching `/\A[a-z_]\w*\??\z/`; a `?` suffix only on computed properties |
-| Keywords | `type:` required; `default:` optional for `property`, required for `attribute`; `key:` only meaningful for `attribute` |
-| Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, or a constant path |
+| Keywords | `type:` required; `default:` optional for `property`, required for `attribute`; `key:` only meaningful for `attribute`; `optional:` only for `outlet` |
+| Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, or a constant path; `outlet` also accepts `T.untyped` for JSON |
+| Outlets | Only on `Swill::Controller` descendants. A stored, nilable, observable property with `outlet` and `optional` metadata, connected at awakening; never computed and never defaulted |
 | Defaults | Literal string, integer, `nil`, `true`, or `false`. Mutable literals are rejected |
 | Computed | Block form, `do`/`end` or braces, no block arguments, no `default:`; `attribute` cannot be computed |
 | Key | Literal symbol or string; defaults to the name |
@@ -205,7 +209,9 @@ export const meta = {
                  defaultValue: function default_name() { return ""; }},
         "label": {type: "String", attribute: false,
                   compute: function compute_label() { return this.loud ? Runtime.upcase(this.name) : this.name; }},
-        "blank?": {js: "blank_predicate", type: "T::Boolean", attribute: false, compute: ...}
+        "blank?": {js: "blank_predicate", type: "T::Boolean", attribute: false, compute: ...},
+        "badge": {type: "T.nilable(Demo::Badge)", attribute: false, outlet: true, optional: false,
+                  defaultValue: function default_badge() { return null; }}
       },
       registries: {model_attributes: {"name": {property: "name", key: "name"}}},
       methods: {"greeting": {"arity": 0}, "rename": {"arity": 1}}
@@ -264,8 +270,9 @@ Each entry is compiled with one of two filter chains, chosen by the
 | `initialize` | Rejected | Compiles to `constructor` |
 | `raise "message"` | `throw new Error("message")` | Same |
 | `callback.call(x)` / `callback.(x)` | `callback(x)` for a local; `receiver.call(null, x)` otherwise | Same |
+| `lookup(name).new(x)` | `new (lookup(name))(x)`; an unparenthesized form would construct `lookup` | Same |
 | `->(x) { ... }` | Arrow function | Arrow function |
-| Constants | Resolved in Ruby scope to encoded identifiers | Same |
+| Constants | Resolved in Ruby scope to encoded identifiers | Same, except a JavaScript intrinsic such as `JSON` passes through when no source constant of that name is in scope |
 
 `Return` provides implicit returns. `RubyCalls` runs last on the shared
 surface and converts any remaining send into an explicit call, so
@@ -402,6 +409,7 @@ parent's, so lookups do not walk the chain at call time.
 | `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. Errors: `Unavailable binding owner` when an intermediate is null, `Read-only binding` when the target is computed or not a property |
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
 | `hasAction(object, name)` | Whether a collected method of arity 0, 1, or 2 exists; the responder chain uses it to decide where an action stops |
+| `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
 | `valueRead(value, name)` | `blank?`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
 
@@ -469,7 +477,7 @@ where it is raised:
 | Top level | Anything other than `class` and `module` |
 | Constants | Unknown or non-static constants; reopened or duplicate constants; a superclass or mixin defined later in the same build; a superclass that is a mixin; an include target that is a class |
 | Methods | Names outside `/\A[a-z_]\w*[!?=]?\z/`; `method_missing`; `initialize` on the shared surface; optional, keyword, splat, or block parameters; a method whose name is also an inherited property |
-| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; mutable defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?` |
+| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; mutable defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, a non-literal `optional:`, or on a class that is not a `Swill::Controller` |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
 | Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval` |

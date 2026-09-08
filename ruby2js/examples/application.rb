@@ -7,6 +7,14 @@ module Demo
     property :person, type: T.nilable(Demo::Person), default: nil
     property :fallback, type: String, default: "Nobody"
 
+    # Connected between view_did_load and awake_from_dom. The input becomes a
+    # plain View, the nested controller is itself the value, the JSON script
+    # is decoded, and an optional outlet may be absent.
+    outlet :name_field, type: Swill::View
+    outlet :badge, type: Demo::Badge
+    outlet :seed, type: T.untyped
+    outlet :missing, type: Swill::View, optional: true
+
     property :title, type: String do
       current = person
       if current
@@ -18,9 +26,14 @@ module Demo
 
     sig { void }
     def view_did_load
-      person = Demo::Person.new
-      person.name = "Ada"
-      self.person = person
+      self.person = Demo::Person.new
+    end
+
+    sig { void }
+    def awake_from_dom
+      current = person
+      data = seed
+      current.name = data["name"] if current && data
     end
 
     sig { returns(String) }

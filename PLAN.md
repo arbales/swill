@@ -39,28 +39,31 @@ The initial kernel and DOM-boundary spike is complete and verified:
 - `<body application="...">` launches a `Swill::Application` on
   `DOMContentLoaded` with no inline script; it tops the responder chain for
   root controllers and terminates on a real `pagehide`. Lifecycle hooks keep
-  Cocoa names (`application_did_launch`, `application_will_terminate`).
+  Cocoa names (`application_did_launch`, `application_will_terminate`);
+- managed elements: `klass`, `controller`, and `outlet` awaken into the sparse
+  view tree, `klass` and `controller` may share an element, declared outlets
+  connect to their direct owner as controllers, views, templates, or decoded
+  JSON, and mistakes fail at awakening by outlet name.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: Managed Elements and Outlets
+## Immediate Next Slice: Binding Parity
 
-Nested ownership and application launch are verified in Node and Chrome
-(September 2026). The next target is roadmap item 1 below, which extends the
-same sparse tree to outlet views and `klass` components and connects them to
-their direct owner.
+Managed elements and outlets are verified in Node and Chrome (September
+2026). The next target is roadmap item 2 below.
 
 ## Ordered Roadmap
 
-### 1. Managed Elements and Outlets
+### 1. Managed Elements and Outlets (done)
 
-- Add `klass`, `controller`, and `outlet` awakening while leaving elements with
-  only `bind`, `bind-*`, or `data-action` inert.
-- Support controller root views, plain outlet views, and `klass` plus
-  `controller` on the same element.
-- Connect outlets to their direct owning controller.
-- Decode `application/json` outlets through a controller hook.
-- Test awakening order, ownership, duplicate connection failures, and teardown.
+- `klass`, `controller`, and `outlet` awaken; elements with only `bind`,
+  `bind-*`, or `data-action` stay inert.
+- Controller root views, plain outlet views, and `klass` plus `controller` on
+  the same element are supported.
+- Outlets connect to their direct owning controller; `application/json`
+  outlets decode through `decode_outlet_data`.
+- Awakening order, ownership, duplicate and unresolved outlet failures, and
+  teardown are tested.
 
 ### 2. Binding Parity
 

@@ -12,6 +12,7 @@
   var Swill__Controller = framework.Swill__Controller;
   var Swill__Bindings = framework.Swill__Bindings;
   var Swill__Actions = framework.Swill__Actions;
+  var Swill__Outlets = framework.Swill__Outlets;
   var Swill__Awakening = framework.Swill__Awakening;
   var Swill__Application = framework.Swill__Application;
   var Swill__Launcher = framework.Swill__Launcher;
@@ -97,10 +98,16 @@
   var OtherConcernRecord = class extends Swill__Object {
   };
   var Demo__Controller = class extends Swill__Controller {
+    // Connected between view_did_load and awake_from_dom. The input becomes a
+    // plain View, the nested controller is itself the value, the JSON script
+    // is decoded, and an optional outlet may be absent.
     view_did_load() {
-      let person = new Demo__Person();
-      Runtime.write(person, "name", "Ada");
-      return this.person = person;
+      return this.person = new Demo__Person();
+    }
+    awake_from_dom() {
+      let current = this.person;
+      let data = this.seed;
+      if (Runtime.isTruthy(current && data)) return current.name = data.name;
     }
     clear() {
       this.person = null;
@@ -336,6 +343,42 @@
               return "Nobody";
             }
           },
+          "name_field": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_name_field() {
+              return null;
+            }
+          },
+          "badge": {
+            type: "T.nilable(Demo::Badge)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_badge() {
+              return null;
+            }
+          },
+          "seed": {
+            type: "T.untyped",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_seed() {
+              return null;
+            }
+          },
+          "missing": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: true,
+            defaultValue: function default_missing() {
+              return null;
+            }
+          },
           "title": {
             type: "String",
             attribute: false,
@@ -347,6 +390,9 @@
         },
         methods: {
           "view_did_load": {
+            "arity": 0
+          },
+          "awake_from_dom": {
             "arity": 0
           },
           "clear": {

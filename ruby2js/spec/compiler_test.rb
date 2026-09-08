@@ -82,6 +82,7 @@ class CompilerTest < Minitest::Test
       lib/swill/core/controller.rb
       lib/swill/core/bindings.rb
       lib/swill/core/actions.rb
+      lib/swill/core/outlets.rb
       lib/swill/core/awakening.rb
       lib/swill/core/application.rb
     ].each do |path|
@@ -481,6 +482,91 @@ class CompilerTest < Minitest::Test
       object._stored = value => value * 10;
       console.log(JSON.stringify([...object.run(value => value + 10, [5]), object.bare(() => "bare")]));
     JS
+  end
+
+  def test_outlets_are_nilable_observable_properties_on_controllers
+    compiler = Swill::Ruby2JS::Compiler.new
+    compiler.add(<<~RUBY, javascript_only: true)
+      module Swill
+        class Object; end
+        class Responder < Swill::Object; end
+        class View < Responder; end
+        class Controller < Responder; end
+      end
+    RUBY
+    compiler.add(<<~RUBY)
+      class Host < Swill::Controller
+        outlet :field, type: Swill::View
+        outlet :seed, type: T.untyped
+        outlet :extra, type: T.nilable(Swill::View), optional: true
+      end
+    RUBY
+    entry = compiler.knowledge.local.last
+    assert_equal [
+      ["field", "T.nilable(Swill::View)", true, false],
+      ["seed", "T.untyped", true, false],
+      ["extra", "T.nilable(Swill::View)", true, true]
+    ], entry["properties"].map { |p| p.values_at("name", "type", "outlet", "optional") }
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "outlet: true"
+    assert_includes js, "optional: true"
+    assert_includes compiler.rbi, "sig { returns(T.nilable(Swill::View)) }\n  def field; end"
+    assert_includes compiler.rbi, "def field=(value); end"
+    js += <<~JS
+      const host = new (Runtime.resolve("Host"))();
+      console.log(JSON.stringify([Runtime.outlets(host).map(o => [o.name, o.optional]), host.field, Runtime.read(host, "seed")]));
+    JS
+    assert_equal [[["field", false], ["seed", false], ["extra", true]], nil, nil], execute(js)
+  end
+
+  def test_outlet_declarations_are_validated
+    framework = <<~RUBY
+      module Swill
+        class Object; end
+        class Responder < Swill::Object; end
+        class View < Responder; end
+        class Controller < Responder; end
+      end
+    RUBY
+    [
+      "class Host < Swill::Controller\noutlet :field, type: Swill::View, default: nil\nend",
+      "class Host < Swill::Controller\noutlet :field, type: Swill::View, optional: maybe\nend",
+      "class Host < Swill::Controller\noutlet :field, type: Swill::View do\n42\nend\nend",
+      "class Host < Swill::Controller\noutlet :field, type: Swill::View\noutlet :field, type: Swill::View\nend",
+      "class Host < Swill::View\noutlet :field, type: Swill::View\nend",
+      "class Host < Swill::Controller\nproperty :name, type: T.untyped, default: nil\nend"
+    ].each do |body|
+      assert_raises(Spike::CompileError, body) do
+        Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(body).javascript(runtime: "./runtime.mjs")
+      end
+    end
+  end
+
+  def test_javascript_intrinsics_are_available_only_to_browser_boundary_code
+    js = Swill::Ruby2JS::Compiler.new.add("class Decoder\ndef parse(text); JSON.parse(text); end\nend", javascript_only: true)
+      .javascript(runtime: "./runtime.mjs")
+    assert_includes js, "JSON.parse(text)"
+    error = assert_raises(Spike::CompileError) { javascript("def parse(text); JSON.parse(text); end") }
+    assert_includes error.message, "unknown constant JSON"
+    js = Swill::Ruby2JS::Compiler.new
+      .add("class JSON\ndef parse(text); text; end\nend\nclass Decoder\ndef parse(text); JSON.new.parse(text); end\nend", javascript_only: true)
+      .javascript(runtime: "./runtime.mjs")
+    assert_includes js, "new Ruby_JSON().parse(text)"
+  end
+
+  def test_constructors_taken_from_call_results_are_parenthesized
+    shared = javascript("def make(registry); registry.lookup(\"x\").new(1); end\ndef plain; TestObject.new; end")
+    assert_includes shared, 'new (registry.lookup("x"))(1)'
+    assert_includes shared, "new TestObject()"
+    assert_equal ["x", 1], execute(shared + <<~JS)
+      const registry = {lookup: name => class { constructor(value) { this.name = name; this.value = value; } }};
+      const made = new (Runtime.resolve("Example"))().make(registry);
+      console.log(JSON.stringify([made.name, made.value]));
+    JS
+    browser = Swill::Ruby2JS::Compiler.new
+      .add("class Maker\ndef make(name, element); Runtime.resolve(name).new(element); end\nend", javascript_only: true)
+      .javascript(runtime: "./runtime.mjs")
+    assert_includes browser, "new (Runtime.resolve(name))(element)"
   end
 
   def test_raise_produces_error_objects_and_rejects_other_forms

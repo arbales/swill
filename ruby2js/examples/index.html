@@ -5,10 +5,11 @@
 <body application="Demo::Application">
 <main controller="Demo::Controller">
   <h1>Ruby2JS spike</h1>
-  <label>Name <input bind="person.name"></label>
+  <script type="application/json" outlet="seed">{"name": "Ada"}</script>
+  <label>Name <input bind="person.name" outlet="name_field"></label>
   <p bind="title"></p>
   <button data-action="clear">Clear person</button>
-  <section controller="Demo::Badge">
+  <section controller="Demo::Badge" outlet="badge">
     <p bind="title"></p>
     <button data-action="bump">Bump badge</button>
     <button data-action="clear">Reset badge</button>

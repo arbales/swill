@@ -120,10 +120,13 @@ try {
     badge.querySelector("[data-action=bump]").click();
     badge.querySelector("[data-action=reset]").click();
     const application = document.body.__swill_application__;
+    const [parent, child] = application.controllers();
     return [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent,
       application.constructor === Swill.Runtime.resolve("Demo::Application"), application.launched,
-      application.controllers().length];
-  })()`), ["Nobody", "Badge 0", true, true, 2]);
+      application.controllers().length,
+      parent.name_field.element() === document.querySelector("input"), parent.badge === child,
+      parent.seed.name, parent.missing];
+  })()`), ["Nobody", "Badge 0", true, true, 2, true, true, "Ada", null]);
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();
     return [document.querySelector("p[bind]").textContent, document.body.__swill_application__ != null];
@@ -141,7 +144,7 @@ try {
     document.body.__swill_application__
   ]`), ["Nobody", "Badge 0", null]);
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: application launch, nested ownership, bindings, actions, responder chain, and teardown passed.");
+  console.log("Chrome: application launch, outlets, nested ownership, bindings, actions, responder chain, and teardown passed.");
 } finally {
   clearTimeout(timeout);
   socket?.close();

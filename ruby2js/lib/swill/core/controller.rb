@@ -63,9 +63,18 @@ module Swill
       @teardowns = []
       dispose
       child_controllers.forEach { |child| child.teardown() }
+      # Plain outlet views are released too; re-awakening adopts them again.
+      @view.subviews().forEach { |subview| @view.release_subview(subview) }
       @view.remove_from_superview()
       @view.controller = nil
       view_did_disappear
+    end
+
+    # Coercion hook for JSON outlets: turn parsed data into value objects
+    # before the outlet is assigned. nil means the script was empty.
+    sig { params(name: String, value: T.untyped).returns(T.untyped) }
+    def decode_outlet_data(name, value)
+      value
     end
 
     sig { void }

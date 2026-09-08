@@ -110,6 +110,18 @@ module Swill
       property_entry(resolve(entry["parent"], entry["scope"]), name)
     end
 
+    # Whether the entry's superclass chain reaches +ancestor+ by name.
+    def descends_from?(entry, ancestor)
+      current = entry
+      while current
+        return true if current["name"] == ancestor
+        return false unless current["parent"]
+        parent_name = resolve(current["parent"], current["scope"])
+        current = entries.find { |candidate| candidate["name"] == parent_name }
+      end
+      false
+    end
+
     private
 
     def collect_scope(nodes, scope, javascript_only)
@@ -326,10 +338,13 @@ module Swill
       nil
     end
 
+    DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|[A-Z]\w*(?:::\w+)*)\z/
+
     def declaration?(node)
       call = node.type == :block ? node.children.first : node
-      call.type == :send && call.children.first.nil? && %i[property attribute].include?(call.children[1])
+      call.type == :send && call.children.first.nil? && %i[property attribute outlet].include?(call.children[1])
     end
+
 
     # Validate source before filters can erase or transform it (Pragma can
     # extract type hints from T.let, which is not annotation-only on MRI).
@@ -357,15 +372,25 @@ module Swill
         raise CompileError, "expected literal keyword" unless key.type == :sym
         [key.children.first, value]
       end
-      raise CompileError, "unknown declaration keyword" unless (pairs.keys - %i[type default key]).empty?
+      allowed = macro == :outlet ? %i[type optional] : %i[type default key]
+      raise CompileError, "unknown declaration keyword" unless (pairs.keys - allowed).empty?
       type = pairs.fetch(:type) { raise CompileError, "declaration requires type:" }.loc.expression.source
       if macro == :attribute && !pairs.key?(:default)
         raise CompileError, "attribute declaration requires default:"
       end
-      unless type.match?(/\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|[A-Z]\w*(?:::\w+)*)\z/)
+      unless type.match?(DECLARATION_TYPE) || (macro == :outlet && type == "T.untyped")
         raise CompileError, "unsupported declaration type #{type}"
       end
       computed = node.type == :block
+      raise CompileError, "outlets cannot be computed" if computed && macro == :outlet
+      optional = pairs[:optional]
+      if optional && !%i[true false].include?(optional.type)
+        raise CompileError, "outlet optional: must be a literal boolean"
+      end
+      # An outlet is unconnected until awakening, so its reader is nilable.
+      if macro == :outlet && type != "T.untyped" && !type.start_with?("T.nilable(")
+        type = "T.nilable(#{type})"
+      end
       property_name = name.children.first.to_s
       unless property_name.match?(/\A[a-z_]\w*\??\z/) && (computed || !property_name.end_with?("?"))
         raise CompileError, "unsupported property name #{property_name}"
@@ -391,6 +416,10 @@ module Swill
         "expression" => computed ? block_body_source(node) : (default&.loc&.expression&.source || "nil")
       }
       property["key"] = wire_key ? wire_key.children.first.to_s : name.children.first.to_s if macro == :attribute
+      if macro == :outlet
+        property["outlet"] = true
+        property["optional"] = optional&.type == :true
+      end
       entry["properties"] << property
     end
   end
@@ -419,6 +448,16 @@ module Swill
       else
         s(:send, process(receiver), :call, s(:nil), *process_all(args))
       end
+    end
+
+    # `expression.new(args)` where the class comes from a call. JavaScript's
+    # `new a.b(x)(y)` constructs `a.b`, so the receiver must be parenthesized.
+    def lower_new(receiver, args)
+      s(:send, s(:begin, process(receiver)), :new, *process_all(args))
+    end
+
+    def constructed_from_call?(receiver, method)
+      method == :new && receiver && %i[send call].include?(receiver.type)
     end
   end
 
@@ -510,6 +549,7 @@ module Swill
     def on_send(node)
       receiver, method, *args = node.children
       return lower_raise(args) if receiver.nil? && method == :raise
+      return lower_new(receiver, args) if constructed_from_call?(receiver, method)
       if receiver&.type == :self && method == :class && args.empty?
         return s(:attr, s(:self), :constructor)
       end
@@ -803,6 +843,7 @@ module Swill
     def on_send(node)
       receiver, method, *args = node.children
       return lower_raise(args) if receiver.nil? && method == :raise
+      return lower_new(receiver, args) if constructed_from_call?(receiver, method)
       return lower_call(receiver, args) if method == :call && receiver && receiver.type != :self
       ruby_call =
         if receiver.nil?
@@ -825,7 +866,14 @@ module Swill
       return node if !node.loc && JS_INTRINSICS.include?(name)
       return s(:const, nil, :Runtime) if name == "Runtime"
 
-      resolved = @knowledge.resolve(name, @scope)
+      resolved = begin
+        @knowledge.resolve(name, @scope)
+      rescue CompileError
+        # Browser-boundary code may use a JavaScript intrinsic such as JSON
+        # when no source constant of that name is in scope.
+        return node if JS_INTRINSICS.include?(name)
+        raise
+      end
       s(:const, nil, Knowledge.identifier(resolved).to_sym)
     end
 
@@ -1076,6 +1124,10 @@ module Swill
         end
         if entry["kind"] == "mixin" && (entry["properties"].any? || entry["includes"].any?)
           raise CompileError, "spike mixins support instance methods only"
+        end
+        if entry["properties"].any? { |property| property["outlet"] } &&
+           !knowledge.descends_from?(entry, "Swill::Controller")
+          raise CompileError, "outlets require a Swill::Controller subclass in #{entry['name']}"
         end
         if entry["extends_class_methods"] && entry["class_methods"].empty? &&
            entry["registries"].empty? && entry["settings"].empty?

@@ -418,6 +418,10 @@ export const Runtime = {
     current.dependents.clear();
   },
 
+  outlets(object) {
+    return [...declarations(object.constructor, "properties").values()].filter(descriptor => descriptor.outlet);
+  },
+
   collect_attributes(object) {
     const result = {};
     for (const descriptor of declarations(object.constructor, "properties").values()) {

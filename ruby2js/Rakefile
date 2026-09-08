@@ -16,6 +16,7 @@ def compile_spike
     lib/swill/core/controller.rb
     lib/swill/core/bindings.rb
     lib/swill/core/actions.rb
+    lib/swill/core/outlets.rb
     lib/swill/core/awakening.rb
     lib/swill/core/application.rb
   ].each do |path|

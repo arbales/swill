@@ -450,19 +450,21 @@ function nestedFixture() {
   }});
 
   const parentTitle = element("p", {bind: "title"});
-  const nameInput = element("input", {bind: "person.name"});
+  const nameInput = element("input", {bind: "person.name", outlet: "name_field"});
   const parentClear = element("button", {"data-action": "clear"});
+  const seed = element("script", {type: "application/json", outlet: "seed"});
+  seed.textContent = '{"name": "Ada"}';
   const childTitle = element("p", {bind: "title"});
   const childClear = element("button", {"data-action": "clear"});
   const childBump = element("button", {"data-action": "bump"});
   const childShout = element("button", {"data-action": "shout"});
   const grandchildTitle = element("p", {bind: "title"});
   const grandchildRoot = element("section", {controller: `Test::Grandchild${suffix}`}, [grandchildTitle]);
-  const childRoot = element("section", {controller: `Test::Child${suffix}`}, [
+  const childRoot = element("section", {controller: `Test::Child${suffix}`, outlet: "badge"}, [
     childTitle, childClear, childBump, childShout, element("div", {}, [grandchildRoot])
   ]);
   const parentRoot = element("main", {controller: `Test::Parent${suffix}`}, [
-    parentTitle, nameInput, parentClear, childRoot
+    seed, parentTitle, nameInput, parentClear, childRoot
   ]);
   const document = element("body", {}, [parentRoot]);
   const controllers = new Awakening().wire(document);
@@ -485,9 +487,11 @@ test("awakening builds a sparse view tree that defines ownership", () => {
   assert.equal(f.child.next_responder(), f.parent);
   assert.equal(f.parent.next_responder(), null);
   assert.equal(f.child.view().superview(), f.parent.view());
-  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.child.view()]);
+  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.name_field, f.child.view()]);
   assert.equal(f.grandchild.view().owner(), f.grandchild);
   assert.equal(f.grandchildRoot.parentElement.__swill_view__, undefined, "plain elements never become views");
+  assert.equal(f.parentTitle.__swill_view__, undefined, "bind-only elements never become views");
+  assert.equal(f.parentClear.__swill_view__, undefined, "action-only elements never become views");
   assert.equal(f.childRoot.__swill_view__.next_responder(), f.child);
 });
 
@@ -501,6 +505,27 @@ test("lifecycle runs children first per phase and preserves the flat order", () 
     ...phase("controller_did_load"), ...phase("view_will_appear"), ...phase("view_did_appear")
   ]);
   assert.ok(f.parent.person instanceof Person, "the parent's inherited view_did_load ran");
+  assert.equal(f.parentTitle.textContent, "Hello Ada", "awake_from_dom saw the decoded JSON outlet");
+});
+
+test("outlets connect to their direct owner as views, controllers, and data", () => {
+  const f = nestedFixture();
+  assert.ok(f.parent.name_field instanceof View);
+  assert.equal(f.parent.name_field.element(), f.nameInput);
+  assert.equal(f.parent.name_field.owner(), f.parent);
+  assert.equal(f.parent.name_field.superview(), f.parent.view());
+  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.name_field, f.child.view()]);
+  assert.equal(f.parent.badge, f.child);
+  assert.deepEqual({...f.parent.seed}, {name: "Ada"});
+  assert.equal(f.parent.missing, null);
+  assert.equal(f.child.parent(), f.parent, "a plain outlet view between them does not change ownership");
+  // Outlets are observable properties, so paths read and observe through them.
+  assert.equal(Runtime.readPath(f.parent, "badge.title"), "Badge 0");
+  const seen = [];
+  const dispose = Runtime.observePath(f.parent, "badge.count", value => seen.push(value));
+  f.childBump.click();
+  assert.deepEqual(seen, [1]);
+  dispose();
 });
 
 test("bindings and actions are wired only by their direct owner", () => {
@@ -589,9 +614,12 @@ const DemoApplication = Runtime.resolve("Demo::Application");
 function pageFixture({readyState = "loading", log = [], appName = "Demo::Application"} = {}) {
   const badgeTitle = element("p", {bind: "title"});
   const resetButton = element("button", {"data-action": "reset"});
-  const badge = element("section", {controller: "Demo::Badge"}, [badgeTitle, resetButton]);
+  const badge = element("section", {controller: "Demo::Badge", outlet: "badge"}, [badgeTitle, resetButton]);
   const parentTitle = element("p", {bind: "title"});
-  const main = element("main", {controller: "Demo::Controller"}, [parentTitle, badge]);
+  const seed = element("script", {type: "application/json", outlet: "seed"});
+  seed.textContent = '{"name": "Ada"}';
+  const nameInput = element("input", {bind: "person.name", outlet: "name_field"});
+  const main = element("main", {controller: "Demo::Controller"}, [seed, parentTitle, nameInput, badge]);
   const body = element("body", {application: appName}, [main]);
   const document = element("#document", {}, [body]);
   document.readyState = readyState;
@@ -663,4 +691,77 @@ test("pages without an application stay inert and unknown applications fail clos
   assert.equal(plain.children[0].children[0].__swill_view__, undefined, "nothing is awakened without an application");
   const f = pageFixture({readyState: "complete", appName: "Demo::Missing"});
   assert.throws(() => new Launcher().launch(f.document), /Unknown class: Demo::Missing/);
+});
+
+// ---- klass components, templates, and outlet failures ----
+
+const View = Runtime.resolve("Swill::View");
+const SwillController = Runtime.resolve("Swill::Controller");
+let hostSequence = 0;
+
+function outletDescriptor(type, optional = false) {
+  return {type, attribute: false, outlet: true, optional, defaultValue() { return null; }};
+}
+
+// A host controller declaring outlets the way generated metadata does.
+function installHost(outlets) {
+  const Host = class extends SwillController {};
+  const name = `Test::Host${++hostSequence}`;
+  const properties = {};
+  for (const [outlet, optional] of Object.entries(outlets)) properties[outlet] = outletDescriptor("T.untyped", optional);
+  Runtime.install({classes: {[name]: {constructor: Host, properties}}});
+  return name;
+}
+
+class Highlight extends View {}
+Runtime.install({classes: {"Test::Highlight": {constructor: Highlight}}});
+
+test("klass awakens View subclasses, alone or together with a controller", () => {
+  const name = installHost({panel: false, both: false, proto: true});
+  const panel = element("div", {klass: "Test::Highlight", outlet: "panel"});
+  const both = element("section", {klass: "Test::Highlight", controller: "Demo::Badge", outlet: "both"}, [
+    element("p", {bind: "title"})
+  ]);
+  const proto = element("template", {outlet: "proto"});
+  const root = element("main", {controller: name}, [panel, both, proto]);
+  const [host, badge] = new Awakening().wire(element("body", {}, [root]));
+  assert.ok(host.panel instanceof Highlight);
+  assert.equal(host.panel.element(), panel);
+  assert.equal(host.panel.owner(), host);
+  assert.equal(host.both, badge);
+  assert.ok(badge.view() instanceof Highlight, "klass wraps the element and the controller uses that view");
+  assert.equal(badge.parent(), host);
+  assert.equal(host.proto, proto);
+  assert.equal(proto.__swill_view__, undefined, "templates are inert");
+  assert.equal(both.children[0].textContent, "Badge 0");
+});
+
+test("outlet mistakes fail at awakening with the outlet name", () => {
+  const awaken = children => new Awakening().wire(element("body", {}, [element("main", {controller: installHost({panel: false})}, children)]));
+  assert.throws(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "panel"})]), /Duplicate outlet: panel/);
+  assert.throws(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "nope"})]), /Undeclared outlet: nope/);
+  assert.throws(() => awaken([]), /Unresolved outlet: panel/);
+  assert.throws(() => awaken([element("div", {klass: "Demo::Badge", outlet: "panel"})]), /Demo::Badge is not a Swill::View/);
+  assert.throws(() => awaken([element("div", {klass: "Nope::View", outlet: "panel"})]), /Unknown class: Nope::View/);
+  const broken = element("script", {type: "application/json", outlet: "panel"});
+  broken.textContent = "{not json";
+  assert.throws(() => awaken([broken]), error => error.name === "SyntaxError");
+  const empty = element("script", {type: "application/json", outlet: "panel"});
+  empty.textContent = "  ";
+  const [host] = awaken([empty]);
+  assert.equal(host.panel, null, "an empty JSON outlet decodes to nil");
+  const inner = element("div", {outlet: "panel"});
+  const nested = element("section", {controller: "Demo::Badge"}, [inner]);
+  assert.throws(() => awaken([nested]), /Unresolved outlet: panel/,
+    "an outlet inside a child controller is not visible to the parent");
+});
+
+test("decode_outlet_data shapes JSON before assignment", () => {
+  const name = installHost({payload: false});
+  const Host = Runtime.resolve(name);
+  Host.prototype.decode_outlet_data = function (outlet, value) { return `${outlet}:${JSON.stringify(value)}`; };
+  const payload = element("script", {type: "application/json", outlet: "payload"});
+  payload.textContent = '[1, 2]';
+  const [host] = new Awakening().wire(element("body", {}, [element("main", {controller: name}, [payload])]));
+  assert.equal(host.payload, "payload:[1,2]");
 });
