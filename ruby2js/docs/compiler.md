@@ -221,7 +221,8 @@ key so it stays an ordinary entry.
 
 ### Modules and publishing
 
-`Compiler#modules(name:, runtime:, framework:, publish:)` emits three files:
+`Compiler#modules(name:, runtime:, framework:, publish:, launch:)` emits three
+files:
 
 | File | Content |
 | --- | --- |
@@ -231,6 +232,9 @@ key so it stays an ordinary entry.
 
 The framework entrypoint throws if the global already exists, installs, then
 publishes `globalThis.Swill = Object.freeze({...definitions, Runtime, install})`.
+With `launch:`, it also instantiates the named class and calls `install(document)`
+when a `document` exists, which is how `Swill::Launcher` starts the application
+declared by `[application]` in a page while Node loading stays inert.
 The application build imports every framework identifier from that global
 through a generated shim, so the application bundle contains neither the
 runtime nor the framework classes. Only `Swill` is global.

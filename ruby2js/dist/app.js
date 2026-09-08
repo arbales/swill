@@ -13,6 +13,8 @@
   var Swill__Bindings = framework.Swill__Bindings;
   var Swill__Actions = framework.Swill__Actions;
   var Swill__Awakening = framework.Swill__Awakening;
+  var Swill__Application = framework.Swill__Application;
+  var Swill__Launcher = framework.Swill__Launcher;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
   var Swill__Model__Drafts = framework.Swill__Model__Drafts;
@@ -96,7 +98,9 @@
   };
   var Demo__Controller = class extends Swill__Controller {
     view_did_load() {
-      return this.person = new Demo__Person();
+      let person = new Demo__Person();
+      Runtime.write(person, "name", "Ada");
+      return this.person = person;
     }
     clear() {
       this.person = null;
@@ -114,6 +118,14 @@
     }
     clear() {
       return this.count = 0;
+    }
+  };
+  var Demo__Application = class extends Swill__Application {
+    application_did_launch() {
+      return this.launched = true;
+    }
+    reset() {
+      return this.controllers().forEach((controller) => controller.clear());
     }
   };
 
@@ -368,6 +380,26 @@
             "arity": 0
           },
           "clear": {
+            "arity": 0
+          }
+        }
+      },
+      "Demo::Application": {
+        constructor: Demo__Application,
+        properties: {
+          "launched": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function default_launched() {
+              return false;
+            }
+          }
+        },
+        methods: {
+          "application_did_launch": {
+            "arity": 0
+          },
+          "reset": {
             "arity": 0
           }
         }

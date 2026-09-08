@@ -17,6 +17,7 @@ def compile_spike
     lib/swill/core/bindings.rb
     lib/swill/core/actions.rb
     lib/swill/core/awakening.rb
+    lib/swill/core/application.rb
   ].each do |path|
     framework.add(File.read(path), file: path, javascript_only: true)
   end
@@ -29,7 +30,8 @@ def compile_spike
   end
   FileUtils.mkdir_p(DIST)
   FileUtils.mkdir_p("build")
-  framework.modules(name: "framework", runtime: "../lib/swill/runtime.mjs", publish: "Swill").each do |name, source|
+  framework.modules(name: "framework", runtime: "../lib/swill/runtime.mjs", publish: "Swill",
+                    launch: "Swill::Launcher").each do |name, source|
     File.write("build/#{name}", source)
   end
 

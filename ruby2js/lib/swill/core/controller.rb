@@ -33,9 +33,18 @@ module Swill
       found
     end
 
+    # The application whose root contains this controller, found through the
+    # DOM so fragments awakened later and multiple applications both work.
+    sig { returns(T.nilable(Application)) }
+    def application
+      nearest_application(@view.element())
+    end
+
+    # A nested controller answers to its parent; a root controller answers to
+    # the application, which is the top of the responder chain.
     sig { override.returns(T.nilable(Responder)) }
     def next_responder
-      parent
+      parent || application
     end
 
     sig { params(dispose: T.proc.void).void }
@@ -79,6 +88,13 @@ module Swill
 
     sig { void }
     def view_did_disappear; end
+
+    sig { params(element: T.untyped).returns(T.nilable(Application)) }
+    def nearest_application(element)
+      return nil unless element
+      found = element.__swill_application__
+      found ? found : nearest_application(element.parentElement)
+    end
 
     sig { params(view: View, found: T.untyped).void }
     def collect_child_controllers(view, found)

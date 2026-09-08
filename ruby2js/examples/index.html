@@ -2,6 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <title>Swill Ruby2JS semantic spike</title>
+<body application="Demo::Application">
 <main controller="Demo::Controller">
   <h1>Ruby2JS spike</h1>
   <label>Name <input bind="person.name"></label>
@@ -12,28 +13,11 @@
     <button data-action="bump">Bump badge</button>
     <button data-action="clear">Reset badge</button>
     <button data-action="shout">Shout name</button>
+    <button data-action="reset">Reset everything</button>
   </section>
-  <p>Nested controller ownership, binding, action, and teardown smoke test.</p>
+  <p>Application launch, nested controller ownership, binding, action, and teardown smoke test.</p>
 </main>
 <script src="../dist/swill.js"></script>
 <script src="../dist/app.js"></script>
-<script>
-try {
-  const {Runtime} = Swill;
-  const root = document.querySelector("[controller]");
-  const awakening = new (Runtime.resolve("Swill::Awakening"))();
-  const [controller] = awakening.wire(document);
-  controller.person.name = "Ada";
-  const button = root.querySelector("[data-action]");
-  button.addEventListener("click", () => {
-    root.querySelector("input").disabled = true;
-  }, {once: true});
-  window.addEventListener("pagehide", () => {
-    controller.teardown();
-  }, {once: true});
-} catch (error) {
-  document.body.dataset.swillError = error.stack || String(error);
-  throw error;
-}
-</script>
+</body>
 </html>

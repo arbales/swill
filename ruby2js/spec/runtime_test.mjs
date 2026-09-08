@@ -578,3 +578,89 @@ test("tearing down the parent releases every descendant exactly once", () => {
   assert.equal(again.child_controllers().length, 1);
   assert.equal(f.childTitle.textContent, "Badge 0");
 });
+
+// ---- application launch and the top of the responder chain ----
+
+const Launcher = Runtime.resolve("Swill::Launcher");
+const DemoApplication = Runtime.resolve("Demo::Application");
+
+// A document shim: the page body carries [application]; the document itself
+// receives DOMContentLoaded and its window receives pagehide.
+function pageFixture({readyState = "loading", log = [], appName = "Demo::Application"} = {}) {
+  const badgeTitle = element("p", {bind: "title"});
+  const resetButton = element("button", {"data-action": "reset"});
+  const badge = element("section", {controller: "Demo::Badge"}, [badgeTitle, resetButton]);
+  const parentTitle = element("p", {bind: "title"});
+  const main = element("main", {controller: "Demo::Controller"}, [parentTitle, badge]);
+  const body = element("body", {application: appName}, [main]);
+  const document = element("#document", {}, [body]);
+  document.readyState = readyState;
+  document.defaultView = new EventTarget();
+  return {log, document, body, main, badge, parentTitle, badgeTitle, resetButton};
+}
+
+test("the launcher launches the declared application once the DOM is parsed", () => {
+  const f = pageFixture();
+  const log = [];
+  class App extends DemoApplication {
+    application_did_launch() { log.push("launch"); return super.application_did_launch(); }
+    application_will_terminate() { log.push("terminate"); }
+  }
+  Runtime.install({classes: {"Test::App": {constructor: App}}});
+  f.body.setAttribute("application", "Test::App");
+  new Launcher().install(f.document);
+  assert.equal(f.body.__swill_application__, undefined, "nothing happens while loading");
+  f.document.dispatchEvent(new Event("DOMContentLoaded"));
+  const application = f.body.__swill_application__;
+  assert.ok(application instanceof App);
+  assert.equal(application.launched, true);
+  assert.deepEqual(log, ["launch"]);
+  assert.equal(application.root(), f.body);
+  const [parent, badge] = application.controllers();
+  assert.ok(parent instanceof Controller);
+  assert.ok(badge instanceof Badge);
+  assert.equal(f.parentTitle.textContent, "Hello Ada", "the example sets its own initial state");
+  assert.equal(parent.application(), application);
+  assert.equal(badge.application(), application);
+  assert.equal(parent.next_responder(), application);
+  assert.equal(badge.next_responder(), parent);
+  assert.equal(application.next_responder(), null);
+
+  // A bfcache pagehide keeps the page alive; a real unload terminates it.
+  const persisted = new Event("pagehide");
+  persisted.persisted = true;
+  f.document.defaultView.dispatchEvent(persisted);
+  assert.deepEqual(log, ["launch"]);
+  f.document.defaultView.dispatchEvent(new Event("pagehide"));
+  assert.deepEqual(log, ["launch", "terminate"]);
+  assert.equal(f.body.__swill_application__, null);
+  assert.equal(parent.view().controller_value(), null);
+  assert.equal(badge.view().controller_value(), null);
+  assert.equal(parent.application(), null);
+  assert.equal(parent.next_responder(), null);
+  application.terminate();
+  assert.deepEqual(log, ["launch", "terminate"], "terminate is idempotent");
+});
+
+test("unhandled root actions reach the application; a ready document launches at once", () => {
+  const f = pageFixture({readyState: "complete"});
+  const application = new Launcher().launch(f.document);
+  assert.ok(application instanceof DemoApplication);
+  const [parent, badge] = application.controllers();
+  parent.person.name = "Grace";
+  badge.count = 3;
+  assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello Grace", "Badge 3"]);
+  f.resetButton.click();
+  assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Nobody", "Badge 0"]);
+  assert.throws(() => badge.perform_action("missing", null, null), /Unhandled action: missing/);
+  assert.throws(() => application.perform_action("missing", null, null), /Unhandled action: missing/);
+});
+
+test("pages without an application stay inert and unknown applications fail closed", () => {
+  const plain = element("#document", {}, [element("body", {}, [element("main", {controller: "Demo::Controller"})])]);
+  plain.readyState = "complete";
+  assert.equal(new Launcher().launch(plain), null);
+  assert.equal(plain.children[0].children[0].__swill_view__, undefined, "nothing is awakened without an application");
+  const f = pageFixture({readyState: "complete", appName: "Demo::Missing"});
+  assert.throws(() => new Launcher().launch(f.document), /Unknown class: Demo::Missing/);
+});

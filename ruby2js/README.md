@@ -51,14 +51,19 @@ BUNDLE_PATH=vendor/bundle bundle exec rake build
 python3 -m http.server 3000 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:3000/examples/index.html`. The page loads:
+Open `http://127.0.0.1:3000/examples/index.html`. The page declares its
+application and loads the two scripts; nothing else is needed:
 
 ```html
-<script src="../dist/swill.js"></script>
-<script src="../dist/app.js"></script>
+<body application="Demo::Application">
+  <main controller="Demo::Controller">...</main>
+  <script src="../dist/swill.js"></script>
+  <script src="../dist/app.js"></script>
+</body>
 ```
 
-Load `swill.js` before `app.js`.
+Load `swill.js` before `app.js`. The framework launches the named application
+on `DOMContentLoaded` and terminates it on a real `pagehide`.
 
 ### Dependency updates
 
@@ -120,8 +125,12 @@ appearance hooks. Teardown runs `view_will_disappear`, the controller's own
 disposers and observable state, its descendants, and `view_did_disappear`,
 exactly once.
 
-Actions resolve through the responder chain: a controller handles an action
-when it has a matching generated method, otherwise its parent tries, and an
+`Swill::Application` is the top of the responder chain for one launched region.
+It records itself on its root element, so a root controller finds it by walking
+up from its own element; `application_did_launch` and
+`application_will_terminate` bracket its life. Actions resolve through the
+responder chain: a controller handles an action when it has a matching
+generated method, otherwise its parent tries, then the application, and an
 action nobody handles raises. Actions default to `click`; `event:action`
 selects another DOM event. Value bindings support text content, text controls,
 selects, checkboxes, readonly controls, nested observable paths, and teardown.
@@ -156,6 +165,8 @@ The implementation covers:
   and awakening framework slices;
 - nested controllers with a sparse view tree, direct-owner wiring, responder
   chain actions, children-first lifecycle, and recursive teardown;
+- a markup-declared application that launches on `DOMContentLoaded`, tops the
+  responder chain, and terminates on unload;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 

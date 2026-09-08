@@ -862,7 +862,7 @@ module Swill
       ].join("\n"))
     end
 
-    def modules(name:, runtime:, framework: nil, publish: nil)
+    def modules(name:, runtime:, framework: nil, publish: nil, launch: nil)
       validate!
       references = knowledge.local.flat_map do |entry|
         [entry["identifier"], *(entry["extends_class_methods"] ? ["#{entry['identifier']}_ClassMethods"] : [])]
@@ -879,6 +879,12 @@ module Swill
       if publish
         entrypoint << "globalThis[#{publish.to_json}] = Object.freeze({" \
           "...definitions, Runtime, install: meta => Runtime.install(meta)});"
+      end
+      if launch
+        raise CompileError, "launch requires publish" unless publish
+        # The browser boundary: a document exists only inside a page.
+        entrypoint << "if (typeof document !== 'undefined') " \
+          "new (Runtime.resolve(#{launch.to_json}))().install(document);"
       end
       entrypoint << "export * from './#{name}.classes.mjs';"
       {

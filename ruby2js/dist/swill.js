@@ -404,9 +404,11 @@
   var framework_classes_exports = {};
   __export(framework_classes_exports, {
     Swill__Actions: () => Swill__Actions,
+    Swill__Application: () => Swill__Application,
     Swill__Awakening: () => Swill__Awakening,
     Swill__Bindings: () => Swill__Bindings,
     Swill__Controller: () => Swill__Controller,
+    Swill__Launcher: () => Swill__Launcher,
     Swill__Model__Attributes: () => Swill__Model__Attributes,
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
     Swill__Model__Base: () => Swill__Model__Base,
@@ -560,8 +562,15 @@
       this.collect_child_controllers(this._view, found);
       return found;
     }
+    // The application whose root contains this controller, found through the
+    // DOM so fragments awakened later and multiple applications both work.
+    application() {
+      return this.nearest_application(this._view.element());
+    }
+    // A nested controller answers to its parent; a root controller answers to
+    // the application, which is the top of the responder chain.
     next_responder() {
-      return this.parent();
+      return this.parent() ?? this.application();
     }
     register_teardown(dispose) {
       return this._teardowns.push(dispose);
@@ -600,6 +609,11 @@
     }
     view_did_disappear() {
       return null;
+    }
+    nearest_application(element) {
+      if (!element) return null;
+      let found = element.__swill_application__;
+      return found ? found : this.nearest_application(element.parentElement);
     }
     collect_child_controllers(view, found) {
       return view.subviews().forEach((subview) => {
@@ -737,6 +751,58 @@
         callback(controllers[index]);
         index--;
       }
+    }
+  };
+  var Swill__Application = class extends Swill__Responder {
+    launch(root) {
+      this._root = root;
+      root.__swill_application__ = this;
+      this._controllers = new Swill__Awakening().wire(root);
+      this.application_did_launch();
+      return this;
+    }
+    // Every controller awakened at launch, in document order, as a JavaScript array.
+    controllers() {
+      return this._controllers;
+    }
+    root() {
+      return this._root;
+    }
+    // Idempotent: a page may see more than one pagehide before it is unloaded.
+    terminate() {
+      if (this._root.__swill_application__ !== this) return;
+      this.application_will_terminate();
+      this._controllers.forEach((controller) => controller.teardown());
+      this._controllers = [];
+      return this._root.__swill_application__ = null;
+    }
+    application_did_launch() {
+      return null;
+    }
+    application_will_terminate() {
+      return null;
+    }
+  };
+  var Swill__Launcher = class extends Swill__Object {
+    install(document2) {
+      return document2.readyState === "loading" ? document2.addEventListener(
+        "DOMContentLoaded",
+        (_event) => this.launch(document2),
+        { once: true }
+      ) : this.launch(document2);
+    }
+    // A page without an [application] element is inert; a page naming an
+    // unregistered class fails closed through Runtime.resolve.
+    launch(document2) {
+      let element = document2.querySelector("[application]");
+      if (!element) return null;
+      let application_class = Runtime.resolve(element.getAttribute("application"));
+      let application = new application_class();
+      application.launch(element);
+      document2.defaultView.addEventListener("pagehide", (event) => {
+        if (!event.persisted) return application.terminate();
+      });
+      return application;
     }
   };
   function Swill__Model__Attributes(Superclass) {
@@ -916,6 +982,9 @@
           "child_controllers": {
             "arity": 0
           },
+          "application": {
+            "arity": 0
+          },
           "next_responder": {
             "arity": 0
           },
@@ -945,6 +1014,9 @@
           },
           "view_did_disappear": {
             "arity": 0
+          },
+          "nearest_application": {
+            "arity": 1
           },
           "collect_child_controllers": {
             "arity": 2
@@ -1002,6 +1074,42 @@
           }
         }
       },
+      "Swill::Application": {
+        constructor: Swill__Application,
+        properties: {},
+        methods: {
+          "launch": {
+            "arity": 1
+          },
+          "controllers": {
+            "arity": 0
+          },
+          "root": {
+            "arity": 0
+          },
+          "terminate": {
+            "arity": 0
+          },
+          "application_did_launch": {
+            "arity": 0
+          },
+          "application_will_terminate": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Launcher": {
+        constructor: Swill__Launcher,
+        properties: {},
+        methods: {
+          "install": {
+            "arity": 1
+          },
+          "launch": {
+            "arity": 1
+          }
+        }
+      },
       "Swill::Model::Base": {
         constructor: Swill__Model__Base,
         mixins: [Swill__Model__Attributes, Swill__Model__Drafts],
@@ -1027,5 +1135,6 @@
   if (globalThis["Swill"]) throw new Error("Framework already loaded");
   Runtime.install(meta);
   globalThis["Swill"] = Object.freeze({ ...framework_classes_exports, Runtime, install: (meta2) => Runtime.install(meta2) });
+  if (typeof document !== "undefined") new (Runtime.resolve("Swill::Launcher"))().install(document);
 })();
 //# sourceMappingURL=swill.js.map

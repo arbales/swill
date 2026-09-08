@@ -18,7 +18,9 @@ module Demo
 
     sig { void }
     def view_did_load
-      self.person = Demo::Person.new
+      person = Demo::Person.new
+      person.name = "Ada"
+      self.person = person
     end
 
     sig { returns(String) }
@@ -53,6 +55,26 @@ module Demo
     sig { void }
     def clear
       self.count = 0
+    end
+  end
+end
+
+module Demo
+  # Declared by <body application="Demo::Application">. Root controllers
+  # forward unhandled actions here, so a button anywhere can reset the page.
+  class Application < Swill::Application
+    extend T::Sig
+
+    property :launched, type: T::Boolean, default: false
+
+    sig { void }
+    def application_did_launch
+      self.launched = true
+    end
+
+    sig { void }
+    def reset
+      controllers.forEach { |controller| controller.clear() }
     end
   end
 end

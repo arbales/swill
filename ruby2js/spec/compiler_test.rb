@@ -83,6 +83,7 @@ class CompilerTest < Minitest::Test
       lib/swill/core/bindings.rb
       lib/swill/core/actions.rb
       lib/swill/core/awakening.rb
+      lib/swill/core/application.rb
     ].each do |path|
       compiler.add(File.read(path), file: path, javascript_only: true)
     end
@@ -96,6 +97,15 @@ class CompilerTest < Minitest::Test
     assert_includes js, "controller.perform_action(action_name, element, event)"
     assert_includes js, "new Swill__Bindings().wire(controller)"
     assert_includes js, "new Swill__Actions().wire(controller)"
+    assert_match(/document\.addEventListener\(\s*"DOMContentLoaded"/, js)
+    assert_includes js, "if (!event.persisted) return application.terminate()"
+    modules = compiler.modules(name: "fixture", runtime: "../lib/swill/runtime.mjs", publish: "Swill", launch: "Swill::Launcher")
+    entry = modules.fetch("fixture.mjs")
+    assert_includes entry, "if (typeof document !== \"undefined\")"
+    assert_includes entry, 'new (Runtime.resolve("Swill::Launcher"))().install(document)'
+    assert_raises(Spike::CompileError) do
+      compiler.modules(name: "fixture", runtime: "../lib/swill/runtime.mjs", launch: "Swill::Launcher")
+    end
   end
 
   def test_runtime_sorbet_constructs_are_not_silently_erased
