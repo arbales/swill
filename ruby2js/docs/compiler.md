@@ -259,12 +259,19 @@ Each entry is compiled with one of two filter chains, chosen by the
 | `param.foo` where `param` has a signature type | Resolved through the receiver rules | A method call when the type names a collected entry; otherwise native property access |
 | `initialize` | Rejected | Compiles to `constructor` |
 | `raise "message"` | `throw new Error("message")` | Same |
+| `callback.call(x)` / `callback.(x)` | `callback(x)` for a local; `receiver.call(null, x)` otherwise | Same |
+| `->(x) { ... }` | Arrow function | Arrow function |
 | Constants | Resolved in Ruby scope to encoded identifiers | Same |
 
 `Return` provides implicit returns. `RubyCalls` runs last on the shared
 surface and converts any remaining send into an explicit call, so
 `person.greeting` and `person.greeting()` compile identically. It leaves
-`new`, `raise`, operators, and indexing to the converter.
+`new`, `raise`, `lambda`, `proc`, operators, and indexing to the converter.
+
+On the JavaScript-only surface a call on a receiver other than `self` or a
+typed parameter is native JavaScript: `view.superview` is property access and
+`view.superview()` is a call. Framework code on that surface writes explicit
+parentheses for every Ruby method call on a local.
 
 ## Lowering rules
 
@@ -336,6 +343,7 @@ For `receiver.name(args)` where the receiver is not `self`:
 | `String` or `T.nilable(String)` | `strip`, `upcase`, `downcase`, `blank?` | `Runtime.strip(receiver)`, `Runtime.upcase(...)`, `Runtime.downcase(...)`, `Runtime.isBlank(...)` |
 | `String` | Anything else | Pragma filter if it applies, else an explicit call |
 | Unknown or `T.untyped` | No arguments and the name is a property on any collected entry, or a string reader name | `Runtime.read(receiver, "name")` |
+| Unknown, `T.untyped`, or `T.proc...` | `call(args)` or `.(args)` | `receiver(args)` for a local receiver; `receiver.call(null, args)` otherwise |
 | Unknown or `T.untyped` | `name = value` where `name` is a property on any collected entry | `Runtime.write(receiver, "name", value)` |
 | Unknown or `T.untyped` | Anything else | `receiver.name(args)` via `RubyCalls` |
 | Any other type | Anything | Pragma filter if it applies, else an explicit call |
@@ -389,6 +397,7 @@ parent's, so lookups do not walk the chain at call time.
 | `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null` |
 | `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. Errors: `Unavailable binding owner` when an intermediate is null, `Read-only binding` when the target is computed or not a property |
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
+| `hasAction(object, name)` | Whether a collected method of arity 0, 1, or 2 exists; the responder chain uses it to decide where an action stops |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
 | `valueRead(value, name)` | `blank?`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
 

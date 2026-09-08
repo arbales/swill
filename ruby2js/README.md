@@ -41,7 +41,8 @@ CHROME_BIN=/path/to/chrome BUNDLE_PATH=vendor/bundle bundle exec rake browser
 ```
 
 The check uses Chrome's DevTools protocol with a temporary profile. It exercises
-class lookup, input events, computed rendering, actions, and listener teardown.
+class lookup, input events, computed rendering, nested controller ownership,
+actions through the responder chain, and listener teardown.
 
 For manual inspection:
 
@@ -102,15 +103,28 @@ forms. Update it whenever the supported boundary changes.
 
 ### DOM boundaries
 
-`Swill::Bindings`, `Swill::Actions`, and `Swill::Awakening` are Ruby-authored
-framework classes compiled with the JavaScript-only surface. DOM traversal,
-control rendering, event selection, action parsing, and listener ownership stay
-in those classes. The handwritten runtime only resolves metadata-aware key paths
-and dispatches generated method names.
+`Swill::View`, `Swill::Controller`, `Swill::Ownership`, `Swill::Bindings`,
+`Swill::Actions`, and `Swill::Awakening` are Ruby-authored framework classes
+compiled with the JavaScript-only surface. DOM traversal, control rendering,
+event selection, action parsing, and listener ownership stay in those classes.
+The handwritten runtime only resolves metadata-aware key paths and dispatches
+generated method names.
 
-Current value bindings support text content, text controls, selects, checkboxes,
-readonly controls, nested observable paths, and teardown. Actions default to
-`click`; `event:action` selects another DOM event.
+Ownership follows a sparse view tree. Only controller roots become `View`
+objects; elements with only `bind` or `data-action` stay raw DOM. A controller's
+`parent` and `child_controllers` are derived from that tree. Binding and action
+scans stop at nested `[controller]` boundaries, so each element is wired by its
+direct owner only. Awakening runs `view_did_load`, wiring, and `awake_from_dom`
+for each controller children first, then `controller_did_load`, then the
+appearance hooks. Teardown runs `view_will_disappear`, the controller's own
+disposers and observable state, its descendants, and `view_did_disappear`,
+exactly once.
+
+Actions resolve through the responder chain: a controller handles an action
+when it has a matching generated method, otherwise its parent tries, and an
+action nobody handles raises. Actions default to `click`; `event:action`
+selects another DOM event. Value bindings support text content, text controls,
+selects, checkboxes, readonly controls, nested observable paths, and teardown.
 
 ### Sorbet
 
@@ -138,15 +152,17 @@ The implementation covers:
 - typed properties, attributes, computed values, and inherited defaults;
 - class settings and inheritable registries;
 - mutation hooks, observation, value bindings, actions, drafts, and disposal;
-- compiled object, responder, view, controller, bindings, actions, and awakening
-  framework slices;
+- compiled object, responder, view, controller, ownership, bindings, actions,
+  and awakening framework slices;
+- nested controllers with a sparse view tree, direct-owner wiring, responder
+  chain actions, children-first lifecycle, and recursive teardown;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
 runtime Sorbet operations, dynamic class mutation, `bind-*` DOM property
-bindings, nested controller ownership, or a complete Awakening and model-layer
-port. Unsupported forms fail compilation.
+bindings, outlets, `klass` components, first-responder focus, or a complete
+Awakening and model-layer port. Unsupported forms fail compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.

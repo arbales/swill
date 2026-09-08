@@ -395,17 +395,30 @@ module Swill
     end
   end
 
-  # Ruby exceptions become JavaScript Error objects so browsers keep stack
-  # traces and callers can tell errors from thrown values. Only a literal
-  # message is supported; other forms fail closed.
-  module RaiseLowering
+  # Lowerings both surfaces share.
+  module SharedLowering
     include ::Ruby2JS::Filter::SEXP
 
+    # Ruby exceptions become JavaScript Error objects so browsers keep stack
+    # traces and callers can tell errors from thrown values. Only a literal
+    # message is supported; other forms fail closed.
     def lower_raise(args)
       unless args.length == 1 && %i[str dstr].include?(args.first.type)
         raise CompileError, "raise supports only a literal message string"
       end
       s(:send, nil, :raise, s(:const, nil, :Error), process(args.first))
+    end
+
+    # Ruby invokes a callable with `call` or `.()`; JavaScript calls the value.
+    # A local is called directly. Any other receiver uses Function.prototype.call
+    # with an explicit null receiver, which Ruby2JS would otherwise emit with
+    # the first argument in the receiver position.
+    def lower_call(receiver, args)
+      if receiver.type == :lvar
+        s(:call, nil, receiver.children.first, *process_all(args))
+      else
+        s(:send, process(receiver), :call, s(:nil), *process_all(args))
+      end
     end
   end
 
@@ -416,7 +429,7 @@ module Swill
     # Wrap the built-in so framework properties and Ruby semantics take priority
     # over its type inference. Unhandled nodes flow through Pragma via super.
     include ::Ruby2JS::Filter::Pragma
-    include RaiseLowering
+    include SharedLowering
 
     STRING_READERS = {strip: :strip, upcase: :upcase, downcase: :downcase, blank?: :isBlank}.freeze
 
@@ -550,7 +563,8 @@ module Swill
         reader = STRING_READERS[method]
         return reader && args.empty? ? s(:call, s(:const, nil, :Runtime), reader, process(receiver)) : nil
       end
-      return nil unless type.nil? || type == "T.untyped"
+      return nil unless type.nil? || type == "T.untyped" || type.start_with?("T.proc")
+      return lower_call(receiver, args) if method == :call
       if args.empty? && (@all_properties.include?(name) || STRING_READERS.key?(method))
         return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, name))
       end
@@ -737,7 +751,7 @@ module Swill
 
     def on_send(node)
       receiver, method, *args = node.children
-      return super if %i[new raise].include?(method)
+      return super if %i[new raise lambda proc].include?(method)
       # Operators and indexing are native converter syntax, not named methods.
       return super if ::Ruby2JS::Filter::Processor::BINARY_OPERATORS.include?(method) ||
         %i[[] []=].include?(method)
@@ -751,7 +765,7 @@ module Swill
   # collision-safe class names.
   module JavaScriptSurface
     include ::Ruby2JS::Filter::SEXP
-    include RaiseLowering
+    include SharedLowering
 
     def options=(options)
       super
@@ -789,6 +803,7 @@ module Swill
     def on_send(node)
       receiver, method, *args = node.children
       return lower_raise(args) if receiver.nil? && method == :raise
+      return lower_call(receiver, args) if method == :call && receiver && receiver.type != :self
       ruby_call =
         if receiver.nil?
           @knowledge.method_defined?(@entry["name"], method)

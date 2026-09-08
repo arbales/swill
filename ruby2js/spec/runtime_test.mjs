@@ -414,3 +414,167 @@ test("invalid meta is rejected before registering preceding valid classes", () =
   assert.throws(() => Runtime.resolve("Test::Valid"), /Unknown class/);
   assert.throws(() => Runtime.install({classes: {"Test::Missing": {}}}), /Missing constructor/);
 });
+
+// ---- nested controller ownership ----
+
+import {element} from "./dom.mjs";
+
+const Awakening = Runtime.resolve("Swill::Awakening");
+const Badge = Runtime.resolve("Demo::Badge");
+let fixtureSequence = 0;
+
+// Parent and child controllers with identically named bindings and actions.
+// Hooks record their order; the runtime installs the recording subclasses
+// under fresh names exactly like generated metadata would.
+function nestedFixture() {
+  const log = [];
+  const hooks = ["view_did_load", "awake_from_dom", "controller_did_load", "view_will_appear",
+    "view_did_appear", "view_will_disappear", "view_did_disappear"];
+  const recording = (Base, label) => {
+    const klass = class extends Base {};
+    for (const hook of hooks) {
+      klass.prototype[hook] = function () { log.push(`${label}:${hook}`); return Base.prototype[hook].call(this); };
+    }
+    return klass;
+  };
+  const Parent = class extends recording(Controller, "parent") {
+    shout() { log.push("parent:shout"); return super.shout(); }
+  };
+  const Child = recording(Badge, "child");
+  const Grandchild = recording(Badge, "grandchild");
+  const suffix = ++fixtureSequence;
+  Runtime.install({classes: {
+    [`Test::Parent${suffix}`]: {constructor: Parent},
+    [`Test::Child${suffix}`]: {constructor: Child},
+    [`Test::Grandchild${suffix}`]: {constructor: Grandchild}
+  }});
+
+  const parentTitle = element("p", {bind: "title"});
+  const nameInput = element("input", {bind: "person.name"});
+  const parentClear = element("button", {"data-action": "clear"});
+  const childTitle = element("p", {bind: "title"});
+  const childClear = element("button", {"data-action": "clear"});
+  const childBump = element("button", {"data-action": "bump"});
+  const childShout = element("button", {"data-action": "shout"});
+  const grandchildTitle = element("p", {bind: "title"});
+  const grandchildRoot = element("section", {controller: `Test::Grandchild${suffix}`}, [grandchildTitle]);
+  const childRoot = element("section", {controller: `Test::Child${suffix}`}, [
+    childTitle, childClear, childBump, childShout, element("div", {}, [grandchildRoot])
+  ]);
+  const parentRoot = element("main", {controller: `Test::Parent${suffix}`}, [
+    parentTitle, nameInput, parentClear, childRoot
+  ]);
+  const document = element("body", {}, [parentRoot]);
+  const controllers = new Awakening().wire(document);
+  const [parent, child, grandchild] = controllers;
+  return {log, suffix, document, controllers, parent, child, grandchild, parentRoot, childRoot, grandchildRoot,
+    parentTitle, nameInput, parentClear, childTitle, childClear, childBump, childShout, grandchildTitle};
+}
+
+test("awakening builds a sparse view tree that defines ownership", () => {
+  const f = nestedFixture();
+  assert.equal(f.controllers.length, 3);
+  assert.ok(f.parent instanceof Controller);
+  assert.ok(f.child instanceof Badge);
+  assert.deepEqual(Array.from(f.parent.child_controllers()), [f.child]);
+  assert.deepEqual(Array.from(f.child.child_controllers()), [f.grandchild]);
+  assert.deepEqual(Array.from(f.grandchild.child_controllers()), []);
+  assert.equal(f.child.parent(), f.parent);
+  assert.equal(f.grandchild.parent(), f.child);
+  assert.equal(f.parent.parent(), null);
+  assert.equal(f.child.next_responder(), f.parent);
+  assert.equal(f.parent.next_responder(), null);
+  assert.equal(f.child.view().superview(), f.parent.view());
+  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.child.view()]);
+  assert.equal(f.grandchild.view().owner(), f.grandchild);
+  assert.equal(f.grandchildRoot.parentElement.__swill_view__, undefined, "plain elements never become views");
+  assert.equal(f.childRoot.__swill_view__.next_responder(), f.child);
+});
+
+test("lifecycle runs children first per phase and preserves the flat order", () => {
+  const f = nestedFixture();
+  const phase = hook => ["grandchild", "child", "parent"].map(label => `${label}:${hook}`);
+  assert.deepEqual(f.log, [
+    "grandchild:view_did_load", "grandchild:awake_from_dom",
+    "child:view_did_load", "child:awake_from_dom",
+    "parent:view_did_load", "parent:awake_from_dom",
+    ...phase("controller_did_load"), ...phase("view_will_appear"), ...phase("view_did_appear")
+  ]);
+  assert.ok(f.parent.person instanceof Person, "the parent's inherited view_did_load ran");
+});
+
+test("bindings and actions are wired only by their direct owner", () => {
+  const f = nestedFixture();
+  f.parent.person.name = "Ada";
+  assert.equal(f.parentTitle.textContent, "Hello Ada");
+  assert.equal(f.childTitle.textContent, "Badge 0");
+  assert.equal(f.grandchildTitle.textContent, "Badge 0");
+  f.childBump.click();
+  assert.equal(f.childTitle.textContent, "Badge 1");
+  assert.equal(f.child.count, 1);
+  assert.equal(f.grandchild.count, 0);
+  assert.equal(f.parentTitle.textContent, "Hello Ada");
+  f.childClear.click();
+  assert.equal(f.childTitle.textContent, "Badge 0");
+  assert.ok(f.parent.person instanceof Person, "the child's clear never reaches the parent");
+  f.parentClear.click();
+  assert.equal(f.parent.person, null);
+  assert.equal(f.parentTitle.textContent, "Nobody");
+  assert.equal(f.childTitle.textContent, "Badge 0");
+});
+
+test("unhandled child actions continue through the responder chain", () => {
+  const f = nestedFixture();
+  f.parent.person.name = "Ada";
+  f.childShout.click();
+  assert.deepEqual(f.log.filter(entry => entry.endsWith(":shout")), ["parent:shout"]);
+  assert.equal(f.parent.person.name, "ADA");
+  assert.equal(f.parentTitle.textContent, "Hello ADA");
+  assert.throws(() => f.grandchild.perform_action("missing", null, null), /Unhandled action: missing/);
+  assert.throws(() => f.parent.perform_action("toString", null, null), /Unhandled action/);
+  assert.equal(Runtime.hasAction(f.parent, "shout"), true);
+  assert.equal(Runtime.hasAction(f.child, "shout"), false);
+});
+
+test("awakening a later fragment adopts it into the nearest live owner", () => {
+  const f = nestedFixture();
+  const lateTitle = element("p", {bind: "title"});
+  const lateRoot = element("section", {controller: "Demo::Badge"}, [lateTitle]);
+  f.childRoot.append(element("div", {}, [lateRoot]));
+  const [late] = new Awakening().wire(lateRoot);
+  assert.equal(late.parent(), f.child);
+  assert.deepEqual(Array.from(f.child.child_controllers()), [f.grandchild, late]);
+  assert.equal(lateTitle.textContent, "Badge 0");
+  assert.equal(f.log.filter(entry => entry.endsWith(":view_did_load")).length, 3, "existing controllers are not re-awakened");
+  assert.deepEqual(Array.from(new Awakening().wire(f.document)), [], "an awakened tree yields no new controllers");
+});
+
+test("tearing down the parent releases every descendant exactly once", () => {
+  const f = nestedFixture();
+  f.parent.person.name = "Ada";
+  f.log.length = 0;
+  f.parent.teardown();
+  assert.deepEqual(f.log, [
+    "parent:view_will_disappear", "child:view_will_disappear",
+    "grandchild:view_will_disappear", "grandchild:view_did_disappear",
+    "child:view_did_disappear", "parent:view_did_disappear"
+  ]);
+  assert.equal(f.child.view().controller_value(), null);
+  assert.equal(f.child.parent(), null);
+  assert.deepEqual(Array.from(f.parent.child_controllers()), []);
+  assert.deepEqual(Array.from(f.parent.view().subviews()), []);
+  f.childBump.click();
+  assert.equal(f.child.count, 0, "child listeners are gone");
+  assert.equal(f.childTitle.textContent, "Badge 0");
+  f.parent.person.name = "Grace";
+  assert.equal(f.parentTitle.textContent, "Hello Ada", "parent observers are gone");
+  f.child.count = 5;
+  assert.equal(f.childTitle.textContent, "Badge 0", "child observers are gone");
+  f.parent.teardown();
+  f.child.teardown();
+  assert.equal(f.log.length, 6, "a second teardown is a no-op");
+  const [again] = new Awakening().wire(f.parentRoot);
+  assert.notEqual(again, f.parent);
+  assert.equal(again.child_controllers().length, 1);
+  assert.equal(f.childTitle.textContent, "Badge 0");
+});

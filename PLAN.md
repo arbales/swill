@@ -29,58 +29,21 @@ The initial kernel and DOM-boundary spike is complete and verified:
 - actions support `data-action="name"` and `data-action="event:name"`;
 - modules may act as both mixins and namespaces without losing nested classes;
 - generated RBIs, readable bundles, minified bundles, and source maps are
-  checked by the build.
+  checked by the build;
+- nested controllers own a sparse `View` tree: parent and child ownership is
+  derived from it, binding and action scans stop at controller boundaries,
+  unhandled actions continue up the responder chain, the lifecycle runs
+  children first per phase, and teardown releases descendants exactly once;
+- the compiler lowers receivers from static types, compiles `raise` to
+  `Error`, invokes callables correctly, and builds under both Ruby2JS parsers.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Guardrails
+## Immediate Next Slice: Managed Elements and Outlets
 
-1. **No second Ruby VM.** Do not add `eval`, general reflection, a universal
-   dynamic-send helper, runtime AST interpretation, or global prototype
-   patches.
-2. **Ruby source owns framework behavior.** Handwritten JavaScript is limited
-   to browser/runtime boundaries that genuinely require dynamic types, shared
-   state, identity, or metadata installation.
-3. **Static facts stay static.** Names, inheritance, declarations, method
-   arity, and supported call forms belong in compiler metadata and filters.
-4. **One coherent rule per behavior.** Do not add fixture-specific rewrites or
-   name-based lowering without type or declaration evidence.
-5. **Fail closed.** The nearest unsupported form should produce a useful build
-   error rather than silently changing Ruby semantics.
-6. **No package ecosystem expansion.** Keep the browser output dependency-free
-   and the build limited to Ruby2JS, Sorbet, Node, and `esbuild`.
-7. **Generated output is generated.** Change Ruby/compiler/runtime sources,
-   regenerate `ruby2js/dist/`, and never hand-edit bundles.
-
-## Immediate Next Slice: Ownership-Correct Nested Controllers
-
-The next implementation target is nested controller ownership. It is the
-dependency for correct outlets, responder routing, richer bindings, and
-controller teardown.
-
-### Work
-
-1. Build the sparse managed `View` tree for controller roots.
-2. Record parent/child controller ownership without treating every DOM element
-   as a framework object.
-3. Make binding and action scans stop at nested controller boundaries so a
-   parent never wires a child's elements.
-4. Route `next_responder` from a child controller through its owning region.
-5. Teardown descendants exactly once, after the owner's disposers and before
-   `view_did_disappear`.
-6. Preserve the documented lifecycle order:
-   `view_did_load` → framework wiring → `awake_from_dom` →
-   `controller_did_load` → appearance.
-
-### Exit Criteria
-
-- A browser fixture contains parent and child controllers with identically
-  named bindings and actions.
-- Each element is wired by only its direct owner.
-- Child actions can continue through the responder chain when unhandled.
-- Replacing or tearing down the parent releases all descendant listeners and
-  observers exactly once.
-- Flat-controller behavior and bundle ownership remain unchanged.
+Nested ownership is verified in Node and Chrome (September 2026). The next
+target is roadmap item 1 below, which extends the same sparse tree to outlet
+views and `klass` components and connects them to their direct owner.
 
 ## Ordered Roadmap
 

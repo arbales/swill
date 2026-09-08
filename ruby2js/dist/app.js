@@ -6,6 +6,7 @@
   var Runtime = framework.Runtime;
   var Swill__Observable = framework.Swill__Observable;
   var Swill__Object = framework.Swill__Object;
+  var Swill__Ownership = framework.Swill__Ownership;
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
   var Swill__Controller = framework.Swill__Controller;
@@ -100,6 +101,19 @@
     clear() {
       this.person = null;
       return this.title;
+    }
+    // Reached through the responder chain from a nested controller's button.
+    shout() {
+      let current = this.person;
+      if (current) return current.name = Runtime.upcase(current.name);
+    }
+  };
+  var Demo__Badge = class extends Swill__Controller {
+    bump() {
+      return this.count = this.count + 1;
+    }
+    clear() {
+      return this.count = 0;
     }
   };
 
@@ -321,6 +335,36 @@
         },
         methods: {
           "view_did_load": {
+            "arity": 0
+          },
+          "clear": {
+            "arity": 0
+          },
+          "shout": {
+            "arity": 0
+          }
+        }
+      },
+      "Demo::Badge": {
+        constructor: Demo__Badge,
+        properties: {
+          "count": {
+            type: "Integer",
+            attribute: false,
+            defaultValue: function default_count() {
+              return 0;
+            }
+          },
+          "title": {
+            type: "String",
+            attribute: false,
+            compute: function compute_title2() {
+              return `Badge ${this.count}`;
+            }
+          }
+        },
+        methods: {
+          "bump": {
             "arity": 0
           },
           "clear": {

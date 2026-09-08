@@ -332,6 +332,10 @@
       if (!method || method.arity !== args.length) throw new Error(`Unknown action or wrong arity: ${name}`);
       return object[method.js](...args);
     },
+    hasAction(object, name) {
+      const method = declarations(object.constructor, "methods").get(name);
+      return !!method && method.arity <= 2;
+    },
     performAction(object, name, sender, event) {
       const method = declarations(object.constructor, "methods").get(name);
       if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
@@ -409,6 +413,7 @@
     Swill__Model__Drafts: () => Swill__Model__Drafts,
     Swill__Object: () => Swill__Object,
     Swill__Observable: () => Swill__Observable,
+    Swill__Ownership: () => Swill__Ownership,
     Swill__Responder: () => Swill__Responder,
     Swill__View: () => Swill__View
   });
@@ -431,12 +436,49 @@
   }
   var Swill__Object = class extends Object {
   };
+  function Swill__Ownership(Superclass) {
+    class Swill__Ownership_Layer extends Superclass {
+      each_child(element, callback) {
+        let children = element.children;
+        let index = 0;
+        while (index < children.length) {
+          callback(children[index]);
+          index++;
+        }
+      }
+      // Visit root and its owned descendants. A nested controller root is a
+      // boundary: neither it nor anything inside it belongs to this owner.
+      each_owned(root, callback) {
+        callback(root);
+        return this.each_child(root, (child) => {
+          if (!child.hasAttribute("controller")) return this.each_owned(child, callback);
+        });
+      }
+      owned_matching(root, selector) {
+        let found = [];
+        this.each_owned(root, (element) => {
+          if (element.matches(selector)) return found.push(element);
+        });
+        return found;
+      }
+    }
+    return Swill__Ownership_Layer;
+  }
   var Swill__Responder = class extends Swill__Object {
     next_responder() {
       return null;
     }
+    // Target/action: handle the action here when a generated method with a
+    // compatible arity exists, otherwise continue up the responder chain. An
+    // action nobody handles is an error, not a silent no-op.
     perform_action(name, sender, event) {
-      return Runtime.performAction(this, name, sender, event);
+      if (Runtime.hasAction(this, name)) {
+        return Runtime.performAction(this, name, sender, event);
+      }
+      ;
+      let target = this.next_responder();
+      if (!target) throw new Error(`Unhandled action: ${name}`);
+      return target.perform_action(name, sender, event);
     }
   };
   var Swill__View = class extends Swill__Responder {
@@ -444,6 +486,8 @@
       super();
       this._element = element;
       this._controller = null;
+      this._superview = null;
+      this._subviews = [];
       element.__swill_view__ = this;
     }
     element() {
@@ -456,8 +500,43 @@
       this._controller = controller;
       return this._controller;
     }
+    superview() {
+      return this._superview;
+    }
+    // Adopted child views in adoption order, as a JavaScript array.
+    subviews() {
+      return this._subviews;
+    }
+    // The nearest controller through the sparse tree: this view's own
+    // controller when it is a controller root, else the superview's owner.
+    owner() {
+      let own = this._controller;
+      if (own) return own;
+      let superview = this._superview;
+      return superview ? superview.owner() : null;
+    }
+    adopt_subview(child) {
+      let previous = child.superview();
+      if (previous) previous.release_subview(child);
+      child.assign_superview(this);
+      this._subviews.push(child);
+      return child;
+    }
+    release_subview(child) {
+      this._subviews = this._subviews.filter((candidate) => candidate !== child);
+      return child.assign_superview(null);
+    }
+    remove_from_superview() {
+      let superview = this._superview;
+      if (superview) return superview.release_subview(this);
+    }
+    // Tree-internal; adopt_subview and release_subview keep both sides consistent.
+    assign_superview(superview) {
+      this._superview = superview;
+      return this._superview;
+    }
     next_responder() {
-      return this._controller;
+      return this._controller ?? this._superview;
     }
   };
   var Swill__Controller = class extends Swill__Responder {
@@ -470,13 +549,34 @@
     view() {
       return this._view;
     }
+    // Ownership is derived from the sparse view tree and never stored twice.
+    parent() {
+      let superview = this._view.superview();
+      return superview ? superview.owner() : null;
+    }
+    // Direct child controllers in tree order, as a JavaScript array.
+    child_controllers() {
+      let found = [];
+      this.collect_child_controllers(this._view, found);
+      return found;
+    }
+    next_responder() {
+      return this.parent();
+    }
     register_teardown(dispose) {
       return this._teardowns.push(dispose);
     }
+    // Releases this controller's listeners and observers, then its descendants,
+    // exactly once. The element keeps its View, so the region can be awakened
+    // again later.
     teardown() {
+      if (this._view.controller_value() !== this) return;
       this.view_will_disappear();
-      this._teardowns.forEach((dispose) => dispose.call());
+      this._teardowns.forEach((dispose) => dispose());
       this._teardowns = [];
+      this.dispose();
+      this.child_controllers().forEach((child) => child.teardown());
+      this._view.remove_from_superview();
       this._view.controller = null;
       return this.view_did_disappear();
     }
@@ -501,10 +601,20 @@
     view_did_disappear() {
       return null;
     }
+    collect_child_controllers(view, found) {
+      return view.subviews().forEach((subview) => {
+        let controller = subview.controller_value();
+        if (controller) {
+          found.push(controller);
+        } else {
+          this.collect_child_controllers(subview, found);
+        }
+      });
+    }
   };
   var Swill__Bindings = class extends Swill__Object {
     wire(controller) {
-      controller.view().element().querySelectorAll("[bind]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
+      this.owned_matching(controller.view().element(), "[bind]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
       return controller;
     }
     wire_element(object, element) {
@@ -523,7 +633,7 @@
           return element.textContent = value == null ? "" : value;
         }
       };
-      render.call(null);
+      render(null);
       let dispose = Runtime.observePath(object, path, render);
       let event_name = element.matches("select") || checkbox ? "change" : "input";
       let handler = (event) => {
@@ -532,14 +642,14 @@
       };
       if (writable) element.addEventListener(event_name, handler);
       return () => {
-        dispose.call();
+        dispose();
         if (writable) return element.removeEventListener(event_name, handler);
       };
     }
   };
   var Swill__Actions = class extends Swill__Object {
     wire(controller) {
-      controller.view().element().querySelectorAll("[data-action]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
+      this.owned_matching(controller.view().element(), "[data-action]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
       return controller;
     }
     wire_element(controller, element) {
@@ -566,26 +676,67 @@
     }
   };
   var Swill__Awakening = class extends Swill__Object {
+    // Returns the new controllers in document order. Awakening a fragment that
+    // already sits under a live controller adopts it into that controller.
     wire(root) {
       let controllers = [];
-      root.querySelectorAll("[controller]").forEach((element) => {
-        let name = element.getAttribute("controller");
-        let controller_class = Runtime.resolve(name);
-        let controller = new controller_class();
-        controller.attach(element);
-        controllers.push(controller);
-        this.awaken(controller);
-      });
+      this.walk(
+        root,
+        this.nearest_controller(root.parentElement),
+        controllers
+      );
+      this.each_reversed(controllers, (controller) => this.load(controller));
+      this.each_reversed(
+        controllers,
+        (controller) => controller.controller_did_load()
+      );
+      this.each_reversed(
+        controllers,
+        (controller) => controller.view_will_appear()
+      );
+      this.each_reversed(
+        controllers,
+        (controller) => controller.view_did_appear()
+      );
       return controllers;
     }
-    awaken(controller) {
+    load(controller) {
       controller.view_did_load();
       new Swill__Bindings().wire(controller);
       new Swill__Actions().wire(controller);
-      controller.awake_from_dom();
-      controller.controller_did_load();
-      controller.view_will_appear();
-      return controller.view_did_appear();
+      return controller.awake_from_dom();
+    }
+    walk(element, parent, controllers) {
+      let controller = null;
+      if (element.nodeType === 1 && element.hasAttribute("controller") && !this.controller_for(element)) {
+        let controller_class = Runtime.resolve(element.getAttribute("controller"));
+        controller = new controller_class();
+        controller.attach(element);
+        if (parent) parent.view().adopt_subview(controller.view());
+        controllers.push(controller);
+      }
+      ;
+      let owner = controller ?? parent;
+      return this.each_child(
+        element,
+        (child) => this.walk(child, owner, controllers)
+      );
+    }
+    controller_for(element) {
+      let view = element.__swill_view__;
+      return view ? view.controller_value() : null;
+    }
+    nearest_controller(element) {
+      if (!element) return null;
+      let controller = this.controller_for(element);
+      return controller ? controller : this.nearest_controller(element.parentElement);
+    }
+    each_reversed(controllers, callback) {
+      let index = controllers.length - 1;
+      while (index >= 0) {
+        callback(controllers[index]);
+        index--;
+      }
     }
   };
   function Swill__Model__Attributes(Superclass) {
@@ -644,6 +795,20 @@
           },
           "property_will_change": {
             "arity": 3
+          }
+        }
+      },
+      "Swill::Ownership": {
+        factory: Swill__Ownership,
+        methods: {
+          "each_child": {
+            "arity": 2
+          },
+          "each_owned": {
+            "arity": 2
+          },
+          "owned_matching": {
+            "arity": 2
           }
         }
       },
@@ -709,6 +874,27 @@
           "controller=": {
             "arity": 1
           },
+          "superview": {
+            "arity": 0
+          },
+          "subviews": {
+            "arity": 0
+          },
+          "owner": {
+            "arity": 0
+          },
+          "adopt_subview": {
+            "arity": 1
+          },
+          "release_subview": {
+            "arity": 1
+          },
+          "remove_from_superview": {
+            "arity": 0
+          },
+          "assign_superview": {
+            "arity": 1
+          },
           "next_responder": {
             "arity": 0
           }
@@ -722,6 +908,15 @@
             "arity": 1
           },
           "view": {
+            "arity": 0
+          },
+          "parent": {
+            "arity": 0
+          },
+          "child_controllers": {
+            "arity": 0
+          },
+          "next_responder": {
             "arity": 0
           },
           "register_teardown": {
@@ -750,11 +945,15 @@
           },
           "view_did_disappear": {
             "arity": 0
+          },
+          "collect_child_controllers": {
+            "arity": 2
           }
         }
       },
       "Swill::Bindings": {
         constructor: Swill__Bindings,
+        mixins: [Swill__Ownership],
         properties: {},
         methods: {
           "wire": {
@@ -767,6 +966,7 @@
       },
       "Swill::Actions": {
         constructor: Swill__Actions,
+        mixins: [Swill__Ownership],
         properties: {},
         methods: {
           "wire": {
@@ -779,13 +979,26 @@
       },
       "Swill::Awakening": {
         constructor: Swill__Awakening,
+        mixins: [Swill__Ownership],
         properties: {},
         methods: {
           "wire": {
             "arity": 1
           },
-          "awaken": {
+          "load": {
             "arity": 1
+          },
+          "walk": {
+            "arity": 3
+          },
+          "controller_for": {
+            "arity": 1
+          },
+          "nearest_controller": {
+            "arity": 1
+          },
+          "each_reversed": {
+            "arity": 2
           }
         }
       },

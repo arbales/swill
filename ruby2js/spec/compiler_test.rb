@@ -55,11 +55,18 @@ class CompilerTest < Minitest::Test
         def wire()
           @element.addEventListener("click") { |event| event.preventDefault() }
         end
+
+        def notify(callback, event)
+          callback.(event)
+          @listener.call(event)
+        end
       end
     RUBY
     js = compiler.javascript(runtime: "./runtime.mjs")
     assert_includes js, "constructor(element)"
     assert_match(/this\._element\.addEventListener\(\s*"click"/, js)
+    assert_includes js, "callback(event)"
+    assert_includes js, "this._listener.call(null, event)"
     refute_includes js, "Runtime.read"
     refute_includes js, "ReactiveObject"
   end
@@ -69,6 +76,7 @@ class CompilerTest < Minitest::Test
     %w[
       lib/swill/core/observable.rb
       lib/swill/core/object.rb
+      lib/swill/core/ownership.rb
       lib/swill/core/responder.rb
       lib/swill/core/view.rb
       lib/swill/core/controller.rb
@@ -435,6 +443,33 @@ class CompilerTest < Minitest::Test
     assert_equal ["trimmed", "Ada", "trimmed", "Ada"], execute(js + <<~JS)
       const object = new (Runtime.resolve("Trimmer"))();
       console.log(JSON.stringify([...object.readers(object, " Ada ", object), object.readers(object, "x", " Ada ")[2]]));
+    JS
+  end
+
+  def test_callables_are_invoked_with_their_arguments
+    js = javascript(<<~'RUBY')
+      def run(callback, list)
+        local = ->(value) { value * 2 }
+        results = [callback.call(1), callback.(2), local.(3), @stored.call(4)]
+        list.forEach { |item| results.push(callback.call(item)) }
+        results
+      end
+      def bare(callback)
+        callback.()
+      end
+    RUBY
+    assert_includes js, "callback(1)"
+    assert_includes js, "callback(2)"
+    assert_includes js, "let local = (value) => value * 2"
+    assert_includes js, "local(3)"
+    assert_includes js, "this._stored.call(null, 4)"
+    assert_includes js, "results.push(callback(item))"
+    assert_includes js, "return callback()"
+    refute_includes js, "this.lambda"
+    assert_equal [11, 12, 6, 40, 15, "bare"], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      object._stored = value => value * 10;
+      console.log(JSON.stringify([...object.run(value => value + 10, [5]), object.bare(() => "bare")]));
     JS
   end
 

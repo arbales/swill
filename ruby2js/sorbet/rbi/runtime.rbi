@@ -6,6 +6,9 @@ module Swill
   module Runtime
     extend T::Sig
 
+    sig { params(receiver: T.untyped, name: String).returns(T::Boolean) }
+    def self.hasAction(receiver, name); end
+
     sig { params(receiver: T.untyped, name: String, sender: T.untyped, event: T.untyped).returns(T.untyped) }
     def self.performAction(receiver, name, sender, event); end
 

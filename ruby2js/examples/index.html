@@ -7,7 +7,13 @@
   <label>Name <input bind="person.name"></label>
   <p bind="title"></p>
   <button data-action="clear">Clear person</button>
-  <p>Controller awakening, binding, action, and teardown smoke test.</p>
+  <section controller="Demo::Badge">
+    <p bind="title"></p>
+    <button data-action="bump">Bump badge</button>
+    <button data-action="clear">Reset badge</button>
+    <button data-action="shout">Shout name</button>
+  </section>
+  <p>Nested controller ownership, binding, action, and teardown smoke test.</p>
 </main>
 <script src="../dist/swill.js"></script>
 <script src="../dist/app.js"></script>
@@ -24,7 +30,6 @@ try {
   }, {once: true});
   window.addEventListener("pagehide", () => {
     controller.teardown();
-    controller.dispose();
   }, {once: true});
 } catch (error) {
   document.body.dataset.swillError = error.stack || String(error);

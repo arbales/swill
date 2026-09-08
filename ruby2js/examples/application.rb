@@ -26,5 +26,33 @@ module Demo
       self.person = nil
       title
     end
+
+    # Reached through the responder chain from a nested controller's button.
+    sig { void }
+    def shout
+      current = person
+      current.name = current.name.upcase if current
+    end
+  end
+
+  # A nested controller with the same binding and action names as its parent.
+  class Badge < Swill::Controller
+    extend T::Sig
+
+    property :count, type: Integer, default: 0
+
+    property :title, type: String do
+      "Badge #{count}"
+    end
+
+    sig { void }
+    def bump
+      self.count = count + 1
+    end
+
+    sig { void }
+    def clear
+      self.count = 0
+    end
   end
 end

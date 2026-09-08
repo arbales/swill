@@ -96,6 +96,23 @@ try {
     input.dispatchEvent(new Event("input", {bubbles: true}));
     return document.querySelector("p[bind]").textContent;
   })()`), "Hello Grace");
+  // The nested controller owns its own title binding and clear action; its
+  // unhandled shout action reaches the parent through the responder chain.
+  assert.deepEqual(await evaluate(`(() => {
+    const badge = document.querySelector("section[controller]");
+    const text = () => [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent];
+    const results = [text()];
+    badge.querySelector("[data-action=bump]").click();
+    results.push(text());
+    badge.querySelector("[data-action=clear]").click();
+    results.push(text());
+    badge.querySelector("[data-action=shout]").click();
+    results.push([...text(), document.querySelector("input").value]);
+    return results;
+  })()`), [
+    ["Hello Grace", "Badge 0"], ["Hello Grace", "Badge 1"],
+    ["Hello Grace", "Badge 0"], ["Hello GRACE", "Badge 0", "GRACE"]
+  ]);
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();
     return [document.querySelector("p[bind]").textContent, document.querySelector("input").disabled];
@@ -106,10 +123,14 @@ try {
     input.disabled = false;
     input.value = "Detached";
     input.dispatchEvent(new Event("input"));
+    document.querySelector("section[controller] [data-action=bump]").click();
   })()`);
-  assert.equal(await evaluate('document.querySelector("p[bind]").textContent'), "Nobody");
+  assert.deepEqual(await evaluate(`[
+    document.querySelector("p[bind]").textContent,
+    document.querySelector("section[controller] p[bind]").textContent
+  ]`), ["Nobody", "Badge 0"]);
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: generated lookup, input/computed binding, action, and teardown passed.");
+  console.log("Chrome: generated lookup, nested ownership, bindings, actions, responder chain, and teardown passed.");
 } finally {
   clearTimeout(timeout);
   socket?.close();

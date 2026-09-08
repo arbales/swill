@@ -4,10 +4,11 @@
 module Swill
   class Actions < Swill::Object
     extend T::Sig
+    include Ownership
 
     sig { params(controller: Controller).returns(Controller) }
     def wire(controller)
-      controller.view().element().querySelectorAll("[data-action]").forEach do |element|
+      owned_matching(controller.view().element(), "[data-action]").forEach do |element|
         controller.register_teardown(wire_element(controller, element))
       end
       controller
