@@ -74,7 +74,7 @@ Commit `Gemfile.lock` after verification.
 | Path | Responsibility |
 | --- | --- |
 | `lib/swill/` | Ruby-authored framework code |
-| `lib/swill/runtime.mjs` | Browser runtime and stateful framework protocols |
+| `lib/swill/runtime.mjs` | Browser state, metadata installation, and dynamic key paths |
 | `lib/swill-ruby2js/` | Compiler integration, filters, metadata, RBIs, and probes |
 | `spec/mri_adapter.rb` | MRI adapter to the Opal observable implementation |
 | `spec/` | Compiler, MRI, runtime, bundle, and browser checks |
@@ -149,6 +149,18 @@ Computed properties capture dependencies. Branch changes replace subscriptions.
 Bindings use the same property protocol and validate writers. Drafts copy
 declared attributes but not subscriptions. Disposal releases dependencies and
 observers.
+
+### DOM boundaries
+
+`Swill::Bindings`, `Swill::Actions`, and `Swill::Awakening` are Ruby-authored
+framework classes compiled with the JavaScript-only surface. DOM traversal,
+control rendering, event selection, action parsing, and listener ownership stay
+in those classes. The handwritten runtime only resolves metadata-aware key paths
+and dispatches generated method names.
+
+Current value bindings support text content, text controls, selects, checkboxes,
+readonly controls, nested observable paths, and teardown. Actions default to
+`click`; `event:action` selects another DOM event.
 
 ## Supported Ruby policy
 
@@ -246,14 +258,16 @@ The implementation covers:
 - static classes, inheritance, method-only mixins, and native `super`;
 - typed properties, attributes, computed values, and inherited defaults;
 - class settings and inheritable registries;
-- mutation hooks, observation, bindings, drafts, and disposal;
-- compiled object, responder, view, controller, and awakening framework slices;
+- mutation hooks, observation, value bindings, actions, drafts, and disposal;
+- compiled object, responder, view, controller, bindings, actions, and awakening
+  framework slices;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
-runtime Sorbet operations, dynamic class mutation, or a complete Awakening and
-model-layer port. Unsupported forms fail compilation.
+runtime Sorbet operations, dynamic class mutation, `bind-*` DOM property
+bindings, nested controller ownership, or a complete Awakening and model-layer
+port. Unsupported forms fail compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.

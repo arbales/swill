@@ -64,6 +64,32 @@ class CompilerTest < Minitest::Test
     refute_includes js, "ReactiveObject"
   end
 
+  def test_binding_and_action_dom_behavior_is_compiled_from_framework_ruby
+    compiler = Swill::Ruby2JS::Compiler.new
+    %w[
+      lib/swill/core/observable.rb
+      lib/swill/core/object.rb
+      lib/swill/core/responder.rb
+      lib/swill/core/view.rb
+      lib/swill/core/controller.rb
+      lib/swill/core/bindings.rb
+      lib/swill/core/actions.rb
+      lib/swill/core/awakening.rb
+    ].each do |path|
+      compiler.add(File.read(path), file: path, javascript_only: true)
+    end
+
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "class Swill__Bindings extends Swill__Object"
+    assert_includes js, "Runtime.observePath(object, path, render)"
+    assert_includes js, "Runtime.isTruthy(value)"
+    assert_includes js, "element.addEventListener(event_name, handler)"
+    assert_includes js, "class Swill__Actions extends Swill__Object"
+    assert_includes js, "controller.perform_action(action_name, element, event)"
+    assert_includes js, "new Swill__Bindings().wire(controller)"
+    assert_includes js, "new Swill__Actions().wire(controller)"
+  end
+
   def test_runtime_sorbet_constructs_are_not_silently_erased
     %w[must cast let unsafe].each do |operation|
       assert_raises(Spike::CompileError) { javascript("def name; T.#{operation}(nil); end") }
@@ -195,6 +221,46 @@ class CompilerTest < Minitest::Test
         RUBY
       end
     end
+  end
+
+  def test_modules_can_be_mixins_and_namespaces_at_the_same_time
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Feature
+        def label; "feature"; end
+
+        class Helper < TestObject
+          def label; "helper"; end
+        end
+      end
+
+      module Namespace
+        class Record < TestObject
+          def label; "record"; end
+        end
+      end
+
+      class Example < TestObject
+        include Feature
+        def helper_label; Feature::Helper.new.label; end
+        def record_label; Namespace::Record.new.label; end
+      end
+    RUBY
+
+    entries = compiler.knowledge.local.to_h { |entry| [entry["name"], entry["kind"]] }
+    assert_equal({
+      "TestObject" => "class",
+      "Feature" => "mixin",
+      "Feature::Helper" => "class",
+      "Namespace::Record" => "class",
+      "Example" => "class"
+    }, entries)
+    refute entries.key?("Namespace")
+
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.label(), object.helper_label(), object.record_label()]));
+    JS
+    assert_equal ["feature", "helper", "record"], execute(js)
   end
 
   def test_unsupported_reflection_is_a_build_error

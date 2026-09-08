@@ -9,6 +9,8 @@
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
   var Swill__Controller = framework.Swill__Controller;
+  var Swill__Bindings = framework.Swill__Bindings;
+  var Swill__Actions = framework.Swill__Actions;
   var Swill__Awakening = framework.Swill__Awakening;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
@@ -92,6 +94,9 @@
   var OtherConcernRecord = class extends Swill__Object {
   };
   var Demo__Controller = class extends Swill__Controller {
+    view_did_load() {
+      return this.person = new Demo__Person();
+    }
     clear() {
       this.person = null;
       return this.title;
@@ -315,6 +320,9 @@
           }
         },
         methods: {
+          "view_did_load": {
+            "arity": 0
+          },
           "clear": {
             "arity": 0
           }

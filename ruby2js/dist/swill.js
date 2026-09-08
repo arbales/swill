@@ -302,6 +302,9 @@
     readPath(object, path) {
       return path.split(".").reduce((owner, name) => this.read(owner, name), object);
     },
+    assertWritablePath(object, path) {
+      if (!pathWriter(object, path)) throw new Error(`Unavailable binding owner: ${path}`);
+    },
     writePath(object, path, value) {
       const writer = pathWriter(object, path);
       if (!writer) throw new Error(`Unavailable binding owner: ${path}`);
@@ -373,30 +376,15 @@
         }
       }
       return object;
-    },
-    // DOM binding primitive used by the compiled Awakening/browser slice.
-    bindElement(object, path, element, { twoWay = false } = {}) {
-      if (twoWay) pathWriter(object, path);
-      const render = () => {
-        const value = this.readPath(object, path);
-        if (twoWay) element.value = value ?? "";
-        else element.textContent = value ?? "";
-      };
-      render();
-      const dispose = this.observePath(object, path, render);
-      const input = () => this.writePath(object, path, element.value);
-      if (twoWay) element.addEventListener("input", input);
-      return () => {
-        dispose();
-        if (twoWay) element.removeEventListener("input", input);
-      };
     }
   };
 
   // build/framework.classes.mjs
   var framework_classes_exports = {};
   __export(framework_classes_exports, {
+    Swill__Actions: () => Swill__Actions,
     Swill__Awakening: () => Swill__Awakening,
+    Swill__Bindings: () => Swill__Bindings,
     Swill__Controller: () => Swill__Controller,
     Swill__Model__Attributes: () => Swill__Model__Attributes,
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
@@ -497,6 +485,69 @@
       return null;
     }
   };
+  var Swill__Bindings = class extends Swill__Object {
+    wire(controller) {
+      controller.view().element().querySelectorAll("[bind]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
+      return controller;
+    }
+    wire_element(object, element) {
+      let path = element.getAttribute("bind");
+      let form_control = element.matches("input, textarea, select");
+      let writable = form_control && !element.hasAttribute("readonly");
+      let checkbox = element.type === "checkbox";
+      if (writable) Runtime.assertWritablePath(object, path);
+      let render = (_value) => {
+        let value = Runtime.readPath(object, path);
+        if (checkbox) {
+          return element.checked = Runtime.isTruthy(value);
+        } else if (form_control) {
+          return element.value = value == null ? "" : value;
+        } else {
+          return element.textContent = value == null ? "" : value;
+        }
+      };
+      render.call(null);
+      let dispose = Runtime.observePath(object, path, render);
+      let event_name = element.matches("select") || checkbox ? "change" : "input";
+      let handler = (event) => {
+        let value = checkbox ? element.checked : element.value;
+        return Runtime.writePath(object, path, value);
+      };
+      if (writable) element.addEventListener(event_name, handler);
+      return () => {
+        dispose.call();
+        if (writable) return element.removeEventListener(event_name, handler);
+      };
+    }
+  };
+  var Swill__Actions = class extends Swill__Object {
+    wire(controller) {
+      controller.view().element().querySelectorAll("[data-action]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
+      return controller;
+    }
+    wire_element(controller, element) {
+      let event_name, action_name;
+      if (element.__swill_action__) return () => null;
+      let specification = element.getAttribute("data-action").trim();
+      if (specification.length === 0) return () => null;
+      let separator = specification.indexOf(":");
+      if (separator >= 0) {
+        event_name = specification.slice(0, separator);
+        action_name = specification.slice(separator + 1);
+      } else {
+        event_name = "click";
+        action_name = specification;
+      }
+      ;
+      let handler = (event) => controller.perform_action(action_name, element, event);
+      element.__swill_action__ = true;
+      element.addEventListener(event_name, handler);
+      return () => {
+        element.removeEventListener(event_name, handler);
+        return element.__swill_action__ = false;
+      };
+    }
+  };
   var Swill__Awakening = class extends Swill__Object {
     wire(root) {
       let controllers = [];
@@ -507,24 +558,17 @@
         controller.attach(element);
         controllers.push(controller);
         this.awaken(controller);
-        this.wire_actions(controller);
       });
       return controllers;
     }
     awaken(controller) {
       controller.view_did_load();
+      new Swill__Bindings().wire(controller);
+      new Swill__Actions().wire(controller);
       controller.awake_from_dom();
       controller.controller_did_load();
       controller.view_will_appear();
       return controller.view_did_appear();
-    }
-    wire_actions(controller) {
-      return controller.view().element().querySelectorAll("[data-action]").forEach((element) => {
-        let action = element.getAttribute("data-action");
-        let handler = (event) => controller.perform_action(action, element, event);
-        element.addEventListener("click", handler);
-        controller.register_teardown(() => element.removeEventListener("click", handler));
-      });
     }
   };
   function Swill__Model__Attributes(Superclass) {
@@ -692,6 +736,30 @@
           }
         }
       },
+      "Swill::Bindings": {
+        constructor: Swill__Bindings,
+        properties: {},
+        methods: {
+          "wire": {
+            "arity": 1
+          },
+          "wire_element": {
+            "arity": 2
+          }
+        }
+      },
+      "Swill::Actions": {
+        constructor: Swill__Actions,
+        properties: {},
+        methods: {
+          "wire": {
+            "arity": 1
+          },
+          "wire_element": {
+            "arity": 2
+          }
+        }
+      },
       "Swill::Awakening": {
         constructor: Swill__Awakening,
         properties: {},
@@ -700,9 +768,6 @@
             "arity": 1
           },
           "awaken": {
-            "arity": 1
-          },
-          "wire_actions": {
             "arity": 1
           }
         }

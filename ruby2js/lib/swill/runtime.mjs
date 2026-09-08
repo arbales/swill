@@ -333,6 +333,10 @@ export const Runtime = {
     return path.split(".").reduce((owner, name) => this.read(owner, name), object);
   },
 
+  assertWritablePath(object, path) {
+    if (!pathWriter(object, path)) throw new Error(`Unavailable binding owner: ${path}`);
+  },
+
   writePath(object, path, value) {
     const writer = pathWriter(object, path);
     if (!writer) throw new Error(`Unavailable binding owner: ${path}`);
@@ -411,23 +415,5 @@ export const Runtime = {
       }
     }
     return object;
-  },
-
-  // DOM binding primitive used by the compiled Awakening/browser slice.
-  bindElement(object, path, element, {twoWay = false} = {}) {
-    if (twoWay) pathWriter(object, path);
-    const render = () => {
-      const value = this.readPath(object, path);
-      if (twoWay) element.value = value ?? "";
-      else element.textContent = value ?? "";
-    };
-    render();
-    const dispose = this.observePath(object, path, render);
-    const input = () => this.writePath(object, path, element.value);
-    if (twoWay) element.addEventListener("input", input);
-    return () => {
-      dispose();
-      if (twoWay) element.removeEventListener("input", input);
-    };
   }
 };

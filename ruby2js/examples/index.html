@@ -17,16 +17,11 @@ try {
   const root = document.querySelector("[controller]");
   const awakening = new (Runtime.resolve("Swill::Awakening"))();
   const [controller] = awakening.wire(document);
-  controller.person = new (Runtime.resolve("Demo::Person"))();
   controller.person.name = "Ada";
-  const disposers = [...root.querySelectorAll("[bind]")].map(element =>
-    Runtime.bindElement(controller, element.getAttribute("bind"), element, {twoWay: element.matches("input")})
-  );
   const button = root.querySelector("[data-action]");
   button.addEventListener("click", () => {
     root.querySelector("input").disabled = true;
   }, {once: true});
-  disposers.forEach(dispose => controller.register_teardown(dispose));
   window.addEventListener("pagehide", () => {
     controller.teardown();
     controller.dispose();

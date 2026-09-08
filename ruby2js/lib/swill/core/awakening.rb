@@ -16,7 +16,6 @@ module Swill
         controllers.push(controller)
 
         awaken(controller)
-        wire_actions(controller)
       end
       controllers
     end
@@ -24,22 +23,12 @@ module Swill
     sig { params(controller: Controller).void }
     def awaken(controller)
       controller.view_did_load
+      Bindings.new.wire(controller)
+      Actions.new.wire(controller)
       controller.awake_from_dom
       controller.controller_did_load
       controller.view_will_appear
       controller.view_did_appear
-    end
-
-    sig { params(controller: Controller).void }
-    def wire_actions(controller)
-      controller.view().element().querySelectorAll("[data-action]").forEach do |element|
-        action = element.getAttribute("data-action")
-        handler = ->(event) { controller.perform_action(action, element, event) }
-        element.addEventListener("click", handler)
-        controller.register_teardown(
-          ->() { element.removeEventListener("click", handler) }
-        )
-      end
     end
   end
 end

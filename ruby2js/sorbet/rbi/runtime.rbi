@@ -9,8 +9,23 @@ module Swill
     sig { params(receiver: T.untyped, name: String, sender: T.untyped, event: T.untyped).returns(T.untyped) }
     def self.performAction(receiver, name, sender, event); end
 
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.isTruthy(value); end
+
     sig { params(name: T.untyped).returns(T.untyped) }
     def self.resolve(name); end
+
+    sig { params(object: T.untyped, path: String).returns(T.untyped) }
+    def self.readPath(object, path); end
+
+    sig { params(object: T.untyped, path: String, value: T.untyped).returns(T.untyped) }
+    def self.writePath(object, path, value); end
+
+    sig { params(object: T.untyped, path: String).void }
+    def self.assertWritablePath(object, path); end
+
+    sig { params(object: T.untyped, path: String, callback: T.proc.params(value: T.untyped).void).returns(T.proc.void) }
+    def self.observePath(object, path, callback); end
 
     sig { params(object: T.untyped, name: T.any(Symbol, String), callback: T.proc.params(value: T.untyped).void).returns(T.proc.void) }
     def self.observe(object, name, callback); end

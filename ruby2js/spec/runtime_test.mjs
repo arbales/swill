@@ -9,6 +9,8 @@ const SwillObject = Runtime.resolve("Swill::Object");
 const Person = Runtime.resolve("Demo::Person");
 const SpecialPerson = Runtime.resolve("Demo::SpecialPerson");
 const Controller = Runtime.resolve("Demo::Controller");
+const Bindings = Runtime.resolve("Swill::Bindings");
+const Actions = Runtime.resolve("Swill::Actions");
 
 test("real Attributes concern builds isolated inherited registries", () => {
   const Base = Runtime.resolve("Swill::Model::Base");
@@ -198,13 +200,30 @@ test("action dispatch uses generated method names and validates arity", () => {
   assert.throws(() => Runtime.performAction(controller, "toString", {}, {}), /Unknown action/);
 });
 
-test("DOM-shaped bindings are two-way and release listeners", () => {
-  class Element extends EventTarget { value = ""; textContent = ""; }
+test("compiled bindings are two-way, validate writers, and release listeners", () => {
+  class Element extends EventTarget {
+    value = "";
+    textContent = "";
+    checked = false;
+
+    constructor(attributes, tagName = "DIV", type = "") {
+      super();
+      this.attributes = attributes;
+      this.tagName = tagName;
+      this.type = type;
+    }
+
+    getAttribute(name) { return this.attributes[name] ?? null; }
+    hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
+    matches(selector) { return selector.toLowerCase().split(", ").includes(this.tagName.toLowerCase()); }
+  }
+
   const person = new Person();
-  const input = new Element();
-  const output = new Element();
-  const unbindInput = Runtime.bindElement(person, "name", input, {twoWay: true});
-  const unbindOutput = Runtime.bindElement(person, "label", output);
+  const input = new Element({bind: "name"}, "INPUT");
+  const output = new Element({bind: "label"});
+  const bindings = new Bindings();
+  const unbindInput = bindings.wire_element(person, input);
+  const unbindOutput = bindings.wire_element(person, output);
   input.value = "Ada";
   input.dispatchEvent(new Event("input"));
   assert.equal(person.name, "Ada");
@@ -218,7 +237,61 @@ test("DOM-shaped bindings are two-way and release listeners", () => {
   person.name = "Grace";
   assert.equal(output.textContent, "ADA");
   assert.equal(input.value, "Ignored");
-  assert.throws(() => Runtime.bindElement(person, "label", input, {twoWay: true}), /Read-only/);
+  assert.throws(
+    () => bindings.wire_element(person, new Element({bind: "label"}, "INPUT")),
+    /Read-only/
+  );
+  const readonly = new Element({bind: "label", readonly: ""}, "INPUT");
+  const unbindReadonly = bindings.wire_element(person, readonly);
+  assert.equal(readonly.value, "GRACE");
+  readonly.value = "Ignored";
+  readonly.dispatchEvent(new Event("input"));
+  assert.equal(person.name, "Grace");
+  unbindReadonly();
+
+  const checkbox = new Element({bind: "loud"}, "INPUT", "checkbox");
+  const unbindCheckbox = bindings.wire_element(person, checkbox);
+  assert.equal(checkbox.checked, true);
+  checkbox.checked = false;
+  checkbox.dispatchEvent(new Event("change"));
+  assert.equal(person.loud, false);
+  unbindCheckbox();
+
+  const controller = new Controller();
+  assert.throws(
+    () => bindings.wire_element(controller, new Element({bind: "person.name"}, "INPUT")),
+    /Unavailable binding owner/
+  );
+  assert.equal(Runtime.bindElement, undefined);
+});
+
+test("compiled actions parse event prefixes and release listeners", () => {
+  class Element extends EventTarget {
+    constructor(action) {
+      super();
+      this.attributes = {"data-action": action};
+    }
+
+    getAttribute(name) { return this.attributes[name] ?? null; }
+  }
+
+  const controller = new Controller();
+  const element = new Element("change:clear");
+  const actions = new Actions();
+  controller.person = new Person();
+  const dispose = actions.wire_element(controller, element);
+  element.dispatchEvent(new Event("click"));
+  assert.ok(controller.person instanceof Person);
+  element.dispatchEvent(new Event("change"));
+  assert.equal(controller.person, null);
+  controller.person = new Person();
+  dispose();
+  element.dispatchEvent(new Event("change"));
+  assert.ok(controller.person instanceof Person);
+  assert.equal(element.__swill_action__, false);
+  const blank = new Element(" ");
+  actions.wire_element(controller, blank)();
+  assert.equal(blank.__swill_action__, undefined);
 });
 
 test("the shared setter coerces before equality and invalidates before hooks", () => {

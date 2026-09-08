@@ -95,20 +95,24 @@ module Swill
         if node.type == :module
           name, body = node.children
           children = statements(body)
-          has_class_methods = children.any? do |child|
-            child.type == :module && constant(child.children.first) == "ClassMethods"
-          end
-          if children.any? { |child| %i[class module].include?(child.type) } && !has_class_methods
-            collect_scope(children, scope + [constant(name)], javascript_only)
-          else
-            collect_entry(node, scope, "mixin", javascript_only)
-          end
+          nested = children.select { |child| namespace_declaration?(child) }
+          # A Ruby module can provide mixin behavior and own nested constants.
+          # Collect those two roles independently instead of treating the
+          # presence of any nested declaration as proof that it is only a
+          # namespace. Empty modules remain valid (inert) mixins.
+          collect_entry(node, scope, "mixin", javascript_only) if children.empty? || nested.length != children.length
+          collect_scope(nested, scope + [constant(name)], javascript_only)
         elsif node.type == :class
           collect_entry(node, scope, "class", javascript_only)
         else
           raise CompileError, "unsupported top-level #{node.type}: #{node.loc.expression.source}"
         end
       end
+    end
+
+    def namespace_declaration?(node)
+      return true if node.type == :class
+      node.type == :module && constant(node.children.first) != "ClassMethods"
     end
 
     def collect_entry(node, scope, kind, javascript_only)
@@ -164,6 +168,8 @@ module Swill
         elsif child.type == :module && kind == "mixin" &&
               constant(child.children.first) == "ClassMethods"
           collect_class_methods(entry, child)
+        elsif kind == "mixin" && namespace_declaration?(child)
+          # collect_scope records nested constants as their own entries.
         elsif declaration?(child)
           collect_property(entry, child)
         else

@@ -13,6 +13,8 @@ def compile_spike
     lib/swill/core/responder.rb
     lib/swill/core/view.rb
     lib/swill/core/controller.rb
+    lib/swill/core/bindings.rb
+    lib/swill/core/actions.rb
     lib/swill/core/awakening.rb
   ].each do |path|
     framework.add(File.read(path), file: path, javascript_only: true)

@@ -16,6 +16,11 @@ module Demo
       end
     end
 
+    sig { void }
+    def view_did_load
+      self.person = Demo::Person.new
+    end
+
     sig { returns(String) }
     def clear()
       self.person = nil
