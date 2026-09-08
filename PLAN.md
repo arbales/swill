@@ -178,7 +178,7 @@ For every roadmap item:
 
 8. Regenerate and review both readable and minified artifacts, including source
    maps and bundle-size output.
-9. Update `ruby2js/README.md` when the supported boundary changes.
+9. Update `ruby2js/docs/compiler.md` when the supported boundary changes.
 
 ## Decision Checkpoints
 

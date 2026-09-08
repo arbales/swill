@@ -78,8 +78,8 @@
       coerce_property_value(name, value, previous) {
         value = super.coerce_property_value(name, value, previous);
         if (name === "name") {
-          value = Runtime.strip(value);
-          if (value === "") throw "name must not be blank";
+          value = Runtime.read(value, "strip");
+          if (value === "") throw new Error("name must not be blank");
         }
         ;
         return value;

@@ -12,7 +12,7 @@ module Swill
   class CompileError < StandardError; end
 
   # Intrinsics introduced by built-in filters must not capture source classes.
-  JS_INTRINSICS = %w[Object Array String Number Math JSON].freeze
+  JS_INTRINSICS = %w[Object Array String Number Math JSON Error].freeze
 
   # The experiment deliberately accepts a finite, inspectable class-body DSL.
   # Never execute application Ruby to discover its declarations.
@@ -81,11 +81,33 @@ module Swill
     end
 
     def method_defined?(type, method)
+      !method_entry(type, method).nil?
+    end
+
+    # Ruby lookup order over collected facts: the class or mixin itself, then
+    # its included mixins (nearest first), then the superclass.
+    def method_entry(type, method)
       entry = entries.find { |candidate| candidate["name"] == type }
-      return false unless entry
-      return true if entry["methods"].any? { |candidate| candidate["name"] == method.to_s }
-      return false unless entry["parent"]
-      method_defined?(resolve(entry["parent"], entry["scope"]), method)
+      return nil unless entry
+      found = entry["methods"].find { |candidate| candidate["name"] == method.to_s }
+      return found if found
+      entry["includes"].reverse_each do |name|
+        found = method_entry(resolve(name, entry["scope"]), method)
+        return found if found
+      end
+      return nil unless entry["parent"]
+      method_entry(resolve(entry["parent"], entry["scope"]), method)
+    end
+
+    def property_entry(type, name)
+      entry = entries.find { |candidate| candidate["name"] == type }
+      return nil unless entry
+      found = (entry["properties"] + entry.fetch("included_properties", [])).find do |property|
+        property["name"] == name.to_s
+      end
+      return found if found
+      return nil unless entry["parent"]
+      property_entry(resolve(entry["parent"], entry["scope"]), name)
     end
 
     private
@@ -141,7 +163,8 @@ module Swill
           entry["methods"] << {
             "name" => method.to_s, "js" => self.class.member(method),
             "arity" => args.children.length,
-            "parameters" => signature_parameters(pending_signature)
+            "parameters" => signature_parameters(pending_signature),
+            "returns" => signature_return(pending_signature)
           }
           pending_signature = nil
         elsif signature?(child)
@@ -273,6 +296,26 @@ module Swill
       end.compact
     end
 
+    def signature_return(signature)
+      return nil unless signature
+      body = signature.children.last
+      return "void" if find_send(body, :void)
+      returns = find_send(body, :returns)
+      returns&.children&.fetch(2, nil)&.loc&.expression&.source
+    end
+
+    # The block body from its first expression to its closer, including
+    # trailing comments where type pragmas live. Only expression ranges are
+    # used: the parser gem and Ruby2JS's Prism walker both provide them, while
+    # their opener/closer token locations differ.
+    def block_body_source(node)
+      range = node.loc.expression
+      body = node.children.last
+      return "nil" unless body
+      closer = range.source.end_with?("}") ? 1 : 3
+      range.class.new(range.source_buffer, body.loc.expression.begin_pos, range.end_pos - closer).source
+    end
+
     def find_send(node, method)
       return unless node.respond_to?(:children)
       return node if node.type == :send && node.children[1] == method
@@ -345,10 +388,24 @@ module Swill
         "name" => name.children.first.to_s, "js" => self.class.member(name.children.first),
         "type" => type, "attribute" => macro == :attribute, "computed" => computed,
         # Include comments after the final expression, where type pragmas live.
-        "expression" => computed ? node.loc.begin.end.join(node.loc.end.begin).source : (default&.loc&.expression&.source || "nil")
+        "expression" => computed ? block_body_source(node) : (default&.loc&.expression&.source || "nil")
       }
       property["key"] = wire_key ? wire_key.children.first.to_s : name.children.first.to_s if macro == :attribute
       entry["properties"] << property
+    end
+  end
+
+  # Ruby exceptions become JavaScript Error objects so browsers keep stack
+  # traces and callers can tell errors from thrown values. Only a literal
+  # message is supported; other forms fail closed.
+  module RaiseLowering
+    include ::Ruby2JS::Filter::SEXP
+
+    def lower_raise(args)
+      unless args.length == 1 && %i[str dstr].include?(args.first.type)
+        raise CompileError, "raise supports only a literal message string"
+      end
+      s(:send, nil, :raise, s(:const, nil, :Error), process(args.first))
     end
   end
 
@@ -359,6 +416,9 @@ module Swill
     # Wrap the built-in so framework properties and Ruby semantics take priority
     # over its type inference. Unhandled nodes flow through Pragma via super.
     include ::Ruby2JS::Filter::Pragma
+    include RaiseLowering
+
+    STRING_READERS = {strip: :strip, upcase: :upcase, downcase: :downcase, blank?: :isBlank}.freeze
 
     def options=(options)
       super
@@ -395,6 +455,8 @@ module Swill
       name, args, body = node.children
       method = @entry["methods"].find { |candidate| candidate["name"] == name.to_s }
       previous = @local_types
+      previous_method = @current_method
+      @current_method = method
       @local_types = method ? method["parameters"].dup : {}
       infer_local_types(body).each do |local, type|
         @local_types[local] = type
@@ -403,6 +465,7 @@ module Swill
       super(node.updated(:defm, [Knowledge.member(name).to_sym, args, body]))
     ensure
       @local_types = previous
+      @current_method = previous_method
     end
 
     def on_const(node)
@@ -433,12 +496,9 @@ module Swill
 
     def on_send(node)
       receiver, method, *args = node.children
+      return lower_raise(args) if receiver.nil? && method == :raise
       if receiver&.type == :self && method == :class && args.empty?
         return s(:attr, s(:self), :constructor)
-      end
-      if %i[strip upcase downcase blank?].include?(method) && args.empty? && receiver
-        runtime_method = method == :blank? ? :isBlank : method
-        return s(:call, s(:const, nil, :Runtime), runtime_method, process(receiver))
       end
       if %i[== !=].include?(method)
         right = args.fetch(0)
@@ -451,10 +511,8 @@ module Swill
       if method == :!
         return s(:send, ruby_truthy(receiver), :!)
       end
-      if receiver && receiver.type != :self && @all_properties.include?(method.to_s) && args.empty?
-        # The receiver's class may only become known at runtime. A name used
-        # for a property elsewhere may be an ordinary method on this object.
-        return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, method.to_s))
+      if receiver && receiver.type != :self
+        return receiver_send(receiver, method, args) || super
       end
       if @properties.include?(method.to_s) && args.empty?
         return s(:attr, receiver ? process(receiver) : s(:self), Knowledge.member(method).to_sym)
@@ -466,6 +524,60 @@ module Swill
     end
 
     private
+
+    # Static facts choose the operation. A receiver whose class is known gets
+    # direct property access or a direct call; a String receiver gets the
+    # shared value readers; only a receiver with no static type reaches the
+    # runtime reader, which is the same dynamic path bindings use.
+    def receiver_send(receiver, method, args)
+      name = method.to_s
+      setter = name.match?(/\A[a-z_]\w*=\z/) && args.length == 1
+      base = name.delete_suffix("=")
+      type = static_type(receiver)
+      if (klass = swill_class(type))
+        if args.empty? && @knowledge.property_entry(klass, name)
+          return s(:attr, process(receiver), Knowledge.member(method).to_sym)
+        end
+        if setter && @knowledge.property_entry(klass, base)
+          return s(:send, process(receiver), method, process(args.first))
+        end
+        if @knowledge.method_entry(klass, name)
+          return s(:call, process(receiver), Knowledge.member(method).to_sym, *process_all(args))
+        end
+        return nil
+      end
+      if string_type?(type)
+        reader = STRING_READERS[method]
+        return reader && args.empty? ? s(:call, s(:const, nil, :Runtime), reader, process(receiver)) : nil
+      end
+      return nil unless type.nil? || type == "T.untyped"
+      if args.empty? && (@all_properties.include?(name) || STRING_READERS.key?(method))
+        return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, name))
+      end
+      if setter && @all_properties.include?(base)
+        return s(:call, s(:const, nil, :Runtime), :write, process(receiver), s(:str, base), process(args.first))
+      end
+      nil
+    end
+
+    def swill_class(type)
+      return nil unless type
+      name = type.sub(/\AT\.nilable\((.+)\)\z/, '\1')
+      return nil unless name.match?(/\A[A-Z]\w*(?:::\w+)*\z/)
+      resolved = @knowledge.resolve(name, @entry["name"].split("::"))
+      @knowledge.entries.any? { |entry| entry["name"] == resolved } ? resolved : nil
+    rescue CompileError
+      nil
+    end
+
+    def string_type?(type)
+      %w[String T.nilable(String)].include?(type)
+    end
+
+    def return_type(method)
+      type = method && method["returns"]
+      type == "void" ? nil : type
+    end
 
     def infer_local_types(node)
       all_assignments = Hash.new { |hash, name| hash[name] = [] }
@@ -525,15 +637,28 @@ module Swill
     def static_type(node)
       return unless node.respond_to?(:type)
       return literal_type(node) if literal_type(node)
-      return @local_types[node.children.first.to_s] if node.type == :lvar
-      return "T::Boolean" if node.type == :send && %i[== != !].include?(node.children[1])
-      if node.type == :send
+      case node.type
+      when :dstr then "String"
+      when :begin then node.children.length == 1 ? static_type(node.children.first) : nil
+      when :lvar then @local_types[node.children.first.to_s]
+      when :super, :zsuper then return_type(@current_method)
+      when :send
         receiver, method, *args = node.children
-        if args.empty? && (receiver.nil? || receiver.type == :self)
-          return @property_types[method.to_s]
+        return "T::Boolean" if %i[== != !].include?(method)
+        if receiver.nil? || receiver.type == :self
+          return @property_types[method.to_s] if args.empty? && @property_types.key?(method.to_s)
+          return return_type(@knowledge.method_entry(@entry["name"], method))
         end
+        receiver_type = static_type(receiver)
+        if string_type?(receiver_type) && args.empty? && STRING_READERS.key?(method)
+          return method == :blank? ? "T::Boolean" : "String"
+        end
+        klass = swill_class(receiver_type)
+        return nil unless klass
+        property = @knowledge.property_entry(klass, method)
+        return property["type"] if property && args.empty?
+        return_type(@knowledge.method_entry(klass, method))
       end
-      nil
     end
 
     def truthiness_kind(type)
@@ -544,6 +669,7 @@ module Swill
         return %w[String Integer Symbol].include?(match[1]) ? :nullable_scalar : :native
       end
       return :scalar if %w[String Integer Symbol].include?(type)
+      return :native if type.start_with?("T::Array[", "T::Hash[")
       return :native if type.match?(/\A(?:Array|Hash|[A-Z]\w*(?:::\w+)*)\z/)
       :unknown
     end
@@ -584,8 +710,18 @@ module Swill
       node && (%i[lvar str int true false nil sym].include?(node.type))
     end
 
+    # Ruby == is identity for framework objects and value equality for scalars,
+    # which JavaScript === also provides. Everything else needs isEqual.
     def native_equality?(left_type, right_type)
-      [left_type, right_type].any? { |type| type && type != "Array" && type != "T.untyped" }
+      [left_type, right_type].any? { |type| identity_comparable?(type) }
+    end
+
+    def identity_comparable?(type)
+      return false unless type
+      return true if %w[String Integer Float Symbol T::Boolean NilClass].include?(type)
+      inner = type[/\AT\.nilable\((.+)\)\z/, 1]
+      return identity_comparable?(inner) if inner
+      !swill_class(type).nil?
     end
 
     def deferred(value)
@@ -615,6 +751,7 @@ module Swill
   # collision-safe class names.
   module JavaScriptSurface
     include ::Ruby2JS::Filter::SEXP
+    include RaiseLowering
 
     def options=(options)
       super
@@ -651,6 +788,7 @@ module Swill
 
     def on_send(node)
       receiver, method, *args = node.children
+      return lower_raise(args) if receiver.nil? && method == :raise
       ruby_call =
         if receiver.nil?
           @knowledge.method_defined?(@entry["name"], method)
@@ -679,6 +817,7 @@ module Swill
     private
 
     def resolve_parameter_class(type)
+      type = type.sub(/\AT\.nilable\((.+)\)\z/, '\1')
       return unless type.match?(/\A[A-Z]\w*(?:::\w+)*\z/)
       @knowledge.resolve(type, @entry["scope"])
     rescue CompileError
@@ -940,8 +1079,12 @@ module Swill
       filters = entry["javascript_only"] ?
         [JavaScriptSurface, ::Ruby2JS::Filter::Return] :
         [RubySurface, ::Ruby2JS::Filter::Return, RubyCalls]
+      # Shared Ruby chooses operators from static types, so a native `||`
+      # must stay logical: `false ?? x` would keep Ruby's falsy value. The
+      # JavaScript-only surface keeps Ruby2JS's own operator selection.
       ::Ruby2JS.convert(source, filters: filters,
                       eslevel: 2022, comparison: :identity, truthy: :js,
+                      **(entry["javascript_only"] ? {} : {or: :logical}),
                       underscored_private: true,
                       knowledge: knowledge, spike_scope: entry["scope"],
                       entry: entry,

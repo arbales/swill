@@ -292,6 +292,7 @@
     },
     read(object, name) {
       if (object == null) return null;
+      if (typeof object !== "object" && typeof object !== "function") return this.valueRead(object, name);
       const property = declarations(object.constructor, "properties").get(name);
       if (property) return object[property.js];
       const method = declarations(object.constructor, "methods").get(name);
@@ -301,6 +302,22 @@
     },
     readPath(object, path) {
       return path.split(".").reduce((owner, name) => this.read(owner, name), object);
+    },
+    // The dynamic writer counterpart of read: a declared property or a generated
+    // `name=` accessor, chosen by metadata rather than by the receiver's shape.
+    write(object, name, value) {
+      if (object == null) throw new Error(`Cannot write ${name} on nil`);
+      const property = declarations(object.constructor, "properties").get(name);
+      if (property) {
+        if (property.computed) throw new Error(`Read-only property: ${name}`);
+        return writeProperty(object, property, value);
+      }
+      const method = declarations(object.constructor, "methods").get(`${name}=`);
+      if (method?.arity === 1) {
+        object[name] = value;
+        return value;
+      }
+      throw new Error(`Unknown writer: ${name}`);
     },
     assertWritablePath(object, path) {
       if (!pathWriter(object, path)) throw new Error(`Unavailable binding owner: ${path}`);

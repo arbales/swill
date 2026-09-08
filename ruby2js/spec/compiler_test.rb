@@ -327,12 +327,20 @@ class CompilerTest < Minitest::Test
       def lazy(value); value || raise("evaluated"); end
       def normalize(value); value.strip.upcase; end
       def blank(value); value.blank?; end
+      extend T::Sig
+      sig { params(value: String).returns(String) }
+      def typed_normalize(value); value.strip.upcase; end
+      sig { params(value: T.nilable(String)).returns(T::Boolean) }
+      def typed_blank(value); value.blank?; end
     RUBY
     assert_includes js, "Runtime.isTruthy("
     assert_includes js, "Runtime.logicalOr("
     assert_includes js, "Runtime.logicalAnd("
     assert_includes js, "Runtime.upcase(Runtime.strip(value))"
     assert_includes js, "Runtime.isBlank(value)"
+    # Untyped receivers use the one dynamic reader instead of a name-based rewrite.
+    assert_includes js, 'Runtime.read(Runtime.read(value, "strip"), "upcase")'
+    assert_includes js, 'Runtime.read(value, "blank?")'
     refute_includes js, "let $T ="
     refute_includes js, "let $ror ="
     refute_includes js, "let $rand ="
@@ -360,6 +368,22 @@ class CompilerTest < Minitest::Test
         [text == "Ada", local != "Grace", maybe || "fallback", flag && "yes", left == right, left || right]
       end
 
+      sig { params(items: T::Array[String], other: T.nilable(TestObject)).returns(T::Array[T.untyped]) }
+      def collections(items, other)
+        [items == [], other == maybe_object, items || "never"]
+      end
+
+      sig { params(flag: T::Boolean).returns(String) }
+      def either(flag); flag || "yes"; end
+
+      sig { returns(String) }
+      def base_label; "Ada"; end
+
+      def derived_label
+        interpolated = "\#{base_label}!"
+        [base_label.upcase, interpolated.downcase]
+      end
+
       def property_local
         current = maybe_object
         current ? "yes" : "no"
@@ -379,6 +403,50 @@ class CompilerTest < Minitest::Test
     assert_includes js, "Runtime.logicalOr(left, () => right)"
     assert_includes js, 'return current ? "yes" : "no"'
     assert_includes js, "Runtime.isEqual(local, [])"
+    # Typed collections never get identity comparison; typed objects always do.
+    assert_includes js, "Runtime.isEqual(items, [])"
+    assert_includes js, "other === this.maybe_object"
+    assert_includes js, 'items || "never"'
+    # Signature return types and interpolation make later reads static.
+    assert_includes js, "Runtime.upcase(this.base_label())"
+    assert_includes js, "Runtime.downcase(interpolated)"
+    # Boolean operands need logical ||; nullish ?? would keep Ruby's false.
+    assert_includes js, 'flag || "yes"'
+    assert_equal ["yes", true, ["ADA", "ada!"]], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.either(false), object.either(true), object.derived_label()]));
+    JS
+  end
+
+  def test_string_readers_follow_receiver_types_not_names
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Trimmer < TestObject
+        extend T::Sig
+        sig { returns(String) }
+        def strip; "trimmed"; end
+        sig { params(other: Trimmer, text: String, value: T.untyped).returns(T::Array[String]) }
+        def readers(other, text, value); [other.strip, text.strip, value.strip]; end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "other.strip()"
+    assert_includes js, "Runtime.strip(text)"
+    assert_includes js, 'Runtime.read(value, "strip")'
+    assert_equal ["trimmed", "Ada", "trimmed", "Ada"], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Trimmer"))();
+      console.log(JSON.stringify([...object.readers(object, " Ada ", object), object.readers(object, "x", " Ada ")[2]]));
+    JS
+  end
+
+  def test_raise_produces_error_objects_and_rejects_other_forms
+    js = javascript('def boom; raise "nope"; end')
+    assert_includes js, 'throw new Error("nope")'
+    assert_raises(Spike::CompileError) { javascript("def boom(value); raise value; end") }
+    assert_raises(Spike::CompileError) { javascript("def boom; raise; end") }
+    assert_equal ["nope", true], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      try { object.boom(); } catch (error) { console.log(JSON.stringify([error.message, error instanceof Error])); }
+    JS
   end
 
   def test_builtin_pragmas_preserve_trailing_comments_and_execute_on_mri_and_js
@@ -486,17 +554,37 @@ class CompilerTest < Minitest::Test
         property :name, type: String, default: "property"
       end
       class MethodOwner < TestObject
+        extend T::Sig
         def name; "method"; end
         def own_name; name; end
         def other_name(other); other.name; end
+        sig { params(other: PropertyOwner).returns(String) }
+        def typed_name(other); other.name; end
+        sig { params(other: PropertyOwner, value: String).returns(String) }
+        def typed_rename(other, value); other.name = value; end
+        sig { params(other: T.nilable(PropertyOwner)).returns(T.nilable(String)) }
+        def nilable_name(other); other.name; end
+        def untyped_rename(other, value); other.name = value; end
       end
     RUBY
-    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    # A typed receiver compiles to direct access; an untyped one stays dynamic.
+    assert_match(/typed_name\(other\) \{\s*return other\.name;/, js)
+    assert_match(/typed_rename\(other, value\) \{\s*return other\.name = value;/, js)
+    assert_match(/nilable_name\(other\) \{\s*return other\.name;/, js)
+    assert_includes js, 'Runtime.write(other, "name", value)'
+    js += <<~JS
       const method = new (Runtime.resolve("MethodOwner"))();
       const property = new (Runtime.resolve("PropertyOwner"))();
-      console.log(JSON.stringify([method.own_name(), method.other_name(method), method.other_name(property)]));
+      method.typed_rename(property, "typed");
+      const typed = property.name;
+      method.untyped_rename(property, "untyped");
+      let rejected;
+      try { method.untyped_rename(method, "x"); } catch (error) { rejected = error.message; }
+      console.log(JSON.stringify([method.own_name(), method.other_name(method), method.other_name(property),
+        method.typed_name(property), typed, property.name, rejected]));
     JS
-    assert_equal ["method", "method", "property"], execute(js)
+    assert_equal ["method", "method", "untyped", "untyped", "typed", "untyped", "Unknown writer: name"], execute(js)
   end
 
   def test_identifier_encoding_does_not_conflate_namespace_and_underscores
@@ -525,6 +613,7 @@ class CompilerTest < Minitest::Test
     refute_match(/class Generated|extends .*?\(|^\s*;\s*$/, js)
     assert_includes js, '"name": {'
     assert_includes js, "function compute_label()"
+    assert_includes js, "Runtime.strip(super.normalize(value))"
     framework_js = framework.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes framework_js, "let copy = new this.constructor"
     refute_includes framework_js, "Runtime.draft("

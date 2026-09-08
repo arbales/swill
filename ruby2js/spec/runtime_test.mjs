@@ -40,9 +40,9 @@ test("included declarations and super-based mutation hooks agree with MRI", () =
     const changed = [object.name, object.dirty, object.baseline];
     let message;
     assert.throws(() => { object.name = " "; }, error => {
-      // Ruby2JS's core raise lowering throws the value, not a Ruby exception.
-      message = typeof error === "string" ? error : error.message;
-      return message === "name must not be blank";
+      // Ruby raise compiles to a JavaScript Error, so stacks and messages survive.
+      message = error.message;
+      return typeof error.stack === "string" && message === "name must not be blank";
     });
     const rejected = [message, object.name, object.dirty, object.baseline];
     object.name = initial;
@@ -171,6 +171,23 @@ test("derived paths cannot be written and null intermediates are explicit", () =
   assert.equal(controller.person.name, "Ada");
   assert.throws(() => Runtime.writePath(controller, "person.label", "Wrong"), /Read-only/);
   assert.throws(() => Runtime.writePath(controller, "person.name.upcase", "Wrong"), /Read-only/);
+});
+
+test("dynamic writers mirror dynamic readers and primitives skip metadata", () => {
+  const person = new Person();
+  assert.equal(Runtime.write(person, "name", "Ada"), "Ada");
+  assert.equal(person.name, "Ada");
+  assert.throws(() => Runtime.write(person, "label", "x"), /Read-only/);
+  assert.throws(() => Runtime.write(person, "missing", "x"), /Unknown writer/);
+  assert.throws(() => Runtime.write(null, "name", "x"), /on nil/);
+  const view = new (Runtime.resolve("Swill::View"))({});
+  const controller = new Controller();
+  Runtime.write(view, "controller", controller);
+  assert.equal(view.controller_value(), controller);
+  assert.equal(Runtime.read(" Ada ", "strip"), "Ada");
+  assert.equal(Runtime.read(null, "strip"), null);
+  assert.throws(() => Runtime.read(42, "strip"), /requires a string/);
+  assert.throws(() => Runtime.read("Ada", "name"), /Unknown value reader/);
 });
 
 test("drafts copy inherited attributes but never observers or computed state", () => {
