@@ -104,6 +104,7 @@ A class or mixin body may contain only:
 | `extend T::Sig` | Erased |
 | `include A, B` / `include A` | Recorded; targets must be previously defined mixins |
 | `property` / `attribute` / `outlet` | Collected as declarations (below) |
+| `restorable :path, key: :k` | Controllers only. A literal dotted path whose first segment is a declared property; the leaf's declared type is recorded when every segment is statically typed. Emitted as `restorations` metadata |
 | `def self.included(base)` | Mixins only; see [Included hooks](#included-hooks) |
 | `module ClassMethods` | Mixins only; see [Class methods](#class-methods) |
 | nested `class` / `module` | Mixins only; collected as namespaced entries |
@@ -178,7 +179,7 @@ such as `skip` or `extend` would desynchronize collected metadata.
 | `Person` | `Person` | Plain names are unchanged |
 | `Demo::Person` | `Demo__Person` | `::` becomes `__` |
 | `Demo_Thing` | `Demo_uThing` | Source `_` becomes `_u` first, so `A::B` and `A__B` stay distinct |
-| `Runtime`, `Superclass`, `Object`, `Array`, `String`, `Number`, `Math`, `JSON`, `Error` | `Ruby_Runtime` and so on | Reserved plumbing and JavaScript intrinsics |
+| `Runtime`, `Superclass`, `Object`, `Array`, `String`, `Number`, `Math`, `JSON`, `Error`, `Promise`, `MutationObserver`, `URLSearchParams` | `Ruby_Runtime` and so on | Reserved plumbing and JavaScript intrinsics |
 | `blank?` | `blank_predicate` | Member names replace `?` |
 | `save!` | `save_bang` | Member names replace `!` |
 
@@ -440,6 +441,9 @@ parent's, so lookups do not walk the chain at call time.
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
 | `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted. The responder chain uses it to decide which responder handles an action |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
+| `restorations(object)` | The `restorable` declarations, including inherited ones, as `{path, key, type}` |
+| `decodeFragment(type, text)` / `encodeFragment(value)` | Fragment values are strings; a declared `Integer` or `T::Boolean` leaf decodes, anything else stays text, and an undecodable value is `undefined`. Encoding maps nil and `""` to removal |
+| `warn(message)` | The one console boundary, for wrong untrusted URL input |
 | `isAttribute(object, name)` | Whether `name` is a declared `attribute` on the object's class |
 | `validate_attribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. The MRI adapter implements the same convention with `respond_to?` |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
@@ -511,7 +515,7 @@ where it is raised:
 | Top level | Anything other than `class` and `module` |
 | Constants | Unknown or non-static constants; reopened or duplicate constants; a superclass or mixin defined later in the same build; a superclass that is a mixin; an include target that is a class |
 | Methods | Names outside `/\A[a-z_]\w*[!?=]?\z/`; `method_missing`; `initialize` on the shared surface; optional, keyword, splat, or block parameters; a method whose name is also an inherited property |
-| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, a non-literal `optional:`, or on a class that is not a `Swill::Controller` |
+| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, a non-literal `optional:`, or on a class that is not a `Swill::Controller`; `restorable` with a non-literal path or key, any keyword but `key:`, a path that does not start with a declared property, a duplicate key, or on a class that is not a `Swill::Controller` |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
 | Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name |

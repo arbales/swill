@@ -41,7 +41,7 @@ module Swill
             "kind" => kind, "scope" => scope, "node" => node, "javascript_only" => javascript_only,
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
             "includes" => [], "properties" => [], "methods" => [], "included_properties" => [],
-            "class_methods" => [], "registries" => [], "settings" => []
+            "class_methods" => [], "registries" => [], "settings" => [], "restorations" => []
           }
           pending_signature = nil
           statements(node.children.last).each do |child|
@@ -88,6 +88,8 @@ module Swill
               collect_class_methods(entry, child)
             elsif kind == "mixin" && namespace_declaration?(child)
               # collect_scope records nested constants as their own entries.
+            elsif child.type == :send && child.children[0..1] == [nil, :restorable]
+              collect_restorable(entry, child)
             elsif declaration?(child)
               collect_property(entry, child)
             else

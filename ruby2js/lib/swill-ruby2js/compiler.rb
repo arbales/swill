@@ -159,6 +159,20 @@ module Swill
                !knowledge.descends_from?(entry, "Swill::Controller")
               raise CompileError, "outlets require a Swill::Controller subclass in #{entry['name']}"
             end
+            unless entry["restorations"].empty?
+              unless knowledge.descends_from?(entry, "Swill::Controller")
+                raise CompileError, "restorable requires a Swill::Controller subclass in #{entry['name']}"
+              end
+              entry["restorations"].each do |restoration|
+                segments = restoration["path"].split(".")
+                unless knowledge.property_entry(entry["name"], segments.first)
+                  raise CompileError, "restorable path must start with a declared property: #{restoration['path']}"
+                end
+                restoration["type"] = restoration_type(entry, segments)
+              end
+              keys = entry["restorations"].map { |restoration| restoration["key"] }
+              raise CompileError, "duplicate restorable key in #{entry['name']}" unless keys.uniq == keys
+            end
             if entry["extends_class_methods"] && entry["class_methods"].empty? &&
                entry["registries"].empty? && entry["settings"].empty?
               raise CompileError, "ClassMethods module is missing or empty"
@@ -172,6 +186,46 @@ module Swill
             available << entry["name"]
           end
         end
+
+        # The declared type at the end of a property path, followed through
+
+        # declared property types; nil when a segment is not statically typed.
+
+        def restoration_type(entry, segments)
+
+          owner = entry["name"]
+
+          type = nil
+
+          segments.each do |segment|
+
+            property = owner && knowledge.property_entry(owner, segment)
+
+            return nil unless property
+
+            type = property["type"]
+
+            inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
+
+            owner = begin
+
+              resolved = knowledge.resolve(inner, entry["name"].split("::"))
+
+              knowledge.entries.any? { |candidate| candidate["name"] == resolved } ? resolved : nil
+
+            rescue CompileError
+
+              nil
+
+            end
+
+          end
+
+          type
+
+        end
+
+        
 
         def reference(name, scope)
           resolved = knowledge.resolve(name, scope)

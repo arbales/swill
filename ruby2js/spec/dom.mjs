@@ -17,8 +17,32 @@ export class Element {
     this.hidden = false;
     this.readOnly = false;
     this.type = attributes.type ?? "";
-    for (const child of children) this.append(child);
+    this.open = false;
+    // A template's children live in an inert content fragment, as in the DOM.
+    if (this.tagName === "TEMPLATE") {
+      this.content = {firstElementChild: children[0] ?? null, children};
+    } else {
+      for (const child of children) this.append(child);
+    }
   }
+
+  get firstElementChild() { return this.children[0] ?? null; }
+
+  cloneNode(deep) {
+    const template = this.tagName === "TEMPLATE" ? this.content.children : this.children;
+    const copy = new Element(this.tagName, this.attributes, deep ? template.map(child => child.cloneNode(true)) : []);
+    copy._value = this._value;
+    copy._text = this._text;
+    return copy;
+  }
+
+  appendChild(child) { return this.append(child); }
+  replaceChildren(...nodes) {
+    for (const child of [...this.children]) child.remove();
+    for (const node of nodes) this.append(node);
+  }
+  show() { this.open = true; }
+  close() { this.open = false; }
 
   // Like the DOM, string properties coerce what they are assigned.
   get value() { return this._value; }
@@ -45,7 +69,7 @@ export class Element {
     return false;
   }
 
-  ownerDocument() {
+  get ownerDocument() {
     let node = this;
     while (node.parentElement) node = node.parentElement;
     return node;
@@ -57,11 +81,19 @@ export class Element {
   removeAttribute(name) { delete this.attributes[name]; }
   getAttributeNames() { return Object.keys(this.attributes); }
 
+  // tag, [attr], [attr=value], and combinations such as template[name].
   matches(selector) {
     return selector.split(",").map(part => part.trim()).some(simple => {
-      const attribute = simple.match(/^\[([\w-]+)\]$/);
-      if (attribute) return this.hasAttribute(attribute[1]);
-      return simple.toUpperCase() === this.tagName;
+      const parsed = simple.match(/^([\w-]*)((?:\[[^\]]+\])*)$/);
+      if (!parsed) return false;
+      const [, tag, attributes] = parsed;
+      if (tag && tag.toUpperCase() !== this.tagName) return false;
+      for (const clause of attributes.match(/\[[^\]]+\]/g) ?? []) {
+        const [, name, , value] = clause.match(/^\[([\w-]+)(=["']?([^"'\]]*)["']?)?\]$/);
+        if (!this.hasAttribute(name)) return false;
+        if (value !== undefined && this.getAttribute(name) !== value) return false;
+      }
+      return true;
     });
   }
 
@@ -111,10 +143,10 @@ export class Element {
   // ---- focus: records activeElement on the document and fires focusin ----
 
   focus() {
-    const document = this.ownerDocument();
+    const document = this.ownerDocument;
     const previous = document.activeElement ?? null;
     if (previous === this) return;
-    if (previous) previous._focused = false;
+    if (previous) previous.leaveFocus(this);
     document.activeElement = this;
     this._focused = true;
     const event = new Event("focusin", {bubbles: true});
@@ -122,13 +154,47 @@ export class Element {
     this.dispatchEvent(event);
   }
 
-  blur() {
-    const document = this.ownerDocument();
+  // Focus leaving this element: focusout carries where it went, or null when
+  // it left the document (the URL bar) or landed on dead space.
+  leaveFocus(destination) {
+    const document = this.ownerDocument;
     if (document.activeElement === this) document.activeElement = null;
     this._focused = false;
+    const event = new Event("focusout", {bubbles: true});
+    Object.defineProperty(event, "relatedTarget", {value: destination, configurable: true});
+    this.dispatchEvent(event);
   }
+
+  blur() { this.leaveFocus(null); }
 }
 
 export const element = (tagName, attributes, children) => new Element(tagName, attributes, children);
 
 export const keyEvent = (type, key) => Object.assign(new Event(type, {bubbles: true}), {key});
+
+// A browser window for tests: location and history keep a hash and a stack
+// of entries; back() pops one and fires popstate as a browser would.
+export class Browser extends EventTarget {
+  constructor(hash = "") {
+    super();
+    this.entries = [hash];
+    this.location = {pathname: "/index.html", search: "", hash};
+    this.history = {
+      pushState: (_state, _title, url) => { this.location.hash = url.replace(/^[^#]*/, ""); this.entries.push(this.location.hash); },
+      replaceState: (_state, _title, url) => { this.location.hash = url.replace(/^[^#]*/, ""); this.entries[this.entries.length - 1] = this.location.hash; }
+    };
+  }
+
+  back() {
+    if (this.entries.length < 2) return;
+    this.entries.pop();
+    this.location.hash = this.entries[this.entries.length - 1];
+    this.dispatchEvent(new Event("popstate"));
+  }
+
+  navigate(hash) {
+    this.location.hash = hash;
+    this.entries.push(hash);
+    this.dispatchEvent(new Event("hashchange"));
+  }
+}

@@ -85,6 +85,8 @@ class CompilerTest < Minitest::Test
       lib/swill/core/actions.rb
       lib/swill/core/outlets.rb
       lib/swill/core/awakening.rb
+      lib/swill/core/fragments.rb
+      lib/swill/core/window.rb
       lib/swill/core/application.rb
     ].each do |path|
       compiler.add(File.read(path), file: path, javascript_only: true)
@@ -583,6 +585,55 @@ class CompilerTest < Minitest::Test
       assert_raises(Spike::CompileError, body) do
         Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(body).javascript(runtime: "./runtime.mjs")
       end
+    end
+  end
+
+  def test_restorable_declarations_resolve_their_leaf_types
+    framework = <<~RUBY
+      module Swill
+        class Object; end
+        class Responder < Swill::Object; end
+        class Controller < Responder; end
+      end
+    RUBY
+    compiler = Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(<<~RUBY)
+      class Person < Swill::Object
+        property :age, type: Integer, default: 0
+      end
+      class Host < Swill::Controller
+        property :query, type: String, default: ""
+        property :person, type: T.nilable(Person), default: nil
+        property :flag, type: T::Boolean, default: false
+        property :data, type: T.untyped, default: nil
+        restorable :query, key: :q
+        restorable "person.age", key: :age
+        restorable :flag
+        restorable "data.deep"
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, 'restorations: [{ path: "query", key: "q", type: "String" }, { path: "person.age", key: "age", type: "Integer" }, { path: "flag", key: "flag", type: "T::Boolean" }, { path: "data.deep", key: "data.deep", type: null }]'
+    assert_equal [["q", "String"], ["age", "Integer"], ["flag", "T::Boolean"], ["data.deep", nil]], execute(js + <<~JS)
+      const host = new (Runtime.resolve("Host"))();
+      console.log(JSON.stringify(Runtime.restorations(host).map(r => [r.key, r.type])));
+    JS
+    [
+      "restorable query",
+      "restorable :query, codec: :string",
+      "restorable :missing",
+      "restorable \"query.\"",
+      "restorable :query, key: :q\nrestorable :flag, key: :q"
+    ].each do |body|
+      assert_raises(Spike::CompileError, body) do
+        Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true)
+          .add("class Host < Swill::Controller\nproperty :query, type: String, default: \"\"\nproperty :flag, type: T::Boolean, default: false\n#{body}\nend")
+          .javascript(runtime: "./runtime.mjs")
+      end
+    end
+    assert_raises(Spike::CompileError) do
+      Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true)
+        .add("class Plain < Swill::Object\nproperty :query, type: String, default: \"\"\nrestorable :query\nend")
+        .javascript(runtime: "./runtime.mjs")
     end
   end
 

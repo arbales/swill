@@ -29,7 +29,13 @@ module Swill
                 fields << "registries: {model_attributes: {\n#{seeds.join(",\n")}\n}}"
               end
             end
-            methods = entry["methods"].map do |method|
+            unless mixin || entry["restorations"].empty?
+          restorations = entry["restorations"].map do |restoration|
+            "{path: #{restoration['path'].to_json}, key: #{restoration['key'].to_json}, type: #{restoration['type'].to_json}}"
+          end
+          fields << "restorations: [#{restorations.join(', ')}]"
+        end
+        methods = entry["methods"].map do |method|
               descriptor = {"arity" => method["arity"]}
               descriptor["js"] = method["js"] if method["js"] != method["name"]
               "#{object_key(method['name'])}: #{JSON.pretty_generate(descriptor)}"

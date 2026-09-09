@@ -22,8 +22,20 @@
     <button data-action="shout">Shout name</button>
     <button data-action="reset">Reset everything</button>
   </section>
+  <section window="main" name="welcome"></section>
+  <button data-action="swap_window">Swap window</button>
+  <button data-action="open_palette">Open palette</button>
   <p>Application launch, nested controller ownership, binding, action, and teardown smoke test.</p>
 </main>
+<template for="window" name="welcome">
+  <article controller="Demo::Badge"><p bind="title"></p><p class="note">Welcome</p></article>
+</template>
+<template for="window" name="farewell">
+  <article controller="Demo::Badge"><p bind="title"></p><p class="note">Farewell</p></article>
+</template>
+<template for="window" name="palette">
+  <dialog controller="Demo::Badge"><p bind="title"></p><button data-action="close">Close</button></dialog>
+</template>
 <script src="../dist/swill.js"></script>
 <script src="../dist/app.js"></script>
 </body>

@@ -62,15 +62,27 @@ The initial kernel and DOM-boundary spike is complete and verified:
   clean-again semantics, and clean codec/draft application; the shared MRI
   and Node fixture produce identical results. The compiler accepts
   `T::Array[...]`/`T::Hash[...]` types, empty collection defaults, and
-  computed declarations in included hooks.
+  computed declarations in included hooks;
+- templates and windows: inert window templates, `[window]` containers
+  filled from templates or keeping captured pre-rendered content,
+  `load_window_content`, `show_window` dialogs with a `closed` promise and
+  first-responder restoration on `dismiss`, `Awakening#detach`, and a
+  `MutationObserver` so code-created content shares the markup activation
+  path;
+- restoration: `restorable :path, key:` declarations compiled with
+  their leaf types, applied and observed through the binding path machinery
+  between the load phase and `controller_did_load`, with
+  `controller_did_restore(restored)`, `main=content` and `main.key=value`
+  fragment keys, push on navigation, replace on state change, and
+  Back/Forward reloading fragment-named content without writing history.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: Model Step 2, Identity Stores
+## Immediate Next Slice: List Controllers
 
-The UI Kernel Checkpoint was reviewed in September 2026 and the port
-continues. Model step 1 is done; next is step 2 below, identity stores and
-model type registration, then codecs.
+Model work beyond step 1 is deferred (decided September 2026) until the UI
+surface is complete. Roadmap item 5 is done; next is item 6, beginning with
+list selection and row ownership.
 
 ## Ordered Roadmap
 
@@ -106,7 +118,7 @@ model type registration, then codecs.
 Port model behavior as independently composable concerns:
 
 1. validation and dirty tracking (done);
-2. identity stores and model type registration;
+2. identity stores and model type registration (deferred);
 3. plain JSON and JSON:API codecs;
 4. observable datasets and the browser wire boundary;
 5. create, update, reload, and delete;
@@ -119,11 +131,12 @@ authorization, and transactions do not move into the browser.
 
 ### 5. Templates, Windows, and Restoration
 
-- Awaken template-backed content without activating inert template DOM.
-- Add named window containers and replaceable content.
+- Awaken template-backed content without activating inert template DOM (done).
+- Add named window containers and replaceable content (done).
 - Add keyed URL restoration and Back/Forward behavior after bindings and
-  controller ownership are reliable.
-- Preserve one activation path for server-rendered and code-created views.
+  controller ownership are reliable (done).
+- Preserve one activation path for server-rendered and code-created views
+  (done).
 
 ### 6. Higher-Level Controllers and Controls
 

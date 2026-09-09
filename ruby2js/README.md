@@ -170,11 +170,42 @@ Cocoa: a responder must accept, the current one may refuse to resign, and a
 refusal to become leaves the application holding it. Views accept and focus
 their first focusable element; controllers accept when their view has one. A
 `focusin` on the root reconciles the first responder after the browser moves
-focus, restoring focus when the holder refuses. `keydown` and `keyup` go to the
+focus, restoring focus when the holder refuses. Focus leaving for the
+browser's own chrome or dead space keeps the first responder, as Cocoa does,
+so keys still reach it when focus returns; focus moving to another part of
+the page outside the application releases it. `keydown` and `keyup` go to the
 first responder: Escape, Enter, and Tab become `cancel_operation`,
 `insert_newline`, and `complete`, and unhandled keys and those methods continue
 up the responder chain to the application. Tearing down a region releases a
 first responder inside it.
+
+Windows are template-backed. `<template for="window" name="x">` anywhere, or
+`<template name="x">` directly under the application root, is inert content.
+A `[window="main"]` container is filled at launch from the template its
+`name` attribute selects, or keeps and captures its pre-rendered content.
+`load_window_content("main", "x")` tears down the old content, clones and
+awakens the new, and hands the first responder to its top controller.
+`show_window("x")` clones a template into the root as a window, or into a
+chosen element with `show_window_in`, showing a `<dialog>` root, and returns a
+`Swill::Window` whose `closed` promise resolves
+when `dismiss(controller)` tears it down and restores the saved first
+responder. Code-created content awakens through a `MutationObserver` on the
+root, and removed content is torn down, so markup and code share one
+activation path; `Awakening#detach` does the same explicitly.
+
+Restoration reuses the binding machinery. A window controller declares
+`restorable :query, key: :q` or `restorable "people.selected_id",
+key: :selected`; the path is a bindable path whose first segment must be a
+declared property, and the compiler records the leaf's declared type so
+integers and booleans decode from the fragment while everything else stays a
+string. The URL fragment holds `main=content` for a container's content and
+`main.q=value` for its controller's state. At launch the fragment chooses a
+container's content and its values are written through the same path writer
+bindings use, then `controller_did_restore(restored)` runs before
+`controller_did_load`. Changes to restorable paths replace their fragment
+values; `load_window_content` pushes a history entry; Back/Forward reloads
+the content the fragment names without writing history. Unknown content and
+values of the wrong type are reported and ignored, since the URL is untrusted.
 
 ### Sorbet
 
@@ -216,13 +247,17 @@ The implementation covers:
   through the responder chain;
 - model attributes with `validate_<name>(value, previous)` validation and
   observable, baseline-aware dirty tracking, shared with MRI;
+- window templates, named containers with replaceable content, dialogs, and
+  observed awakening of code-created content;
+- keyed URL restoration of window content and controller state with
+  Back/Forward, declared per path and typed from declarations;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
-runtime Sorbet operations, dynamic class mutation, templates as content,
-windows, restoration, list and editor controllers, controls, or a complete
-model-layer port. Unsupported forms fail compilation.
+runtime Sorbet operations, dynamic class mutation, list and editor
+controllers, controls, or a complete model-layer port. Unsupported forms fail
+compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.

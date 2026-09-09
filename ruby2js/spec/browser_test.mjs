@@ -78,7 +78,7 @@ try {
     assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
-  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/index.html`}, sessionId);
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/index.html#main=farewell&main.n=2`}, sessionId);
   await evaluate(`new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
     const poll = () => {
@@ -90,6 +90,13 @@ try {
     };
     poll();
   })`);
+  // The fragment chose the main window's content and restored its state
+  // before controller_did_load.
+  assert.deepEqual(await evaluate(`(() => {
+    const container = document.querySelector("[window=main]");
+    const badge = container.children[0].__swill_view__.controller_value();
+    return [container.getAttribute("name"), container.querySelector("p[bind]").textContent, badge.count, badge.restored];
+  })()`), ["farewell", "Badge 2", 2, true]);
   assert.equal(await evaluate(`(() => {
     const input = document.querySelector("input");
     input.value = "Grace";
@@ -145,7 +152,7 @@ try {
       parent.name_field.element() === document.querySelector("input"),
       parent.badge === application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge")),
       parent.seed.name, parent.missing];
-  })()`), ["Hello ", "Badge 0", true, true, 3, true, true, "Ada", null]);
+  })()`), ["Hello ", "Badge 0", true, true, 4, true, true, "Ada", null]);
   // The editor is a child controller bound to the parent's person: its own
   // bindings resolve under represented_object, bind-* on its root is its own,
   // and the object binding mirrors the badge count into the parent.
@@ -161,6 +168,50 @@ try {
     results.push(document.querySelector("output[bind=badge_count]").textContent);
     return results;
   })()`), [[false, "", "true", true, "0"], ["Hello Hopper", "Hopper"], "1"]);
+  // Windows: the main container was filled from its template at launch,
+  // swap_window replaces it through the application, and the palette is a
+  // dialog that closes itself and restores focus.
+  assert.deepEqual(await evaluate(`(() => {
+    const application = document.body.__swill_application__;
+    const container = document.querySelector("[window=main]");
+    const results = [container.getAttribute("name"), container.querySelector(".note").textContent,
+      container.querySelector("p[bind]").textContent, application.controllers().length];
+    document.querySelector("[data-action=swap_window]").click();
+    results.push(container.getAttribute("name"), container.querySelector(".note").textContent, container.children.length,
+      location.hash);
+    document.querySelector("[data-action=open_palette]").click();
+    const dialog = document.querySelector("dialog");
+    results.push(dialog.open, application.first_responder() === dialog.__swill_view__.controller_value());
+    dialog.querySelector("[data-action=close]").click();
+    results.push(document.querySelector("dialog") === null, application.first_responder() === application.controllers()[0].name_field);
+    return results;
+  })()`), ["farewell", "Farewell", "Badge 0", 4, "welcome", "Welcome", 1, "#main=welcome&main.n=0", true, true, true, true]);
+  // Back returns to the previous window content and its restored state.
+  assert.deepEqual(await evaluate(`(async () => {
+    const container = document.querySelector("[window=main]");
+    const before = [location.hash, container.getAttribute("name")];
+    const popped = new Promise(resolve => window.addEventListener("popstate", resolve, {once: true}));
+    history.back();
+    await popped;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const badge = container.children[0].__swill_view__.controller_value();
+    return [...before, location.hash, container.getAttribute("name"), badge.count, badge.restored];
+  })()`), ["#main=welcome&main.n=0", "welcome", "#main=farewell&main.n=0", "farewell", 0, true]);
+  // Code-created content awakens through the MutationObserver, and removed
+  // content is torn down, without any explicit call.
+  assert.deepEqual(await evaluate(`(async () => {
+    const main = document.querySelector("main");
+    const late = document.createElement("section");
+    late.setAttribute("controller", "Demo::Badge");
+    late.innerHTML = '<p bind="title"></p>';
+    main.appendChild(late);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const controller = late.__swill_view__.controller_value();
+    const awakened = [late.querySelector("p").textContent, controller.parent() === document.body.__swill_application__.controllers()[0]];
+    late.remove();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return [...awakened, controller.view().controller_value() === null];
+  })()`), ["Badge 0", true, true]);
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();
     const editor = document.querySelector("section[controller='Demo::PersonEditor']");
@@ -180,7 +231,7 @@ try {
     document.body.__swill_application__
   ]`), ["Hello ", "Badge 1", null]);
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: application launch, outlets, nested ownership, bindings, actions, first responder, key routing, and teardown passed.");
+  console.log("Chrome: application launch, outlets, nested ownership, bindings, actions, first responder, key routing, windows, dialogs, restoration, observed content, and teardown passed.");
 } finally {
   clearTimeout(timeout);
   socket?.close();

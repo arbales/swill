@@ -119,6 +119,12 @@ module Swill
     sig { void }
     def awake_from_dom; end
 
+    # Runs on a window controller after fragment values were applied to its
+    # restorable paths and before controller_did_load. restored is true
+    # when at least one value was applied.
+    sig { params(restored: T::Boolean).void }
+    def controller_did_restore(restored); end
+
     sig { void }
     def controller_did_load; end
 

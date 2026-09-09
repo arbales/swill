@@ -8,17 +8,18 @@ export function declarations(klass, kind) {
     const known = metadata.get(current);
     if (known) return known[kind];
   }
-  return new Map();
+  return kind === "restorations" ? [] : new Map();
 }
 
 export function hasMetadata(klass) {
   return metadata.has(klass);
 }
 
-export function installMetadata(klass, properties, methods) {
+export function installMetadata(klass, properties, methods, restorations = []) {
   const parent = Object.getPrototypeOf(klass);
   metadata.set(klass, {
     properties: new Map([...declarations(parent, "properties"), ...properties.map(item => [item.name, item])]),
-    methods: new Map([...declarations(parent, "methods"), ...methods.map(item => [item.name, item])])
+    methods: new Map([...declarations(parent, "methods"), ...methods.map(item => [item.name, item])]),
+    restorations: [...declarations(parent, "restorations"), ...restorations]
   });
 }

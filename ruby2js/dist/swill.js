@@ -13,16 +13,17 @@
       const known = metadata.get(current);
       if (known) return known[kind];
     }
-    return /* @__PURE__ */ new Map();
+    return kind === "restorations" ? [] : /* @__PURE__ */ new Map();
   }
   function hasMetadata(klass) {
     return metadata.has(klass);
   }
-  function installMetadata(klass, properties, methods) {
+  function installMetadata(klass, properties, methods, restorations2 = []) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
       properties: new Map([...declarations(parent, "properties"), ...properties.map((item) => [item.name, item])]),
-      methods: new Map([...declarations(parent, "methods"), ...methods.map((item) => [item.name, item])])
+      methods: new Map([...declarations(parent, "methods"), ...methods.map((item) => [item.name, item])]),
+      restorations: [...declarations(parent, "restorations"), ...restorations2]
     });
   }
 
@@ -87,6 +88,24 @@
       default:
         throw new Error(`Unknown value reader: ${name}`);
     }
+  }
+  function decodeFragment(type, text) {
+    const inner = (type ?? "").replace(/^T\.nilable\((.+)\)$/, "$1");
+    switch (inner) {
+      case "Integer": {
+        const number = Number.parseInt(text, 10);
+        return Number.isNaN(number) ? void 0 : number;
+      }
+      case "T::Boolean":
+        if (text === "true" || text === "1") return true;
+        if (text === "false" || text === "0") return false;
+        return void 0;
+      default:
+        return text;
+    }
+  }
+  function encodeFragment(value) {
+    return value == null || value === "" ? null : String(value);
   }
   var NIL_READERS = ["nil?", "blank?", "present?"];
   var VALUE_READERS = ["nil?", "blank?", "present?", "empty?", "strip", "upcase", "downcase"];
@@ -232,7 +251,7 @@
         if (pending.has(Object.getPrototypeOf(klass))) continue;
         if (descriptor.mixins?.length) include(klass, descriptor.mixins, incoming);
         const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({ name: name2, js: name2, ...property, computed: typeof property.compute === "function" }));
-        installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries);
+        installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries, descriptor.restorations ?? []);
         pending.delete(klass);
         progress = true;
       }
@@ -279,9 +298,9 @@
     const parent = Object.getPrototypeOf(klass);
     return typeof parent?.[name] === "function" ? parent[name]() : null;
   }
-  function installClass(klass, name, properties, methods, registries = {}) {
+  function installClass(klass, name, properties, methods, registries = {}, restorations2 = []) {
     if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
-    installMetadata(klass, properties, methods);
+    installMetadata(klass, properties, methods, restorations2);
     const propertyByName = new Map(properties.map((property) => [property.name, property]));
     for (const [registryName, seeds] of Object.entries(registries)) {
       if (typeof klass[registryName] !== "function") {
@@ -417,6 +436,9 @@
     const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
     return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
   }
+  function restorations(object) {
+    return declarations(object.constructor, "restorations");
+  }
   function outlets(object) {
     return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
   }
@@ -462,6 +484,8 @@
     upcase,
     downcase,
     valueRead,
+    decodeFragment,
+    encodeFragment,
     NIL_READERS,
     VALUE_READERS,
     // metadata-driven dispatch
@@ -481,9 +505,14 @@
     // declarations
     isAttribute,
     validate_attribute,
+    restorations,
     outlets,
     collect_attributes,
-    apply_attributes
+    apply_attributes,
+    // The one console boundary: wrong untrusted URL input is reported, not raised.
+    warn(message) {
+      console.warn(`[Swill] ${message}`);
+    }
   };
 
   // build/framework.classes.mjs
@@ -494,6 +523,7 @@
     Swill__Awakening: () => Swill__Awakening,
     Swill__Bindings: () => Swill__Bindings,
     Swill__Controller: () => Swill__Controller,
+    Swill__Fragments: () => Swill__Fragments,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Model__Attributes: () => Swill__Model__Attributes,
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
@@ -506,7 +536,8 @@
     Swill__Outlets: () => Swill__Outlets,
     Swill__Ownership: () => Swill__Ownership,
     Swill__Responder: () => Swill__Responder,
-    Swill__View: () => Swill__View
+    Swill__View: () => Swill__View,
+    Swill__Window: () => Swill__Window
   });
   function Swill__Observable(Superclass) {
     class Swill__Observable_Layer extends Superclass {
@@ -821,6 +852,12 @@
     awake_from_dom() {
       return null;
     }
+    // Runs on a window controller after fragment values were applied to its
+    // restorable paths and before controller_did_load. restored is true
+    // when at least one value was applied.
+    controller_did_restore(restored) {
+      return null;
+    }
     controller_did_load() {
       return null;
     }
@@ -1068,9 +1105,21 @@
     // Returns the new controllers in document order. Awakening a fragment that
     // already sits under a live view adopts it into that view's tree.
     wire(root) {
+      let controllers = this.awaken(root);
+      this.finish(controllers);
+      return controllers;
+    }
+    // The load phase only: view_did_load, outlets, bindings, actions, and
+    // awake_from_dom, children first. The application restores window state
+    // between this and finish.
+    awaken(root) {
       let controllers = [];
       this.walk(root, this.nearest_view(root.parentElement), controllers);
       this.each_reversed(controllers, (controller) => this.load(controller));
+      return controllers;
+    }
+    // controller_did_load once per controller, then appearance.
+    finish(controllers) {
       this.each_reversed(
         controllers,
         (controller) => controller.controller_did_load()
@@ -1079,11 +1128,10 @@
         controllers,
         (controller) => controller.view_will_appear()
       );
-      this.each_reversed(
+      return this.each_reversed(
         controllers,
         (controller) => controller.view_did_appear()
       );
-      return controllers;
     }
     load(controller) {
       controller.view_did_load();
@@ -1133,6 +1181,26 @@
       ;
       return view;
     }
+    // Every controller in a subtree in document order, the node included.
+    controllers_within(node) {
+      let found = [];
+      this.collect_controllers(node, found);
+      return found;
+    }
+    collect_controllers(element, found) {
+      let view = element.__swill_view__;
+      let controller = view ? view.controller_value() : null;
+      if (controller) found.push(controller);
+      return this.each_child(
+        element,
+        (child) => this.collect_controllers(child, found)
+      );
+    }
+    // The counterpart of wire for a subtree being removed. Teardown recurses
+    // into descendants and is idempotent, so document order is fine.
+    detach(node) {
+      return this.controllers_within(node).forEach((controller) => controller.teardown());
+    }
     nearest_view(element) {
       if (!element) return null;
       let view = element.__swill_view__;
@@ -1146,17 +1214,177 @@
       }
     }
   };
+  var Swill__Fragments = class extends Swill__Object {
+    constructor(browser) {
+      super();
+      this._browser = browser;
+      this._suspended = false;
+      this._on_change = null;
+    }
+    available_predicate() {
+      return this._browser != null && this._browser.location != null && this._browser.history != null;
+    }
+    params() {
+      let found = {};
+      if (!this.available_predicate()) return found;
+      let search = new URLSearchParams(this._browser.location.hash.replace(
+        /^#/m,
+        ""
+      ));
+      search.forEach((value, key) => found[key] = value);
+      return found;
+    }
+    // :push adds a history entry, :replace rewrites the current one, :none is
+    // a no-op. Writes are also dropped while fragment state is being applied.
+    write(key, value, history) {
+      if (history === "none" || this._suspended) return;
+      if (!this.available_predicate()) return;
+      let location = this._browser.location;
+      let search = new URLSearchParams(location.hash.replace(/^#/m, ""));
+      if (value == null) {
+        search.delete(key);
+      } else {
+        search.set(key, value);
+      }
+      ;
+      let query = search.toString();
+      let next_url = location.pathname + location.search + (query.length > 0 ? "#" + query : "");
+      if (next_url === location.pathname + location.search + location.hash) return;
+      return history === "push" ? this._browser.history.pushState(
+        null,
+        "",
+        next_url
+      ) : this._browser.history.replaceState(null, "", next_url);
+    }
+    // Run callback with writes suppressed, so observers fired by applying
+    // fragment values do not write back mid-application.
+    suspended(callback) {
+      this._suspended = true;
+      try {
+        return callback();
+      } finally {
+        this._suspended = false;
+      }
+    }
+    observe(callback) {
+      if (!this.available_predicate()) return;
+      this._on_change = (_event) => callback();
+      this._browser.addEventListener("popstate", this._on_change);
+      return this._browser.addEventListener("hashchange", this._on_change);
+    }
+    release() {
+      if (!this._on_change) return;
+      this._browser.removeEventListener("popstate", this._on_change);
+      this._browser.removeEventListener("hashchange", this._on_change);
+      this._on_change = null;
+      return this._on_change;
+    }
+  };
+  var Swill__Window = class extends Swill__Object {
+    constructor(name, root) {
+      super();
+      this._name = name;
+      this._root = root;
+      this._controller = null;
+      this._content_name = null;
+      this._saved_first_responder = null;
+      this._restoration_disposers = [];
+      this._restoration_keys = [];
+      this._closed = new Promise((resolve2, _reject) => {
+        this._resolve_closed = resolve2;
+        return this._resolve_closed;
+      });
+    }
+    // ---- fragment restoration ----
+    //
+    // The window's own fragment param is its bare name (main=farewell); its
+    // controller's state params are scoped under it (main.n=3).
+    scoped_key(key) {
+      return `${this._name}.${key}`;
+    }
+    add_restoration(disposer, key) {
+      this._restoration_disposers.push(disposer);
+      return this._restoration_keys.push(key);
+    }
+    // Release the current restoration subscriptions; returns the scoped keys
+    // they covered so a caller can prune ones the next controller will not own.
+    dispose_restoration() {
+      let disposers = this._restoration_disposers;
+      let keys = this._restoration_keys;
+      this._restoration_disposers = [];
+      this._restoration_keys = [];
+      disposers.forEach((dispose2) => dispose2());
+      return keys;
+    }
+    name() {
+      return this._name;
+    }
+    root() {
+      return this._root;
+    }
+    controller() {
+      return this._controller;
+    }
+    content_name() {
+      return this._content_name;
+    }
+    // Resolves with nil when the window is dismissed.
+    closed() {
+      return this._closed;
+    }
+    saved_first_responder() {
+      return this._saved_first_responder;
+    }
+    save_first_responder(responder) {
+      this._saved_first_responder = responder;
+      return this._saved_first_responder;
+    }
+    assign_content(content_name, controller) {
+      this._content_name = content_name;
+      this._controller = controller;
+      return this._controller;
+    }
+    // A named [window] container, as opposed to a template-instantiated dialog.
+    container_predicate() {
+      return this._root.hasAttribute("window");
+    }
+    contains_controller_predicate(candidate) {
+      return candidate === this._controller || this._root.contains(candidate.view().element());
+    }
+    // Tear down the subtree, close a dialog, remove the root, and resolve.
+    dismiss() {
+      this.dispose_restoration();
+      new Swill__Awakening().detach(this._root);
+      if (this._root.close) this._root.close();
+      this._root.remove();
+      return this._resolve_closed.call(null, null);
+    }
+  };
   var Swill__Application = class extends Swill__Responder {
     launch(root) {
       this._root = root;
       root.__swill_application__ = this;
+      this._windows = [];
+      this._templates = {};
+      this._captured = {};
       this._on_focus = (event) => this.sync_first_responder(event.target, event.relatedTarget);
+      this._on_focus_out = (event) => this.focus_left(event.relatedTarget);
       this._on_key_down = (event) => this.first_responder().key_down(event);
       this._on_key_up = (event) => this.first_responder().key_up(event);
       root.addEventListener("focusin", this._on_focus);
+      root.addEventListener("focusout", this._on_focus_out);
       root.addEventListener("keydown", this._on_key_down);
       root.addEventListener("keyup", this._on_key_up);
-      this._controllers = new Swill__Awakening().wire(root);
+      this._fragments = new Swill__Fragments(root.ownerDocument.defaultView);
+      this.scan_templates();
+      this.prepare_window_containers();
+      let awakening = new Swill__Awakening();
+      this._controllers = awakening.awaken(root);
+      this.register_window_containers();
+      this.restore_launched_windows();
+      awakening.finish(this._controllers);
+      this._fragments.observe(() => this.apply_fragment());
+      this.watch(root);
       this.application_did_launch();
       return this;
     }
@@ -1171,9 +1399,14 @@
     terminate() {
       if (this._root.__swill_application__ !== this) return;
       this.application_will_terminate();
+      this._fragments.release();
+      if (this._observer) this._observer.disconnect();
+      this._windows.forEach((window) => this.release_window(window));
+      this._windows = [];
       this._controllers.forEach((controller) => controller.teardown());
       this._controllers = [];
       this._root.removeEventListener("focusin", this._on_focus);
+      this._root.removeEventListener("focusout", this._on_focus_out);
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
       this._first_responder = null;
@@ -1184,6 +1417,95 @@
     }
     application_will_terminate() {
       return null;
+    }
+    // ---- windows ----
+    // Replace a named container's content with a window template or captured
+    // pre-rendered content, awaken it, record the content in the URL fragment
+    // as a history entry, restore the new controller's state, and hand the
+    // first responder to it. Returns that controller.
+    load_window_content(window_name, content_name) {
+      return this.load_window_content_with(
+        window_name,
+        content_name,
+        "push"
+      );
+    }
+    // history is :push for navigation, :replace to rewrite the entry, or :none
+    // when the fragment itself asked for the content (Back/Forward).
+    load_window_content_with(window_name, content_name, history) {
+      let window = this.window_named(window_name);
+      if (!window) throw new Error(`No window container: ${window_name}`);
+      let container = window.root();
+      let previous = this.first_responder();
+      let awakening = new Swill__Awakening();
+      this.each_child(container, (child) => awakening.detach(child));
+      container.replaceChildren();
+      container.appendChild(this.clone_window_content(content_name));
+      container.setAttribute("name", content_name);
+      let controllers = awakening.awaken(container);
+      window.assign_content(
+        content_name,
+        this.top_controller_in(container)
+      );
+      this._fragments.write(window.name(), content_name, history);
+      this.restore_window_state(
+        window,
+        history !== "none",
+        history !== "none"
+      );
+      awakening.finish(controllers);
+      let controller = window.controller();
+      if (controller) {
+        this.make_first_responder(controller);
+      } else if (this.attached_predicate(previous)) {
+        this.make_first_responder(previous);
+      }
+      ;
+      return controller;
+    }
+    // Present a template as a window appended to the root. A <dialog> root is
+    // shown. Dismiss it with dismiss(controller); the window's closed promise
+    // resolves then.
+    show_window(name) {
+      return this.show_window_in(name, this._root);
+    }
+    show_window_in(name, into) {
+      let node = this.clone_window_content(name);
+      into.appendChild(node);
+      let awakening = new Swill__Awakening();
+      let controllers = awakening.awaken(node);
+      let view = node.__swill_view__;
+      let controller = view ? view.controller_value() : null;
+      if (!controller) {
+        awakening.detach(node);
+        node.remove();
+        throw new Error(`Window root has no controller: ${name}`);
+      }
+      ;
+      if (node.show) node.show();
+      let window = new Swill__Window(name, node);
+      window.assign_content(name, controller);
+      window.save_first_responder(this.first_responder());
+      this._windows.push(window);
+      this.restore_window_state(window, false, false);
+      awakening.finish(controllers);
+      this.make_first_responder(controller);
+      return window;
+    }
+    dismiss(controller) {
+      let window = this.window_containing(controller);
+      if (!window) return false;
+      this._windows = this._windows.filter((candidate) => candidate !== window);
+      let saved = window.saved_first_responder();
+      window.dismiss();
+      if (saved && this.attached_predicate(saved)) this.make_first_responder(saved);
+      return true;
+    }
+    window_named(name) {
+      return this._windows.find((window) => this.matches_container_predicate(window, name));
+    }
+    window_content_predicate(name) {
+      return (this._captured[name] ?? this.window_template(name)) != null;
     }
     // ---- first responder ----
     // The application itself when nothing more specific holds it.
@@ -1219,6 +1541,16 @@
       this._first_responder = responder;
       return this._first_responder;
     }
+    // Focus moved to another part of the page: the first responder falls
+    // back here. A null destination (the browser's own chrome, or dead space
+    // in the page) leaves it alone, as Cocoa does, so keys still reach it
+    // when focus returns.
+    focus_left(destination) {
+      if (destination && !this._root.contains(destination)) {
+        this._first_responder = null;
+        return this._first_responder;
+      }
+    }
     // A first responder inside a region being torn down falls back here.
     release_first_responder(element) {
       let owner = this.responder_element(this.first_responder());
@@ -1248,6 +1580,211 @@
       if (!owner) return;
       let target = previous && owner.contains(previous) ? previous : owner.__swill_view__.first_focusable_element();
       if (target) return target.focus();
+    }
+    // ---- window templates, containers, and content ----
+    // <template for="window" name="x"> anywhere, or <template name="x"> directly
+    // under the root. Templates are inert; content is cloned from them.
+    scan_templates() {
+      return this._root.querySelectorAll("template[name]").forEach((template) => {
+        let name = template.getAttribute("name");
+        if (template.getAttribute("for") === "window" || template.parentElement === this._root) {
+          this._templates[name] = template;
+        }
+      });
+    }
+    // Rescans once on a miss so templates inserted after launch are found.
+    window_template(name) {
+      let found = this._templates[name];
+      if (found) return found;
+      this.scan_templates();
+      return this._templates[name];
+    }
+    clone_window_content(name) {
+      let captured = this._captured[name];
+      if (captured) return captured.cloneNode(true);
+      let template = this.window_template(name);
+      if (!template) throw new Error(`No window content template: ${name}`);
+      let content = template.content;
+      let node = content ? content.firstElementChild : template.firstElementChild;
+      if (!node) throw new Error(`Empty window template: ${name}`);
+      return node.cloneNode(true);
+    }
+    window_containers() {
+      let found = [];
+      if (this._root.hasAttribute("window")) found.push(this._root);
+      this._root.querySelectorAll("[window]").forEach((container) => found.push(container));
+      return found;
+    }
+    // Before awakening: capture pre-rendered content under the container's
+    // name so it can be reloaded later, and fill empty containers from the
+    // template their name attribute (or window name) selects.
+    prepare_window_containers() {
+      let params = this._fragments.params();
+      return this.window_containers().forEach((container) => {
+        let window_name = container.getAttribute("window");
+        let default_name = container.getAttribute("name") ?? window_name;
+        let first = container.firstElementChild;
+        if (first && !this._captured[default_name]) {
+          this._captured[default_name] = first.cloneNode(true);
+        }
+        ;
+        let content_name = this.requested_content(
+          window_name,
+          default_name,
+          params[window_name]
+        );
+        if (first && content_name === default_name) return;
+        container.replaceChildren();
+        container.appendChild(this.clone_window_content(content_name));
+        container.setAttribute("name", content_name);
+      });
+    }
+    // The fragment may name the content to show; unknown names are reported
+    // and the default stands.
+    requested_content(window_name, default_name, requested) {
+      if (requested == null || requested === default_name) return default_name;
+      if (this.window_content_predicate(requested)) return requested;
+      Runtime.warn(`window "${window_name}" requested unknown content "${requested}"`);
+      return default_name;
+    }
+    register_window_containers() {
+      return this.window_containers().forEach((container) => {
+        let window = new Swill__Window(container.getAttribute("window"), container);
+        window.assign_content(
+          container.getAttribute("name"),
+          this.top_controller_in(container)
+        );
+        this._windows.push(window);
+      });
+    }
+    // The first controller inside the container whose parent is outside it.
+    top_controller_in(container) {
+      return new Swill__Awakening().controllers_within(container).find((controller) => this.top_within_predicate(controller, container));
+    }
+    top_within_predicate(controller, container) {
+      let parent = controller.parent();
+      return parent == null || !container.contains(parent.view().element());
+    }
+    matches_container_predicate(window, name) {
+      return window.container_predicate() && window.name() === name;
+    }
+    window_containing(controller) {
+      return this._windows.find((window) => this.holds_predicate(window, controller));
+    }
+    holds_predicate(window, controller) {
+      return window.contains_controller_predicate(controller);
+    }
+    attached_predicate(responder) {
+      if (!responder) return false;
+      let element = this.responder_element(responder);
+      return element != null && this._root.contains(element);
+    }
+    // At terminate: a container's content is torn down in place; a dialog is
+    // dismissed.
+    release_window(window) {
+      if (window.container_predicate()) {
+        window.dispose_restoration();
+        return new Swill__Awakening().detach(window.root());
+      } else {
+        return window.dismiss();
+      }
+    }
+    // ---- fragment restoration ----
+    //
+    // Restoration reuses the binding machinery: restorable paths are
+    // observed and written exactly as bind paths are. Runs after the load
+    // phase and before controller_did_load, so restored values are in place
+    // for it.
+    restore_window_state(window, prune_stale, write_content) {
+      let stale = window.dispose_restoration();
+      let controller = window.controller();
+      let declarations2 = controller ? Runtime.restorations(controller) : [];
+      let keys = declarations2.map((declaration) => window.scoped_key(declaration.key));
+      let content = window.content_name();
+      if (write_content && content) {
+        this._fragments.write(window.name(), content, "replace");
+      }
+      ;
+      if (prune_stale) {
+        stale.forEach((key) => {
+          if (!keys.includes(key)) this._fragments.write(key, null, "replace");
+        });
+      }
+      ;
+      if (!controller) return;
+      let params = this._fragments.params();
+      let applied = 0;
+      this._fragments.suspended(() => declarations2.forEach((declaration) => {
+        let text = params[window.scoped_key(declaration.key)];
+        if (text == null) return;
+        let value = Runtime.decodeFragment(declaration.type, text);
+        if (value == null) return;
+        Runtime.writePath(controller, declaration.path, value);
+        applied++;
+      }));
+      if (declarations2.length > 0) controller.controller_did_restore(applied > 0);
+      return declarations2.forEach((declaration) => {
+        let disposer = Runtime.observePath(
+          controller,
+          declaration.path,
+          (_value) => this.write_window_state(window)
+        );
+        window.add_restoration(disposer, window.scoped_key(declaration.key));
+      });
+    }
+    restore_launched_windows() {
+      return this._windows.forEach((window) => this.restore_window_state(window, false, true));
+    }
+    // Push the controller's current restorable state into the fragment.
+    write_window_state(window) {
+      let controller = window.controller();
+      if (!controller) return;
+      return Runtime.restorations(controller).forEach((declaration) => {
+        let value = Runtime.encodeFragment(Runtime.readPath(
+          controller,
+          declaration.path
+        ));
+        this._fragments.write(
+          window.scoped_key(declaration.key),
+          value,
+          "replace"
+        );
+      });
+    }
+    // Back/Forward: a container whose fragment names other known content loads
+    // it without touching history; otherwise its state is reapplied.
+    apply_fragment() {
+      let params = this._fragments.params();
+      return this._windows.forEach((window) => this.apply_fragment_to(window, params));
+    }
+    apply_fragment_to(window, params) {
+      if (!window.container_predicate()) return;
+      let requested = params[window.name()];
+      if (requested != null && requested !== window.content_name()) {
+        return this.window_content_predicate(requested) ? this.load_window_content_with(
+          window.name(),
+          requested,
+          "none"
+        ) : Runtime.warn(`window "${window.name()}" requested unknown content "${requested}"`);
+      } else {
+        return this.restore_window_state(window, false, false);
+      }
+    }
+    // Code-created content awakens through the same path as markup: the
+    // observer wires added subtrees and detaches removed ones. Explicit wiring
+    // before the observer runs is harmless, since both are idempotent.
+    watch(root) {
+      if (typeof MutationObserver === "undefined") return;
+      let awakening = new Swill__Awakening();
+      this._observer = new MutationObserver((records, _observer) => records.forEach((record2) => {
+        record2.removedNodes.forEach((node) => {
+          if (node.nodeType === 1) awakening.detach(node);
+        });
+        record2.addedNodes.forEach((node) => {
+          if (node.nodeType === 1) awakening.wire(node);
+        });
+      }));
+      return this._observer.observe(root, { childList: true, subtree: true });
     }
   };
   var Swill__Launcher = class extends Swill__Object {
@@ -1626,6 +2163,9 @@
           "awake_from_dom": {
             "arity": 0
           },
+          "controller_did_restore": {
+            "arity": 1
+          },
           "controller_did_load": {
             "arity": 0
           },
@@ -1724,6 +2264,12 @@
           "wire": {
             "arity": 1
           },
+          "awaken": {
+            "arity": 1
+          },
+          "finish": {
+            "arity": 1
+          },
           "load": {
             "arity": 1
           },
@@ -1737,6 +2283,15 @@
           "create_view": {
             "arity": 1
           },
+          "controllers_within": {
+            "arity": 1
+          },
+          "collect_controllers": {
+            "arity": 2
+          },
+          "detach": {
+            "arity": 1
+          },
           "nearest_view": {
             "arity": 1
           },
@@ -1745,8 +2300,90 @@
           }
         }
       },
+      "Swill::Fragments": {
+        constructor: Swill__Fragments,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "available?": {
+            "arity": 0,
+            "js": "available_predicate"
+          },
+          "params": {
+            "arity": 0
+          },
+          "write": {
+            "arity": 3
+          },
+          "suspended": {
+            "arity": 1
+          },
+          "observe": {
+            "arity": 1
+          },
+          "release": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Window": {
+        constructor: Swill__Window,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 2
+          },
+          "scoped_key": {
+            "arity": 1
+          },
+          "add_restoration": {
+            "arity": 2
+          },
+          "dispose_restoration": {
+            "arity": 0
+          },
+          "name": {
+            "arity": 0
+          },
+          "root": {
+            "arity": 0
+          },
+          "controller": {
+            "arity": 0
+          },
+          "content_name": {
+            "arity": 0
+          },
+          "closed": {
+            "arity": 0
+          },
+          "saved_first_responder": {
+            "arity": 0
+          },
+          "save_first_responder": {
+            "arity": 1
+          },
+          "assign_content": {
+            "arity": 2
+          },
+          "container?": {
+            "arity": 0,
+            "js": "container_predicate"
+          },
+          "contains_controller?": {
+            "arity": 1,
+            "js": "contains_controller_predicate"
+          },
+          "dismiss": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::Application": {
         constructor: Swill__Application,
+        mixins: [Swill__Ownership],
         properties: {},
         methods: {
           "launch": {
@@ -1767,6 +2404,28 @@
           "application_will_terminate": {
             "arity": 0
           },
+          "load_window_content": {
+            "arity": 2
+          },
+          "load_window_content_with": {
+            "arity": 3
+          },
+          "show_window": {
+            "arity": 1
+          },
+          "show_window_in": {
+            "arity": 2
+          },
+          "dismiss": {
+            "arity": 1
+          },
+          "window_named": {
+            "arity": 1
+          },
+          "window_content?": {
+            "arity": 1,
+            "js": "window_content_predicate"
+          },
           "first_responder": {
             "arity": 0
           },
@@ -1775,6 +2434,9 @@
           },
           "sync_first_responder": {
             "arity": 2
+          },
+          "focus_left": {
+            "arity": 1
           },
           "release_first_responder": {
             "arity": 1
@@ -1787,6 +2449,70 @@
           },
           "restore_focus": {
             "arity": 2
+          },
+          "scan_templates": {
+            "arity": 0
+          },
+          "window_template": {
+            "arity": 1
+          },
+          "clone_window_content": {
+            "arity": 1
+          },
+          "window_containers": {
+            "arity": 0
+          },
+          "prepare_window_containers": {
+            "arity": 0
+          },
+          "requested_content": {
+            "arity": 3
+          },
+          "register_window_containers": {
+            "arity": 0
+          },
+          "top_controller_in": {
+            "arity": 1
+          },
+          "top_within?": {
+            "arity": 2,
+            "js": "top_within_predicate"
+          },
+          "matches_container?": {
+            "arity": 2,
+            "js": "matches_container_predicate"
+          },
+          "window_containing": {
+            "arity": 1
+          },
+          "holds?": {
+            "arity": 2,
+            "js": "holds_predicate"
+          },
+          "attached?": {
+            "arity": 1,
+            "js": "attached_predicate"
+          },
+          "release_window": {
+            "arity": 1
+          },
+          "restore_window_state": {
+            "arity": 3
+          },
+          "restore_launched_windows": {
+            "arity": 0
+          },
+          "write_window_state": {
+            "arity": 1
+          },
+          "apply_fragment": {
+            "arity": 0
+          },
+          "apply_fragment_to": {
+            "arity": 2
+          },
+          "watch": {
+            "arity": 1
           }
         }
       },

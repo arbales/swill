@@ -14,6 +14,11 @@ export function validate_attribute(object, name, value, previous) {
   return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
 }
 
+// restorable declarations, including inherited ones.
+export function restorations(object) {
+  return declarations(object.constructor, "restorations");
+}
+
 export function outlets(object) {
   return [...declarations(object.constructor, "properties").values()].filter(descriptor => descriptor.outlet);
 }

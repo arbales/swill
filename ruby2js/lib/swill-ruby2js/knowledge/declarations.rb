@@ -29,6 +29,50 @@ module Swill
           node.children.each { |child| validate_expression!(child) }
         end
 
+        # restorable :query, key: :q — a bindable path whose value the
+
+        # application keeps in the URL fragment. Types are resolved at validation.
+
+        def collect_restorable(entry, node)
+
+          _, _, path, options = node.children
+
+          unless path && %i[sym str].include?(path.type)
+
+            raise CompileError, "restorable path must be a literal symbol or string"
+
+          end
+
+          key = nil
+
+          if options
+
+            raise CompileError, "restorable accepts only key:" unless options.type == :hash
+
+            options.children.each do |pair|
+
+              name, value = pair.children
+
+              raise CompileError, "restorable accepts only key:" unless name.type == :sym && name.children.first == :key
+
+              raise CompileError, "restorable key must be a literal symbol or string" unless %i[sym str].include?(value.type)
+
+              key = value.children.first.to_s
+
+            end
+
+          end
+
+          text = path.children.first.to_s
+
+          raise CompileError, "restorable path must be a dotted property path" unless text.match?(/\A[a-z_]\w*(?:\.[a-z_]\w*)*\z/)
+
+          entry["restorations"] << {"path" => text, "key" => key || text}
+
+        end
+
+        
+
         def collect_property(entry, node)
           call = node.type == :block ? node.children.first : node
           _, macro, name, options = call.children

@@ -75,9 +75,19 @@ module Demo
     extend T::Sig
 
     property :count, type: Integer, default: 0
+    property :restored, type: T::Boolean, default: false
+
+    # When this badge is window content, its count lives in the URL fragment
+    # under the window's name (main.n=3) and comes back on Back/Forward.
+    restorable :count, key: :n
 
     property :title, type: String do
       "Badge #{count}"
+    end
+
+    sig { override.params(restored: T::Boolean).void }
+    def controller_did_restore(restored)
+      self.restored = restored
     end
 
     sig { void }
@@ -88,6 +98,13 @@ module Demo
     sig { void }
     def clear
       self.count = 0
+    end
+
+    # A badge presented as a dialog closes itself through the application.
+    sig { void }
+    def close
+      app = application
+      app.dismiss(self) if app
     end
   end
 end
@@ -103,6 +120,19 @@ module Demo
     sig { void }
     def application_did_launch
       self.launched = true
+    end
+
+    # Alternate the main window between two templates.
+    sig { void }
+    def swap_window
+      current = window_named("main")
+      name = current && current.content_name == "welcome" ? "farewell" : "welcome"
+      load_window_content("main", name)
+    end
+
+    sig { void }
+    def open_palette
+      show_window("palette")
     end
 
     # Clears every awakened controller that handles clear; the metadata

@@ -6,7 +6,7 @@ module Swill
     class CompileError < StandardError; end
 
     # Intrinsics introduced by built-in filters must not capture source classes.
-    JS_INTRINSICS = %w[Object Array String Number Math JSON Error].freeze
+    JS_INTRINSICS = %w[Object Array String Number Math JSON Error Promise MutationObserver URLSearchParams].freeze
 
     # Encoded names shared by the compiler, its metadata, and generated code.
     module Names

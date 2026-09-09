@@ -15,7 +15,7 @@ test("script loading installs both artifacts using a single runtime", () => {
   assert.equal(Runtime.resolve("Swill::Model::Base"), Base);
   assert.equal(Swill.Runtime, Runtime);
   assert.equal(Swill.Swill__Model__Base, Base);
-  assert.deepEqual(Object.keys(environment.context), ["Swill"]);
+  assert.deepEqual(Object.keys(environment.context).filter(key => !["console", "URLSearchParams"].includes(key)), ["Swill"]);
   const controller = new (Runtime.resolve("Demo::Controller"))();
   const person = new (Runtime.resolve("Demo::SpecialPerson"))();
   assert.ok(person instanceof Base);

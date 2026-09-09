@@ -466,7 +466,7 @@ test("invalid meta is rejected before registering preceding valid classes", () =
 
 // ---- nested controller ownership ----
 
-import {element, keyEvent} from "./dom.mjs";
+import {element, keyEvent, Browser} from "./dom.mjs";
 
 const Awakening = Runtime.resolve("Swill::Awakening");
 const Badge = Runtime.resolve("Demo::Badge");
@@ -679,7 +679,7 @@ function pageFixture({readyState = "loading", log = [], appName = "Demo::Applica
   const body = element("body", {application: appName}, [main]);
   const document = element("#document", {}, [body]);
   document.readyState = readyState;
-  document.defaultView = new EventTarget();
+  document.defaultView = new Browser();
   return {log, document, body, main, badge, parentTitle, badgeTitle, resetButton, nameInput};
 }
 
@@ -985,6 +985,19 @@ test("the application owns the first responder and moves focus with it", () => {
   assert.equal(application.first_responder(), parent.name_field, "browser focus reconciles the first responder");
   f.resetButton.focus();
   assert.equal(application.first_responder(), badge);
+  // Leaving for the browser's own chrome keeps the first responder, as Cocoa
+  // does; when focus comes back to the page, keys still reach it.
+  f.resetButton.blur();
+  assert.equal(application.first_responder(), badge, "a null focusout destination keeps the first responder");
+  f.resetButton.dispatchEvent(keyEvent("keydown", "x"));
+  // Leaving for another part of the page outside the application releases it.
+  const outside = element("input", {});
+  f.document.append(outside);
+  f.resetButton.focus();
+  outside.focus();
+  assert.equal(application.first_responder(), application, "focus elsewhere in the page releases the first responder");
+  f.nameInput.focus();
+  assert.equal(application.first_responder(), parent.name_field);
 });
 
 test("a refusing first responder keeps focus", () => {
@@ -1023,4 +1036,190 @@ test("key events route from the first responder up the chain", () => {
   application.terminate();
   f.resetButton.focus();
   assert.equal(application.first_responder(), application, "terminate removed the listeners");
+});
+
+// ---- windows: templates, containers, dialogs, detach ----
+
+function windowedPage(hash = "") {
+  const seed = element("script", {type: "application/json", outlet: "seed"});
+  seed.textContent = '{"name": "Ada"}';
+  const nameInput = element("input", {bind: "person.name", outlet: "name_field"});
+  const badge = element("section", {controller: "Demo::Badge", outlet: "badge"}, [element("button", {"data-action": "bump"})]);
+  const mainWindow = element("section", {window: "main", name: "welcome"});
+  const prerendered = element("article", {controller: "Demo::Badge"}, [element("p", {bind: "title"}), element("i", {}, [])]);
+  prerendered.children[1].textContent = "pre-rendered";
+  const sideWindow = element("aside", {window: "side"}, [prerendered]);
+  const main = element("main", {controller: "Demo::Controller"}, [seed, nameInput, badge, mainWindow, sideWindow]);
+  const welcome = element("template", {for: "window", name: "welcome"}, [
+    element("article", {controller: "Demo::Badge"}, [element("p", {bind: "title"}), element("input", {})])
+  ]);
+  const farewell = element("template", {name: "farewell"}, [
+    element("article", {controller: "Demo::Badge"}, [element("p", {bind: "title"})])
+  ]);
+  const nested = element("div", {}, [element("template", {name: "ignored"}, [element("p", {})])]);
+  const palette = element("template", {for: "window", name: "palette"}, [
+    element("dialog", {controller: "Demo::Badge"}, [element("p", {bind: "title"}), element("button", {"data-action": "close"})])
+  ]);
+  const body = element("body", {application: "Demo::Application"}, [main, welcome, farewell, nested, palette]);
+  const document = element("#document", {}, [body]);
+  document.readyState = "complete";
+  document.defaultView = new Browser(hash);
+  const application = new Launcher().launch(document);
+  return {application, document, body, main, mainWindow, sideWindow, prerendered, welcome, palette, badge,
+    browser: document.defaultView};
+}
+
+test("window containers fill from templates at launch and keep pre-rendered content", () => {
+  const f = windowedPage();
+  const [parent, , windowBadge, sideBadge] = f.application.controllers();
+  assert.equal(f.mainWindow.children.length, 1);
+  assert.equal(f.mainWindow.getAttribute("name"), "welcome");
+  assert.equal(f.mainWindow.children[0].children[0].textContent, "Badge 0", "cloned content awakened in the launch pass");
+  assert.ok(windowBadge instanceof Badge);
+  assert.equal(windowBadge.parent(), parent, "window content nests under the containing controller");
+  assert.equal(f.application.window_named("main").controller(), windowBadge);
+  assert.equal(f.application.window_named("main").content_name(), "welcome");
+  assert.equal(f.sideWindow.children[0], f.prerendered, "pre-rendered content stays in place");
+  assert.equal(f.application.window_named("side").controller(), sideBadge);
+  assert.equal(f.application.window_content_predicate("side"), true, "pre-rendered content is captured under the window name");
+  assert.equal(f.application.window_content_predicate("farewell"), true, "a root-level template counts");
+  assert.equal(f.application.window_content_predicate("ignored"), false, "a nested template without for=window does not");
+  assert.equal(f.welcome.__swill_view__, undefined, "templates are inert");
+  assert.equal(f.welcome.content.firstElementChild.__swill_view__, undefined, "template content is never awakened");
+  assert.equal(f.application.first_responder(), parent.name_field);
+});
+
+test("load_window_content replaces, tears down, awakens, and moves focus", () => {
+  const f = windowedPage();
+  const [parent, , welcomeBadge] = f.application.controllers();
+  const teardown = [];
+  welcomeBadge.view_did_disappear = () => teardown.push("welcome");
+  const farewellBadge = f.application.load_window_content("main", "farewell");
+  assert.deepEqual(teardown, ["welcome"]);
+  assert.equal(welcomeBadge.view().controller_value(), null);
+  assert.ok(farewellBadge instanceof Badge);
+  assert.notEqual(farewellBadge, welcomeBadge);
+  assert.equal(f.mainWindow.getAttribute("name"), "farewell");
+  assert.equal(f.mainWindow.children.length, 1);
+  assert.equal(f.mainWindow.children[0].children[0].textContent, "Badge 0");
+  assert.equal(farewellBadge.parent(), parent);
+  assert.equal(f.application.window_named("main").controller(), farewellBadge);
+  assert.equal(f.application.first_responder(), parent.name_field, "content without a focusable element leaves focus alone");
+  const back = f.application.load_window_content("main", "welcome");
+  assert.equal(f.application.first_responder(), back, "focusable content takes the first responder");
+  assert.equal(f.document.activeElement, f.mainWindow.children[0].children[1]);
+  const again = f.application.load_window_content("side", "side");
+  assert.ok(again instanceof Badge, "captured pre-rendered content can be reloaded");
+  assert.notEqual(f.sideWindow.children[0], f.prerendered, "reloaded content is a clone");
+  assert.throws(() => f.application.load_window_content("main", "nope"), /No window content template: nope/);
+  assert.throws(() => f.application.load_window_content("nope", "welcome"), /No window container: nope/);
+});
+
+test("show_window presents a dialog whose dismissal restores the first responder", async () => {
+  const f = windowedPage();
+  const [parent] = f.application.controllers();
+  const window = f.application.show_window("palette");
+  const dialog = window.root();
+  assert.equal(dialog.parentElement, f.body);
+  assert.equal(dialog.open, true, "a dialog root is shown");
+  assert.ok(window.controller() instanceof Badge);
+  assert.equal(window.container_predicate(), false);
+  assert.equal(f.application.first_responder(), window.controller());
+  assert.equal(window.saved_first_responder(), parent.name_field);
+  let resolved = false;
+  window.closed().then(() => { resolved = true; });
+  dialog.querySelector("[data-action=close]").click();
+  await window.closed();
+  assert.equal(resolved, true);
+  assert.equal(dialog.parentElement, null, "dismiss removes the root");
+  assert.equal(dialog.open, false);
+  assert.equal(window.controller().view().controller_value(), null, "dismiss tears down the controller");
+  assert.equal(f.application.first_responder(), parent.name_field, "the saved first responder returns");
+  assert.equal(f.application.dismiss(window.controller()), false, "a dismissed window is gone");
+  assert.throws(() => f.application.show_window("ignored"), /No window content template: ignored/);
+  const plain = element("template", {for: "window", name: "plain"}, [
+    element("div", {}, [element("section", {controller: "Demo::Badge"})])
+  ]);
+  f.body.append(plain);
+  const before = f.body.children.length;
+  assert.throws(() => f.application.show_window("plain"), /Window root has no controller: plain/,
+    "templates inserted later are found and still validated");
+  assert.equal(f.body.children.length, before, "a rejected window leaves nothing in the page");
+  const host = element("div", {});
+  f.body.append(host);
+  const hosted = f.application.show_window_in("palette", host);
+  assert.equal(hosted.root().parentElement, host, "show_window_in presents into a chosen element");
+  f.application.dismiss(hosted.controller());
+  assert.equal(host.children.length, 0);
+});
+
+test("detach tears down a removed subtree and terminate releases windows", () => {
+  const f = windowedPage();
+  const [parent, badge, welcomeBadge, sideBadge] = f.application.controllers();
+  const awakening = new Awakening();
+  assert.deepEqual(Array.from(awakening.controllers_within(f.main)), [parent, badge, welcomeBadge, sideBadge]);
+  f.badge.remove();
+  awakening.detach(f.badge);
+  assert.equal(badge.view().controller_value(), null);
+  assert.deepEqual(Array.from(parent.child_controllers()), [welcomeBadge, sideBadge]);
+  const window = f.application.show_window("palette");
+  f.application.terminate();
+  assert.equal(window.root().parentElement, null, "terminate dismisses dialogs");
+  assert.equal(welcomeBadge.view().controller_value(), null, "terminate tears down window content");
+  assert.equal(parent.view().controller_value(), null);
+});
+
+// ---- URL restoration ----
+
+test("window content and restorable state round-trip through the fragment", () => {
+  const f = windowedPage("#main=farewell&main.n=3&main.junk=x");
+  const [, , badge] = f.application.controllers();
+  assert.equal(f.mainWindow.getAttribute("name"), "farewell", "the fragment chose the content at launch");
+  assert.equal(badge.count, 3, "an Integer path decoded its value");
+  assert.equal(badge.restored, true, "controller_did_restore saw the applied value");
+  assert.equal(f.browser.location.hash, "#main=farewell&main.n=3&main.junk=x", "launch only reads");
+  badge.count = 4;
+  assert.equal(f.browser.location.hash, "#main=farewell&main.n=4&main.junk=x", "state changes replace the fragment value");
+  assert.equal(f.browser.entries.length, 1, "state changes add no history entries");
+  const welcomeBadge = f.application.load_window_content("main", "welcome");
+  assert.equal(f.browser.location.hash, "#main=welcome&main.n=4&main.junk=x", "navigation pushes the content; a key the new controller shares carries over");
+  assert.equal(f.browser.entries.length, 2);
+  assert.equal(welcomeBadge.count, 4, "the carried value was applied to the new controller");
+  assert.equal(welcomeBadge.restored, true);
+  welcomeBadge.count = 9;
+  assert.equal(f.browser.location.hash, "#main=welcome&main.n=9&main.junk=x");
+  badge.count = 5;
+  assert.equal(f.browser.location.hash, "#main=welcome&main.n=9&main.junk=x", "the replaced controller no longer writes");
+  f.browser.back();
+  assert.equal(f.mainWindow.getAttribute("name"), "farewell", "Back restores the content");
+  const restoredBadge = f.application.window_named("main").controller();
+  assert.equal(restoredBadge.count, 4, "Back restores the state that was in that entry");
+  assert.equal(f.browser.entries.length, 1, "Back/Forward routing writes no history");
+  f.browser.navigate("#main=farewell&main.n=oops");
+  assert.equal(f.application.window_named("main").controller().count, 4, "a value that is not an Integer is ignored");
+  f.browser.navigate("#main=missing");
+  assert.equal(f.mainWindow.getAttribute("name"), "farewell", "unknown content is reported and ignored");
+});
+
+test("restoration state is scoped per window and pruned when content changes", () => {
+  const f = windowedPage("#side=side&side.n=2");
+  const sideBadge = f.application.window_named("side").controller();
+  assert.equal(sideBadge.count, 2);
+  const mainBadge = f.application.window_named("main").controller();
+  assert.equal(mainBadge.count, 0, "another window's key does not apply");
+  const dialog = f.application.show_window("palette");
+  dialog.controller().count = 7;
+  assert.match(f.browser.location.hash, /palette\.n=7/, "a dialog's state is scoped under its name");
+  f.application.dismiss(dialog.controller());
+  dialog.controller().count = 8;
+  assert.doesNotMatch(f.browser.location.hash, /palette\.n=8/, "a dismissed window stops writing");
+  assert.equal(f.application.window_content_predicate("side"), true);
+});
+
+test("fragment routing is inert without a browser window", () => {
+  const f = pageFixture({readyState: "complete"});
+  f.document.defaultView = new EventTarget();
+  const application = new Launcher().launch(f.document);
+  assert.ok(application.controllers().length > 0);
+  application.terminate();
 });

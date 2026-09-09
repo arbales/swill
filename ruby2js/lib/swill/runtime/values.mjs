@@ -71,6 +71,30 @@ export function valueRead(value, name) {
   }
 }
 
+// URL fragment values are strings. A declared leaf type decodes integers
+// and booleans; anything else stays a string. Undefined means "not a value
+// of that type", and the caller ignores it.
+export function decodeFragment(type, text) {
+  const inner = (type ?? "").replace(/^T\.nilable\((.+)\)$/, "$1");
+  switch (inner) {
+    case "Integer": {
+      const number = Number.parseInt(text, 10);
+      return Number.isNaN(number) ? undefined : number;
+    }
+    case "T::Boolean":
+      if (text === "true" || text === "1") return true;
+      if (text === "false" || text === "0") return false;
+      return undefined;
+    default:
+      return text;
+  }
+}
+
+// nil and "" leave the fragment; everything else is written as text.
+export function encodeFragment(value) {
+  return value == null || value === "" ? null : String(value);
+}
+
 // Readers defined for nil itself; any other reader on a nil intermediate
 // yields nil, so partially built paths render as empty.
 export const NIL_READERS = ["nil?", "blank?", "present?"];

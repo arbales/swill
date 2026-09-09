@@ -49,7 +49,7 @@ export function install(meta) {
       if (descriptor.mixins?.length) include(klass, descriptor.mixins, incoming);
       const properties = Object.entries(descriptor.properties ?? {}).map(([name, property]) =>
         ({name, js: name, ...property, computed: typeof property.compute === "function"}));
-      installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries);
+      installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries, descriptor.restorations ?? []);
       pending.delete(klass);
       progress = true;
     }
@@ -110,9 +110,9 @@ export function classSetting(klass, name, values) {
   return typeof parent?.[name] === "function" ? parent[name]() : null;
 }
 
-export function installClass(klass, name, properties, methods, registries = {}) {
+export function installClass(klass, name, properties, methods, registries = {}, restorations = []) {
   if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
-  installMetadata(klass, properties, methods);
+  installMetadata(klass, properties, methods, restorations);
   const propertyByName = new Map(properties.map(property => [property.name, property]));
   for (const [registryName, seeds] of Object.entries(registries)) {
     if (typeof klass[registryName] !== "function") {

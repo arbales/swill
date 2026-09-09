@@ -15,6 +15,8 @@
   var Swill__Actions = framework.Swill__Actions;
   var Swill__Outlets = framework.Swill__Outlets;
   var Swill__Awakening = framework.Swill__Awakening;
+  var Swill__Fragments = framework.Swill__Fragments;
+  var Swill__Window = framework.Swill__Window;
   var Swill__Application = framework.Swill__Application;
   var Swill__Launcher = framework.Swill__Launcher;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
@@ -145,16 +147,35 @@
     }
   };
   var Demo__Badge = class extends Swill__Controller {
+    // When this badge is window content, its count lives in the URL fragment
+    // under the window's name (main.n=3) and comes back on Back/Forward.
+    controller_did_restore(restored) {
+      return this.restored = restored;
+    }
     bump() {
       return this.count = this.count + 1;
     }
     clear() {
       return this.count = 0;
     }
+    // A badge presented as a dialog closes itself through the application.
+    close() {
+      let app = this.application();
+      if (app) return app.dismiss(this);
+    }
   };
   var Demo__Application = class extends Swill__Application {
     application_did_launch() {
       return this.launched = true;
+    }
+    // Alternate the main window between two templates.
+    swap_window() {
+      let current = this.window_named("main");
+      let name = Runtime.isTruthy(current && current.content_name() === "welcome") ? "farewell" : "welcome";
+      return this.load_window_content("main", name);
+    }
+    open_palette() {
+      return this.show_window("palette");
     }
     // Clears every awakened controller that handles clear; the metadata
     // query is the explicit stand-in for respond_to?.
@@ -467,6 +488,13 @@
               return 0;
             }
           },
+          "restored": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function default_restored() {
+              return false;
+            }
+          },
           "title": {
             type: "String",
             attribute: false,
@@ -475,11 +503,18 @@
             }
           }
         },
+        restorations: [{ path: "count", key: "n", type: "Integer" }],
         methods: {
+          "controller_did_restore": {
+            "arity": 1
+          },
           "bump": {
             "arity": 0
           },
           "clear": {
+            "arity": 0
+          },
+          "close": {
             "arity": 0
           }
         }
@@ -497,6 +532,12 @@
         },
         methods: {
           "application_did_launch": {
+            "arity": 0
+          },
+          "swap_window": {
+            "arity": 0
+          },
+          "open_palette": {
             "arity": 0
           },
           "reset": {
