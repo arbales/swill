@@ -24,7 +24,7 @@ module Swill
       controller
     end
 
-    sig { params(controller: Controller, prefix: String, element: T.untyped).void }
+    sig { params(controller: Controller, prefix: T.nilable(Symbol), element: T.untyped).void }
     def wire_region(controller, prefix, element)
       each_child(element, ->(child) do
         if child.hasAttribute("controller")
@@ -37,7 +37,7 @@ module Swill
       end)
     end
 
-    sig { params(controller: Controller, prefix: String, element: T.untyped).void }
+    sig { params(controller: Controller, prefix: T.nilable(Symbol), element: T.untyped).void }
     def wire_properties(controller, prefix, element)
       element.getAttributeNames().forEach do |name|
         if name.slice(0, 5) == "bind-"
@@ -47,16 +47,16 @@ module Swill
       end
     end
 
-    sig { params(prefix: String, path: String).returns(String) }
+    sig { params(prefix: T.nilable(Symbol), path: String).returns(String) }
     def resolve_path(prefix, path)
       return path.slice(1, path.length) || "" if path[0] == "@"
-      return path if prefix.length == 0
-      path.length == 0 ? prefix : "#{prefix}.#{path}"
+      return path if prefix == nil
+      path.length == 0 ? "#{prefix}" : "#{prefix}.#{path}"
     end
 
     # A value binding. On a child controller's root the value becomes the
     # child's represented object; otherwise it renders into the element.
-    sig { params(object: Swill::Object, element: T.untyped, prefix: String).returns(T.proc.void) }
+    sig { params(object: Swill::Object, element: T.untyped, prefix: T.nilable(Symbol)).returns(T.proc.void) }
     def wire_element(object, element, prefix)
       path = resolve_path(prefix, element.getAttribute("bind"))
       view = element.__swill_view__
@@ -100,7 +100,7 @@ module Swill
       Runtime.observePath(object, path, sync)
     end
 
-    sig { params(object: Swill::Object, prefix: String, element: T.untyped, property: String, path: String).returns(T.proc.void) }
+    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: T.untyped, property: String, path: String).returns(T.proc.void) }
     def wire_property(object, prefix, element, property, path)
       resolved = resolve_path(prefix, path)
       name = property == "readonly" ? "readOnly" : property

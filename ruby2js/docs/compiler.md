@@ -355,6 +355,9 @@ For `receiver.name(args)` where the receiver is not `self`:
 | Any | `nil?` | `receiver == null` |
 | `String` or `T.nilable(String)` | `strip`, `upcase`, `downcase`, `blank?`, `present?`, `empty?` | `Runtime.strip(receiver)`, `Runtime.upcase(...)`, `Runtime.downcase(...)`, `Runtime.isBlank(...)`, `Runtime.isPresent(...)`, `Runtime.isEmpty(...)` |
 | `Array`, `Hash`, `T::Array[...]`, `T::Hash[...]` | `empty?`, `blank?`, `present?` | The same runtime readers |
+| `Array`, `T::Array[...]` | `each`, `map`, `select` with a block | `forEach`, `map`, `filter` with an arrow function; block parameters take the element type of `T::Array[X]` |
+| `Array`, `T::Array[...]` | `include?(x)`, `size`, `length`, `first`, `last` | `includes(x)`, `.length`, `[0]`, `at(-1)` |
+| Any, or implicit self | `respond_to?(:name)` with a literal name | `Runtime.respondsTo(receiver, "name")`; a dynamic name is rejected |
 | `String` | Anything else | Pragma filter if it applies, else an explicit call |
 | Unknown or `T.untyped` | No arguments and the name is a property on any collected entry, or a string reader name | `Runtime.read(receiver, "name")` |
 | Unknown, `T.untyped`, or `T.proc...` | `call(args)` or `.(args)` | `receiver(args)` for a local receiver; `receiver.call(null, args)` otherwise |
@@ -411,6 +414,7 @@ parent's, so lookups do not walk the chain at call time.
 | `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null`; the empty path is the object itself |
 | `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Error: `Read-only binding` when the leaf is computed, not a property, or the path is empty |
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
+| `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted |
 | `hasAction(object, name)` | Whether a collected method of arity 0, 1, or 2 exists; the responder chain uses it to decide where an action stops |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
@@ -485,7 +489,7 @@ where it is raised:
 | Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; mutable defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, a non-literal `optional:`, or on a class that is not a `Swill::Controller` |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
-| Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval` |
+| Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name |
 | Exceptions | Any `raise` form other than a literal message string |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |
 | Members | Two members with the same encoded JavaScript name |

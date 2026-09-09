@@ -145,11 +145,13 @@ action nobody handles raises. Actions default to `click`; `event:action`
 selects another DOM event.
 
 Bindings are Ruby key paths. `bind="path"` is two-way for form controls and
-one-way for text; `bind-prop="path"` writes a DOM property one way, with
-`data-` and `aria-` names going through attributes, boolean properties using
-Ruby truthiness, and `readonly` mapping to `readOnly`. Paths resolve under the
-controller's `binding_root`, and a leading `@` binds against the controller
-itself regardless of the root. Reader chains may end in `strip`, `upcase`,
+one-way for text; `bind-prop="path"` writes the DOM property named by the
+HTML attribute one way, so `bind-disabled`, `bind-hidden`, and `bind-readonly`
+set the matching properties with Ruby truthiness, and `bind-data-*` names go
+through attributes because they are not properties. Paths resolve under the
+controller's `binding_root`, a Symbol naming a property or nil for the
+controller itself, and a leading `@` binds against the controller regardless
+of the root. Reader chains may end in `strip`, `upcase`,
 `downcase`, `blank?`, `present?`, `empty?`, or `nil?`; the first three
 predicates answer for a nil intermediate, and any other reader on nil yields
 nil. A write through a missing owner is dropped; a read-only leaf on a

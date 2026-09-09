@@ -17,8 +17,8 @@ module Swill
       self
     end
 
-    # Every controller awakened at launch, in document order, as a JavaScript array.
-    sig { returns(T.untyped) }
+    # Every controller awakened at launch, in document order.
+    sig { returns(T::Array[T.untyped]) }
     def controllers
       @controllers
     end

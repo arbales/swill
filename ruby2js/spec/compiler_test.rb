@@ -585,6 +585,45 @@ class CompilerTest < Minitest::Test
     assert_includes browser, "new (Runtime.resolve(name))(element)"
   end
 
+  def test_array_idioms_and_respond_to_lower_from_static_evidence
+    js = javascript(<<~'RUBY')
+      property :names, type: T.untyped, default: nil
+
+      sig { params(people: T::Array[TestObject], words: T::Array[String]).returns(T.untyped) }
+      def survey(people, words)
+        seen = []
+        people.each do |person|
+          seen.push(person.label) if person.respond_to?(:label)
+        end
+        shouted = words.map { |word| word.upcase }
+        short = words.select { |word| word.strip.empty? }
+        [seen, shouted, short, words.include?("Ada"), words.size, words.first, words.last, respond_to?(:survey), respond_to?(:missing)]
+      end
+
+      def label; "labelled"; end
+
+      def untyped(things)
+        things.each { |thing| thing }
+      end
+    RUBY
+    assert_includes js, "people.forEach((person) => {"
+    assert_includes js, 'Runtime.respondsTo(person, "label")'
+    assert_includes js, "seen.push(person.label())", "block parameters take the element type"
+    assert_includes js, "words.map((word) => Runtime.upcase(word))"
+    assert_includes js, "words.filter((word) => Runtime.isEmpty(Runtime.strip(word)))"
+    assert_includes js, 'words.includes("Ada")'
+    assert_includes js, "words.length"
+    assert_includes js, "words[0]"
+    assert_includes js, "words.at(-1)"
+    assert_includes js, 'Runtime.respondsTo(this, "survey")'
+    assert_includes js, "things.each(", "an untyped receiver keeps its Ruby method name"
+    assert_raises(Spike::CompileError) { javascript("def ask(name); respond_to?(name); end") }
+    assert_equal [["labelled"], ["ADA", " "], [" "], true, 2, "Ada", " ", true, false], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify(object.survey([object, {}], ["Ada", " "])));
+    JS
+  end
+
   def test_raise_produces_error_objects_and_rejects_other_forms
     js = javascript('def boom; raise "nope"; end')
     assert_includes js, 'throw new Error("nope")'

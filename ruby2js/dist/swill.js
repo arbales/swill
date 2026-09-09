@@ -355,6 +355,19 @@
       if (!method || method.arity !== args.length) throw new Error(`Unknown action or wrong arity: ${name}`);
       return object[method.js](...args);
     },
+    // Ruby respond_to? over installed metadata: declared properties, their
+    // writers, collected methods, and the value readers plain values answer to.
+    respondsTo(object, name) {
+      if (object == null) return this.NIL_READERS.includes(name);
+      if (typeof object !== "object" && typeof object !== "function") return this.VALUE_READERS.includes(name);
+      const properties = declarations(object.constructor, "properties");
+      const methods = declarations(object.constructor, "methods");
+      if (name.endsWith("=")) {
+        const property = properties.get(name.slice(0, -1));
+        return !!property && !property.computed || methods.has(name);
+      }
+      return properties.has(name) || methods.has(name);
+    },
     hasAction(object, name) {
       const method = declarations(object.constructor, "methods").get(name);
       return !!method && method.arity <= 2;
@@ -604,10 +617,10 @@
   var Swill__Controller = class extends Swill__Responder {
     // The object a parent binding assigns through bind="path" on this
     // controller root. Editors resolve their own bindings under it.
-    // Prefix for bind paths in this controller region; "" binds against the
-    // controller itself. A leading @ in markup always ignores it.
+    // Property under which bind paths in this region resolve; nil binds
+    // against the controller itself. A leading @ in markup always ignores it.
     binding_root() {
-      return "";
+      return null;
     }
     attach(element) {
       this._view = element.__swill_view__ ?? new Swill__View(element);
@@ -748,8 +761,8 @@
     }
     resolve_path(prefix, path) {
       if (path[0] === "@") return path.slice(1, path.length) ?? "";
-      if (prefix.length === 0) return path;
-      return path.length === 0 ? prefix : `${prefix}.${path}`;
+      if (prefix == null) return path;
+      return path.length === 0 ? `${prefix}` : `${prefix}.${path}`;
     }
     // A value binding. On a child controller's root the value becomes the
     // child's represented object; otherwise it renders into the element.
@@ -1002,7 +1015,7 @@
       this.application_did_launch();
       return this;
     }
-    // Every controller awakened at launch, in document order, as a JavaScript array.
+    // Every controller awakened at launch, in document order.
     controllers() {
       return this._controllers;
     }

@@ -99,8 +99,8 @@ module Demo
     # query is the explicit stand-in for respond_to?.
     sig { void }
     def reset
-      controllers.forEach do |controller|
-        controller.clear() if Swill::Runtime.hasAction(controller, "clear")
+      controllers.each do |controller|
+        controller.clear if controller.respond_to?(:clear)
       end
     end
   end
@@ -115,9 +115,9 @@ module Demo
     # Controller-local state, reached from markup with bind="@note".
     property :note, type: String, default: ""
 
-    sig { returns(String) }
+    sig { returns(T.nilable(Symbol)) }
     def binding_root
-      "represented_object"
+      :represented_object
     end
   end
 end

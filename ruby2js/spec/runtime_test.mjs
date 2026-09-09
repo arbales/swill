@@ -247,8 +247,8 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   const input = new Element({bind: "name"}, "INPUT");
   const output = new Element({bind: "label"});
   const bindings = new Bindings();
-  const unbindInput = bindings.wire_element(person, input, "");
-  const unbindOutput = bindings.wire_element(person, output, "");
+  const unbindInput = bindings.wire_element(person, input, null);
+  const unbindOutput = bindings.wire_element(person, output, null);
   input.value = "Ada";
   input.dispatchEvent(new Event("input"));
   assert.equal(person.name, "Ada");
@@ -263,11 +263,11 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   assert.equal(output.textContent, "ADA");
   assert.equal(input.value, "Ignored");
   assert.throws(
-    () => bindings.wire_element(person, new Element({bind: "label"}, "INPUT"), ""),
+    () => bindings.wire_element(person, new Element({bind: "label"}, "INPUT"), null),
     /Read-only/
   );
   const readonly = new Element({bind: "label", readonly: ""}, "INPUT");
-  const unbindReadonly = bindings.wire_element(person, readonly, "");
+  const unbindReadonly = bindings.wire_element(person, readonly, null);
   assert.equal(readonly.value, "GRACE");
   readonly.value = "Ignored";
   readonly.dispatchEvent(new Event("input"));
@@ -275,7 +275,7 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   unbindReadonly();
 
   const checkbox = new Element({bind: "loud"}, "INPUT", "checkbox");
-  const unbindCheckbox = bindings.wire_element(person, checkbox, "");
+  const unbindCheckbox = bindings.wire_element(person, checkbox, null);
   assert.equal(checkbox.checked, true);
   checkbox.checked = false;
   checkbox.dispatchEvent(new Event("change"));
@@ -285,7 +285,7 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   // A path whose owner is not there yet wires, ignores writes, and catches up.
   const controller = new Controller();
   const pending = new Element({bind: "person.name"}, "INPUT");
-  const unbindPending = bindings.wire_element(controller, pending, "");
+  const unbindPending = bindings.wire_element(controller, pending, null);
   assert.equal(pending.value, "");
   pending.value = "Early";
   pending.dispatchEvent(new Event("input"));
@@ -814,12 +814,27 @@ function editorFixture() {
   return {parent, editor, parentTitle, parentClear, editorRoot, nameInput, blank, local, clearButton};
 }
 
+test("respond_to? answers from metadata for objects, nil, and plain values", () => {
+  const person = new Person();
+  assert.equal(Runtime.respondsTo(person, "name"), true);
+  assert.equal(Runtime.respondsTo(person, "name="), true);
+  assert.equal(Runtime.respondsTo(person, "label="), false, "computed properties have no writer");
+  assert.equal(Runtime.respondsTo(person, "greeting"), true);
+  assert.equal(Runtime.respondsTo(person, "toString"), false, "JavaScript shape is not consulted");
+  assert.equal(Runtime.respondsTo(null, "nil?"), true);
+  assert.equal(Runtime.respondsTo(null, "strip"), false);
+  assert.equal(Runtime.respondsTo("Ada", "strip"), true);
+  assert.equal(Runtime.respondsTo({name: "plain"}, "name"), false);
+});
+
 test("binding roots and @ resolve paths against the right object", () => {
   const bindings = new Bindings();
-  assert.equal(bindings.resolve_path("", "name"), "name");
+  assert.equal(bindings.resolve_path(null, "name"), "name");
+  assert.equal(bindings.resolve_path(null, "@name"), "name");
   assert.equal(bindings.resolve_path("represented_object", "name"), "represented_object.name");
   assert.equal(bindings.resolve_path("represented_object", "@note"), "note");
   assert.equal(bindings.resolve_path("represented_object", ""), "represented_object");
+  assert.equal(new PersonEditor().binding_root(), "represented_object", "a Ruby symbol is a string here");
   assert.equal(bindings.resolve_path("represented_object", "@"), "");
 });
 
@@ -869,7 +884,7 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   const disposers = [];
   for (const el of [link, field]) {
     for (const name of el.getAttributeNames()) {
-      disposers.push(bindings.wire_property(f.parent, "", el, name.slice(5), el.getAttribute(name)));
+      disposers.push(bindings.wire_property(f.parent, null, el, name.slice(5), el.getAttribute(name)));
     }
   }
   assert.equal(link.href, "Ada");

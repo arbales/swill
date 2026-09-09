@@ -147,8 +147,8 @@
     // query is the explicit stand-in for respond_to?.
     reset() {
       return this.controllers().forEach((controller) => {
-        if (Runtime.isTruthy(Runtime.hasAction(controller, "clear"))) {
-          return controller.clear();
+        if (Runtime.isTruthy(Runtime.respondsTo(controller, "clear"))) {
+          controller.clear();
         }
       });
     }

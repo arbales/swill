@@ -10,11 +10,11 @@ module Swill
     # controller root. Editors resolve their own bindings under it.
     property :represented_object, type: T.untyped, default: nil
 
-    # Prefix for bind paths in this controller region; "" binds against the
-    # controller itself. A leading @ in markup always ignores it.
-    sig { returns(String) }
+    # Property under which bind paths in this region resolve; nil binds
+    # against the controller itself. A leading @ in markup always ignores it.
+    sig { returns(T.nilable(Symbol)) }
     def binding_root
-      ""
+      nil
     end
 
     sig { params(element: T.untyped).returns(Controller) }
