@@ -15,6 +15,9 @@ module Demo
     outlet :seed, type: T.untyped
     outlet :missing, type: Swill::View, optional: true
 
+    # Kept equal to the badge outlet's count by an object binding.
+    property :badge_count, type: Integer, default: 0
+
     property :title, type: String do
       current = person
       if current
@@ -26,7 +29,7 @@ module Demo
 
     sig { void }
     def view_did_load
-      self.person = Demo::Person.new
+      reset_person
     end
 
     sig { void }
@@ -34,12 +37,19 @@ module Demo
       current = person
       data = seed
       current.name = data["name"] if current && data
+      current_badge = badge
+      bind(:badge_count, to: current_badge, key_path: "count") if current_badge
     end
 
     sig { returns(String) }
     def clear()
-      self.person = nil
+      reset_person
       title
+    end
+
+    sig { void }
+    def reset_person
+      self.person = Demo::Person.new
     end
 
     # Reached through the responder chain from a nested controller's button.
@@ -85,9 +95,29 @@ module Demo
       self.launched = true
     end
 
+    # Clears every awakened controller that handles clear; the metadata
+    # query is the explicit stand-in for respond_to?.
     sig { void }
     def reset
-      controllers.forEach { |controller| controller.clear() }
+      controllers.forEach do |controller|
+        controller.clear() if Swill::Runtime.hasAction(controller, "clear")
+      end
+    end
+  end
+end
+
+module Demo
+  # Bound by its parent through bind="person" on its root; its own bindings
+  # resolve under represented_object, so bind="name" edits the person.
+  class PersonEditor < Swill::Controller
+    extend T::Sig
+
+    # Controller-local state, reached from markup with bind="@note".
+    property :note, type: String, default: ""
+
+    sig { returns(String) }
+    def binding_root
+      "represented_object"
     end
   end
 end

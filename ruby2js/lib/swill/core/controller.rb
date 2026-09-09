@@ -4,6 +4,18 @@
 module Swill
   class Controller < Responder
     extend T::Sig
+    include ObjectBindings
+
+    # The object a parent binding assigns through bind="path" on this
+    # controller root. Editors resolve their own bindings under it.
+    property :represented_object, type: T.untyped, default: nil
+
+    # Prefix for bind paths in this controller region; "" binds against the
+    # controller itself. A leading @ in markup always ignores it.
+    sig { returns(String) }
+    def binding_root
+      ""
+    end
 
     sig { params(element: T.untyped).returns(Controller) }
     def attach(element)
@@ -61,6 +73,7 @@ module Swill
       view_will_disappear
       @teardowns.forEach { |dispose| dispose.() }
       @teardowns = []
+      unbind_all
       dispose
       child_controllers.forEach { |child| child.teardown() }
       # Plain outlet views are released too; re-awakening adopts them again.

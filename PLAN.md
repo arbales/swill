@@ -43,14 +43,23 @@ The initial kernel and DOM-boundary spike is complete and verified:
 - managed elements: `klass`, `controller`, and `outlet` awaken into the sparse
   view tree, `klass` and `controller` may share an element, declared outlets
   connect to their direct owner as controllers, views, templates, or decoded
-  JSON, and mistakes fail at awakening by outlet name.
+  JSON, and mistakes fail at awakening by outlet name;
+- binding parity: `binding_root` and `@` roots, `bind-*` property bindings,
+  `present?`/`empty?`/`nil?` readers that answer for nil intermediates,
+  child-controller `represented_object` fed by the parent's `bind` (nil
+  included, an intentional divergence from Opal, which skips nil), writes
+  through a missing owner dropped, and object-to-object bindings as a
+  Ruby-authored `ObjectBindings` mixin over the runtime's existing path
+  observation and metadata-checked writes, with no new compiler metadata.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: Binding Parity
+## Immediate Next Slice: Responder, Action, and Focus Parity
 
-Managed elements and outlets are verified in Node and Chrome (September
-2026). The next target is roadmap item 2 below.
+Binding parity is verified in Node and Chrome (September 2026). The next
+target is roadmap item 3 below; action resolution from the sender's region
+and the application chain top already exist, so the work is first-responder
+focus and keyboard routing.
 
 ## Ordered Roadmap
 
@@ -65,16 +74,14 @@ Managed elements and outlets are verified in Node and Chrome (September
 - Awakening order, ownership, duplicate and unresolved outlet failures, and
   teardown are tested.
 
-### 2. Binding Parity
+### 2. Binding Parity (done)
 
-- Add controller `binding_root` and `@` root overrides.
-- Add `bind-*` DOM-property bindings.
-- Add the finite value transforms needed by current markup, beginning with
-  blank, present, and empty predicates.
-- Bind child-controller `represented_object` values through the same ownership
-  rules.
-- Decide whether reusable object-to-object bindings belong in compiler metadata
-  or in a small runtime protocol; do not infer this from method names.
+- `binding_root` and `@` root overrides.
+- `bind-*` DOM-property bindings.
+- Reader chains ending in blank, present, empty, and nil predicates.
+- Child-controller `represented_object` bound through ownership rules.
+- Object-to-object bindings are a Ruby mixin over existing runtime
+  primitives; neither compiler metadata nor a new runtime protocol.
 
 ### 3. Responder, Action, and Focus Parity
 

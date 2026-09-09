@@ -129,8 +129,11 @@ function writeProperty(object, descriptor, value) {
   return value;
 }
 
+// null when an intermediate owner is absent (the path may become writable
+// later); throws when the leaf can never be written.
 function pathWriter(object, path) {
-  const names = path.split(".");
+  const names = Runtime.segments(path);
+  if (names.length === 0) throw new Error(`Read-only binding: ${path}`);
   const name = names.pop();
   const owner = names.reduce((target, segment) => Runtime.read(target, segment), object);
   if (owner == null) return null;
@@ -294,6 +297,13 @@ export const Runtime = {
     return false;
   },
 
+  isPresent(value) { return !this.isBlank(value); },
+
+  isEmpty(value) {
+    if (typeof value === "string" || Array.isArray(value)) return value.length === 0;
+    throw new TypeError("empty? requires a string or array");
+  },
+
   strip(value) {
     if (typeof value !== "string") throw new TypeError("strip requires a string");
     return strip(value);
@@ -311,7 +321,10 @@ export const Runtime = {
 
   valueRead(value, name) {
     switch (name) {
+      case "nil?": return value == null;
       case "blank?": return this.isBlank(value);
+      case "present?": return this.isPresent(value);
+      case "empty?": return this.isEmpty(value);
       case "strip": return this.strip(value);
       case "upcase": return this.upcase(value);
       case "downcase": return this.downcase(value);
@@ -319,19 +332,28 @@ export const Runtime = {
     }
   },
 
+  // Readers defined for nil itself; any other reader on a nil intermediate
+  // yields nil, so partially built paths render as empty.
+  NIL_READERS: ["nil?", "blank?", "present?"],
+  VALUE_READERS: ["nil?", "blank?", "present?", "empty?", "strip", "upcase", "downcase"],
+
   read(object, name) {
-    if (object == null) return null;
+    if (object == null) return this.NIL_READERS.includes(name) ? this.valueRead(object, name) : null;
     if (typeof object !== "object" && typeof object !== "function") return this.valueRead(object, name);
     const property = declarations(object.constructor, "properties").get(name);
     if (property) return object[property.js];
     const method = declarations(object.constructor, "methods").get(name);
     if (method?.arity === 0) return object[method.js]();
-    if (["strip", "upcase", "downcase", "blank?"].includes(name)) return this.valueRead(object, name);
+    if (this.VALUE_READERS.includes(name)) return this.valueRead(object, name);
     throw new Error(`Unknown reader: ${name}`);
   },
 
+  segments(path) {
+    return path === "" ? [] : path.split(".");
+  },
+
   readPath(object, path) {
-    return path.split(".").reduce((owner, name) => this.read(owner, name), object);
+    return this.segments(path).reduce((owner, name) => this.read(owner, name), object);
   },
 
   // The dynamic writer counterpart of read: a declared property or a generated
@@ -352,12 +374,14 @@ export const Runtime = {
   },
 
   assertWritablePath(object, path) {
-    if (!pathWriter(object, path)) throw new Error(`Unavailable binding owner: ${path}`);
+    pathWriter(object, path);
   },
 
+  // A write through a missing owner is dropped: the control shows an empty
+  // value and the owner may appear later.
   writePath(object, path, value) {
     const writer = pathWriter(object, path);
-    if (!writer) throw new Error(`Unavailable binding owner: ${path}`);
+    if (!writer) return undefined;
     return writeProperty(writer.owner, writer.descriptor, value);
   },
 
@@ -384,7 +408,7 @@ export const Runtime = {
     const rehook = () => {
       disposers.splice(0).forEach(dispose => dispose());
       let owner = object;
-      for (const name of path.split(".")) {
+      for (const name of this.segments(path)) {
         if (owner == null) break;
         if (declarations(owner.constructor, "properties").has(name)) {
           disposers.push(subscribe(owner, name, () => {

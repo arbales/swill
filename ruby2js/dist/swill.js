@@ -121,7 +121,8 @@
     return value;
   }
   function pathWriter(object, path) {
-    const names = path.split(".");
+    const names = Runtime.segments(path);
+    if (names.length === 0) throw new Error(`Read-only binding: ${path}`);
     const name = names.pop();
     const owner = names.reduce((target, segment) => Runtime.read(target, segment), object);
     if (owner == null) return null;
@@ -264,6 +265,13 @@
       if (Array.isArray(value)) return value.length === 0;
       return false;
     },
+    isPresent(value) {
+      return !this.isBlank(value);
+    },
+    isEmpty(value) {
+      if (typeof value === "string" || Array.isArray(value)) return value.length === 0;
+      throw new TypeError("empty? requires a string or array");
+    },
     strip(value) {
       if (typeof value !== "string") throw new TypeError("strip requires a string");
       return strip(value);
@@ -278,8 +286,14 @@
     },
     valueRead(value, name) {
       switch (name) {
+        case "nil?":
+          return value == null;
         case "blank?":
           return this.isBlank(value);
+        case "present?":
+          return this.isPresent(value);
+        case "empty?":
+          return this.isEmpty(value);
         case "strip":
           return this.strip(value);
         case "upcase":
@@ -290,18 +304,25 @@
           throw new Error(`Unknown value reader: ${name}`);
       }
     },
+    // Readers defined for nil itself; any other reader on a nil intermediate
+    // yields nil, so partially built paths render as empty.
+    NIL_READERS: ["nil?", "blank?", "present?"],
+    VALUE_READERS: ["nil?", "blank?", "present?", "empty?", "strip", "upcase", "downcase"],
     read(object, name) {
-      if (object == null) return null;
+      if (object == null) return this.NIL_READERS.includes(name) ? this.valueRead(object, name) : null;
       if (typeof object !== "object" && typeof object !== "function") return this.valueRead(object, name);
       const property = declarations(object.constructor, "properties").get(name);
       if (property) return object[property.js];
       const method = declarations(object.constructor, "methods").get(name);
       if (method?.arity === 0) return object[method.js]();
-      if (["strip", "upcase", "downcase", "blank?"].includes(name)) return this.valueRead(object, name);
+      if (this.VALUE_READERS.includes(name)) return this.valueRead(object, name);
       throw new Error(`Unknown reader: ${name}`);
     },
+    segments(path) {
+      return path === "" ? [] : path.split(".");
+    },
     readPath(object, path) {
-      return path.split(".").reduce((owner, name) => this.read(owner, name), object);
+      return this.segments(path).reduce((owner, name) => this.read(owner, name), object);
     },
     // The dynamic writer counterpart of read: a declared property or a generated
     // `name=` accessor, chosen by metadata rather than by the receiver's shape.
@@ -320,11 +341,13 @@
       throw new Error(`Unknown writer: ${name}`);
     },
     assertWritablePath(object, path) {
-      if (!pathWriter(object, path)) throw new Error(`Unavailable binding owner: ${path}`);
+      pathWriter(object, path);
     },
+    // A write through a missing owner is dropped: the control shows an empty
+    // value and the owner may appear later.
     writePath(object, path, value) {
       const writer = pathWriter(object, path);
-      if (!writer) throw new Error(`Unavailable binding owner: ${path}`);
+      if (!writer) return void 0;
       return writeProperty(writer.owner, writer.descriptor, value);
     },
     invoke(object, name, ...args) {
@@ -347,7 +370,7 @@
       const rehook = () => {
         disposers.splice(0).forEach((dispose) => dispose());
         let owner = object;
-        for (const name of path.split(".")) {
+        for (const name of this.segments(path)) {
           if (owner == null) break;
           if (declarations(owner.constructor, "properties").has(name)) {
             disposers.push(subscribe(owner, name, () => {
@@ -417,6 +440,7 @@
     Swill__Model__Base: () => Swill__Model__Base,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
     Swill__Object: () => Swill__Object,
+    Swill__ObjectBindings: () => Swill__ObjectBindings,
     Swill__Observable: () => Swill__Observable,
     Swill__Outlets: () => Swill__Outlets,
     Swill__Ownership: () => Swill__Ownership,
@@ -469,6 +493,38 @@
       }
     }
     return Swill__Ownership_Layer;
+  }
+  function Swill__ObjectBindings(Superclass) {
+    class Swill__ObjectBindings_Layer extends Superclass {
+      bind(target, options) {
+        this.unbind(target);
+        let source = options.to;
+        let path = options.key_path;
+        let sync = (value) => Runtime.write(this, target, value);
+        sync(Runtime.readPath(source, path));
+        this.object_bindings().push({
+          target,
+          dispose: Runtime.observePath(source, path, sync)
+        });
+        return this;
+      }
+      unbind(target) {
+        let remaining = [];
+        this.object_bindings().forEach((binding) => binding.target === target ? binding.dispose.call(null) : remaining.push(binding));
+        this._object_bindings = remaining;
+        return this;
+      }
+      unbind_all() {
+        this.object_bindings().forEach((binding) => binding.dispose.call(null));
+        this._object_bindings = [];
+        return this;
+      }
+      object_bindings() {
+        if (!this._object_bindings) this._object_bindings = [];
+        return this._object_bindings;
+      }
+    }
+    return Swill__ObjectBindings_Layer;
   }
   var Swill__Responder = class extends Swill__Object {
     next_responder() {
@@ -546,6 +602,13 @@
     }
   };
   var Swill__Controller = class extends Swill__Responder {
+    // The object a parent binding assigns through bind="path" on this
+    // controller root. Editors resolve their own bindings under it.
+    // Prefix for bind paths in this controller region; "" binds against the
+    // controller itself. A leading @ in markup always ignores it.
+    binding_root() {
+      return "";
+    }
     attach(element) {
       this._view = element.__swill_view__ ?? new Swill__View(element);
       this._view.controller = this;
@@ -587,6 +650,7 @@
       this.view_will_disappear();
       this._teardowns.forEach((dispose) => dispose());
       this._teardowns = [];
+      this.unbind_all();
       this.dispose();
       this.child_controllers().forEach((child) => child.teardown());
       this._view.subviews().forEach((subview) => this._view.release_subview(subview));
@@ -638,11 +702,62 @@
   };
   var Swill__Bindings = class extends Swill__Object {
     wire(controller) {
-      this.owned_matching(controller.view().element(), "[bind]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
+      let root = controller.view().element();
+      let prefix = controller.binding_root();
+      this.wire_properties(controller, prefix, root);
+      this.wire_region(controller, prefix, root);
       return controller;
     }
-    wire_element(object, element) {
-      let path = element.getAttribute("bind");
+    wire_region(controller, prefix, element) {
+      return this.each_child(element, (child) => {
+        if (child.hasAttribute("controller")) {
+          if (child.hasAttribute("bind")) {
+            return controller.register_teardown(this.wire_element(
+              controller,
+              child,
+              prefix
+            ));
+          }
+        } else {
+          if (child.hasAttribute("bind")) {
+            controller.register_teardown(this.wire_element(
+              controller,
+              child,
+              prefix
+            ));
+          }
+          ;
+          this.wire_properties(controller, prefix, child);
+          return this.wire_region(controller, prefix, child);
+        }
+      });
+    }
+    wire_properties(controller, prefix, element) {
+      return element.getAttributeNames().forEach((name) => {
+        if (name.slice(0, 5) === "bind-") {
+          let property = name.slice(5, name.length);
+          controller.register_teardown(this.wire_property(
+            controller,
+            prefix,
+            element,
+            property,
+            element.getAttribute(name)
+          ));
+        }
+      });
+    }
+    resolve_path(prefix, path) {
+      if (path[0] === "@") return path.slice(1, path.length) ?? "";
+      if (prefix.length === 0) return path;
+      return path.length === 0 ? prefix : `${prefix}.${path}`;
+    }
+    // A value binding. On a child controller's root the value becomes the
+    // child's represented object; otherwise it renders into the element.
+    wire_element(object, element, prefix) {
+      let path = this.resolve_path(prefix, element.getAttribute("bind"));
+      let view = element.__swill_view__;
+      let child = view ? view.controller_value() : null;
+      if (child) return this.wire_represented_object(object, child, path);
       let form_control = element.matches("input, textarea, select");
       let writable = form_control && !element.hasAttribute("readonly");
       let checkbox = element.type === "checkbox";
@@ -669,6 +784,50 @@
         dispose();
         if (writable) return element.removeEventListener(event_name, handler);
       };
+    }
+    wire_represented_object(object, child, path) {
+      let sync = (value) => child.represented_object = value;
+      sync(Runtime.readPath(object, path));
+      return Runtime.observePath(object, path, sync);
+    }
+    wire_property(object, prefix, element, property, path) {
+      let resolved = this.resolve_path(prefix, path);
+      let name = property === "readonly" ? "readOnly" : property;
+      let render = (value) => this.write_property(element, name, value);
+      render(Runtime.readPath(object, resolved));
+      return Runtime.observePath(object, resolved, render);
+    }
+    write_property(element, property, value) {
+      if (property.slice(0, 5) === "data-" || property.slice(0, 5) === "aria-") {
+        if (value == null || value === "") {
+          element.removeAttribute(property);
+        } else {
+          element.setAttribute(property, value);
+        }
+        ;
+        return;
+      }
+      ;
+      if ((property === "href" || property === "src") && value == null) {
+        element.removeAttribute(property);
+        element[property] = "";
+        return;
+      }
+      ;
+      return element[property] = this.boolean_property_predicate(property) ? Runtime.isTruthy(value) : value;
+    }
+    boolean_property_predicate(property) {
+      switch (property) {
+        case "disabled":
+        case "checked":
+        case "hidden":
+        case "readOnly":
+        case "required":
+        case "open":
+          return true;
+        default:
+          return false;
+      }
     }
   };
   var Swill__Actions = class extends Swill__Object {
@@ -960,6 +1119,23 @@
           }
         }
       },
+      "Swill::ObjectBindings": {
+        factory: Swill__ObjectBindings,
+        methods: {
+          "bind": {
+            "arity": 2
+          },
+          "unbind": {
+            "arity": 1
+          },
+          "unbind_all": {
+            "arity": 0
+          },
+          "object_bindings": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::Model::Attributes": {
         factory: Swill__Model__Attributes,
         classFactory: Swill__Model__Attributes_ClassMethods,
@@ -1050,8 +1226,20 @@
       },
       "Swill::Controller": {
         constructor: Swill__Controller,
-        properties: {},
+        mixins: [Swill__ObjectBindings],
+        properties: {
+          "represented_object": {
+            type: "T.untyped",
+            attribute: false,
+            defaultValue: function default_represented_object() {
+              return null;
+            }
+          }
+        },
         methods: {
+          "binding_root": {
+            "arity": 0
+          },
           "attach": {
             "arity": 1
           },
@@ -1116,8 +1304,30 @@
           "wire": {
             "arity": 1
           },
-          "wire_element": {
+          "wire_region": {
+            "arity": 3
+          },
+          "wire_properties": {
+            "arity": 3
+          },
+          "resolve_path": {
             "arity": 2
+          },
+          "wire_element": {
+            "arity": 3
+          },
+          "wire_represented_object": {
+            "arity": 3
+          },
+          "wire_property": {
+            "arity": 5
+          },
+          "write_property": {
+            "arity": 3
+          },
+          "boolean_property?": {
+            "arity": 1,
+            "js": "boolean_property_predicate"
           }
         }
       },

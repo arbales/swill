@@ -15,6 +15,15 @@ module Swill
     sig { params(value: T.untyped).returns(T::Boolean) }
     def self.isTruthy(value); end
 
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.isBlank(value); end
+
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.isPresent(value); end
+
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.isEmpty(value); end
+
     sig { params(name: T.untyped).returns(T.untyped) }
     def self.resolve(name); end
 
@@ -24,7 +33,7 @@ module Swill
     sig { params(object: T.untyped, path: String, value: T.untyped).returns(T.untyped) }
     def self.writePath(object, path, value); end
 
-    sig { params(object: T.untyped, name: String, value: T.untyped).returns(T.untyped) }
+    sig { params(object: T.untyped, name: T.any(Symbol, String), value: T.untyped).returns(T.untyped) }
     def self.write(object, name, value); end
 
     sig { params(object: T.untyped, path: String).void }
@@ -129,4 +138,7 @@ class Object
   extend T::Sig
   sig { returns(T::Boolean) }
   def blank?; end
+
+  sig { returns(T::Boolean) }
+  def present?; end
 end

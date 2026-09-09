@@ -8,12 +8,21 @@ export class Element extends EventTarget {
     this.attributes = {...attributes};
     this.children = [];
     this.parentElement = null;
-    this.value = "";
-    this.textContent = "";
+    this._value = "";
+    this._text = "";
     this.checked = false;
+    this.disabled = false;
+    this.hidden = false;
+    this.readOnly = false;
     this.type = attributes.type ?? "";
     for (const child of children) this.append(child);
   }
+
+  // Like the DOM, string properties coerce what they are assigned.
+  get value() { return this._value; }
+  set value(v) { this._value = v == null ? "" : String(v); }
+  get textContent() { return this._text; }
+  set textContent(v) { this._text = v == null ? "" : String(v); }
 
   append(child) {
     child.remove();
@@ -32,6 +41,8 @@ export class Element extends EventTarget {
   getAttribute(name) { return this.attributes[name] ?? null; }
   hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  removeAttribute(name) { delete this.attributes[name]; }
+  getAttributeNames() { return Object.keys(this.attributes); }
 
   matches(selector) {
     return selector.split(",").map(part => part.trim()).some(simple => {

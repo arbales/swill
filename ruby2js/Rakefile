@@ -11,6 +11,7 @@ def compile_spike
     lib/swill/core/observable.rb
     lib/swill/core/object.rb
     lib/swill/core/ownership.rb
+    lib/swill/core/object_bindings.rb
     lib/swill/core/responder.rb
     lib/swill/core/view.rb
     lib/swill/core/controller.rb

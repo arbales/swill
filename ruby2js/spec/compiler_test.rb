@@ -77,6 +77,7 @@ class CompilerTest < Minitest::Test
       lib/swill/core/observable.rb
       lib/swill/core/object.rb
       lib/swill/core/ownership.rb
+      lib/swill/core/object_bindings.rb
       lib/swill/core/responder.rb
       lib/swill/core/view.rb
       lib/swill/core/controller.rb
@@ -351,6 +352,9 @@ class CompilerTest < Minitest::Test
       def typed_normalize(value); value.strip.upcase; end
       sig { params(value: T.nilable(String)).returns(T::Boolean) }
       def typed_blank(value); value.blank?; end
+      sig { params(text: String, items: T::Array[String], thing: T.nilable(TestObject)).returns(T::Array[T::Boolean]) }
+      def readers(text, items, thing); [text.present?, text.empty?, items.empty?, items.blank?, thing.nil?, text.nil?]; end
+      def dynamic_readers(value); [value.present?, value.empty?, value.nil?]; end
     RUBY
     assert_includes js, "Runtime.isTruthy("
     assert_includes js, "Runtime.logicalOr("
@@ -360,10 +364,22 @@ class CompilerTest < Minitest::Test
     # Untyped receivers use the one dynamic reader instead of a name-based rewrite.
     assert_includes js, 'Runtime.read(Runtime.read(value, "strip"), "upcase")'
     assert_includes js, 'Runtime.read(value, "blank?")'
+    assert_includes js, "Runtime.isPresent(text)"
+    assert_includes js, "Runtime.isEmpty(text)"
+    assert_includes js, "Runtime.isEmpty(items)"
+    assert_includes js, "Runtime.isBlank(items)"
+    assert_includes js, "thing == null"
+    assert_includes js, "text == null"
+    assert_includes js, 'Runtime.read(value, "present?")'
+    assert_includes js, "value == null", "nil? never needs the runtime"
     refute_includes js, "let $T ="
     refute_includes js, "let $ror ="
     refute_includes js, "let $rand ="
     refute_includes js, "Runtime.valueRead("
+    assert_equal [[true, false, true, true, true, false], [false, true, false], [false, nil, true]], execute(js + <<~JS)
+      const example = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([example.readers("Ada", [], null), example.dynamic_readers(""), example.dynamic_readers(null)]));
+    JS
     js += <<~JS
       const object = new (Runtime.resolve("Example"))();
       console.log(JSON.stringify([object.choose(0), object.choose(false),
@@ -534,7 +550,7 @@ class CompilerTest < Minitest::Test
       "class Host < Swill::Controller\noutlet :field, type: Swill::View do\n42\nend\nend",
       "class Host < Swill::Controller\noutlet :field, type: Swill::View\noutlet :field, type: Swill::View\nend",
       "class Host < Swill::View\noutlet :field, type: Swill::View\nend",
-      "class Host < Swill::Controller\nproperty :name, type: T.untyped, default: nil\nend"
+      "class Host < Swill::Controller\noutlet :field, type: Swill::View, key: :x\nend"
     ].each do |body|
       assert_raises(Spike::CompileError, body) do
         Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(body).javascript(runtime: "./runtime.mjs")

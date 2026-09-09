@@ -7,6 +7,7 @@
   var Swill__Observable = framework.Swill__Observable;
   var Swill__Object = framework.Swill__Object;
   var Swill__Ownership = framework.Swill__Ownership;
+  var Swill__ObjectBindings = framework.Swill__ObjectBindings;
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
   var Swill__Controller = framework.Swill__Controller;
@@ -101,17 +102,28 @@
     // Connected between view_did_load and awake_from_dom. The input becomes a
     // plain View, the nested controller is itself the value, the JSON script
     // is decoded, and an optional outlet may be absent.
+    // Kept equal to the badge outlet's count by an object binding.
     view_did_load() {
-      return this.person = new Demo__Person();
+      return this.reset_person();
     }
     awake_from_dom() {
       let current = this.person;
       let data = this.seed;
-      if (Runtime.isTruthy(current && data)) return current.name = data.name;
+      if (Runtime.isTruthy(current && data)) current.name = data.name;
+      let current_badge = this.badge;
+      if (current_badge) {
+        return this.bind(
+          "badge_count",
+          { to: current_badge, key_path: "count" }
+        );
+      }
     }
     clear() {
-      this.person = null;
+      this.reset_person();
       return this.title;
+    }
+    reset_person() {
+      return this.person = new Demo__Person();
     }
     // Reached through the responder chain from a nested controller's button.
     shout() {
@@ -131,8 +143,20 @@
     application_did_launch() {
       return this.launched = true;
     }
+    // Clears every awakened controller that handles clear; the metadata
+    // query is the explicit stand-in for respond_to?.
     reset() {
-      return this.controllers().forEach((controller) => controller.clear());
+      return this.controllers().forEach((controller) => {
+        if (Runtime.isTruthy(Runtime.hasAction(controller, "clear"))) {
+          return controller.clear();
+        }
+      });
+    }
+  };
+  var Demo__PersonEditor = class extends Swill__Controller {
+    // Controller-local state, reached from markup with bind="@note".
+    binding_root() {
+      return "represented_object";
     }
   };
 
@@ -379,6 +403,13 @@
               return null;
             }
           },
+          "badge_count": {
+            type: "Integer",
+            attribute: false,
+            defaultValue: function default_badge_count() {
+              return 0;
+            }
+          },
           "title": {
             type: "String",
             attribute: false,
@@ -396,6 +427,9 @@
             "arity": 0
           },
           "clear": {
+            "arity": 0
+          },
+          "reset_person": {
             "arity": 0
           },
           "shout": {
@@ -446,6 +480,23 @@
             "arity": 0
           },
           "reset": {
+            "arity": 0
+          }
+        }
+      },
+      "Demo::PersonEditor": {
+        constructor: Demo__PersonEditor,
+        properties: {
+          "note": {
+            type: "String",
+            attribute: false,
+            defaultValue: function default_note() {
+              return "";
+            }
+          }
+        },
+        methods: {
+          "binding_root": {
             "arity": 0
           }
         }

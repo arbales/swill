@@ -165,7 +165,13 @@ test("nested paths rehook before callbacks and stop after disposal", () => {
 test("derived paths cannot be written and null intermediates are explicit", () => {
   const controller = new Controller();
   assert.equal(Runtime.readPath(controller, "person.name"), null);
-  assert.throws(() => Runtime.writePath(controller, "person.name", "Ada"), /Unavailable/);
+  assert.equal(Runtime.writePath(controller, "person.name", "Ada"), undefined, "a write through a missing owner is dropped");
+  assert.equal(Runtime.readPath(controller, "person.name.blank?"), true, "blank? is defined for nil");
+  assert.equal(Runtime.readPath(controller, "person.nil?"), true);
+  assert.equal(Runtime.readPath(controller, "person.name.present?"), false);
+  assert.equal(Runtime.readPath(controller, "person.name.upcase"), null, "other readers on nil yield nil");
+  assert.equal(Runtime.readPath(controller, ""), controller, "an empty path is the object itself");
+  assert.throws(() => Runtime.writePath(controller, "", {}), /Read-only/);
   controller.person = new Person();
   Runtime.writePath(controller, "person.name", "Ada");
   assert.equal(controller.person.name, "Ada");
@@ -209,9 +215,11 @@ test("drafts copy inherited attributes but never observers or computed state", (
 
 test("action dispatch uses generated method names and validates arity", () => {
   const controller = new Controller();
-  controller.person = new Person();
-  assert.equal(Runtime.performAction(controller, "clear", {}, {}), "Nobody");
-  assert.equal(controller.person, null);
+  const before = new Person();
+  controller.person = before;
+  assert.equal(Runtime.performAction(controller, "clear", {}, {}), "Hello ");
+  assert.ok(controller.person instanceof Person);
+  assert.notEqual(controller.person, before, "clear resets to a fresh person");
   assert.throws(() => Runtime.invoke(controller, "clear", 1), /wrong arity/);
   assert.throws(() => Runtime.invoke(controller, "toString"), /Unknown action/);
   assert.throws(() => Runtime.performAction(controller, "toString", {}, {}), /Unknown action/);
@@ -239,8 +247,8 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   const input = new Element({bind: "name"}, "INPUT");
   const output = new Element({bind: "label"});
   const bindings = new Bindings();
-  const unbindInput = bindings.wire_element(person, input);
-  const unbindOutput = bindings.wire_element(person, output);
+  const unbindInput = bindings.wire_element(person, input, "");
+  const unbindOutput = bindings.wire_element(person, output, "");
   input.value = "Ada";
   input.dispatchEvent(new Event("input"));
   assert.equal(person.name, "Ada");
@@ -255,11 +263,11 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   assert.equal(output.textContent, "ADA");
   assert.equal(input.value, "Ignored");
   assert.throws(
-    () => bindings.wire_element(person, new Element({bind: "label"}, "INPUT")),
+    () => bindings.wire_element(person, new Element({bind: "label"}, "INPUT"), ""),
     /Read-only/
   );
   const readonly = new Element({bind: "label", readonly: ""}, "INPUT");
-  const unbindReadonly = bindings.wire_element(person, readonly);
+  const unbindReadonly = bindings.wire_element(person, readonly, "");
   assert.equal(readonly.value, "GRACE");
   readonly.value = "Ignored";
   readonly.dispatchEvent(new Event("input"));
@@ -267,18 +275,28 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   unbindReadonly();
 
   const checkbox = new Element({bind: "loud"}, "INPUT", "checkbox");
-  const unbindCheckbox = bindings.wire_element(person, checkbox);
+  const unbindCheckbox = bindings.wire_element(person, checkbox, "");
   assert.equal(checkbox.checked, true);
   checkbox.checked = false;
   checkbox.dispatchEvent(new Event("change"));
   assert.equal(person.loud, false);
   unbindCheckbox();
 
+  // A path whose owner is not there yet wires, ignores writes, and catches up.
   const controller = new Controller();
-  assert.throws(
-    () => bindings.wire_element(controller, new Element({bind: "person.name"}, "INPUT")),
-    /Unavailable binding owner/
-  );
+  const pending = new Element({bind: "person.name"}, "INPUT");
+  const unbindPending = bindings.wire_element(controller, pending, "");
+  assert.equal(pending.value, "");
+  pending.value = "Early";
+  pending.dispatchEvent(new Event("input"));
+  assert.equal(controller.person, null);
+  controller.person = new Person();
+  controller.person.name = "Late";
+  assert.equal(pending.value, "Late");
+  pending.value = "Typed";
+  pending.dispatchEvent(new Event("input"));
+  assert.equal(controller.person.name, "Typed");
+  unbindPending();
   assert.equal(Runtime.bindElement, undefined);
 });
 
@@ -295,16 +313,18 @@ test("compiled actions parse event prefixes and release listeners", () => {
   const controller = new Controller();
   const element = new Element("change:clear");
   const actions = new Actions();
-  controller.person = new Person();
+  const first = new Person();
+  controller.person = first;
   const dispose = actions.wire_element(controller, element);
   element.dispatchEvent(new Event("click"));
-  assert.ok(controller.person instanceof Person);
+  assert.equal(controller.person, first, "click is not the selected event");
   element.dispatchEvent(new Event("change"));
-  assert.equal(controller.person, null);
-  controller.person = new Person();
+  assert.notEqual(controller.person, first, "the change event performed clear");
+  const second = new Person();
+  controller.person = second;
   dispose();
   element.dispatchEvent(new Event("change"));
-  assert.ok(controller.person instanceof Person);
+  assert.equal(controller.person, second, "a disposed action no longer fires");
   assert.equal(element.__swill_action__, false);
   const blank = new Element(" ");
   actions.wire_element(controller, blank)();
@@ -542,9 +562,10 @@ test("bindings and actions are wired only by their direct owner", () => {
   f.childClear.click();
   assert.equal(f.childTitle.textContent, "Badge 0");
   assert.ok(f.parent.person instanceof Person, "the child's clear never reaches the parent");
+  const before = f.parent.person;
   f.parentClear.click();
-  assert.equal(f.parent.person, null);
-  assert.equal(f.parentTitle.textContent, "Nobody");
+  assert.notEqual(f.parent.person, before, "the parent's clear ran");
+  assert.equal(f.parentTitle.textContent, "Hello ");
   assert.equal(f.childTitle.textContent, "Badge 0");
 });
 
@@ -679,7 +700,7 @@ test("unhandled root actions reach the application; a ready document launches at
   badge.count = 3;
   assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello Grace", "Badge 3"]);
   f.resetButton.click();
-  assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Nobody", "Badge 0"]);
+  assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello ", "Badge 0"]);
   assert.throws(() => badge.perform_action("missing", null, null), /Unhandled action: missing/);
   assert.throws(() => application.perform_action("missing", null, null), /Unhandled action: missing/);
 });
@@ -764,4 +785,131 @@ test("decode_outlet_data shapes JSON before assignment", () => {
   payload.textContent = '[1, 2]';
   const [host] = new Awakening().wire(element("body", {}, [element("main", {controller: name}, [payload])]));
   assert.equal(host.payload, "payload:[1,2]");
+});
+
+// ---- binding parity: roots, properties, readers, represented objects ----
+
+const PersonEditor = Runtime.resolve("Demo::PersonEditor");
+
+// The whole tree awakens together: a child root's bind is wired when its
+// parent loads, so the editor must be present before the parent awakens.
+function editorFixture() {
+  const seed = element("script", {type: "application/json", outlet: "seed"});
+  seed.textContent = '{"name": "Ada"}';
+  const parentTitle = element("p", {bind: "title"});
+  const parentInput = element("input", {bind: "person.name", outlet: "name_field"});
+  const parentClear = element("button", {"data-action": "clear"});
+  const badgeRoot = element("section", {controller: "Demo::Badge", outlet: "badge"});
+  const nameInput = element("input", {bind: "name"});
+  const blank = element("output", {bind: "name.blank?"});
+  const local = element("input", {bind: "@note"});
+  const clearButton = element("button", {"data-action": "clear", "bind-disabled": "@represented_object.name.empty?"});
+  const editorRoot = element("section", {controller: "Demo::PersonEditor", bind: "person", "bind-hidden": "@represented_object.nil?"}, [
+    nameInput, blank, local, clearButton
+  ]);
+  const parentRoot = element("main", {controller: "Demo::Controller"}, [
+    seed, parentTitle, parentInput, parentClear, badgeRoot, editorRoot
+  ]);
+  const [parent, , editor] = new Awakening().wire(element("body", {}, [parentRoot]));
+  return {parent, editor, parentTitle, parentClear, editorRoot, nameInput, blank, local, clearButton};
+}
+
+test("binding roots and @ resolve paths against the right object", () => {
+  const bindings = new Bindings();
+  assert.equal(bindings.resolve_path("", "name"), "name");
+  assert.equal(bindings.resolve_path("represented_object", "name"), "represented_object.name");
+  assert.equal(bindings.resolve_path("represented_object", "@note"), "note");
+  assert.equal(bindings.resolve_path("represented_object", ""), "represented_object");
+  assert.equal(bindings.resolve_path("represented_object", "@"), "");
+});
+
+test("a parent binds a child controller's represented object, nil included", () => {
+  const f = editorFixture();
+  assert.equal(f.editor.parent(), f.parent);
+  assert.equal(f.editor.represented_object, f.parent.person, "the parent's path feeds the child's represented object");
+  assert.equal(f.nameInput.value, "Ada", "child bindings resolve under binding_root");
+  assert.equal(f.blank.textContent, "false");
+  assert.equal(f.editorRoot.hidden, false, "bind-* on the child's root belongs to the child");
+  assert.equal(f.clearButton.disabled, false);
+  f.nameInput.value = "Grace";
+  f.nameInput.dispatchEvent(new Event("input"));
+  assert.equal(f.parent.person.name, "Grace", "child input writes through represented_object");
+  assert.equal(f.parentTitle.textContent, "Hello Grace");
+  f.nameInput.value = "";
+  f.nameInput.dispatchEvent(new Event("input"));
+  assert.deepEqual([f.blank.textContent, f.clearButton.disabled], ["true", true]);
+  f.local.value = "scratch";
+  f.local.dispatchEvent(new Event("input"));
+  assert.equal(f.editor.note, "scratch", "@ binds the controller itself despite binding_root");
+  assert.equal(f.parent.person.note, undefined);
+  const replacement = new Person();
+  replacement.name = "Grace";
+  f.parent.person = replacement;
+  assert.equal(f.editor.represented_object, replacement);
+  assert.equal(f.nameInput.value, "Grace", "child bindings rehook when the represented object changes");
+  f.parentClear.click();
+  assert.equal(f.editor.represented_object, f.parent.person, "clear hands the editor the fresh person");
+  assert.deepEqual([f.editorRoot.hidden, f.nameInput.value, f.blank.textContent], [false, "", "true"]);
+  f.parent.person = null;
+  assert.equal(f.editor.represented_object, null, "nil propagates");
+  assert.deepEqual([f.editorRoot.hidden, f.nameInput.value, f.blank.textContent], [true, "", "true"]);
+  f.nameInput.value = "Ignored";
+  f.nameInput.dispatchEvent(new Event("input"));
+  assert.equal(f.parent.person, null, "writes through a nil represented object are dropped");
+});
+
+test("bind-* writes DOM properties and attributes one way with Ruby truthiness", () => {
+  const f = nestedFixture();
+  const link = element("a", {"bind-href": "person.name", "bind-data-name": "person.name", "bind-aria-label": "title"});
+  const field = element("input", {"bind-readonly": "person.nil?", "bind-required": "fallback", "bind-title": "fallback"});
+  f.parentRoot.append(link);
+  f.parentRoot.append(field);
+  const [] = new Awakening().wire(f.parentRoot);
+  const bindings = new Bindings();
+  const disposers = [];
+  for (const el of [link, field]) {
+    for (const name of el.getAttributeNames()) {
+      disposers.push(bindings.wire_property(f.parent, "", el, name.slice(5), el.getAttribute(name)));
+    }
+  }
+  assert.equal(link.href, "Ada");
+  assert.equal(link.getAttribute("data-name"), "Ada");
+  assert.equal(link.getAttribute("aria-label"), "Hello Ada");
+  assert.deepEqual([field.readOnly, field.required, field.title], [false, true, "Nobody"], "a non-empty string is truthy");
+  f.parent.person.name = "";
+  assert.equal(link.href, "");
+  assert.equal(link.getAttribute("data-name"), null, "empty strings remove data attributes");
+  f.parent.person = null;
+  assert.equal(link.href, "");
+  assert.equal(link.attributes.href, undefined, "nil removes href");
+  assert.equal(link.getAttribute("aria-label"), "Nobody");
+  assert.equal(field.readOnly, true);
+  disposers.forEach(dispose => dispose());
+  f.parent.person = new Person();
+  assert.equal(field.readOnly, true, "disposed property bindings stop updating");
+  assert.equal(Runtime.isEmpty([]), true);
+  assert.throws(() => Runtime.isEmpty(42), /requires a string or array/);
+});
+
+test("object bindings keep a target equal to a source path and release on teardown", () => {
+  const f = nestedFixture();
+  assert.equal(f.parent.badge_count, 0);
+  f.childBump.click();
+  assert.equal(f.parent.badge_count, 1, "awake_from_dom bound badge_count to the badge outlet");
+  const other = new Badge();
+  other.count = 7;
+  f.parent.bind("badge_count", {to: other, key_path: "count"});
+  assert.equal(f.parent.badge_count, 7, "rebinding replaces the previous source");
+  f.childBump.click();
+  assert.equal(f.parent.badge_count, 7);
+  other.count = 8;
+  assert.equal(f.parent.badge_count, 8);
+  assert.throws(() => f.parent.bind("nonexistent", {to: other, key_path: "count"}), /Unknown writer: nonexistent/);
+  f.parent.unbind("badge_count");
+  other.count = 9;
+  assert.equal(f.parent.badge_count, 8);
+  f.parent.bind("badge_count", {to: other, key_path: "count"});
+  f.parent.teardown();
+  other.count = 10;
+  assert.equal(f.parent.badge_count, 9, "teardown unbinds object bindings");
 });

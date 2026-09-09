@@ -378,7 +378,7 @@ module Swill
       if macro == :attribute && !pairs.key?(:default)
         raise CompileError, "attribute declaration requires default:"
       end
-      unless type.match?(DECLARATION_TYPE) || (macro == :outlet && type == "T.untyped")
+      unless type.match?(DECLARATION_TYPE) || type == "T.untyped"
         raise CompileError, "unsupported declaration type #{type}"
       end
       computed = node.type == :block
@@ -470,7 +470,9 @@ module Swill
     include ::Ruby2JS::Filter::Pragma
     include SharedLowering
 
-    STRING_READERS = {strip: :strip, upcase: :upcase, downcase: :downcase, blank?: :isBlank}.freeze
+    STRING_READERS = {strip: :strip, upcase: :upcase, downcase: :downcase,
+                      blank?: :isBlank, present?: :isPresent, empty?: :isEmpty}.freeze
+    BOOLEAN_READERS = %i[blank? present? empty? nil?].freeze
 
     def options=(options)
       super
@@ -587,6 +589,8 @@ module Swill
       setter = name.match?(/\A[a-z_]\w*=\z/) && args.length == 1
       base = name.delete_suffix("=")
       type = static_type(receiver)
+      # nil? is defined for every value, including nil itself.
+      return s(:send, process(receiver), :==, s(:nil)) if method == :nil? && args.empty?
       if (klass = swill_class(type))
         if args.empty? && @knowledge.property_entry(klass, name)
           return s(:attr, process(receiver), Knowledge.member(method).to_sym)
@@ -602,6 +606,9 @@ module Swill
       if string_type?(type)
         reader = STRING_READERS[method]
         return reader && args.empty? ? s(:call, s(:const, nil, :Runtime), reader, process(receiver)) : nil
+      end
+      if collection_type?(type) && %i[empty? blank? present?].include?(method) && args.empty?
+        return s(:call, s(:const, nil, :Runtime), STRING_READERS.fetch(method), process(receiver))
       end
       return nil unless type.nil? || type == "T.untyped" || type.start_with?("T.proc")
       return lower_call(receiver, args) if method == :call
@@ -626,6 +633,11 @@ module Swill
 
     def string_type?(type)
       %w[String T.nilable(String)].include?(type)
+    end
+
+    def collection_type?(type)
+      return false unless type
+      type == "Array" || type == "Hash" || type.start_with?("T::Array[", "T::Hash[")
     end
 
     def return_type(method)
@@ -699,13 +711,14 @@ module Swill
       when :send
         receiver, method, *args = node.children
         return "T::Boolean" if %i[== != !].include?(method)
+        return "T::Boolean" if BOOLEAN_READERS.include?(method) && args.empty? && receiver
         if receiver.nil? || receiver.type == :self
           return @property_types[method.to_s] if args.empty? && @property_types.key?(method.to_s)
           return return_type(@knowledge.method_entry(@entry["name"], method))
         end
         receiver_type = static_type(receiver)
         if string_type?(receiver_type) && args.empty? && STRING_READERS.key?(method)
-          return method == :blank? ? "T::Boolean" : "String"
+          return "String"
         end
         klass = swill_class(receiver_type)
         return nil unless klass

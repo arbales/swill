@@ -6,9 +6,15 @@
 <main controller="Demo::Controller">
   <h1>Ruby2JS spike</h1>
   <script type="application/json" outlet="seed">{"name": "Ada"}</script>
-  <label>Name <input bind="person.name" outlet="name_field"></label>
+  <label>Name <input bind="person.name" outlet="name_field" bind-disabled="person.nil?"></label>
   <p bind="title"></p>
+  <p>Badge count via object binding: <output bind="badge_count"></output></p>
   <button data-action="clear">Clear person</button>
+  <section controller="Demo::PersonEditor" bind="person" bind-hidden="@represented_object.nil?">
+    <label>Edit name <input bind="name"></label>
+    <p>Blank: <output bind="name.blank?"></output></p>
+    <button data-action="clear" bind-disabled="@represented_object.name.empty?">Clear via editor</button>
+  </section>
   <section controller="Demo::Badge" outlet="badge">
     <p bind="title"></p>
     <button data-action="bump">Bump badge</button>

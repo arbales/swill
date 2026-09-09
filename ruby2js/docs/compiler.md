@@ -105,7 +105,7 @@ outlet :seed, type: T.untyped, optional: true
 | --- | --- |
 | Name | Literal symbol matching `/\A[a-z_]\w*\??\z/`; a `?` suffix only on computed properties |
 | Keywords | `type:` required; `default:` optional for `property`, required for `attribute`; `key:` only meaningful for `attribute`; `optional:` only for `outlet` |
-| Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, or a constant path; `outlet` also accepts `T.untyped` for JSON |
+| Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, a constant path, or `T.untyped` as an explicit opt-out of static lowering |
 | Outlets | Only on `Swill::Controller` descendants. A stored, nilable, observable property with `outlet` and `optional` metadata, connected at awakening; never computed and never defaulted |
 | Defaults | Literal string, integer, `nil`, `true`, or `false`. Mutable literals are rejected |
 | Computed | Block form, `do`/`end` or braces, no block arguments, no `default:`; `attribute` cannot be computed |
@@ -302,7 +302,8 @@ the runtime is reached only where a fact is genuinely unavailable.
 | `name(...)` or `self.name(...)` for a collected method | Its `sig` return type; `void` yields no type |
 | `super(...)` / `super` | The enclosing method's return type |
 | `receiver.name` where the receiver has a framework class type | That class's property type or method return type |
-| `receiver.strip` / `upcase` / `downcase` on a `String` receiver | `String`; `blank?` yields `T::Boolean` |
+| `receiver.strip` / `upcase` / `downcase` on a `String` receiver | `String` |
+| `receiver.blank?` / `present?` / `empty?` / `nil?` | `T::Boolean` |
 | `(expression)` | The inner expression's type |
 
 Nilable wrappers are unwrapped where the rule says "class type". Anything not
@@ -351,7 +352,9 @@ For `receiver.name(args)` where the receiver is not `self`:
 | Framework class | `name = value` for a declared property | `receiver.name = value` |
 | Framework class | Collected method | `receiver.name(args)` |
 | Framework class | Anything else | Pragma filter if it applies, else an explicit call |
-| `String` or `T.nilable(String)` | `strip`, `upcase`, `downcase`, `blank?` | `Runtime.strip(receiver)`, `Runtime.upcase(...)`, `Runtime.downcase(...)`, `Runtime.isBlank(...)` |
+| Any | `nil?` | `receiver == null` |
+| `String` or `T.nilable(String)` | `strip`, `upcase`, `downcase`, `blank?`, `present?`, `empty?` | `Runtime.strip(receiver)`, `Runtime.upcase(...)`, `Runtime.downcase(...)`, `Runtime.isBlank(...)`, `Runtime.isPresent(...)`, `Runtime.isEmpty(...)` |
+| `Array`, `Hash`, `T::Array[...]`, `T::Hash[...]` | `empty?`, `blank?`, `present?` | The same runtime readers |
 | `String` | Anything else | Pragma filter if it applies, else an explicit call |
 | Unknown or `T.untyped` | No arguments and the name is a property on any collected entry, or a string reader name | `Runtime.read(receiver, "name")` |
 | Unknown, `T.untyped`, or `T.proc...` | `call(args)` or `.(args)` | `receiver(args)` for a local receiver; `receiver.call(null, args)` otherwise |
@@ -403,15 +406,15 @@ parent's, so lookups do not walk the chain at call time.
 
 | Function | Behavior |
 | --- | --- |
-| `read(object, name)` | `null` for a null receiver. Primitives go straight to `valueRead`. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the four string reader names. Error: `Unknown reader` |
+| `read(object, name)` | On a null receiver, `nil?`, `blank?`, and `present?` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the value reader names. Error: `Unknown reader` |
 | `write(object, name, value)` | A declared stored property through the property protocol, or a collected `name=` accessor. Errors: `Cannot write ... on nil`, `Read-only property`, `Unknown writer` |
-| `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null` |
-| `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. Errors: `Unavailable binding owner` when an intermediate is null, `Read-only binding` when the target is computed or not a property |
+| `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null`; the empty path is the object itself |
+| `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Error: `Read-only binding` when the leaf is computed, not a property, or the path is empty |
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
 | `hasAction(object, name)` | Whether a collected method of arity 0, 1, or 2 exists; the responder chain uses it to decide where an action stops |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
-| `valueRead(value, name)` | `blank?`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
+| `valueRead(value, name)` | `nil?`, `blank?`, `present?`, `empty?`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
 
 ### Values
 
@@ -421,6 +424,8 @@ parent's, so lookups do not walk the chain at call time.
 | `logicalAnd(left, thunk)` / `logicalOr(left, thunk)` | Ruby `&&` / `\|\|` with a deferred right operand |
 | `isEqual(left, right)` | `===`, or element-wise for two arrays. Hashes and custom `==` are not implemented; framework objects compare by identity |
 | `isBlank(value)` | `null`, `undefined`, `false`, a string that strips to empty, or an empty array |
+| `isPresent(value)` | The negation of `isBlank` |
+| `isEmpty(value)` | Zero length for a string or array; anything else throws `TypeError` |
 | `strip(value)` | Removes ASCII whitespace and NUL from both ends, as Ruby does; JavaScript `trim` would also remove NBSP. Non-strings throw `TypeError` |
 | `upcase(value)` / `downcase(value)` | `toUpperCase` / `toLowerCase`; non-strings throw `TypeError` |
 

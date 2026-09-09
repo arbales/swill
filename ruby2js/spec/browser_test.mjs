@@ -99,7 +99,7 @@ try {
   // The nested controller owns its own title binding and clear action; its
   // unhandled shout action reaches the parent through the responder chain.
   assert.deepEqual(await evaluate(`(() => {
-    const badge = document.querySelector("section[controller]");
+    const badge = document.querySelector("section[controller='Demo::Badge']");
     const text = () => [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent];
     const results = [text()];
     badge.querySelector("[data-action=bump]").click();
@@ -116,7 +116,7 @@ try {
   // The badge's reset action is handled by neither controller; it reaches
   // the application declared on <body>, which clears every controller.
   assert.deepEqual(await evaluate(`(() => {
-    const badge = document.querySelector("section[controller]");
+    const badge = document.querySelector("section[controller='Demo::Badge']");
     badge.querySelector("[data-action=bump]").click();
     badge.querySelector("[data-action=reset]").click();
     const application = document.body.__swill_application__;
@@ -124,27 +124,45 @@ try {
     return [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent,
       application.constructor === Swill.Runtime.resolve("Demo::Application"), application.launched,
       application.controllers().length,
-      parent.name_field.element() === document.querySelector("input"), parent.badge === child,
+      parent.name_field.element() === document.querySelector("input"),
+      parent.badge === application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge")),
       parent.seed.name, parent.missing];
-  })()`), ["Nobody", "Badge 0", true, true, 2, true, true, "Ada", null]);
+  })()`), ["Hello ", "Badge 0", true, true, 3, true, true, "Ada", null]);
+  // The editor is a child controller bound to the parent's person: its own
+  // bindings resolve under represented_object, bind-* on its root is its own,
+  // and the object binding mirrors the badge count into the parent.
+  assert.deepEqual(await evaluate(`(() => {
+    const editor = document.querySelector("section[controller='Demo::PersonEditor']");
+    const input = editor.querySelector("input");
+    const results = [[editor.hidden, input.value, editor.querySelector("output").textContent,
+      editor.querySelector("button").disabled, document.querySelector("output[bind=badge_count]").textContent]];
+    input.value = "Hopper";
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    results.push([document.querySelector("p[bind]").textContent, document.querySelector("input").value]);
+    document.querySelector("section[controller='Demo::Badge'] [data-action=bump]").click();
+    results.push(document.querySelector("output[bind=badge_count]").textContent);
+    return results;
+  })()`), [[false, "", "true", true, "0"], ["Hello Hopper", "Hopper"], "1"]);
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();
-    return [document.querySelector("p[bind]").textContent, document.body.__swill_application__ != null];
-  })()`), ["Nobody", true]);
+    const editor = document.querySelector("section[controller='Demo::PersonEditor']");
+    return [document.querySelector("p[bind]").textContent, document.body.__swill_application__ != null,
+      document.querySelector("input").disabled, editor.hidden, editor.querySelector("input").value];
+  })()`), ["Hello ", true, false, false, ""]);
   await evaluate(`(() => {
     window.dispatchEvent(new Event("pagehide"));
     const input = document.querySelector("input");
     input.value = "Detached";
     input.dispatchEvent(new Event("input"));
-    document.querySelector("section[controller] [data-action=bump]").click();
+    document.querySelector("section[controller='Demo::Badge'] [data-action=bump]").click();
   })()`);
   assert.deepEqual(await evaluate(`[
     document.querySelector("p[bind]").textContent,
-    document.querySelector("section[controller] p[bind]").textContent,
+    document.querySelector("section[controller='Demo::Badge'] p[bind]").textContent,
     document.body.__swill_application__
-  ]`), ["Nobody", "Badge 0", null]);
+  ]`), ["Hello ", "Badge 1", null]);
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: application launch, outlets, nested ownership, bindings, actions, responder chain, and teardown passed.");
+  console.log("Chrome: application launch, outlets, nested ownership, roots, property and object bindings, actions, responder chain, and teardown passed.");
 } finally {
   clearTimeout(timeout);
   socket?.close();

@@ -142,8 +142,26 @@ up from its own element; `application_did_launch` and
 responder chain: a controller handles an action when it has a matching
 generated method, otherwise its parent tries, then the application, and an
 action nobody handles raises. Actions default to `click`; `event:action`
-selects another DOM event. Value bindings support text content, text controls,
-selects, checkboxes, readonly controls, nested observable paths, and teardown.
+selects another DOM event.
+
+Bindings are Ruby key paths. `bind="path"` is two-way for form controls and
+one-way for text; `bind-prop="path"` writes a DOM property one way, with
+`data-` and `aria-` names going through attributes, boolean properties using
+Ruby truthiness, and `readonly` mapping to `readOnly`. Paths resolve under the
+controller's `binding_root`, and a leading `@` binds against the controller
+itself regardless of the root. Reader chains may end in `strip`, `upcase`,
+`downcase`, `blank?`, `present?`, `empty?`, or `nil?`; the first three
+predicates answer for a nil intermediate, and any other reader on nil yields
+nil. A write through a missing owner is dropped; a read-only leaf on a
+writable control fails at wiring.
+
+A `bind` on a child controller's root belongs to the parent and assigns the
+child's `represented_object`, nil included; it is wired when the parent loads,
+so a fragment awakened later must be present under its parent before the
+parent awakens or be bound by the parent explicitly. `bind-*` on that root
+belongs to the child. `bind(:target, to: source, key_path: "a.b")` keeps a declared
+property equal to a path on another object until `unbind`, `unbind_all`, or
+teardown.
 
 ### Sorbet
 
@@ -179,13 +197,15 @@ The implementation covers:
   responder chain, and terminates on unload;
 - managed elements: `klass` views, plain outlet views, declared outlets
   connected to their direct owner, and JSON outlets decoded through a hook;
+- binding roots, `@` paths, `bind-*` property bindings, predicate readers,
+  represented objects for child controllers, and object-to-object bindings;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
-runtime Sorbet operations, dynamic class mutation, `bind-*` DOM property
-bindings, binding roots, first-responder focus, templates as content, or a
-complete model-layer port. Unsupported forms fail compilation.
+runtime Sorbet operations, dynamic class mutation, first-responder focus,
+keyboard routing, templates as content, or a complete model-layer port.
+Unsupported forms fail compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.
