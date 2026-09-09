@@ -368,10 +368,6 @@
       }
       return properties.has(name) || methods.has(name);
     },
-    hasAction(object, name) {
-      const method = declarations(object.constructor, "methods").get(name);
-      return !!method && method.arity <= 2;
-    },
     performAction(object, name, sender, event) {
       const method = declarations(object.constructor, "methods").get(name);
       if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
@@ -543,11 +539,12 @@
     next_responder() {
       return null;
     }
-    // Target/action: handle the action here when a generated method with a
-    // compatible arity exists, otherwise continue up the responder chain. An
-    // action nobody handles is an error, not a silent no-op.
+    // Target/action: the first responder in the chain that responds to the
+    // name handles it, as respond_to? would decide in Ruby. A same-named
+    // property or a method of the wrong arity is an error there, not a reason
+    // to keep walking. An action nobody handles is also an error.
     perform_action(name, sender, event) {
-      if (Runtime.hasAction(this, name)) {
+      if (Runtime.respondsTo(this, name)) {
         return Runtime.performAction(this, name, sender, event);
       }
       ;

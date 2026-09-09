@@ -7,9 +7,6 @@ module Swill
     extend T::Sig
 
     sig { params(receiver: T.untyped, name: String).returns(T::Boolean) }
-    def self.hasAction(receiver, name); end
-
-    sig { params(receiver: T.untyped, name: String).returns(T::Boolean) }
     def self.respondsTo(receiver, name); end
 
     sig { params(receiver: T.untyped, name: String, sender: T.untyped, event: T.untyped).returns(T.untyped) }

@@ -405,11 +405,6 @@ export const Runtime = {
     return properties.has(name) || methods.has(name);
   },
 
-  hasAction(object, name) {
-    const method = declarations(object.constructor, "methods").get(name);
-    return !!method && method.arity <= 2;
-  },
-
   performAction(object, name, sender, event) {
     const method = declarations(object.constructor, "methods").get(name);
     if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);

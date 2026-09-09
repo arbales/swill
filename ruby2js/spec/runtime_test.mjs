@@ -576,10 +576,16 @@ test("unhandled child actions continue through the responder chain", () => {
   assert.deepEqual(f.log.filter(entry => entry.endsWith(":shout")), ["parent:shout"]);
   assert.equal(f.parent.person.name, "ADA");
   assert.equal(f.parentTitle.textContent, "Hello ADA");
-  assert.throws(() => f.grandchild.perform_action("missing", null, null), /Unhandled action: missing/);
+  assert.throws(() => f.grandchild.perform_action("vanish", null, null), /Unhandled action: vanish/);
   assert.throws(() => f.parent.perform_action("toString", null, null), /Unhandled action/);
-  assert.equal(Runtime.hasAction(f.parent, "shout"), true);
-  assert.equal(Runtime.hasAction(f.child, "shout"), false);
+  assert.equal(Runtime.respondsTo(f.parent, "shout"), true);
+  assert.equal(Runtime.respondsTo(f.child, "shout"), false);
+  // A responder that responds to the name but cannot take the action is an
+  // error there, as a wrong-arity send would be in Ruby; it never bubbles.
+  assert.throws(() => f.child.perform_action("title", null, null), /Unknown action or wrong arity: title/);
+  class Wide extends Badge { wide(a, b, c) { return [a, b, c]; } }
+  Runtime.install({classes: {"Test::Wide": {constructor: Wide, methods: {wide: {arity: 3}}}}});
+  assert.throws(() => new Wide().perform_action("wide", null, null), /Unknown action or wrong arity: wide/);
 });
 
 test("awakening a later fragment adopts it into the nearest live owner", () => {
@@ -701,8 +707,8 @@ test("unhandled root actions reach the application; a ready document launches at
   assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello Grace", "Badge 3"]);
   f.resetButton.click();
   assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello ", "Badge 0"]);
-  assert.throws(() => badge.perform_action("missing", null, null), /Unhandled action: missing/);
-  assert.throws(() => application.perform_action("missing", null, null), /Unhandled action: missing/);
+  assert.throws(() => badge.perform_action("vanish", null, null), /Unhandled action: vanish/);
+  assert.throws(() => application.perform_action("vanish", null, null), /Unhandled action: vanish/);
 });
 
 test("pages without an application stay inert and unknown applications fail closed", () => {

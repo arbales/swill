@@ -414,8 +414,7 @@ parent's, so lookups do not walk the chain at call time.
 | `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null`; the empty path is the object itself |
 | `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Error: `Read-only binding` when the leaf is computed, not a property, or the path is empty |
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
-| `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted |
-| `hasAction(object, name)` | Whether a collected method of arity 0, 1, or 2 exists; the responder chain uses it to decide where an action stops |
+| `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted. The responder chain uses it to decide which responder handles an action |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
 | `valueRead(value, name)` | `nil?`, `blank?`, `present?`, `empty?`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
