@@ -50,16 +50,21 @@ The initial kernel and DOM-boundary spike is complete and verified:
   included, an intentional divergence from Opal, which skips nil), writes
   through a missing owner dropped, and object-to-object bindings as a
   Ruby-authored `ObjectBindings` mixin over the runtime's existing path
-  observation and metadata-checked writes, with no new compiler metadata.
+  observation and metadata-checked writes, with no new compiler metadata;
+- responder parity: the application owns the first responder with Cocoa's
+  accept/resign/become protocol, `focusin` reconciliation with refusal
+  restoring focus, and `keydown`/`keyup` routing through the responder chain
+  with Escape, Enter, and Tab as `cancel_operation`, `insert_newline`, and
+  `complete`; teardown releases a first responder inside the region.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: Responder, Action, and Focus Parity
+## Immediate Next Step: UI Kernel Checkpoint
 
-Binding parity is verified in Node and Chrome (September 2026). The next
-target is roadmap item 3 below; action resolution from the sender's region
-and the application chain top already exist, so the work is first-responder
-focus and keyboard routing.
+Roadmap items 1 through 3 are verified in Node and Chrome (September 2026).
+The next step is the UI Kernel Checkpoint below, comparing this port with the
+Opal implementation before the model vertical slice. The static example port
+named in the checkpoint is the remaining input to that comparison.
 
 ## Ordered Roadmap
 
@@ -83,14 +88,12 @@ focus and keyboard routing.
 - Object-to-object bindings are a Ruby mixin over existing runtime
   primitives; neither compiler metadata nor a new runtime protocol.
 
-### 3. Responder, Action, and Focus Parity
+### 3. Responder, Action, and Focus Parity (done)
 
-- Resolve actions from the sender's owned region instead of always invoking the
-  root controller directly.
-- Walk controller/application responders with explicit method metadata and
-  arity validation (done for controllers and the application; focus remains).
-- Add first-responder focus and keyboard routing only after ownership is stable.
-- Keep action names constrained to installed generated methods.
+- Actions resolve from the sender's owned region and walk controller and
+  application responders through `respond_to?` metadata.
+- First-responder focus and keyboard routing sit on top of stable ownership.
+- Action names remain constrained to installed generated methods.
 
 ### 4. Model Vertical Slice
 

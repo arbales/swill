@@ -85,5 +85,43 @@ module Swill
     def next_responder
       @controller || @superview
     end
+
+    # ---- focus ----
+
+    sig { returns(String) }
+    def focusable_selector
+      "input, select, textarea, button, [tabindex]"
+    end
+
+    # This element when it is focusable, else its first focusable descendant.
+    sig { returns(T.untyped) }
+    def first_focusable_element
+      @element.matches(focusable_selector) ? @element : @element.querySelector(focusable_selector)
+    end
+
+    sig { void }
+    def focus_element
+      target = first_focusable_element
+      target.focus() if target
+    end
+
+    sig { void }
+    def blur_element
+      target = first_focusable_element
+      target.blur() if target
+    end
+
+    # A view wraps a focusable element, so it accepts by default; becoming
+    # first responder focuses it.
+    sig { override.returns(T::Boolean) }
+    def accepts_first_responder?
+      true
+    end
+
+    sig { override.returns(T::Boolean) }
+    def become_first_responder
+      focus_element
+      true
+    end
   end
 end

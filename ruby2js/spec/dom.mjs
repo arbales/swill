@@ -1,15 +1,17 @@
 // A small element tree for Node tests: enough DOM for ownership walks,
-// attribute scans, simple selectors, and events. No layout, no parsing.
-export class Element extends EventTarget {
+// attribute scans, simple selectors, bubbling events, and focus. No layout,
+// no parsing.
+export class Element {
   constructor(tagName, attributes = {}, children = []) {
-    super();
     this.tagName = tagName.toUpperCase();
     this.nodeType = 1;
     this.attributes = {...attributes};
     this.children = [];
     this.parentElement = null;
+    this.listeners = new Map();
     this._value = "";
     this._text = "";
+    this._focused = false;
     this.checked = false;
     this.disabled = false;
     this.hidden = false;
@@ -36,6 +38,17 @@ export class Element extends EventTarget {
     if (!parent) return;
     parent.children.splice(parent.children.indexOf(this), 1);
     this.parentElement = null;
+  }
+
+  contains(other) {
+    for (let node = other; node; node = node.parentElement) if (node === this) return true;
+    return false;
+  }
+
+  ownerDocument() {
+    let node = this;
+    while (node.parentElement) node = node.parentElement;
+    return node;
   }
 
   getAttribute(name) { return this.attributes[name] ?? null; }
@@ -66,7 +79,56 @@ export class Element extends EventTarget {
 
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
 
-  click() { this.dispatchEvent(new Event("click")); }
+  // ---- events: registration, once, and bubbling ----
+
+  addEventListener(type, listener, options) {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push({listener, once: options?.once === true});
+  }
+
+  removeEventListener(type, listener) {
+    const entries = this.listeners.get(type);
+    if (!entries) return;
+    const index = entries.findIndex(entry => entry.listener === listener);
+    if (index >= 0) entries.splice(index, 1);
+  }
+
+  dispatchEvent(event) {
+    Object.defineProperty(event, "target", {value: this, configurable: true});
+    for (let node = this; node; node = node.parentElement) {
+      Object.defineProperty(event, "currentTarget", {value: node, configurable: true});
+      for (const entry of [...(node.listeners.get(event.type) ?? [])]) {
+        if (entry.once) node.removeEventListener(event.type, entry.listener);
+        entry.listener.call(node, event);
+      }
+      if (!event.bubbles) break;
+    }
+    return true;
+  }
+
+  click() { this.dispatchEvent(new Event("click", {bubbles: true})); }
+
+  // ---- focus: records activeElement on the document and fires focusin ----
+
+  focus() {
+    const document = this.ownerDocument();
+    const previous = document.activeElement ?? null;
+    if (previous === this) return;
+    if (previous) previous._focused = false;
+    document.activeElement = this;
+    this._focused = true;
+    const event = new Event("focusin", {bubbles: true});
+    Object.defineProperty(event, "relatedTarget", {value: previous, configurable: true});
+    this.dispatchEvent(event);
+  }
+
+  blur() {
+    const document = this.ownerDocument();
+    if (document.activeElement === this) document.activeElement = null;
+    this._focused = false;
+  }
 }
 
 export const element = (tagName, attributes, children) => new Element(tagName, attributes, children);
+
+export const keyEvent = (type, key) => Object.assign(new Event(type, {bubbles: true}), {key});

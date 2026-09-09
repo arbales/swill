@@ -39,6 +39,16 @@ module Demo
       current.name = data["name"] if current && data
       current_badge = badge
       bind(:badge_count, to: current_badge, key_path: "count") if current_badge
+      # Start with the name field focused; the field is a View, so it accepts.
+      app = application
+      field = name_field
+      app.make_first_responder(field) if app && field
+    end
+
+    # Escape in any owned field bubbles here through the responder chain.
+    sig { override.params(event: T.untyped).void }
+    def cancel_operation(event)
+      clear
     end
 
     sig { returns(String) }

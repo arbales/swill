@@ -112,11 +112,16 @@
       if (Runtime.isTruthy(current && data)) current.name = data.name;
       let current_badge = this.badge;
       if (current_badge) {
-        return this.bind(
-          "badge_count",
-          { to: current_badge, key_path: "count" }
-        );
+        this.bind("badge_count", { to: current_badge, key_path: "count" });
       }
+      ;
+      let app = this.application();
+      let field = this.name_field;
+      if (Runtime.isTruthy(app && field)) return app.make_first_responder(field);
+    }
+    // Escape in any owned field bubbles here through the responder chain.
+    cancel_operation(event) {
+      return this.clear();
     }
     clear() {
       this.reset_person();
@@ -425,6 +430,9 @@
           },
           "awake_from_dom": {
             "arity": 0
+          },
+          "cancel_operation": {
+            "arity": 1
           },
           "clear": {
             "arity": 0

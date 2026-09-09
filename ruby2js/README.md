@@ -165,6 +165,17 @@ belongs to the child. `bind(:target, to: source, key_path: "a.b")` keeps a decla
 property equal to a path on another object until `unbind`, `unbind_all`, or
 teardown.
 
+The application owns the first responder. `make_first_responder` follows
+Cocoa: a responder must accept, the current one may refuse to resign, and a
+refusal to become leaves the application holding it. Views accept and focus
+their first focusable element; controllers accept when their view has one. A
+`focusin` on the root reconciles the first responder after the browser moves
+focus, restoring focus when the holder refuses. `keydown` and `keyup` go to the
+first responder: Escape, Enter, and Tab become `cancel_operation`,
+`insert_newline`, and `complete`, and unhandled keys and those methods continue
+up the responder chain to the application. Tearing down a region releases a
+first responder inside it.
+
 ### Sorbet
 
 Declarations carry explicit types, and method signatures feed the compiler's
@@ -201,13 +212,15 @@ The implementation covers:
   connected to their direct owner, and JSON outlets decoded through a hook;
 - binding roots, `@` paths, `bind-*` property bindings, predicate readers,
   represented objects for child controllers, and object-to-object bindings;
+- application-owned first responder with focus reconciliation and key routing
+  through the responder chain;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
-runtime Sorbet operations, dynamic class mutation, first-responder focus,
-keyboard routing, templates as content, or a complete model-layer port.
-Unsupported forms fail compilation.
+runtime Sorbet operations, dynamic class mutation, templates as content,
+windows, restoration, list and editor controllers, controls, or a complete
+model-layer port. Unsupported forms fail compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.

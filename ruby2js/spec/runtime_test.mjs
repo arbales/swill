@@ -437,7 +437,7 @@ test("invalid meta is rejected before registering preceding valid classes", () =
 
 // ---- nested controller ownership ----
 
-import {element} from "./dom.mjs";
+import {element, keyEvent} from "./dom.mjs";
 
 const Awakening = Runtime.resolve("Swill::Awakening");
 const Badge = Runtime.resolve("Demo::Badge");
@@ -651,7 +651,7 @@ function pageFixture({readyState = "loading", log = [], appName = "Demo::Applica
   const document = element("#document", {}, [body]);
   document.readyState = readyState;
   document.defaultView = new EventTarget();
-  return {log, document, body, main, badge, parentTitle, badgeTitle, resetButton};
+  return {log, document, body, main, badge, parentTitle, badgeTitle, resetButton, nameInput};
 }
 
 test("the launcher launches the declared application once the DOM is parsed", () => {
@@ -933,4 +933,65 @@ test("object bindings keep a target equal to a source path and release on teardo
   f.parent.teardown();
   other.count = 10;
   assert.equal(f.parent.badge_count, 9, "teardown unbinds object bindings");
+});
+
+// ---- first responder and key routing ----
+
+test("the application owns the first responder and moves focus with it", () => {
+  const f = pageFixture({readyState: "complete"});
+  const application = new Launcher().launch(f.document);
+  const [parent, badge] = application.controllers();
+  assert.equal(application.first_responder(), parent.name_field, "awake_from_dom made the field first responder");
+  assert.equal(f.document.activeElement, f.nameInput);
+  assert.equal(application.make_first_responder(parent.name_field), true, "already first responder");
+  assert.equal(application.make_first_responder(badge), true, "a controller with a focusable element accepts");
+  assert.equal(application.first_responder(), badge);
+  assert.equal(f.document.activeElement, f.resetButton);
+  const bare = new (Runtime.resolve("Swill::Responder"))();
+  assert.equal(application.make_first_responder(bare), false, "a bare responder does not accept");
+  assert.equal(application.first_responder(), badge);
+  assert.equal(application.make_first_responder(null), true);
+  assert.equal(application.first_responder(), application, "nothing specific falls back to the application");
+  f.nameInput.focus();
+  assert.equal(application.first_responder(), parent.name_field, "browser focus reconciles the first responder");
+  f.resetButton.focus();
+  assert.equal(application.first_responder(), badge);
+});
+
+test("a refusing first responder keeps focus", () => {
+  const f = pageFixture({readyState: "complete"});
+  const application = new Launcher().launch(f.document);
+  const [parent, badge] = application.controllers();
+  badge.resign_first_responder = () => false;
+  application.make_first_responder(badge);
+  assert.equal(application.make_first_responder(parent.name_field), false);
+  assert.equal(application.first_responder(), badge);
+  f.nameInput.focus();
+  assert.equal(application.first_responder(), badge, "focusin cannot take it either");
+  assert.equal(f.document.activeElement, f.resetButton, "focus was restored to the refuser");
+});
+
+test("key events route from the first responder up the chain", () => {
+  const f = pageFixture({readyState: "complete"});
+  const application = new Launcher().launch(f.document);
+  const [parent] = application.controllers();
+  parent.person.name = "Grace";
+  assert.equal(f.parentTitle.textContent, "Hello Grace");
+  f.nameInput.dispatchEvent(keyEvent("keydown", "x"));
+  assert.equal(f.parentTitle.textContent, "Hello Grace");
+  f.nameInput.dispatchEvent(keyEvent("keydown", "Escape"));
+  assert.equal(f.parentTitle.textContent, "Hello ", "Escape reached the controller's cancel_operation through the view chain");
+  const seen = [];
+  application.insert_newline = event => seen.push(`enter:${event.key}`);
+  application.complete = () => seen.push("tab");
+  application.key_up = event => seen.push(`up:${event.key}`);
+  f.nameInput.dispatchEvent(keyEvent("keydown", "Enter"));
+  f.nameInput.dispatchEvent(keyEvent("keydown", "Tab"));
+  f.nameInput.dispatchEvent(keyEvent("keyup", "Tab"));
+  assert.deepEqual(seen, ["enter:Enter", "tab", "up:Tab"]);
+  parent.teardown();
+  assert.equal(application.first_responder(), application, "tearing down the region releases its first responder");
+  application.terminate();
+  f.resetButton.focus();
+  assert.equal(application.first_responder(), application, "terminate removed the listeners");
 });

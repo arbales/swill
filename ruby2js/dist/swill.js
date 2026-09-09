@@ -552,6 +552,51 @@
       if (!target) throw new Error(`Unhandled action: ${name}`);
       return target.perform_action(name, sender, event);
     }
+    // ---- first responder ----
+    //
+    // The policy gate for being made first responder by focus or the key loop.
+    // Views accept; a bare responder refuses.
+    accepts_first_responder_predicate() {
+      return false;
+    }
+    // Return false to refuse; set up state such as focus otherwise. Never
+    // call directly; ask the application.
+    become_first_responder() {
+      return true;
+    }
+    // Return false to keep first responder status; the incoming responder is
+    // passed so a refusal can be selective.
+    resign_first_responder(next_responder) {
+      return true;
+    }
+    // ---- key events ----
+    //
+    // Well-known keys route to named methods; everything else, and the named
+    // methods themselves, continue up the chain.
+    key_down(event) {
+      switch (event.key) {
+        case "Escape":
+          return this.cancel_operation(event);
+        case "Enter":
+          return this.insert_newline(event);
+        case "Tab":
+          return this.complete(event);
+        default:
+          return this.next_responder()?.key_down(event);
+      }
+    }
+    key_up(event) {
+      return this.next_responder()?.key_up(event);
+    }
+    cancel_operation(event) {
+      return this.next_responder()?.cancel_operation(event);
+    }
+    insert_newline(event) {
+      return this.next_responder()?.insert_newline(event);
+    }
+    complete(event) {
+      return this.next_responder()?.complete(event);
+    }
   };
   var Swill__View = class extends Swill__Responder {
     constructor(element) {
@@ -610,6 +655,31 @@
     next_responder() {
       return this._controller ?? this._superview;
     }
+    // ---- focus ----
+    focusable_selector() {
+      return "input, select, textarea, button, [tabindex]";
+    }
+    // This element when it is focusable, else its first focusable descendant.
+    first_focusable_element() {
+      return this._element.matches(this.focusable_selector()) ? this._element : this._element.querySelector(this.focusable_selector());
+    }
+    focus_element() {
+      let target = this.first_focusable_element();
+      if (target) return target.focus();
+    }
+    blur_element() {
+      let target = this.first_focusable_element();
+      if (target) return target.blur();
+    }
+    // A view wraps a focusable element, so it accepts by default; becoming
+    // first responder focuses it.
+    accepts_first_responder_predicate() {
+      return true;
+    }
+    become_first_responder() {
+      this.focus_element();
+      return true;
+    }
   };
   var Swill__Controller = class extends Swill__Responder {
     // The object a parent binding assigns through bind="path" on this
@@ -655,9 +725,29 @@
     // Releases this controller's listeners and observers, then its descendants,
     // exactly once. The element keeps its View, so the region can be awakened
     // again later.
+    // A controller can be first responder when its view has something to
+    // focus; becoming and resigning move DOM focus accordingly.
+    accepts_first_responder_predicate() {
+      return this._view.first_focusable_element() != null;
+    }
+    become_first_responder() {
+      if (!super.become_first_responder()) return false;
+      this._view.focus_element();
+      return true;
+    }
+    resign_first_responder(next_responder) {
+      if (!super.resign_first_responder(next_responder)) return false;
+      this._view.blur_element();
+      return true;
+    }
     teardown() {
       if (this._view.controller_value() !== this) return;
       this.view_will_disappear();
+      let current_application = this.application();
+      if (current_application) {
+        current_application.release_first_responder(this._view.element());
+      }
+      ;
       this._teardowns.forEach((dispose) => dispose());
       this._teardowns = [];
       this.unbind_all();
@@ -1008,6 +1098,12 @@
     launch(root) {
       this._root = root;
       root.__swill_application__ = this;
+      this._on_focus = (event) => this.sync_first_responder(event.target, event.relatedTarget);
+      this._on_key_down = (event) => this.first_responder().key_down(event);
+      this._on_key_up = (event) => this.first_responder().key_up(event);
+      root.addEventListener("focusin", this._on_focus);
+      root.addEventListener("keydown", this._on_key_down);
+      root.addEventListener("keyup", this._on_key_up);
       this._controllers = new Swill__Awakening().wire(root);
       this.application_did_launch();
       return this;
@@ -1025,6 +1121,10 @@
       this.application_will_terminate();
       this._controllers.forEach((controller) => controller.teardown());
       this._controllers = [];
+      this._root.removeEventListener("focusin", this._on_focus);
+      this._root.removeEventListener("keydown", this._on_key_down);
+      this._root.removeEventListener("keyup", this._on_key_up);
+      this._first_responder = null;
       return this._root.__swill_application__ = null;
     }
     application_did_launch() {
@@ -1032,6 +1132,70 @@
     }
     application_will_terminate() {
       return null;
+    }
+    // ---- first responder ----
+    // The application itself when nothing more specific holds it.
+    first_responder() {
+      return this._first_responder ?? this;
+    }
+    // Cocoa's makeFirstResponder: a responder that does not accept is refused
+    // up front; the current first responder may refuse to resign; a responder
+    // that refuses to become leaves the application as first responder.
+    make_first_responder(responder) {
+      if (responder && !responder.accepts_first_responder_predicate()) return false;
+      let current = this.first_responder();
+      if (responder === current) return true;
+      if (!current.resign_first_responder(responder)) return false;
+      this._first_responder = null;
+      if (responder && responder.become_first_responder()) {
+        this._first_responder = responder;
+      }
+      ;
+      return true;
+    }
+    // The browser already moved focus; reconcile the first responder without
+    // re-running become. A resign refusal restores focus to the refuser.
+    sync_first_responder(target, previous) {
+      let responder = this.responder_for(target);
+      let current = this.first_responder();
+      if (responder === current) return;
+      if (!current.resign_first_responder(responder)) {
+        this.restore_focus(current, previous);
+        return;
+      }
+      ;
+      this._first_responder = responder;
+      return this._first_responder;
+    }
+    // A first responder inside a region being torn down falls back here.
+    release_first_responder(element) {
+      let owner = this.responder_element(this.first_responder());
+      if (owner && (owner === element || element.contains(owner))) {
+        this._first_responder = null;
+        return this._first_responder;
+      }
+    }
+    // The responder for a DOM location: the first managed view above it,
+    // which yields its controller for a controller root and itself otherwise.
+    responder_for(element) {
+      if (!element) return null;
+      let view = element.__swill_view__;
+      if (view) return view.controller_value() ?? view;
+      return this.responder_for(element.parentElement);
+    }
+    responder_element(responder) {
+      if (responder instanceof Swill__Controller) {
+        return responder.view().element();
+      }
+      ;
+      if (responder instanceof Swill__View) return responder.element();
+      return null;
+    }
+    restore_focus(responder, previous) {
+      let owner = this.responder_element(responder);
+      if (!owner) return;
+      let target = previous && owner.contains(previous) ? previous : owner.__swill_view__.first_focusable_element();
+      if (target) return target.focus();
     }
   };
   var Swill__Launcher = class extends Swill__Object {
@@ -1189,6 +1353,31 @@
           },
           "perform_action": {
             "arity": 3
+          },
+          "accepts_first_responder?": {
+            "arity": 0,
+            "js": "accepts_first_responder_predicate"
+          },
+          "become_first_responder": {
+            "arity": 0
+          },
+          "resign_first_responder": {
+            "arity": 1
+          },
+          "key_down": {
+            "arity": 1
+          },
+          "key_up": {
+            "arity": 1
+          },
+          "cancel_operation": {
+            "arity": 1
+          },
+          "insert_newline": {
+            "arity": 1
+          },
+          "complete": {
+            "arity": 1
           }
         }
       },
@@ -1231,6 +1420,25 @@
           },
           "next_responder": {
             "arity": 0
+          },
+          "focusable_selector": {
+            "arity": 0
+          },
+          "first_focusable_element": {
+            "arity": 0
+          },
+          "focus_element": {
+            "arity": 0
+          },
+          "blur_element": {
+            "arity": 0
+          },
+          "accepts_first_responder?": {
+            "arity": 0,
+            "js": "accepts_first_responder_predicate"
+          },
+          "become_first_responder": {
+            "arity": 0
           }
         }
       },
@@ -1269,6 +1477,16 @@
             "arity": 0
           },
           "register_teardown": {
+            "arity": 1
+          },
+          "accepts_first_responder?": {
+            "arity": 0,
+            "js": "accepts_first_responder_predicate"
+          },
+          "become_first_responder": {
+            "arity": 0
+          },
+          "resign_first_responder": {
             "arity": 1
           },
           "teardown": {
@@ -1423,6 +1641,27 @@
           },
           "application_will_terminate": {
             "arity": 0
+          },
+          "first_responder": {
+            "arity": 0
+          },
+          "make_first_responder": {
+            "arity": 1
+          },
+          "sync_first_responder": {
+            "arity": 2
+          },
+          "release_first_responder": {
+            "arity": 1
+          },
+          "responder_for": {
+            "arity": 1
+          },
+          "responder_element": {
+            "arity": 1
+          },
+          "restore_focus": {
+            "arity": 2
           }
         }
       },

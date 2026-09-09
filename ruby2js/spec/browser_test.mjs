@@ -96,6 +96,24 @@ try {
     input.dispatchEvent(new Event("input", {bubbles: true}));
     return document.querySelector("p[bind]").textContent;
   })()`), "Hello Grace");
+  // The name field is first responder from awake_from_dom; Escape travels
+  // view, controller; focusing the badge's button moves the first responder.
+  assert.deepEqual(await evaluate(`(() => {
+    const application = document.body.__swill_application__;
+    const parent = application.controllers()[0];
+    const badge = application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge"));
+    const input = document.querySelector("input");
+    const results = [document.activeElement === input, application.first_responder() === parent.name_field];
+    input.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    results.push(document.querySelector("p[bind]").textContent, input.value);
+    document.querySelector("section[controller='Demo::Badge'] button").focus();
+    results.push(application.first_responder() === badge);
+    input.focus();
+    results.push(application.first_responder() === parent.name_field);
+    input.value = "Grace";
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    return results;
+  })()`), [true, true, "Hello ", "", true, true]);
   // The nested controller owns its own title binding and clear action; its
   // unhandled shout action reaches the parent through the responder chain.
   assert.deepEqual(await evaluate(`(() => {
@@ -162,7 +180,7 @@ try {
     document.body.__swill_application__
   ]`), ["Hello ", "Badge 1", null]);
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: application launch, outlets, nested ownership, roots, property and object bindings, actions, responder chain, and teardown passed.");
+  console.log("Chrome: application launch, outlets, nested ownership, bindings, actions, first responder, key routing, and teardown passed.");
 } finally {
   clearTimeout(timeout);
   socket?.close();

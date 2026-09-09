@@ -67,10 +67,33 @@ module Swill
     # Releases this controller's listeners and observers, then its descendants,
     # exactly once. The element keeps its View, so the region can be awakened
     # again later.
+    # A controller can be first responder when its view has something to
+    # focus; becoming and resigning move DOM focus accordingly.
+    sig { override.returns(T::Boolean) }
+    def accepts_first_responder?
+      @view.first_focusable_element() != nil
+    end
+
+    sig { override.returns(T::Boolean) }
+    def become_first_responder
+      return false unless super
+      @view.focus_element()
+      true
+    end
+
+    sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
+    def resign_first_responder(next_responder)
+      return false unless super(next_responder)
+      @view.blur_element()
+      true
+    end
+
     sig { void }
     def teardown
       return if @view.controller_value() != self
       view_will_disappear
+      current_application = application
+      current_application.release_first_responder(@view.element()) if current_application
       @teardowns.forEach { |dispose| dispose.() }
       @teardowns = []
       unbind_all
