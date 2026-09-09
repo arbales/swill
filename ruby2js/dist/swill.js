@@ -6,29 +6,17 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
-  // lib/swill/runtime.mjs
-  var classes = /* @__PURE__ */ new Map();
+  // lib/swill/runtime/metadata.mjs
   var metadata = /* @__PURE__ */ new WeakMap();
-  var mixinMetadata = /* @__PURE__ */ new WeakMap();
-  var mixinClassFactories = /* @__PURE__ */ new WeakMap();
-  var classConfiguration = /* @__PURE__ */ new WeakMap();
-  var states = /* @__PURE__ */ new WeakMap();
-  var captures = [];
-  function strip(value) {
-    return value.replace(/^[\x00\t\n\v\f\r ]+|[\x00\t\n\v\f\r ]+$/g, "");
-  }
-  function state(object) {
-    if (!states.has(object)) {
-      states.set(object, { values: /* @__PURE__ */ new Map(), computed: /* @__PURE__ */ new Map(), observers: /* @__PURE__ */ new Map(), dependents: /* @__PURE__ */ new Map() });
-    }
-    return states.get(object);
-  }
   function declarations(klass, kind) {
     for (let current = klass; current; current = Object.getPrototypeOf(current)) {
       const known = metadata.get(current);
       if (known) return known[kind];
     }
     return /* @__PURE__ */ new Map();
+  }
+  function hasMetadata(klass) {
+    return metadata.has(klass);
   }
   function installMetadata(klass, properties, methods) {
     const parent = Object.getPrototypeOf(klass);
@@ -37,11 +25,80 @@
       methods: new Map([...declarations(parent, "methods"), ...methods.map((item) => [item.name, item])])
     });
   }
-  function configuration(klass) {
-    if (!classConfiguration.has(klass)) {
-      classConfiguration.set(klass, { registries: /* @__PURE__ */ new Map(), settings: /* @__PURE__ */ new Map() });
+
+  // lib/swill/runtime/values.mjs
+  function stripString(value) {
+    return value.replace(/^[\x00\t\n\v\f\r ]+|[\x00\t\n\v\f\r ]+$/g, "");
+  }
+  function isTruthy(value) {
+    return value !== false && value !== null && value !== void 0;
+  }
+  function logicalAnd(left, right) {
+    return isTruthy(left) ? right() : left;
+  }
+  function logicalOr(left, right) {
+    return isTruthy(left) ? left : right();
+  }
+  function isEqual(left, right) {
+    if (left === right) return true;
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => isEqual(value, right[index]));
+  }
+  function isBlank(value) {
+    if (value == null || value === false) return true;
+    if (typeof value === "string") return stripString(value).length === 0;
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  }
+  function isPresent(value) {
+    return !isBlank(value);
+  }
+  function isEmpty(value) {
+    if (typeof value === "string" || Array.isArray(value)) return value.length === 0;
+    throw new TypeError("empty? requires a string or array");
+  }
+  function strip(value) {
+    if (typeof value !== "string") throw new TypeError("strip requires a string");
+    return stripString(value);
+  }
+  function upcase(value) {
+    if (typeof value !== "string") throw new TypeError("upcase requires a string");
+    return value.toUpperCase();
+  }
+  function downcase(value) {
+    if (typeof value !== "string") throw new TypeError("downcase requires a string");
+    return value.toLowerCase();
+  }
+  function valueRead(value, name) {
+    switch (name) {
+      case "nil?":
+        return value == null;
+      case "blank?":
+        return isBlank(value);
+      case "present?":
+        return isPresent(value);
+      case "empty?":
+        return isEmpty(value);
+      case "strip":
+        return strip(value);
+      case "upcase":
+        return upcase(value);
+      case "downcase":
+        return downcase(value);
+      default:
+        throw new Error(`Unknown value reader: ${name}`);
     }
-    return classConfiguration.get(klass);
+  }
+  var NIL_READERS = ["nil?", "blank?", "present?"];
+  var VALUE_READERS = ["nil?", "blank?", "present?", "empty?", "strip", "upcase", "downcase"];
+
+  // lib/swill/runtime/properties.mjs
+  var states = /* @__PURE__ */ new WeakMap();
+  var captures = [];
+  function state(object) {
+    if (!states.has(object)) {
+      states.set(object, { values: /* @__PURE__ */ new Map(), computed: /* @__PURE__ */ new Map(), observers: /* @__PURE__ */ new Map(), dependents: /* @__PURE__ */ new Map() });
+    }
+    return states.get(object);
   }
   function record(object, name) {
     const frame = captures.at(-1);
@@ -76,7 +133,7 @@
     }
     if (slot.valid) return slot.value;
     if (slot.running) throw new Error(`Computed cycle: ${descriptor.name}`);
-    slot.disposers.splice(0).forEach((dispose) => dispose());
+    slot.disposers.splice(0).forEach((dispose2) => dispose2());
     const frame = /* @__PURE__ */ new Map();
     slot.running = true;
     captures.push(frame);
@@ -102,7 +159,7 @@
     for (const callback of [...listeners(object, descriptor.name, "dependents")]) callback();
     if (listeners(object, descriptor.name, "observers").size) {
       const value = computedValue(object, descriptor);
-      if (!Runtime.isEqual(previous, value)) notify(object, descriptor.name, previous, value);
+      if (!isEqual(previous, value)) notify(object, descriptor.name, previous, value);
     }
   }
   function notify(object, name, previous, value) {
@@ -114,325 +171,309 @@
   function writeProperty(object, descriptor, value) {
     const previous = storedValue(object, descriptor);
     value = object.coerce_property_value(descriptor.name, value, previous);
-    if (Runtime.isEqual(previous, value)) return value;
+    if (isEqual(previous, value)) return value;
     object.property_will_change(descriptor.name, previous, value);
     state(object).values.set(descriptor.name, value);
     notify(object, descriptor.name, previous, value);
     return value;
   }
+  function observe(object, name, callback) {
+    return subscribe(object, name, callback, "observers");
+  }
+  function dispose(object) {
+    const current = states.get(object);
+    if (!current) return;
+    for (const slot of current.computed.values()) {
+      slot.disposers.splice(0).forEach((dispose2) => dispose2());
+    }
+    current.computed.clear();
+    current.observers.clear();
+    current.dependents.clear();
+  }
+
+  // lib/swill/runtime/install.mjs
+  var classes = /* @__PURE__ */ new Map();
+  var mixinMetadata = /* @__PURE__ */ new WeakMap();
+  var mixinClassFactories = /* @__PURE__ */ new WeakMap();
+  var classConfiguration = /* @__PURE__ */ new WeakMap();
+  function configuration(klass) {
+    if (!classConfiguration.has(klass)) {
+      classConfiguration.set(klass, { registries: /* @__PURE__ */ new Map(), settings: /* @__PURE__ */ new Map() });
+    }
+    return classConfiguration.get(klass);
+  }
+  function install(meta2) {
+    const entries = Object.entries(meta2.classes ?? {});
+    const mixins = Object.values(meta2.mixins ?? {});
+    const incoming = new Map(mixins.map((item) => [item.factory, item]));
+    for (const [name, descriptor] of entries) {
+      if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
+      if (!Object.hasOwn(descriptor, "constructor") || typeof descriptor.constructor !== "function") {
+        throw new TypeError(`Missing constructor: ${name}`);
+      }
+      for (const mixin of descriptor.mixins ?? []) {
+        if (!incoming.has(mixin) && !mixinMetadata.has(mixin)) throw new Error(`Unknown mixin for ${name}`);
+      }
+    }
+    const pending = new Map(entries.map(([name, descriptor]) => [descriptor.constructor, { name, descriptor }]));
+    if (pending.size !== entries.length) throw new Error("Duplicate constructor in meta");
+    const methods = (descriptors) => Object.entries(descriptors ?? {}).map(([name, descriptor]) => ({ name, js: name, ...descriptor }));
+    for (const mixin of mixins) {
+      if (typeof mixin.factory !== "function") throw new Error("Mixin factory must be a function");
+      if (mixin.classFactory !== void 0 && typeof mixin.classFactory !== "function") {
+        throw new Error("ClassMethods factory must be a function");
+      }
+      mixinMetadata.set(mixin.factory, methods(mixin.methods));
+      if (mixin.classFactory) mixinClassFactories.set(mixin.factory, mixin.classFactory);
+    }
+    while (pending.size) {
+      let progress = false;
+      for (const [klass, { name, descriptor }] of pending) {
+        if (pending.has(Object.getPrototypeOf(klass))) continue;
+        if (descriptor.mixins?.length) include(klass, descriptor.mixins, incoming);
+        const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({ name: name2, js: name2, ...property, computed: typeof property.compute === "function" }));
+        installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries);
+        pending.delete(klass);
+        progress = true;
+      }
+      if (!progress) throw new Error("Unresolvable superclass order in meta");
+    }
+  }
+  function include(klass, mixins, incoming = /* @__PURE__ */ new Map()) {
+    if (hasMetadata(klass)) throw new Error("Mixins must be attached before class installation");
+    let parent = Object.getPrototypeOf(klass);
+    for (const mixin of mixins) {
+      parent = mixin(parent);
+      if (mixinMetadata.has(mixin)) installMetadata(parent, [], mixinMetadata.get(mixin));
+    }
+    Object.setPrototypeOf(klass.prototype, parent.prototype);
+    Object.setPrototypeOf(klass, parent);
+    for (const mixin of mixins) {
+      const classFactory = incoming.get(mixin)?.classFactory ?? mixinClassFactories.get(mixin);
+      if (classFactory) {
+        const helpers = Object.getOwnPropertyDescriptors(
+          classFactory(Object.getPrototypeOf(klass))
+        );
+        delete helpers.constructor;
+        Object.defineProperties(klass, helpers);
+      }
+    }
+  }
+  function inheritableRegistry(klass, name, initial = "hash") {
+    const own = configuration(klass).registries;
+    if (own.has(name)) return own.get(name);
+    const parent = Object.getPrototypeOf(klass);
+    const inherited = typeof parent?.[name] === "function" ? parent[name]() : void 0;
+    const value = inherited === void 0 ? initial === "array" ? [] : {} : Array.isArray(inherited) ? [...inherited] : { ...inherited };
+    own.set(name, value);
+    return value;
+  }
+  function classSetting(klass, name, values) {
+    const own = configuration(klass).settings;
+    if (values.length) {
+      if (values.length !== 1) throw new Error(`${name} expects zero or one argument`);
+      own.set(name, values[0]);
+      return values[0];
+    }
+    if (own.has(name)) return own.get(name);
+    const parent = Object.getPrototypeOf(klass);
+    return typeof parent?.[name] === "function" ? parent[name]() : null;
+  }
+  function installClass(klass, name, properties, methods, registries = {}) {
+    if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
+    installMetadata(klass, properties, methods);
+    const propertyByName = new Map(properties.map((property) => [property.name, property]));
+    for (const [registryName, seeds] of Object.entries(registries)) {
+      if (typeof klass[registryName] !== "function") {
+        throw new Error(`Missing registry declaration: ${registryName}`);
+      }
+      const registry = klass[registryName]();
+      for (const [name2, seed] of Object.entries(seeds)) {
+        const property = propertyByName.get(seed.property);
+        if (!property) throw new Error(`Unknown registry property: ${seed.property}`);
+        registry[name2] = { ...seed, type: property.type, defaultValue: property.defaultValue };
+      }
+    }
+    for (const descriptor of properties) {
+      Object.defineProperty(klass.prototype, descriptor.js, {
+        configurable: true,
+        get() {
+          record(this, descriptor.name);
+          return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
+        },
+        ...descriptor.computed ? {} : { set(value) {
+          writeProperty(this, descriptor, value);
+        } }
+      });
+    }
+    classes.set(name, klass);
+  }
+  function resolve(name) {
+    if (!classes.has(name)) throw new Error(`Unknown class: ${name}`);
+    return classes.get(name);
+  }
+
+  // lib/swill/runtime/paths.mjs
+  function read(object, name) {
+    if (object == null) return NIL_READERS.includes(name) ? valueRead(object, name) : null;
+    if (typeof object !== "object" && typeof object !== "function") return valueRead(object, name);
+    const property = declarations(object.constructor, "properties").get(name);
+    if (property) return object[property.js];
+    const method = declarations(object.constructor, "methods").get(name);
+    if (method?.arity === 0) return object[method.js]();
+    if (VALUE_READERS.includes(name)) return valueRead(object, name);
+    throw new Error(`Unknown reader: ${name}`);
+  }
+  function segments(path) {
+    return path === "" ? [] : path.split(".");
+  }
+  function readPath(object, path) {
+    return segments(path).reduce((owner, name) => read(owner, name), object);
+  }
+  function write(object, name, value) {
+    if (object == null) throw new Error(`Cannot write ${name} on nil`);
+    const property = declarations(object.constructor, "properties").get(name);
+    if (property) {
+      if (property.computed) throw new Error(`Read-only property: ${name}`);
+      return writeProperty(object, property, value);
+    }
+    const method = declarations(object.constructor, "methods").get(`${name}=`);
+    if (method?.arity === 1) {
+      object[name] = value;
+      return value;
+    }
+    throw new Error(`Unknown writer: ${name}`);
+  }
   function pathWriter(object, path) {
-    const names = Runtime.segments(path);
+    const names = segments(path);
     if (names.length === 0) throw new Error(`Read-only binding: ${path}`);
     const name = names.pop();
-    const owner = names.reduce((target, segment) => Runtime.read(target, segment), object);
+    const owner = names.reduce((target, segment) => read(target, segment), object);
     if (owner == null) return null;
     const descriptor = declarations(owner.constructor, "properties").get(name);
     if (!descriptor || descriptor.computed) throw new Error(`Read-only binding: ${path}`);
     return { owner, descriptor };
   }
-  var Runtime = {
-    // One load-time operation over generated data. Definitions are inert until
-    // here; install parents before children regardless of object key order.
-    install(meta2) {
-      const entries = Object.entries(meta2.classes ?? {});
-      const mixins = Object.values(meta2.mixins ?? {});
-      const incoming = new Map(mixins.map((item) => [item.factory, item]));
-      for (const [name, descriptor] of entries) {
-        if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
-        if (!Object.hasOwn(descriptor, "constructor") || typeof descriptor.constructor !== "function") {
-          throw new TypeError(`Missing constructor: ${name}`);
+  function assertWritablePath(object, path) {
+    pathWriter(object, path);
+  }
+  function writePath(object, path, value) {
+    const writer = pathWriter(object, path);
+    if (!writer) return void 0;
+    return writeProperty(writer.owner, writer.descriptor, value);
+  }
+  function observePath(object, path, callback) {
+    let disposers = [];
+    let active = true;
+    const rehook = () => {
+      disposers.splice(0).forEach((dispose2) => dispose2());
+      let owner = object;
+      for (const name of segments(path)) {
+        if (owner == null) break;
+        if (declarations(owner.constructor, "properties").has(name)) {
+          disposers.push(subscribe(owner, name, () => {
+            if (!active) return;
+            rehook();
+            callback(readPath(object, path));
+          }, "observers"));
         }
-        for (const mixin of descriptor.mixins ?? []) {
-          if (!incoming.has(mixin) && !mixinMetadata.has(mixin)) throw new Error(`Unknown mixin for ${name}`);
-        }
+        owner = read(owner, name);
       }
-      const pending = new Map(entries.map(([name, descriptor]) => [descriptor.constructor, { name, descriptor }]));
-      if (pending.size !== entries.length) throw new Error("Duplicate constructor in meta");
-      const methods = (descriptors) => Object.entries(descriptors ?? {}).map(([name, descriptor]) => ({ name, js: name, ...descriptor }));
-      for (const mixin of mixins) {
-        if (typeof mixin.factory !== "function") throw new Error("Mixin factory must be a function");
-        if (mixin.classFactory !== void 0 && typeof mixin.classFactory !== "function") {
-          throw new Error("ClassMethods factory must be a function");
-        }
-        mixinMetadata.set(mixin.factory, methods(mixin.methods));
-        if (mixin.classFactory) mixinClassFactories.set(mixin.factory, mixin.classFactory);
-      }
-      while (pending.size) {
-        let progress = false;
-        for (const [klass, { name, descriptor }] of pending) {
-          if (pending.has(Object.getPrototypeOf(klass))) continue;
-          if (descriptor.mixins?.length) this.include(klass, descriptor.mixins, incoming);
-          const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({ name: name2, js: name2, ...property, computed: typeof property.compute === "function" }));
-          this.installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries);
-          pending.delete(klass);
-          progress = true;
-        }
-        if (!progress) throw new Error("Unresolvable superclass order in meta");
-      }
-    },
-    include(klass, mixins, incoming = /* @__PURE__ */ new Map()) {
-      if (metadata.has(klass)) throw new Error("Mixins must be attached before class installation");
-      let parent = Object.getPrototypeOf(klass);
-      for (const mixin of mixins) {
-        parent = mixin(parent);
-        if (mixinMetadata.has(mixin)) installMetadata(parent, [], mixinMetadata.get(mixin));
-      }
-      Object.setPrototypeOf(klass.prototype, parent.prototype);
-      Object.setPrototypeOf(klass, parent);
-      for (const mixin of mixins) {
-        const classFactory = incoming.get(mixin)?.classFactory ?? mixinClassFactories.get(mixin);
-        if (classFactory) {
-          const helpers = Object.getOwnPropertyDescriptors(
-            classFactory(Object.getPrototypeOf(klass))
-          );
-          delete helpers.constructor;
-          Object.defineProperties(klass, helpers);
-        }
-      }
-    },
-    inheritableRegistry(klass, name, initial = "hash") {
-      const own = configuration(klass).registries;
-      if (own.has(name)) return own.get(name);
-      const parent = Object.getPrototypeOf(klass);
-      const inherited = typeof parent?.[name] === "function" ? parent[name]() : void 0;
-      const value = inherited === void 0 ? initial === "array" ? [] : {} : Array.isArray(inherited) ? [...inherited] : { ...inherited };
-      own.set(name, value);
-      return value;
-    },
-    classSetting(klass, name, values) {
-      const own = configuration(klass).settings;
-      if (values.length) {
-        if (values.length !== 1) throw new Error(`${name} expects zero or one argument`);
-        own.set(name, values[0]);
-        return values[0];
-      }
-      if (own.has(name)) return own.get(name);
-      const parent = Object.getPrototypeOf(klass);
-      return typeof parent?.[name] === "function" ? parent[name]() : null;
-    },
-    installClass(klass, name, properties, methods, registries = {}) {
-      if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
-      installMetadata(klass, properties, methods);
-      const propertyByName = new Map(properties.map((property) => [property.name, property]));
-      for (const [registryName, seeds] of Object.entries(registries)) {
-        if (typeof klass[registryName] !== "function") {
-          throw new Error(`Missing registry declaration: ${registryName}`);
-        }
-        const registry = klass[registryName]();
-        for (const [name2, seed] of Object.entries(seeds)) {
-          const property = propertyByName.get(seed.property);
-          if (!property) throw new Error(`Unknown registry property: ${seed.property}`);
-          registry[name2] = { ...seed, type: property.type, defaultValue: property.defaultValue };
-        }
-      }
-      for (const descriptor of properties) {
-        Object.defineProperty(klass.prototype, descriptor.js, {
-          configurable: true,
-          get() {
-            record(this, descriptor.name);
-            return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
-          },
-          ...descriptor.computed ? {} : { set(value) {
-            writeProperty(this, descriptor, value);
-          } }
-        });
-      }
-      classes.set(name, klass);
-    },
-    // Fail closed: markup cannot traverse globals or instantiate arbitrary values.
-    resolve(name) {
-      if (!classes.has(name)) throw new Error(`Unknown class: ${name}`);
-      return classes.get(name);
-    },
-    isTruthy(value) {
-      return value !== false && value !== null && value !== void 0;
-    },
-    logicalAnd(left, right) {
-      return this.isTruthy(left) ? right() : left;
-    },
-    logicalOr(left, right) {
-      return this.isTruthy(left) ? left : right();
-    },
-    // Spike contract: scalar values and acyclic arrays have Ruby value equality;
-    // framework objects retain identity. General Hash/custom == is not implemented.
-    isEqual(left, right) {
-      if (left === right) return true;
-      return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => this.isEqual(value, right[index]));
-    },
-    isBlank(value) {
-      if (value == null || value === false) return true;
-      if (typeof value === "string") return strip(value).length === 0;
-      if (Array.isArray(value)) return value.length === 0;
-      return false;
-    },
-    isPresent(value) {
-      return !this.isBlank(value);
-    },
-    isEmpty(value) {
-      if (typeof value === "string" || Array.isArray(value)) return value.length === 0;
-      throw new TypeError("empty? requires a string or array");
-    },
-    strip(value) {
-      if (typeof value !== "string") throw new TypeError("strip requires a string");
-      return strip(value);
-    },
-    upcase(value) {
-      if (typeof value !== "string") throw new TypeError("upcase requires a string");
-      return value.toUpperCase();
-    },
-    downcase(value) {
-      if (typeof value !== "string") throw new TypeError("downcase requires a string");
-      return value.toLowerCase();
-    },
-    valueRead(value, name) {
-      switch (name) {
-        case "nil?":
-          return value == null;
-        case "blank?":
-          return this.isBlank(value);
-        case "present?":
-          return this.isPresent(value);
-        case "empty?":
-          return this.isEmpty(value);
-        case "strip":
-          return this.strip(value);
-        case "upcase":
-          return this.upcase(value);
-        case "downcase":
-          return this.downcase(value);
-        default:
-          throw new Error(`Unknown value reader: ${name}`);
-      }
-    },
-    // Readers defined for nil itself; any other reader on a nil intermediate
-    // yields nil, so partially built paths render as empty.
-    NIL_READERS: ["nil?", "blank?", "present?"],
-    VALUE_READERS: ["nil?", "blank?", "present?", "empty?", "strip", "upcase", "downcase"],
-    read(object, name) {
-      if (object == null) return this.NIL_READERS.includes(name) ? this.valueRead(object, name) : null;
-      if (typeof object !== "object" && typeof object !== "function") return this.valueRead(object, name);
-      const property = declarations(object.constructor, "properties").get(name);
-      if (property) return object[property.js];
-      const method = declarations(object.constructor, "methods").get(name);
-      if (method?.arity === 0) return object[method.js]();
-      if (this.VALUE_READERS.includes(name)) return this.valueRead(object, name);
-      throw new Error(`Unknown reader: ${name}`);
-    },
-    segments(path) {
-      return path === "" ? [] : path.split(".");
-    },
-    readPath(object, path) {
-      return this.segments(path).reduce((owner, name) => this.read(owner, name), object);
-    },
-    // The dynamic writer counterpart of read: a declared property or a generated
-    // `name=` accessor, chosen by metadata rather than by the receiver's shape.
-    write(object, name, value) {
-      if (object == null) throw new Error(`Cannot write ${name} on nil`);
-      const property = declarations(object.constructor, "properties").get(name);
-      if (property) {
-        if (property.computed) throw new Error(`Read-only property: ${name}`);
-        return writeProperty(object, property, value);
-      }
-      const method = declarations(object.constructor, "methods").get(`${name}=`);
-      if (method?.arity === 1) {
-        object[name] = value;
-        return value;
-      }
-      throw new Error(`Unknown writer: ${name}`);
-    },
-    assertWritablePath(object, path) {
-      pathWriter(object, path);
-    },
-    // A write through a missing owner is dropped: the control shows an empty
-    // value and the owner may appear later.
-    writePath(object, path, value) {
-      const writer = pathWriter(object, path);
-      if (!writer) return void 0;
-      return writeProperty(writer.owner, writer.descriptor, value);
-    },
-    invoke(object, name, ...args) {
-      const method = declarations(object.constructor, "methods").get(name);
-      if (!method || method.arity !== args.length) throw new Error(`Unknown action or wrong arity: ${name}`);
-      return object[method.js](...args);
-    },
-    // Ruby respond_to? over installed metadata: declared properties, their
-    // writers, collected methods, and the value readers plain values answer to.
-    respondsTo(object, name) {
-      if (object == null) return this.NIL_READERS.includes(name);
-      if (typeof object !== "object" && typeof object !== "function") return this.VALUE_READERS.includes(name);
-      const properties = declarations(object.constructor, "properties");
-      const methods = declarations(object.constructor, "methods");
-      if (name.endsWith("=")) {
-        const property = properties.get(name.slice(0, -1));
-        return !!property && !property.computed || methods.has(name);
-      }
-      return properties.has(name) || methods.has(name);
-    },
-    performAction(object, name, sender, event) {
-      const method = declarations(object.constructor, "methods").get(name);
-      if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
-      return object[method.js](...[sender, event].slice(0, method.arity));
-    },
-    observePath(object, path, callback) {
-      let disposers = [];
-      let active = true;
-      const rehook = () => {
-        disposers.splice(0).forEach((dispose) => dispose());
-        let owner = object;
-        for (const name of this.segments(path)) {
-          if (owner == null) break;
-          if (declarations(owner.constructor, "properties").has(name)) {
-            disposers.push(subscribe(owner, name, () => {
-              if (!active) return;
-              rehook();
-              callback(this.readPath(object, path));
-            }, "observers"));
-          }
-          owner = this.read(owner, name);
-        }
-      };
-      rehook();
-      return () => {
-        active = false;
-        disposers.splice(0).forEach((dispose) => dispose());
-      };
-    },
-    observe(object, name, callback) {
-      return subscribe(object, name, callback, "observers");
-    },
-    dispose(object) {
-      const current = states.get(object);
-      if (!current) return;
-      for (const slot of current.computed.values()) {
-        slot.disposers.splice(0).forEach((dispose) => dispose());
-      }
-      current.computed.clear();
-      current.observers.clear();
-      current.dependents.clear();
-    },
-    outlets(object) {
-      return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
-    },
-    collect_attributes(object) {
-      const result = {};
-      for (const descriptor of declarations(object.constructor, "properties").values()) {
-        if (descriptor.attribute && !descriptor.computed) {
-          result[descriptor.key] = object[descriptor.js];
-        }
-      }
-      return result;
-    },
-    apply_attributes(object, source) {
-      for (const descriptor of declarations(object.constructor, "properties").values()) {
-        if (!descriptor.attribute || descriptor.computed) continue;
-        if (Object.hasOwn(source, descriptor.key)) {
-          object[descriptor.js] = source[descriptor.key];
-        } else if (Object.hasOwn(source, descriptor.name)) {
-          object[descriptor.js] = source[descriptor.name];
-        }
-      }
-      return object;
+    };
+    rehook();
+    return () => {
+      active = false;
+      disposers.splice(0).forEach((dispose2) => dispose2());
+    };
+  }
+  function respondsTo(object, name) {
+    if (object == null) return NIL_READERS.includes(name);
+    if (typeof object !== "object" && typeof object !== "function") return VALUE_READERS.includes(name);
+    const properties = declarations(object.constructor, "properties");
+    const methods = declarations(object.constructor, "methods");
+    if (name.endsWith("=")) {
+      const property = properties.get(name.slice(0, -1));
+      return !!property && !property.computed || methods.has(name);
     }
+    return properties.has(name) || methods.has(name);
+  }
+  function invoke(object, name, ...args) {
+    const method = declarations(object.constructor, "methods").get(name);
+    if (!method || method.arity !== args.length) throw new Error(`Unknown action or wrong arity: ${name}`);
+    return object[method.js](...args);
+  }
+  function performAction(object, name, sender, event) {
+    const method = declarations(object.constructor, "methods").get(name);
+    if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
+    return object[method.js](...[sender, event].slice(0, method.arity));
+  }
+
+  // lib/swill/runtime/attributes.mjs
+  function outlets(object) {
+    return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
+  }
+  function collect_attributes(object) {
+    const result = {};
+    for (const descriptor of declarations(object.constructor, "properties").values()) {
+      if (descriptor.attribute && !descriptor.computed) {
+        result[descriptor.key] = object[descriptor.js];
+      }
+    }
+    return result;
+  }
+  function apply_attributes(object, source) {
+    for (const descriptor of declarations(object.constructor, "properties").values()) {
+      if (!descriptor.attribute || descriptor.computed) continue;
+      if (Object.hasOwn(source, descriptor.key)) {
+        object[descriptor.js] = source[descriptor.key];
+      } else if (Object.hasOwn(source, descriptor.name)) {
+        object[descriptor.js] = source[descriptor.name];
+      }
+    }
+    return object;
+  }
+
+  // lib/swill/runtime.mjs
+  var Runtime = {
+    // installation and class configuration
+    install,
+    include,
+    installClass,
+    inheritableRegistry,
+    classSetting,
+    resolve,
+    // values
+    isTruthy,
+    logicalAnd,
+    logicalOr,
+    isEqual,
+    isBlank,
+    isPresent,
+    isEmpty,
+    strip,
+    upcase,
+    downcase,
+    valueRead,
+    NIL_READERS,
+    VALUE_READERS,
+    // metadata-driven dispatch
+    read,
+    segments,
+    readPath,
+    write,
+    assertWritablePath,
+    writePath,
+    respondsTo,
+    invoke,
+    performAction,
+    // observation
+    observe,
+    observePath,
+    dispose,
+    // declarations
+    outlets,
+    collect_attributes,
+    apply_attributes
   };
 
   // build/framework.classes.mjs
@@ -719,8 +760,8 @@
     next_responder() {
       return this.parent() ?? this.application();
     }
-    register_teardown(dispose) {
-      return this._teardowns.push(dispose);
+    register_teardown(dispose2) {
+      return this._teardowns.push(dispose2);
     }
     // Releases this controller's listeners and observers, then its descendants,
     // exactly once. The element keeps its View, so the region can be awakened
@@ -748,7 +789,7 @@
         current_application.release_first_responder(this._view.element());
       }
       ;
-      this._teardowns.forEach((dispose) => dispose());
+      this._teardowns.forEach((dispose2) => dispose2());
       this._teardowns = [];
       this.unbind_all();
       this.dispose();
@@ -873,7 +914,7 @@
         }
       };
       render(null);
-      let dispose = Runtime.observePath(object, path, render);
+      let dispose2 = Runtime.observePath(object, path, render);
       let event_name = element.matches("select") || checkbox ? "change" : "input";
       let handler = (event) => {
         let value = checkbox ? element.checked : element.value;
@@ -881,7 +922,7 @@
       };
       if (writable) element.addEventListener(event_name, handler);
       return () => {
-        dispose();
+        dispose2();
         if (writable) return element.removeEventListener(event_name, handler);
       };
     }

@@ -57,7 +57,7 @@ test("the application contains neither the framework implementation nor another 
   const map = JSON.parse(readFileSync(new URL(`../dist/app${suffix}.js.map`, import.meta.url)));
   assert.ok(map.sources.some(source => source.endsWith("application.meta.mjs")));
   assert.ok(map.sources.some(source => source.endsWith("framework.external.mjs")));
-  assert.ok(!map.sources.some(source => source.endsWith("runtime.mjs")));
+  assert.ok(!map.sources.some(source => source.endsWith("runtime.mjs") || source.includes("/runtime/")));
   assert.ok(!map.sources.some(source => source.endsWith("framework.classes.mjs")));
   assert.equal(map.sources.length, map.sourcesContent.length);
 });

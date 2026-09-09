@@ -6,8 +6,31 @@ the handwritten runtime provides. It is the reference for the supported
 boundary. The README covers commands and layout; `PLAN.md` at the repository
 root covers goals and roadmap.
 
-Source of truth: `lib/swill-ruby2js/compiler.rb` and `lib/swill/runtime.mjs`.
-When this document and the code disagree, fix one of them in the same change.
+Source of truth: `lib/swill-ruby2js/` and `lib/swill/runtime/`. When this
+document and the code disagree, fix one of them in the same change.
+
+| Path | Holds |
+| --- | --- |
+| `swill-ruby2js/names.rb` | Identifier and member encoding, JavaScript intrinsics, `CompileError` |
+| `swill-ruby2js/knowledge.rb` | The fact model: entries, constant resolution, method and property lookup |
+| `swill-ruby2js/knowledge/collection.rb` | Walking class and module bodies into entries |
+| `swill-ruby2js/knowledge/declarations.rb` | The `property`, `attribute`, and `outlet` DSL |
+| `swill-ruby2js/knowledge/signatures.rb` | Reading `sig` parameter and return types and source ranges |
+| `swill-ruby2js/filters/shared_lowering.rb` | `raise`, callable invocation, and constructor lowering for both surfaces |
+| `swill-ruby2js/filters/static_types.rb` | Static type facts and the reader tables that justify each operation |
+| `swill-ruby2js/filters/ruby_surface.rb` | The shared-Ruby surface: AST hooks, receiver dispatch, truthiness, and logic |
+| `swill-ruby2js/filters/ruby_calls.rb` | Explicit calls for whatever the shared surface left alone |
+| `swill-ruby2js/filters/javascript_surface.rb` | The browser-boundary surface |
+| `swill-ruby2js/compiler.rb` | Orchestration, validation, conversion, and definitions |
+| `swill-ruby2js/compiler/meta.rb` | The `meta` object and mixin factories |
+| `swill-ruby2js/compiler/sorbet.rb` | Generated RBIs and type probes |
+| `swill/runtime.mjs` | The `Runtime` surface generated code calls |
+| `swill/runtime/metadata.mjs` | Installed property and method tables |
+| `swill/runtime/properties.mjs` | Observable state, computed capture, and the mutation path |
+| `swill/runtime/values.mjs` | Ruby truthiness, equality, and value readers |
+| `swill/runtime/paths.mjs` | Key paths, dynamic read and write, `respond_to?`, and action dispatch |
+| `swill/runtime/install.mjs` | Installation, mixin linking, registries, and the class registry |
+| `swill/runtime/attributes.mjs` | Outlet and attribute views of an object |
 
 ## Contents
 

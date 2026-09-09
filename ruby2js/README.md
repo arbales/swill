@@ -83,8 +83,8 @@ Commit `Gemfile.lock` after verification.
 | Path | Responsibility |
 | --- | --- |
 | `lib/swill/` | Ruby-authored framework code |
-| `lib/swill/runtime.mjs` | Browser state, metadata installation, and dynamic key paths |
-| `lib/swill-ruby2js/` | Compiler integration, filters, metadata, RBIs, and probes |
+| `lib/swill/runtime.mjs`, `lib/swill/runtime/` | The runtime surface and its modules: metadata, properties, values, paths, installation, attributes |
+| `lib/swill-ruby2js/` | Compiler: knowledge collection, filters, emission, and Sorbet artifacts |
 | `spec/mri_adapter.rb` | MRI adapter to the Opal observable implementation |
 | `spec/` | Compiler, MRI, runtime, bundle, and browser checks |
 | `examples/` | Browser example and application source |
