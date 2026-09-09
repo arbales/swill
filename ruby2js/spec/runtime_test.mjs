@@ -67,6 +67,35 @@ test("shared Ruby model has the same result on MRI and compiled JavaScript", () 
   assert.deepEqual(result, JSON.parse(readFileSync(new URL("../build/mri-result.json", import.meta.url))));
 });
 
+test("dirty tracking and validation agree with MRI", () => {
+  const person = new SpecialPerson();
+  const changes = [];
+  person.observe("dirty?", value => changes.push(["dirty?", value]));
+  person.observe("dirty_attributes", value => changes.push(["dirty_attributes", [...value]]));
+  const steps = [];
+  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  person.name = "Ada";
+  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  person.role = " writer ";
+  steps.push([person.role, [...person.dirty()]]);
+  person.name = "";
+  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  let message;
+  assert.throws(() => { person.role = "  "; }, error => { message = error.message; return true; });
+  steps.push([message, person.role, [...person.dirty()]]);
+  person.apply_attributes({name: "Grace"});
+  steps.push([person.name, person.dirty_predicate, [...person.dirty()]]);
+  const draft = person.draft();
+  steps.push([draft.name, draft.role, draft.dirty_predicate]);
+  person.mark_clean_bang();
+  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  person.role = "editor";
+  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  assert.deepEqual({steps, changes}, JSON.parse(readFileSync("build/mri-dirty.json")));
+  assert.equal(Runtime.readPath(person, "dirty?"), true);
+  assert.notEqual(person.dirty(), person.dirty_attributes, "dirty returns a copy");
+});
+
 test("generated registry crosses artifact boundaries without exposing globals", () => {
   assert.equal(Object.getPrototypeOf(Person.prototype) instanceof SwillObject, true);
   assert.equal(globalThis.Demo, undefined);

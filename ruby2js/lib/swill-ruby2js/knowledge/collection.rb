@@ -116,13 +116,15 @@ module Swill
           base = args.children.first.children.first
           declarations = {"properties" => []}
           statements(body).each do |statement|
-            receiver, method, *arguments = statement.children if statement.type == :send
-            if receiver&.type == :lvar && receiver.children == [base] &&
+            call = statement.type == :block ? statement.children.first : statement
+            receiver, method, *arguments = call.children if call.type == :send
+            if statement.type == :send && receiver&.type == :lvar && receiver.children == [base] &&
                method == :extend && arguments.length == 1 &&
                constant(arguments.first) == "ClassMethods"
               entry["extends_class_methods"] = true
             elsif receiver&.type == :lvar && receiver.children == [base] &&
                   %i[property attribute].include?(method)
+              # Stored or computed; a computed block compiles in each receiver.
               collect_property(declarations, statement)
             else
               raise CompileError, "included hooks support only literal base.property/base.attribute declarations"

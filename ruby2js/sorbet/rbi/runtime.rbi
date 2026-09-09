@@ -48,6 +48,12 @@ module Swill
     sig { params(object: T.untyped).void }
     def self.dispose(object); end
 
+    sig { params(object: T.untyped, name: T.any(Symbol, String)).returns(T::Boolean) }
+    def self.isAttribute(object, name); end
+
+    sig { params(object: T.untyped, name: T.any(Symbol, String), value: T.untyped, previous: T.untyped).returns(T.untyped) }
+    def self.validate_attribute(object, name, value, previous); end
+
     sig { params(object: T.untyped).returns(T.untyped) }
     def self.outlets(object); end
 
@@ -72,7 +78,9 @@ end
 class Swill::Object
   extend T::Sig
 
-  sig { params(name: Symbol, type: T.untyped, default: T.untyped, block: T.nilable(T.proc.bind(T.attached_class).returns(T.untyped))).void }
+  # Computed blocks are checked per receiving class by the generated type
+  # probes, so the block itself binds loosely here.
+  sig { params(name: Symbol, type: T.untyped, default: T.untyped, block: T.nilable(T.proc.bind(T.untyped).returns(T.untyped))).void }
   def self.property(name, type:, default: nil, &block); end
 
   sig { params(name: Symbol, type: T.untyped, default: T.untyped, key: T.any(Symbol, String)).void }
@@ -84,6 +92,12 @@ class Swill::Controller
 
   sig { params(name: Symbol, type: T.untyped, optional: T::Boolean).void }
   def self.outlet(name, type:, optional: false); end
+end
+
+module Swill::Model::DirtyTracking
+  extend T::Helpers
+  requires_ancestor { Swill::Object }
+  requires_ancestor { Swill::Model::Attributes }
 end
 
 module Swill::Model::Drafts

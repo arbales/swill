@@ -8,7 +8,7 @@ import {isTruthy, logicalAnd, logicalOr, isEqual, isBlank, isPresent, isEmpty, s
   valueRead, NIL_READERS, VALUE_READERS} from "./runtime/values.mjs";
 import {read, segments, readPath, write, assertWritablePath, writePath, observePath, respondsTo, invoke,
   performAction} from "./runtime/paths.mjs";
-import {outlets, collect_attributes, apply_attributes} from "./runtime/attributes.mjs";
+import {isAttribute, validate_attribute, outlets, collect_attributes, apply_attributes} from "./runtime/attributes.mjs";
 
 export const Runtime = {
   // installation and class configuration
@@ -21,5 +21,5 @@ export const Runtime = {
   // observation
   observe, observePath, dispose,
   // declarations
-  outlets, collect_attributes, apply_attributes
+  isAttribute, validate_attribute, outlets, collect_attributes, apply_attributes
 };

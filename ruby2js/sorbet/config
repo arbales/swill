@@ -12,6 +12,7 @@ lib/swill/core/object.rb
 lib/swill/core/ownership.rb
 lib/swill/core/object_bindings.rb
 lib/swill/model/attributes.rb
+lib/swill/model/dirty_tracking.rb
 lib/swill/model/drafts.rb
 lib/swill/model/base.rb
 --dir=sorbet/rbi

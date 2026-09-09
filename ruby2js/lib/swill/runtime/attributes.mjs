@@ -2,6 +2,18 @@
 // collection and application that models and drafts use.
 import {declarations} from "./metadata.mjs";
 
+export function isAttribute(object, name) {
+  return !!declarations(object.constructor, "properties").get(name)?.attribute;
+}
+
+// The validate_<name>(value, previous) convention, resolved from installed
+// method metadata rather than by probing the object.
+export function validate_attribute(object, name, value, previous) {
+  if (!isAttribute(object, name)) return value;
+  const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
+  return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
+}
+
 export function outlets(object) {
   return [...declarations(object.constructor, "properties").values()].filter(descriptor => descriptor.outlet);
 }

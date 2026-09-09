@@ -409,6 +409,14 @@
   }
 
   // lib/swill/runtime/attributes.mjs
+  function isAttribute(object, name) {
+    return !!declarations(object.constructor, "properties").get(name)?.attribute;
+  }
+  function validate_attribute(object, name, value, previous) {
+    if (!isAttribute(object, name)) return value;
+    const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
+    return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
+  }
   function outlets(object) {
     return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
   }
@@ -471,6 +479,8 @@
     observePath,
     dispose,
     // declarations
+    isAttribute,
+    validate_attribute,
     outlets,
     collect_attributes,
     apply_attributes
@@ -488,6 +498,7 @@
     Swill__Model__Attributes: () => Swill__Model__Attributes,
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
     Swill__Model__Base: () => Swill__Model__Base,
+    Swill__Model__DirtyTracking: () => Swill__Model__DirtyTracking,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
     Swill__Object: () => Swill__Object,
     Swill__ObjectBindings: () => Swill__ObjectBindings,
@@ -1269,8 +1280,11 @@
       apply_attributes(source) {
         return Runtime.apply_attributes(this, source);
       }
+      // Declared attributes coerce through the validate_<name>(value, previous)
+      // convention, resolved from metadata. A validator may raise to reject.
       coerce_property_value(name, value, previous) {
-        return super.coerce_property_value(name, value, previous);
+        value = super.coerce_property_value(name, value, previous);
+        return Runtime.validate_attribute(this, name, value, previous);
       }
       property_will_change(name, previous, value) {
         return super.property_will_change(name, previous, value);
@@ -1286,6 +1300,55 @@
     }
     Object.setPrototypeOf(Swill__Model__Attributes_ClassMethods_Layer.prototype, Superclass);
     return Swill__Model__Attributes_ClassMethods_Layer.prototype;
+  }
+  function Swill__Model__DirtyTracking(Superclass) {
+    class Swill__Model__DirtyTracking_Layer extends Superclass {
+      dirty() {
+        return this.dirty_attributes.slice();
+      }
+      mark_clean_bang() {
+        this._dirty_baseline = {};
+        this.dirty_attributes = [];
+        return this;
+      }
+      // Server, codec, and draft application is clean; only user mutation
+      // through setters marks attributes dirty.
+      apply_attributes(source) {
+        this._dirty_suspensions = Runtime.logicalOr(
+          this._dirty_suspensions,
+          () => 0
+        ) + 1;
+        try {
+          super.apply_attributes(source);
+        } finally {
+          this._dirty_suspensions = this._dirty_suspensions - 1;
+        }
+        ;
+        return this;
+      }
+      property_will_change(name, previous, value) {
+        super.property_will_change(name, previous, value);
+        if (Runtime.isTruthy(Runtime.logicalOr(
+          this._dirty_suspensions,
+          () => 0
+        ) > 0)) return;
+        if (!Runtime.isTruthy(Runtime.isAttribute(this, name))) return;
+        return this.mark_attribute_dirty(name, previous, value);
+      }
+      mark_attribute_dirty(name, previous, value) {
+        let baseline = this._dirty_baseline ||= {};
+        let names = this.dirty_attributes;
+        if (Runtime.isTruthy(names.includes(name))) {
+          if (Runtime.isEqual(baseline[name], value)) {
+            return this.dirty_attributes = names.filter((candidate) => !Runtime.isEqual(candidate, name));
+          }
+        } else {
+          baseline[name] = previous;
+          return this.dirty_attributes = [...names, name];
+        }
+      }
+    }
+    return Swill__Model__DirtyTracking_Layer;
   }
   function Swill__Model__Drafts(Superclass) {
     class Swill__Model__Drafts_Layer extends Superclass {
@@ -1365,6 +1428,27 @@
             "arity": 3
           },
           "property_will_change": {
+            "arity": 3
+          }
+        }
+      },
+      "Swill::Model::DirtyTracking": {
+        factory: Swill__Model__DirtyTracking,
+        methods: {
+          "dirty": {
+            "arity": 0
+          },
+          "mark_clean!": {
+            "arity": 0,
+            "js": "mark_clean_bang"
+          },
+          "apply_attributes": {
+            "arity": 1
+          },
+          "property_will_change": {
+            "arity": 3
+          },
+          "mark_attribute_dirty": {
             "arity": 3
           }
         }
@@ -1720,8 +1804,23 @@
       },
       "Swill::Model::Base": {
         constructor: Swill__Model__Base,
-        mixins: [Swill__Model__Attributes, Swill__Model__Drafts],
+        mixins: [Swill__Model__Attributes, Swill__Model__DirtyTracking, Swill__Model__Drafts],
         properties: {
+          "dirty_attributes": {
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue: function default_dirty_attributes() {
+              return [];
+            }
+          },
+          "dirty?": {
+            js: "dirty_predicate",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_dirty_predicate() {
+              return !Runtime.isEmpty(this.dirty_attributes);
+            }
+          },
           "id": {
             type: "T.nilable(String)",
             attribute: true,

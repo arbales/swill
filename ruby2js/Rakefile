@@ -25,6 +25,7 @@ def compile_spike
   end
   %w[
     lib/swill/model/attributes.rb
+    lib/swill/model/dirty_tracking.rb
     lib/swill/model/drafts.rb
     lib/swill/model/base.rb
   ].each do |path|

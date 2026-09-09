@@ -35,8 +35,11 @@ module Swill
         Swill::Runtime.apply_attributes(self, source)
       end
 
+      # Declared attributes coerce through the validate_<name>(value, previous)
+      # convention, resolved from metadata. A validator may raise to reject.
       def coerce_property_value(name, value, previous)
-        super
+        value = super
+        Swill::Runtime.validate_attribute(self, name, value, previous)
       end
 
       def property_will_change(name, previous, value)

@@ -124,7 +124,7 @@ class CompilerTest < Minitest::Test
   end
 
   def test_dynamic_declarations_and_mutable_defaults_are_rejected
-    ['property field, type: String', 'property :names, type: Array, default: []',
+    ['property field, type: String', 'property :names, type: T::Array[String], default: [1]',
      'property :name, type: String, nonsense: true', 'prepend Other'].each do |body|
       assert_raises(Spike::CompileError) { javascript(body) }
     end
@@ -146,10 +146,10 @@ class CompilerTest < Minitest::Test
   def test_included_hooks_reject_dynamic_code_and_colliding_declarations
     [
       'base.attribute field, type: String',
-      'base.attribute :name, type: String, default: []',
+      'base.attribute :name, type: String, default: [1]',
       'base.extend(ClassMethods)',
       'other.attribute :name, type: String',
-      'base.property(:name, type: String) { "Ada" }',
+      'base.attribute(:name, type: String, default: "") { "Ada" }',
       'base.attribute :name, type: String, default: ""; base.attribute :name, type: String, default: ""'
     ].each do |body|
       assert_raises(Spike::CompileError) do
@@ -169,6 +169,34 @@ class CompilerTest < Minitest::Test
         end
       RUBY
     end
+  end
+
+  def test_collection_declarations_and_computed_hook_declarations
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Tracked
+        def self.included(base)
+          base.property :names, type: T::Array[String], default: []
+          base.property :any?, type: T::Boolean do
+            !names.empty?
+          end
+        end
+        def add(name); self.names = [*names, name]; end
+      end
+      class Example < TestObject
+        include Tracked
+        property :lookup, type: T::Hash[String, T.untyped], default: {}
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "return !Runtime.isEmpty(this.names)"
+    assert_includes compiler.rbi, "sig { returns(T::Array[String]) }\n  def names; end"
+    assert_equal [[], false, ["Ada"], true, true, {}], execute(js + <<~JS)
+      const first = new (Runtime.resolve("Example"))();
+      const second = new (Runtime.resolve("Example"))();
+      const before = [[...first.names], first.any_predicate];
+      first.add("Ada");
+      console.log(JSON.stringify([...before, first.names, first.any_predicate, second.names.length === 0, second.lookup]));
+    JS
   end
 
   def test_included_declarations_survive_compiler_interfaces_without_sharing_descriptors
@@ -786,6 +814,7 @@ class CompilerTest < Minitest::Test
       .add(File.read("lib/swill/core/observable.rb"), javascript_only: true)
       .add(File.read("lib/swill/core/object.rb"), javascript_only: true)
       .add(File.read("lib/swill/model/attributes.rb"))
+      .add(File.read("lib/swill/model/dirty_tracking.rb"))
       .add(File.read("lib/swill/model/drafts.rb"))
       .add(File.read("lib/swill/model/base.rb"))
     compiler = Spike::Compiler.new(imports: framework.knowledge.interface)

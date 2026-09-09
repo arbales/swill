@@ -214,6 +214,8 @@ The implementation covers:
   represented objects for child controllers, and object-to-object bindings;
 - application-owned first responder with focus reconciliation and key routing
   through the responder chain;
+- model attributes with `validate_<name>(value, previous)` validation and
+  observable, baseline-aware dirty tracking, shared with MRI;
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 

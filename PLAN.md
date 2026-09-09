@@ -55,16 +55,22 @@ The initial kernel and DOM-boundary spike is complete and verified:
   accept/resign/become protocol, `focusin` reconciliation with refusal
   restoring focus, and `keydown`/`keyup` routing through the responder chain
   with Escape, Enter, and Tab as `cancel_operation`, `insert_newline`, and
-  `complete`; teardown releases a first responder inside the region.
+  `complete`; teardown releases a first responder inside the region;
+- model step 1: `validate_<name>(value, previous)` resolved from metadata (the
+  MRI adapter uses `respond_to?`), and `Swill::Model::DirtyTracking` with
+  observable `dirty_attributes` and computed `dirty?`, baseline-aware
+  clean-again semantics, and clean codec/draft application; the shared MRI
+  and Node fixture produce identical results. The compiler accepts
+  `T::Array[...]`/`T::Hash[...]` types, empty collection defaults, and
+  computed declarations in included hooks.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Step: UI Kernel Checkpoint
+## Immediate Next Slice: Model Step 2, Identity Stores
 
-Roadmap items 1 through 3 are verified in Node and Chrome (September 2026).
-The next step is the UI Kernel Checkpoint below, comparing this port with the
-Opal implementation before the model vertical slice. The static example port
-named in the checkpoint is the remaining input to that comparison.
+The UI Kernel Checkpoint was reviewed in September 2026 and the port
+continues. Model step 1 is done; next is step 2 below, identity stores and
+model type registration, then codecs.
 
 ## Ordered Roadmap
 
@@ -99,7 +105,7 @@ named in the checkpoint is the remaining input to that comparison.
 
 Port model behavior as independently composable concerns:
 
-1. validation and dirty tracking;
+1. validation and dirty tracking (done);
 2. identity stores and model type registration;
 3. plain JSON and JSON:API codecs;
 4. observable datasets and the browser wire boundary;

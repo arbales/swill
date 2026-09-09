@@ -81,5 +81,14 @@ module Demo
 
   class SpecialPerson < Person
     attribute :role, type: String, key: :job, default: "editor"
+
+    # The validate_<attribute>(value, previous) convention: return the value
+    # to store, or raise to reject and keep the previous one.
+    sig { params(value: String, previous: String).returns(String) }
+    def validate_role(value, previous)
+      cleaned = value.strip
+      raise "role must not be blank" if cleaned.empty?
+      cleaned
+    end
   end
 end

@@ -2,6 +2,7 @@ require "minitest/autorun"
 require "json"
 require_relative "mri_adapter"
 require_relative "../lib/swill/model/attributes"
+require_relative "../lib/swill/model/dirty_tracking"
 require_relative "../lib/swill/model/drafts"
 require_relative "../lib/swill/model/base"
 require_relative "../examples/models"
@@ -46,6 +47,35 @@ class SharedTest < Minitest::Test
     end
     assert_equal ["Ada", "Grace", "Ada"], records.map { |record| record[:initial] }
     File.write("build/mri-concerns.json", JSON.pretty_generate(records) + "\n")
+  end
+
+  def test_dirty_tracking_and_validation_on_mri
+    person = Demo::SpecialPerson.new
+    changes = []
+    person.observe(:dirty?) { |value| changes << ["dirty?", value] }
+    person.observe(:dirty_attributes) { |value| changes << ["dirty_attributes", value.map(&:to_s)] }
+    steps = []
+    steps << [person.dirty?, person.dirty.map(&:to_s)]
+    person.name = "Ada"
+    steps << [person.dirty?, person.dirty.map(&:to_s)]
+    person.role = " writer "
+    steps << [person.role, person.dirty.map(&:to_s)]
+    person.name = ""
+    steps << [person.dirty?, person.dirty.map(&:to_s)]
+    error = assert_raises(RuntimeError) { person.role = "  " }
+    steps << [error.message, person.role, person.dirty.map(&:to_s)]
+    person.apply_attributes(name: "Grace")
+    steps << [person.name, person.dirty?, person.dirty.map(&:to_s)]
+    draft = person.draft
+    steps << [draft.name, draft.role, draft.dirty?]
+    person.mark_clean!
+    steps << [person.dirty?, person.dirty.map(&:to_s)]
+    person.role = "editor"
+    steps << [person.dirty?, person.dirty.map(&:to_s)]
+    assert_equal [false, []], steps[0]
+    assert_equal ["writer", %w[name role]], steps[2]
+    assert_equal [true, %w[role]], steps[3]
+    File.write("build/mri-dirty.json", JSON.pretty_generate("steps" => steps, "changes" => changes) + "\n")
   end
 
   def test_draft_is_shared_ruby_orchestration

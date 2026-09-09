@@ -14,6 +14,17 @@ module Swill
       end
     end
 
+    def self.isAttribute(object, name)
+      object.class.model_attributes.key?(name.to_sym)
+    end
+
+    def self.validate_attribute(object, name, value, previous)
+      return value unless isAttribute(object, name)
+
+      validator = "validate_#{name}"
+      object.respond_to?(validator) ? object.public_send(validator, value, previous) : value
+    end
+
     def self.apply_attributes(object, source)
       object.class.model_attributes.each_value do |descriptor|
         key = descriptor[:key]
@@ -29,8 +40,13 @@ module Swill
   class Object
     include Observable
 
+    # Empty collection defaults are fresh per instance, as generated
+    # defaultValue functions are in JavaScript.
     def self.property(name, type:, default: nil, &block)
-      block ? super(name, &block) : super(name, default: default)
+      return super(name, &block) if block
+
+      fresh = default.is_a?(Array) || default.is_a?(Hash) ? -> { default.dup } : default
+      super(name, default: fresh)
     end
 
     def self.attribute(name, type:, default:, key: name)

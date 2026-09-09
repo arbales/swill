@@ -6,7 +6,7 @@ module Swill
     # The property, attribute, and outlet declaration DSL.
     class Knowledge
       
-        DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|[A-Z]\w*(?:::\w+)*)\z/
+        DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|T::(?:Array|Hash)\[[\w:., ]+\]|[A-Z]\w*(?:::\w+)*)\z/
 
         def declaration?(node)
           call = node.type == :block ? node.children.first : node
@@ -68,8 +68,11 @@ module Swill
             raise CompileError, "computed blocks cannot take arguments"
           end
           default = pairs[:default]
-          unless computed || default.nil? || %i[str int nil true false].include?(default.type)
-            raise CompileError, "spike supports only immutable literal defaults"
+          # Immutable literals, or an empty collection: the generated default is
+          # a function, so each instance gets its own array or hash.
+          empty_collection = default && %i[array hash].include?(default.type) && default.children.empty?
+          unless computed || default.nil? || %i[str int nil true false].include?(default.type) || empty_collection
+            raise CompileError, "spike supports only immutable literal or empty collection defaults"
           end
           wire_key = pairs[:key]
           if wire_key && !%i[sym str].include?(wire_key.type)

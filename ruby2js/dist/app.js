@@ -19,6 +19,7 @@
   var Swill__Launcher = framework.Swill__Launcher;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
+  var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;
   var Swill__Model__Drafts = framework.Swill__Model__Drafts;
   var Swill__Model__Base = framework.Swill__Model__Base;
 
@@ -65,6 +66,13 @@
     }
   };
   var Demo__SpecialPerson = class extends Demo__Person {
+    // The validate_<attribute>(value, previous) convention: return the value
+    // to store, or raise to reject and keep the previous one.
+    validate_role(value, previous) {
+      let cleaned = Runtime.strip(value);
+      if (Runtime.isEmpty(cleaned)) throw new Error("role must not be blank");
+      return cleaned;
+    }
   };
   function NameTracking(Superclass) {
     class NameTracking_Layer extends Superclass {
@@ -281,7 +289,11 @@
         registries: { model_attributes: {
           "role": { property: "role", key: "job" }
         } },
-        methods: {}
+        methods: {
+          "validate_role": {
+            "arity": 2
+          }
+        }
       },
       "ConcernRecord": {
         constructor: ConcernRecord,
