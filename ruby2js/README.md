@@ -3,9 +3,10 @@
 This directory contains the Ruby2JS implementation of Swill. It supports a
 deliberate Ruby subset rather than general Ruby execution.
 
-The build produces two self-initializing browser scripts:
+The build produces two browser scripts:
 
-- `swill.js` contains the runtime and framework definitions.
+- `swill.js` contains the runtime, framework definitions, and the plain
+  JavaScript authoring API. It can be used by itself with no build step.
 - `app.js` contains application definitions and reuses the installed framework.
 
 Shared model fixtures produce the same results on MRI and JavaScript, including
@@ -30,6 +31,78 @@ artifact sizes. Individual tasks are `build`, `typecheck`, `test`, and `optimize
 `build/` is disposable. `dist/` contains checked-in browser output. Regenerate it
 with `rake build`; do not edit generated files.
 
+## Plain JavaScript, without a build step
+
+Load `swill.js`, register ordinary JavaScript classes, then start the
+application explicitly. Put these scripts at the end of `body` so the default
+root, `document.body`, is ready.
+
+```html
+<main controller="Hello">
+  <h1 bind="greeting"></h1>
+  <input bind="name">
+  <button data-action="clearName">Clear</button>
+  <p outlet="status"></p>
+</main>
+<script src="swill.js"></script>
+<script>
+  class Hello extends Swill.Controller {
+    static properties = {
+      name: {default: "Ada"},
+      items: {default: () => []}
+    };
+
+    static outlets = {
+      status: {},
+      optionalPanel: {optional: true}
+    };
+
+    static actions = ["clearName"];
+
+    get greeting() {
+      return `Hello ${this.name}`;
+    }
+
+    awakeFromDOM() {
+      this.status.element().textContent = "Ready";
+    }
+
+    clearName() {
+      this.name = "";
+    }
+  }
+
+  Swill.register(Hello);
+  const application = Swill.start();
+</script>
+```
+
+Every native getter on a registered class is an observable computed property.
+Dependencies are collected while the getter runs. Scalar properties may use a
+literal default; arrays and objects use a zero-argument factory so instances do
+not share mutable state. Actions are explicit and accept zero, one, or two
+arguments; the framework supplies the sender and DOM event when requested.
+Outlets are required unless their descriptor has `optional: true`.
+
+Controller subclasses may override `bindingRoot`, `decodeOutletData`,
+`viewDidLoad`, `awakeFromDOM`, `controllerDidRestore`, `controllerDidLoad`,
+`viewWillAppear`, `viewDidAppear`, `viewWillDisappear`, and
+`viewDidDisappear`. Outlets are connected after `viewDidLoad` and before
+`awakeFromDOM`. Application subclasses may override `applicationDidLaunch`
+and `applicationWillTerminate`.
+
+`Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
+Register a JavaScript parent before its subclasses. For another root or a
+custom registered application class, use
+`Swill.start({root: element, application: MyApplication})`. Separate roots may
+host separate applications, and `start` returns the launched application.
+
+JavaScript methods use JavaScript semantics. Markup bindings retain Swill's one
+shared value rule: only `false`, `null`, and `undefined` are false for checkboxes
+and boolean `bind-*` properties.
+
+See `examples/javascript.html` for a complete page.
+
 ### Browser checks
 
 ```sh
@@ -41,7 +114,8 @@ CHROME_BIN=/path/to/chrome BUNDLE_PATH=vendor/bundle bundle exec rake browser
 ```
 
 The check uses Chrome's DevTools protocol with a temporary profile. It exercises
-class lookup, input events, computed rendering, nested controller ownership,
+both compiled Ruby and plain JavaScript applications, including class lookup,
+manual startup, input events, computed rendering, nested controller ownership,
 actions through the responder chain, and listener teardown.
 
 For manual inspection:
@@ -51,8 +125,9 @@ BUNDLE_PATH=vendor/bundle bundle exec rake build
 python3 -m http.server 3000 --bind 127.0.0.1
 ```
 
-Open `http://127.0.0.1:3000/examples/index.html`. The page declares its
-application and loads the two scripts; nothing else is needed:
+Open `http://127.0.0.1:3000/examples/javascript.html` for the no-build
+JavaScript example. `examples/index.html` demonstrates compiled Ruby: it
+declares its application and loads the two scripts.
 
 ```html
 <body application="Demo::Application">
@@ -84,6 +159,7 @@ Commit `Gemfile.lock` after verification.
 | --- | --- |
 | `lib/swill/` | Ruby-authored framework code |
 | `lib/swill/runtime.mjs`, `lib/swill/runtime/` | The runtime surface and its modules: metadata, properties, values, paths, installation, attributes |
+| `lib/swill/browser_api.mjs` | Plain JavaScript declarations, friendly class aliases, and manual startup |
 | `lib/swill-ruby2js/` | Compiler: knowledge collection, filters, emission, and Sorbet artifacts |
 | `spec/mri_adapter.rb` | MRI adapter to the Opal observable implementation |
 | `spec/` | Compiler, MRI, runtime, bundle, and browser checks |
@@ -100,7 +176,10 @@ bodies, then emits readable JavaScript classes, mixin factories, and one
 `meta` object per bundle. A small handwritten runtime installs that metadata,
 implements the property protocol, and provides the only dynamic dispatch. The
 framework and application compile into separate bundles that share one
-runtime; only `Swill` is global.
+runtime; only `Swill` is global. `Swill.register` translates JavaScript static
+declarations and native getters into the same metadata rather than maintaining
+a second framework implementation. Generated identifiers remain on `Swill` so
+compiled application bundles can import them, but they are private browser API.
 
 [`docs/compiler.md`](docs/compiler.md) is the reference for the pipeline, the
 accepted Ruby subset, every lowering rule, the runtime API, and the rejected

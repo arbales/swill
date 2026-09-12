@@ -16,6 +16,10 @@ The initial kernel and DOM-boundary spike is complete and verified:
 
 - framework and application Ruby compile into separate, self-initializing
   `swill.js` and `app.js` bundles that share one runtime;
+- `swill.js` also exposes a no-build JavaScript API: friendly framework class
+  names, metadata-backed static properties and outlets, native computed
+  getters, explicit actions, camel-case lifecycle hooks, and manual
+  `Swill.start()` application launch;
 - static classes, inheritance, namespaced constants, mixins, native `super`,
   included declaration hooks, class settings, and inheritable registries work;
 - typed properties, attributes, computed dependencies, nested key paths,

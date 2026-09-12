@@ -697,6 +697,7 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   f.document.dispatchEvent(new Event("DOMContentLoaded"));
   const application = f.body.__swill_application__;
   assert.ok(application instanceof App);
+  assert.equal(new Launcher().launch(f.document), application, "an attached root is not launched twice");
   assert.equal(application.launched, true);
   assert.deepEqual(log, ["launch"]);
   assert.equal(application.root(), f.body);

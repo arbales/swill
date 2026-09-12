@@ -484,6 +484,7 @@ module Swill
     def launch(document)
       element = document.querySelector("[application]")
       return nil unless element
+      return element.__swill_application__ if element.__swill_application__
       application_class = Runtime.resolve(element.getAttribute("application"))
       application = application_class.new()
       application.launch(element)

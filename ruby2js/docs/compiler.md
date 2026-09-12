@@ -31,6 +31,7 @@ document and the code disagree, fix one of them in the same change.
 | `swill/runtime/paths.mjs` | Key paths, dynamic read and write, `respond_to?`, and action dispatch |
 | `swill/runtime/install.mjs` | Installation, mixin linking, registries, and the class registry |
 | `swill/runtime/attributes.mjs` | Outlet and attribute views of an object |
+| `swill/browser_api.mjs` | Plain JavaScript registration, camel-case hooks, and manual application startup |
 
 ## Contents
 
@@ -261,14 +262,22 @@ files:
 | `name.meta.mjs` | Imports the definitions and exports `meta` |
 | `name.mjs` | `Runtime.install(meta)`; with `publish:`, also freezes the global |
 
-The framework entrypoint throws if the global already exists, installs, then
-publishes `globalThis.Swill = Object.freeze({...definitions, Runtime, install})`.
-With `launch:`, it also instantiates the named class and calls `install(document)`
-when a `document` exists, which is how `Swill::Launcher` starts the application
-declared by `[application]` in a page while Node loading stays inert.
+The generic compiler can publish and launch directly with these options. The
+Swill distribution instead compiles the framework without them and bundles a
+small handwritten browser entrypoint. That entrypoint installs the framework,
+passes its definitions to `browserAPI`, freezes the returned `Swill` global,
+and installs `Swill::Launcher`. The browser API retains the definitions for
+compiled bundles and adds friendly class names, JavaScript registration, and
+manual startup. `Swill::Launcher` starts an application declared by
+`[application]`; `Swill.start()` starts a JavaScript application explicitly.
 The application build imports every framework identifier from that global
 through a generated shim, so the application bundle contains neither the
 runtime nor the framework classes. Only `Swill` is global.
+
+`Swill.register` converts `static properties`, `static outlets`, explicit
+actions, and native getters into the same `meta.classes` descriptors emitted
+by the compiler. It then delegates to `Runtime.install`; JavaScript classes do
+not have a separate observation or dispatch path.
 
 ### Sorbet artifacts
 

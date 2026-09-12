@@ -35,10 +35,18 @@ def compile_spike
   end
   FileUtils.mkdir_p(DIST)
   FileUtils.mkdir_p("build")
-  framework.modules(name: "framework", runtime: "../lib/swill/runtime.mjs", publish: "Swill",
-                    launch: "Swill::Launcher").each do |name, source|
+  framework.modules(name: "framework", runtime: "../lib/swill/runtime.mjs").each do |name, source|
     File.write("build/#{name}", source)
   end
+  browser = <<~JAVASCRIPT
+    import {Runtime} from "../lib/swill/runtime.mjs";
+    import * as definitions from "./framework.mjs";
+    import {browserAPI} from "../lib/swill/browser_api.mjs";
+    if (globalThis.Swill) throw new Error("Framework already loaded");
+    globalThis.Swill = browserAPI(definitions, Runtime);
+    if (typeof document !== "undefined") new definitions.Swill__Launcher().install(document);
+  JAVASCRIPT
+  File.write("build/browser.mjs", Swill::Ruby2JS::Compiler.format_javascript(browser))
 
   # Compiler facts stay in memory. The application bundle imports references
   # from the initialized framework, never another copy of its implementation.
@@ -68,14 +76,14 @@ def compile_spike
 end
 
 def bundle_spike(minify: false)
-  {"framework" => "swill", "application" => "app"}.each do |source, target|
+  {"browser" => "swill", "application" => "app"}.each do |source, target|
     output = "dist/#{target}#{minify ? '.min' : ''}.js"
     sh "esbuild", "build/#{source}.mjs", "--bundle", "--format=iife", "--target=es2022",
        "--sourcemap", "--outfile=#{output}", *(minify ? ["--minify"] : [])
   end
 end
 
-desc "Generate metadata and self-initializing swill.js/app.js bundles with source maps"
+desc "Generate metadata and swill.js/app.js browser bundles with source maps"
 task :build do
   Dir.chdir(ROOT) do
     compile_spike

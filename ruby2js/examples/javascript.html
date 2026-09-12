@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Swill without a build step</title>
+<body>
+<main controller="Hello">
+  <h1 bind="greeting"></h1>
+  <label>Name <input bind="name" autofocus></label>
+  <button data-action="clearName">Clear</button>
+  <p outlet="status"></p>
+</main>
+<script src="../dist/swill.js"></script>
+<script>
+  class Hello extends Swill.Controller {
+    static properties = {
+      name: {default: "Ada"},
+      items: {default: () => []}
+    };
+
+    static outlets = {
+      status: {},
+      optionalPanel: {optional: true}
+    };
+
+    static actions = ["clearName"];
+
+    get greeting() {
+      return `Hello ${this.name}`;
+    }
+
+    viewDidLoad() {
+      document.body.dataset.viewDidLoad = "true";
+    }
+
+    awakeFromDOM() {
+      this.status.element().textContent = "Ready";
+    }
+
+    clearName() {
+      this.name = "";
+    }
+  }
+
+  Swill.register(Hello);
+  window.application = Swill.start();
+</script>
+</body>
+</html>

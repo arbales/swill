@@ -230,8 +230,42 @@ try {
     document.querySelector("section[controller='Demo::Badge'] p[bind]").textContent,
     document.body.__swill_application__
   ]`), ["Hello ", "Badge 1", null]);
+
+  // A second page uses the same framework bundle directly from plain
+  // JavaScript: registration is metadata-backed and startup is explicit.
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/javascript.html`}, sessionId);
+  await evaluate(`new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const poll = () => {
+      if (document.querySelector("h1")?.textContent === "Hello Ada" && window.application) resolve(true);
+      else if (Date.now() > deadline) reject(new Error("JavaScript application did not start"));
+      else setTimeout(poll, 20);
+    };
+    poll();
+  })`);
+  assert.deepEqual(await evaluate(`(() => {
+    const controller = application.controllers()[0];
+    const another = new controller.constructor();
+    return [
+      application instanceof Swill.Application,
+      controller instanceof Swill.Controller,
+      document.body.dataset.viewDidLoad,
+      document.querySelector("[outlet=status]").textContent,
+      controller.items !== another.items
+    ];
+  })()`), [true, true, "true", "Ready", true]);
+  assert.deepEqual(await evaluate(`(() => {
+    const input = document.querySelector("input");
+    input.value = "Grace";
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    const changed = document.querySelector("h1").textContent;
+    document.querySelector("button").click();
+    return [changed, document.querySelector("h1").textContent, input.value];
+  })()`), ["Hello Grace", "Hello ", ""]);
+  await evaluate(`window.dispatchEvent(new Event("pagehide"))`);
+  assert.equal(await evaluate(`document.body.__swill_application__`), null);
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: application launch, outlets, nested ownership, bindings, actions, first responder, key routing, windows, dialogs, restoration, observed content, and teardown passed.");
+  console.log("Chrome: compiled Ruby and no-build JavaScript applications passed.");
 } finally {
   clearTimeout(timeout);
   socket?.close();
