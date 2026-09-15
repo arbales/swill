@@ -7,30 +7,10 @@ DIST = File.join(ROOT, "dist")
 
 def compile_spike
   framework = Swill::Ruby2JS::Compiler.new
-  %w[
-    lib/swill/core/observable.rb
-    lib/swill/core/object.rb
-    lib/swill/core/ownership.rb
-    lib/swill/core/object_bindings.rb
-    lib/swill/core/responder.rb
-    lib/swill/core/view.rb
-    lib/swill/core/controller.rb
-    lib/swill/core/bindings.rb
-    lib/swill/core/actions.rb
-    lib/swill/core/outlets.rb
-    lib/swill/core/awakening.rb
-    lib/swill/core/fragments.rb
-    lib/swill/core/window.rb
-    lib/swill/core/application.rb
-  ].each do |path|
+  Swill::Ruby2JS::FRAMEWORK_SOURCES[:javascript_only].each do |path|
     framework.add(File.read(path), file: path, javascript_only: true)
   end
-  %w[
-    lib/swill/model/attributes.rb
-    lib/swill/model/dirty_tracking.rb
-    lib/swill/model/drafts.rb
-    lib/swill/model/base.rb
-  ].each do |path|
+  Swill::Ruby2JS::FRAMEWORK_SOURCES[:shared].each do |path|
     framework.add(File.read(path), file: path)
   end
   FileUtils.mkdir_p(DIST)

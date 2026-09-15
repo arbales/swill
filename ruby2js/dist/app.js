@@ -19,6 +19,8 @@
   var Swill__Window = framework.Swill__Window;
   var Swill__Application = framework.Swill__Application;
   var Swill__Launcher = framework.Swill__Launcher;
+  var Swill__Controller__List = framework.Swill__Controller__List;
+  var Swill__Controller__SortableList = framework.Swill__Controller__SortableList;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
   var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;
@@ -113,6 +115,7 @@
     // plain View, the nested controller is itself the value, the JSON script
     // is decoded, and an optional outlet may be absent.
     // Kept equal to the badge outlet's count by an object binding.
+    // The roster JSON becomes people; the list shows them through bind="people".
     view_did_load() {
       return this.reset_person();
     }
@@ -125,9 +128,32 @@
         this.bind("badge_count", { to: current_badge, key_path: "count" });
       }
       ;
+      let rows = this.roster;
+      if (Runtime.isTruthy(rows)) this.people = this.people_from(rows);
       let app = this.application();
       let field = this.name_field;
       if (Runtime.isTruthy(app && field)) return app.make_first_responder(field);
+    }
+    // Enter, a double-click, or the list's own button hand its selection here:
+    // the selected person becomes the one being edited.
+    activate_selection(sender) {
+      return this.person = sender.selected_object;
+    }
+    // A row's remove button. The sender is the button, so the list says which
+    // row it sits in; the list re-renders from the new array.
+    remove_person(sender) {
+      let list = this.people_list;
+      if (!list) return;
+      let removed = list.object_at(list.row_for(sender));
+      return this.people = this.people.filter((candidate) => candidate !== removed);
+    }
+    people_from(rows) {
+      return rows.map((row) => this.person_from(row));
+    }
+    person_from(row) {
+      let person = new Demo__SpecialPerson();
+      person.apply_attributes(row);
+      return person;
     }
     // Escape in any owned field bubbles here through the responder chain.
     cancel_operation(event) {
@@ -182,9 +208,15 @@
     reset() {
       return this.controllers().forEach((controller) => {
         if (Runtime.isTruthy(Runtime.respondsTo(controller, "clear"))) {
-          controller.clear();
+          Runtime.read(controller, "clear");
         }
       });
+    }
+  };
+  var Demo__PeopleList = class extends Swill__Controller__SortableList {
+    // How many times a different person became the selected one.
+    selected_object_did_change(previous, object) {
+      return this.selection_changes = this.selection_changes + 1;
     }
   };
   var Demo__PersonEditor = class extends Swill__Controller {
@@ -448,6 +480,31 @@
               return 0;
             }
           },
+          "people": {
+            type: "T::Array[Demo::Person]",
+            attribute: false,
+            defaultValue: function default_people() {
+              return [];
+            }
+          },
+          "roster": {
+            type: "T.untyped",
+            attribute: false,
+            outlet: true,
+            optional: true,
+            defaultValue: function default_roster() {
+              return null;
+            }
+          },
+          "people_list": {
+            type: "T.nilable(Demo::PeopleList)",
+            attribute: false,
+            outlet: true,
+            optional: true,
+            defaultValue: function default_people_list() {
+              return null;
+            }
+          },
           "title": {
             type: "String",
             attribute: false,
@@ -463,6 +520,18 @@
           },
           "awake_from_dom": {
             "arity": 0
+          },
+          "activate_selection": {
+            "arity": 1
+          },
+          "remove_person": {
+            "arity": 1
+          },
+          "people_from": {
+            "arity": 1
+          },
+          "person_from": {
+            "arity": 1
           },
           "cancel_operation": {
             "arity": 1
@@ -542,6 +611,24 @@
           },
           "reset": {
             "arity": 0
+          }
+        }
+      },
+      "Demo::PeopleList": {
+        constructor: Demo__PeopleList,
+        properties: {
+          "selection_changes": {
+            type: "Integer",
+            attribute: false,
+            defaultValue: function default_selection_changes() {
+              return 0;
+            }
+          }
+        },
+        restorations: [{ path: "selected_object_id", key: "selected", type: "T.nilable(String)" }, { path: "sort_key", key: "sort", type: "T.nilable(String)" }, { path: "sort_direction", key: "dir", type: "String" }],
+        methods: {
+          "selected_object_did_change": {
+            "arity": 2
           }
         }
       },

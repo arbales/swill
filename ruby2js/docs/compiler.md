@@ -17,7 +17,8 @@ document and the code disagree, fix one of them in the same change.
 | `swill-ruby2js/knowledge/declarations.rb` | The `property`, `attribute`, and `outlet` DSL |
 | `swill-ruby2js/knowledge/signatures.rb` | Reading `sig` parameter and return types and source ranges |
 | `swill-ruby2js/filters/shared_lowering.rb` | `raise`, callable invocation, and constructor lowering for both surfaces |
-| `swill-ruby2js/filters/static_types.rb` | Static type facts and the reader tables that justify each operation |
+| `swill-ruby2js/filters/static_types.rb` | Static type facts: literal, local, signature, and result types |
+| `swill-ruby2js/filters/core_types.rb` | Lowering tables for String, Symbol, Integer, Float, Boolean, nil, Array, and Hash receivers and their blocks |
 | `swill-ruby2js/filters/ruby_surface.rb` | The shared-Ruby surface: AST hooks, receiver dispatch, truthiness, and logic |
 | `swill-ruby2js/filters/ruby_calls.rb` | Explicit calls for whatever the shared surface left alone |
 | `swill-ruby2js/filters/javascript_surface.rb` | The browser-boundary surface |
@@ -131,7 +132,7 @@ outlet :seed, type: T.untyped, optional: true
 | Name | Literal symbol matching `/\A[a-z_]\w*\??\z/`; a `?` suffix only on computed properties |
 | Keywords | `type:` required; `default:` optional for `property`, required for `attribute`; `key:` only meaningful for `attribute`; `optional:` only for `outlet` |
 | Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, `T::Array[...]`, `T::Hash[...]`, a constant path, or `T.untyped` as an explicit opt-out of static lowering |
-| Outlets | Only on `Swill::Controller` descendants. A stored, nilable, observable property with `outlet` and `optional` metadata, connected at awakening; never computed and never defaulted |
+| Outlets | A stored, nilable, observable property with `outlet` and `optional` metadata, connected at awakening; never computed and never defaulted. The macro is declared on `Swill::Controller` in the RBI, so Sorbet limits it to controllers |
 | Defaults | Literal string, integer, `nil`, `true`, `false`, or an empty `[]` or `{}`; the generated default is a function, so each instance gets its own collection. Non-empty collection literals are rejected |
 | Computed | Block form, `do`/`end` or braces, no block arguments, no `default:`; `attribute` cannot be computed |
 | Key | Literal symbol or string; defaults to the name |
@@ -154,15 +155,13 @@ A mixin's `module ClassMethods` may contain:
 
 | Statement | Result |
 | --- | --- |
-| `extend Swill::Declarations` (or any `...Declarations`) | Accepted and erased; the compiler implements the protocol |
+| `extend Swill::Declarations` | Accepted and erased; the compiler implements the protocol |
 | `inheritable_registry :name` / `:name, :array` | A per-class registry that copies its parent's contents on first access |
+| `inheritable_registry :name, seeded_by: :attribute` | The same registry, and every class inheriting it receives one entry per `attribute` declaration, emitted as `registries` in the meta object. On MRI the macro's own implementation seeds it |
 | `class_setting :name` | A per-class value that falls back to the parent's |
 | `def name(positional)` | Compiled as a class-side method |
+| `def property` / `def attribute` / `def outlet` | Not compiled: a class method named after a declaration macro is that macro's MRI implementation, and the compiler lowers the declaration itself |
 | `sig { ... }` | Erased |
-
-`Swill::Model::Attributes::ClassMethods#attribute` is special-cased: its MRI
-body is metaprogramming, so the compiler lowers the `attribute` declaration
-protocol directly and skips that definition.
 
 ### Pragmas
 
@@ -297,7 +296,7 @@ Each entry is compiled with one of two filter chains, chosen by the
 | | Shared Ruby | JavaScript-only |
 | --- | --- | --- |
 | Filters | `RubySurface`, `Return`, `RubyCalls` | `JavaScriptSurface`, `Return` |
-| Used for | Models, concerns, controllers, application code that also runs on MRI | `Swill::Bindings`, `Actions`, `Awakening`, `View`, `Controller`: code that touches the DOM |
+| Used for | Models, concerns, controllers, application code that also runs on MRI | `Swill::Bindings`, `Actions`, `Awakening`, `View`, `Controller`, `Controller::List`: code that touches the DOM |
 | Truthiness, equality, `\|\|` | Lowered from static types (below) | Ruby2JS defaults; Ruby is used as JavaScript syntax |
 | Unqualified call `foo(x)` | Always a method call | A method call when `foo` is a collected method on the entry, its mixins, or its ancestors; otherwise native |
 | `param.foo` where `param` has a signature type | Resolved through the receiver rules | A method call when the type names a collected entry; otherwise native property access |
@@ -387,21 +386,62 @@ For `receiver.name(args)` where the receiver is not `self`:
 | Framework class | Collected method | `receiver.name(args)` |
 | Framework class | Anything else | Pragma filter if it applies, else an explicit call |
 | Any | `nil?` | `receiver == null` |
-| `String` or `T.nilable(String)` | `strip`, `upcase`, `downcase`, `blank?`, `present?`, `empty?` | `Runtime.strip(receiver)`, `Runtime.upcase(...)`, `Runtime.downcase(...)`, `Runtime.isBlank(...)`, `Runtime.isPresent(...)`, `Runtime.isEmpty(...)` |
-| `Array`, `Hash`, `T::Array[...]`, `T::Hash[...]` | `empty?`, `blank?`, `present?` | The same runtime readers |
-| `Array`, `T::Array[...]` | `each`, `map`, `select` with a block | `forEach`, `map`, `filter` with an arrow function; block parameters take the element type of `T::Array[X]` |
-| `Array`, `T::Array[...]` | `include?(x)`, `size`, `length`, `first`, `last` | `includes(x)`, `.length`, `[0]`, `at(-1)` |
+| Core value type (below), nilable or not | A method in its table | The table's form; a method outside the table is rejected |
+| Core value type | Operators, indexing, `new`, or a send with an `array`/`hash`/`string` pragma | Left to the converter and the Pragma filter, except the array and integer operators the tables name |
 | Any, or implicit self | `respond_to?(:name)` with a literal name | `Runtime.respondsTo(receiver, "name")`; a dynamic name is rejected |
-| `String` | Anything else | Pragma filter if it applies, else an explicit call |
-| Unknown or `T.untyped` | No arguments and the name is a property on any collected entry, or a string reader name | `Runtime.read(receiver, "name")` |
 | Unknown, `T.untyped`, or `T.proc...` | `call(args)` or `.(args)` | `receiver(args)` for a local receiver; `receiver.call(null, args)` otherwise |
-| Unknown or `T.untyped` | `name = value` where `name` is a property on any collected entry | `Runtime.write(receiver, "name", value)` |
-| Unknown or `T.untyped` | Anything else | `receiver.name(args)` via `RubyCalls` |
+| Unknown or `T.untyped` | Operators, indexing, `new`, unary operators, or a send with an `array`/`hash`/`string` pragma | Left to the converter and the Pragma filter |
+| Unknown or `T.untyped` | No arguments | `Runtime.read(receiver, "name")` |
+| Unknown or `T.untyped` | `name = value` | `Runtime.write(receiver, "name", value)` |
+| Unknown or `T.untyped` | Arguments | `Runtime.invoke(receiver, "name", args)`, arity-checked against metadata |
+| Unknown or `T.untyped` | Any block | Rejected: collected methods take no blocks, so only a collection can receive one, and its type must be declared |
 | Any other type | Anything | Pragma filter if it applies, else an explicit call |
 
-No operation is chosen by method name alone. A model may define its own
-`strip`; a typed receiver calls it, and an untyped receiver reaches it through
-`Runtime.read`, which prefers a collected method over the string reader.
+No operation is chosen by method name alone. A typed receiver is resolved
+statically; an untyped receiver is dynamic, and every send on it is resolved
+through installed metadata at run time, as Ruby itself would resolve it. A
+model may define its own `strip`: a typed receiver calls it, and an untyped
+receiver reaches it through `Runtime.read`, which prefers a collected method
+over the string reader. Constants and `self` are never dynamic, and
+`Const.new` types its result as that class when the class is collected.
+
+### Core value types
+
+`filters/core_types.rb` holds one table per Ruby core type. A method in a
+table compiles to the JavaScript form where Ruby and JavaScript agree, or to a
+`Runtime` helper in `values.mjs` that carries Ruby's rule where they differ.
+Each entry also fixes the static type of its result, so chains such as
+`name.strip.length > 0` stay typed. A method on one of these receivers that
+no table lists is a build error naming the type and method: a gap is
+reported, not compiled into a call to a method JavaScript lacks. The tables
+grow with real code; `spec/compiler_test.rb` runs one fixture over them on
+MRI and as compiled JavaScript and requires identical results.
+
+A `T.nilable(X)` receiver uses `X`'s table. Ruby would raise on nil, and the
+JavaScript forms and helpers throw on `null` too, except `to_s`, which is
+nil-safe (`Runtime.stringify`) because `nil.to_s` is `""`.
+
+| Type | Direct JavaScript | Runtime helper (Ruby semantics) |
+| --- | --- | --- |
+| `String` | `length`/`size` (`.length`); `include?`, `start_with?`, `end_with?` (`includes`, `startsWith`, `endsWith`); `to_s`, `to_sym`, `dup` (identity); `chars` (`Array.from`) | `strip`, `upcase`, `downcase`, `capitalize`, `blank?`, `present?`, `empty?`, `to_i` (leading integer or 0), `to_f`, `split` (whitespace or separator, trailing empties dropped), `slice(index)` / `slice(start, length)` |
+| `Symbol` | `to_s`, `to_sym` (identity) | |
+| `Integer` | `zero?`, `positive?`, `negative?`, `even?`, `odd?` (comparisons); `abs` (`Math.abs`); `to_i`, `to_f` (identity) | `to_s`, `clamp`, `between?`; `/` and `%` with an Integer divisor floor and take the divisor's sign (`intDiv`, `modulo`) |
+| `Float` | `floor`, `ceil`, `round`, `to_i` (`Math`); `zero?`, `positive?`, `negative?`, `abs` | `to_s`, `clamp`, `between?` |
+| `T::Boolean`, `NilClass` | `nil.to_a` (`[]`), `nil.to_i` (`0`) | `to_s` (`nil.to_s` is `""`) |
+| `Array` | `length`/`size`/`count` (`.length`); `first` (`[0]`); `last` (`at(-1)`); `include?` (`includes`); `pop`, `shift`; `join` (default `""`); `take`, `drop` (`slice`); `dup` (`slice()`); `to_a`; `+` (`concat`) | `blank?`, `present?`, `empty?`, `index` (Ruby equality, nil when absent), `push` and `<<` (return the array), `unshift`, `reverse`, `sort` (copy, Ruby ordering), `uniq`, `compact`, `flatten`, `sum`, `min`, `max` (nil when empty), `-` (Ruby equality) |
+| `Hash` | `length`/`size`/`count`, `keys`, `values`, `key?`/`has_key?`/`include?` (`Object.keys`, `Object.values`, `Object.hasOwn`); `merge`, `dup` (`Object.assign`); `to_h` | `blank?`, `present?`, `empty?`, `fetch` (default or error), `delete` (the value or nil) |
+
+Blocks on arrays and hashes:
+
+| Receiver | Methods | Emitted |
+| --- | --- | --- |
+| `Array` | `each`, `each_with_index`, `map`, `flat_map` | `forEach`, `map`, `flatMap` with an arrow function; parameters take the element type, and the index is an `Integer` |
+| `Array` | `select`/`filter`, `reject`, `find`/`detect`, `any?`, `all?`, `none?`, `count` | `filter`, `find`, `some`, `every`, negated or `.length` as needed; the block's last expression is read with Ruby truthiness, so `0` and `""` stay true |
+| `Array` | `sort_by`, `min_by`, `max_by` | `Runtime.sortBy`, `minBy`, `maxBy` with the arrow function |
+| `Hash` | `each`, `map`, `select`/`filter`, `reject`, `any?`, `all?`, `count` | The same over `Object.entries`; `\|key, value\|` destructures each pair and `select`/`reject` rebuild a hash with `Object.fromEntries` |
+
+Any other block on a core receiver is rejected. Untyped receivers are covered
+above: a send on one is dynamic, and a block on one is rejected.
 
 ### Self and implicit receivers
 
@@ -433,21 +473,30 @@ prototypes it did not create, and provides no universal dynamic send.
 | --- | --- |
 | `install(meta)` | Validates every entry first, then installs classes superclass-first regardless of key order. Errors: `Duplicate class`, `Missing constructor`, `Unknown mixin for`, `Duplicate constructor in meta`, `Mixin factory must be a function`, `ClassMethods factory must be a function`, `Unresolvable superclass order in meta` |
 | `include(klass, mixins, incoming)` | Rewires `klass` and `klass.prototype` through the mixin layers once, before instances exist, and copies `ClassMethods` helpers onto the constructor. Error: `Mixins must be attached before class installation` |
-| `installClass(klass, name, properties, methods, registries)` | Records metadata, seeds registries, defines accessors on the prototype, and registers the name. Errors: `Duplicate class`, `Missing registry declaration`, `Unknown registry property` |
+| `installClass(klass, name, properties, methods, registries, restorations)` | Records metadata, seeds registries, defines accessors on the prototype, and registers the name. Errors: `Duplicate class`, `Setter method for declared property`, `Restorable path must start with a declared property`, `Duplicate restorable key`, `Missing registry declaration`, `Unknown registry property` |
 | `resolve(name)` | Returns the registered constructor for a Ruby name. Fails closed with `Unknown class`; markup cannot reach globals or prototypes |
 
 Metadata is inherited: a class's property and method tables start from its
 parent's, so lookups do not walk the chain at call time.
 
+Conflicts with installed metadata are rejected here, not by the compiler:
+the compiler rejects what it cannot compile or emit, and the runtime rejects
+metadata it cannot install or honor. A `name=` method for a declared or
+inherited property would be replaced or bypassed by the installed accessor;
+mutation belongs in `name_did_change`. A `restorable` path must start at a
+declared property for the path writer to reach it, and fragment keys must be
+unique along the class chain. Checking at installation also covers classes
+registered from JavaScript, which the compiler never sees.
+
 ### Metadata-driven dispatch
 
 | Function | Behavior |
 | --- | --- |
-| `read(object, name)` | On a null receiver, `nil?`, `blank?`, and `present?` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the value reader names. Error: `Unknown reader` |
+| `read(object, name)` | On a null receiver, `nil?`, `blank?`, and `present?` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. A plain object is a Hash: its entry by key, `null` when absent, then the value readers, as key-value coding treats a dictionary; entries are not observable. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the value reader names. Error: `Unknown reader` |
 | `write(object, name, value)` | A declared stored property through the property protocol, or a collected `name=` accessor. Errors: `Cannot write ... on nil`, `Read-only property`, `Unknown writer` |
 | `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null`; the empty path is the object itself |
 | `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Error: `Read-only binding` when the leaf is computed, not a property, or the path is empty |
-| `invoke(object, name, ...args)` | Calls a collected method with an exact arity match. Error: `Unknown action or wrong arity` |
+| `invoke(object, name, ...args)` | Calls a collected method with an exact arity match; the dynamic call compiled for an untyped receiver. Errors: `Cannot call ... on nil`, `Unknown method or wrong arity` |
 | `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted. The responder chain uses it to decide which responder handles an action |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
 | `restorations(object)` | The `restorable` declarations, including inherited ones, as `{path, key, type}` |
@@ -456,7 +505,7 @@ parent's, so lookups do not walk the chain at call time.
 | `isAttribute(object, name)` | Whether `name` is a declared `attribute` on the object's class |
 | `validate_attribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. The MRI adapter implements the same convention with `respond_to?` |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
-| `valueRead(value, name)` | `nil?`, `blank?`, `present?`, `empty?`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
+| `valueRead(value, name)` | `nil?`, `blank?`, `present?`, `empty?`, `size`, `length`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
 
 ### Values
 
@@ -470,6 +519,7 @@ parent's, so lookups do not walk the chain at call time.
 | `isEmpty(value)` | Zero length for a string or array; anything else throws `TypeError` |
 | `strip(value)` | Removes ASCII whitespace and NUL from both ends, as Ruby does; JavaScript `trim` would also remove NBSP. Non-strings throw `TypeError` |
 | `upcase(value)` / `downcase(value)` | `toUpperCase` / `toLowerCase`; non-strings throw `TypeError` |
+| `length`, `stringify`, `toInteger`, `toFloat`, `capitalize`, `split`, `slice`, `sort`, `sortBy`, `minBy`, `maxBy`, `min`, `max`, `sum`, `uniq`, `compact`, `flatten`, `reverse`, `indexOf`, `append`, `prepend`, `difference`, `fetch`, `deleteKey`, `intDiv`, `modulo`, `between`, `clamp` | Core type methods whose Ruby rule differs from JavaScript's; the core value types section lists which method each serves. `isBlank`, `isEmpty`, and `length` also accept a plain object as a Hash |
 
 ### Observation
 
@@ -506,9 +556,15 @@ sees a fresh value.
 Computed properties record every `(object, property)` read during `compute`
 through a capture stack. Each recompute replaces the previous dependency
 subscriptions, so a branch that stops reading an object stops observing it.
-Invalidation drops the cache and, only when something observes the computed
-property, recomputes eagerly and notifies if the value changed. Cycles throw
-`Computed cycle`; an exception inside `compute` unwinds the capture stack.
+Invalidation drops the cache and recomputes eagerly only for something that
+must learn of the change: an observer, or the property's own
+`name_did_change` hook. A computed property whose class defines that hook is
+therefore evaluated when the object's state is first touched, so the hook
+runs on every dependency change with the previous and new values, as
+`Swill::Controller::List` relies on for `selected_object_did_change`; a
+computed property without a hook stays lazy until read or observed. Cycles
+throw `Computed cycle`; an exception inside `compute` unwinds the capture
+stack.
 
 Per-object state lives in a `WeakMap`, so objects need no reserved fields and
 are collected normally. Drafts copy attributes through `apply_attributes` and
@@ -524,10 +580,11 @@ where it is raised:
 | Top level | Anything other than `class` and `module` |
 | Constants | Unknown or non-static constants; reopened or duplicate constants; a superclass or mixin defined later in the same build; a superclass that is a mixin; an include target that is a class |
 | Methods | Names outside `/\A[a-z_]\w*[!?=]?\z/`; `method_missing`; `initialize` on the shared surface; optional, keyword, splat, or block parameters; a method whose name is also an inherited property |
-| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, a non-literal `optional:`, or on a class that is not a `Swill::Controller`; `restorable` with a non-literal path or key, any keyword but `key:`, a path that does not start with a declared property, a duplicate key, or on a class that is not a `Swill::Controller` |
+| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, or a non-literal `optional:`; `restorable` with a non-literal path or key, any keyword but `key:`, or a path that is not dotted property names. Which classes may declare `outlet` and `restorable` is Sorbet's rule, from the handwritten RBI; whether a `restorable` path starts at a declared property, and whether keys collide, is checked by the runtime at installation |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
-| Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name |
+| Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments |
+| `ClassMethods` registries | `inheritable_registry` keywords other than `seeded_by: :attribute` |
 | Exceptions | Any `raise` form other than a literal message string |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |
 | Members | Two members with the same encoded JavaScript name |

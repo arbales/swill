@@ -16,10 +16,18 @@ module Swill
     # to keep walking. An action nobody handles is also an error.
     sig { params(name: String, sender: T.untyped, event: T.untyped).returns(T.untyped) }
     def perform_action(name, sender, event)
-      return Runtime.performAction(self, name, sender, event) if Runtime.respondsTo(self, name)
-      target = next_responder
+      target = action_target(name)
       raise "Unhandled action: #{name}" unless target
-      target.perform_action(name, sender, event)
+      Runtime.performAction(target, name, sender, event)
+    end
+
+    # The first responder from here up the chain that responds to name, or
+    # nil when none does; for actions that are optional to handle.
+    sig { params(name: String).returns(T.nilable(Responder)) }
+    def action_target(name)
+      return self if Runtime.respondsTo(self, name)
+      target = next_responder
+      target ? target.action_target(name) : nil
     end
 
     # ---- first responder ----

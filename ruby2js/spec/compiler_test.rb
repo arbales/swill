@@ -73,27 +73,15 @@ class CompilerTest < Minitest::Test
 
   def test_binding_and_action_dom_behavior_is_compiled_from_framework_ruby
     compiler = Swill::Ruby2JS::Compiler.new
-    %w[
-      lib/swill/core/observable.rb
-      lib/swill/core/object.rb
-      lib/swill/core/ownership.rb
-      lib/swill/core/object_bindings.rb
-      lib/swill/core/responder.rb
-      lib/swill/core/view.rb
-      lib/swill/core/controller.rb
-      lib/swill/core/bindings.rb
-      lib/swill/core/actions.rb
-      lib/swill/core/outlets.rb
-      lib/swill/core/awakening.rb
-      lib/swill/core/fragments.rb
-      lib/swill/core/window.rb
-      lib/swill/core/application.rb
-    ].each do |path|
+    Swill::Ruby2JS::FRAMEWORK_SOURCES[:javascript_only].each do |path|
       compiler.add(File.read(path), file: path, javascript_only: true)
     end
 
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes js, "class Swill__Bindings extends Swill__Object"
+    assert_includes js, "class Swill__Controller__List extends Swill__Controller", "a class nested under a class compiles"
+    assert_match(/new Swill__Bindings\(\)\.wire_object\(\s*item,\s*element\s*\)/, js)
+    assert_match(/new Swill__Actions\(\)\.wire_into\(\s*this,\s*element\s*\)/, js)
     assert_includes js, "Runtime.observePath(object, path, render)"
     assert_includes js, "Runtime.isTruthy(value)"
     assert_includes js, "element.addEventListener(event_name, handler)"
@@ -107,20 +95,20 @@ class CompilerTest < Minitest::Test
     entry = modules.fetch("fixture.mjs")
     assert_includes entry, "if (typeof document !== \"undefined\")"
     assert_includes entry, 'new (Runtime.resolve("Swill::Launcher"))().install(document)'
-    assert_raises(Spike::CompileError) do
+    assert_raises(Swill::Ruby2JS::CompileError) do
       compiler.modules(name: "fixture", runtime: "../lib/swill/runtime.mjs", launch: "Swill::Launcher")
     end
   end
 
   def test_runtime_sorbet_constructs_are_not_silently_erased
     %w[must cast let unsafe].each do |operation|
-      assert_raises(Spike::CompileError) { javascript("def name; T.#{operation}(nil); end") }
+      assert_raises(Swill::Ruby2JS::CompileError) { javascript("def name; T.#{operation}(nil); end") }
     end
-    assert_raises(Spike::CompileError) { javascript("def name; T::Struct.new; end") }
-    assert_raises(Spike::CompileError) do
+    assert_raises(Swill::Ruby2JS::CompileError) { javascript("def name; T::Struct.new; end") }
+    assert_raises(Swill::Ruby2JS::CompileError) do
       javascript("def name; value = T.let([], T::Array[String]); value; end")
     end
-    assert_raises(Spike::CompileError) do
+    assert_raises(Swill::Ruby2JS::CompileError) do
       javascript("property :name, type: String do\nvalue = T.let('Ada', String)\nvalue\nend")
     end
   end
@@ -128,21 +116,21 @@ class CompilerTest < Minitest::Test
   def test_dynamic_declarations_and_mutable_defaults_are_rejected
     ['property field, type: String', 'property :names, type: T::Array[String], default: [1]',
      'property :name, type: String, nonsense: true', 'prepend Other'].each do |body|
-      assert_raises(Spike::CompileError) { javascript(body) }
+      assert_raises(Swill::Ruby2JS::CompileError) { javascript(body) }
     end
   end
 
   def test_attribute_requires_an_explicit_default
-    error = assert_raises(Spike::CompileError) do
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
       javascript("attribute :name, type: String")
     end
     assert_equal "attribute declaration requires default:", error.message
   end
 
   def test_missing_include_and_reopened_class_are_rejected
-    assert_raises(Spike::CompileError) { javascript("include Missing") }
+    assert_raises(Swill::Ruby2JS::CompileError) { javascript("include Missing") }
     compiler = compile("")
-    assert_raises(Spike::CompileError) { compiler.add("class Example < TestObject; end") }
+    assert_raises(Swill::Ruby2JS::CompileError) { compiler.add("class Example < TestObject; end") }
   end
 
   def test_included_hooks_reject_dynamic_code_and_colliding_declarations
@@ -154,11 +142,11 @@ class CompilerTest < Minitest::Test
       'base.attribute(:name, type: String, default: "") { "Ada" }',
       'base.attribute :name, type: String, default: ""; base.attribute :name, type: String, default: ""'
     ].each do |body|
-      assert_raises(Spike::CompileError) do
-        Spike::Compiler.new.add("module Feature\ndef self.included(base)\n#{body}\nend\nend")
+      assert_raises(Swill::Ruby2JS::CompileError) do
+        Swill::Ruby2JS::Compiler.new.add("module Feature\ndef self.included(base)\n#{body}\nend\nend")
       end
     end
-    assert_raises(Spike::CompileError) do
+    assert_raises(Swill::Ruby2JS::CompileError) do
       compiler_with_test_object.add(<<~RUBY)
         module Feature
           def self.included(base)
@@ -210,7 +198,7 @@ class CompilerTest < Minitest::Test
         def label; name; end
       end
     RUBY
-    application = Spike::Compiler.new(imports: framework.knowledge.interface).add(<<~RUBY)
+    application = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface).add(<<~RUBY)
       class First < TestObject
         include Feature
       end
@@ -259,8 +247,8 @@ class CompilerTest < Minitest::Test
       "inheritable_registry :items, :set",
       "class_setting(:mode) { |value| value }"
     ].each do |declaration|
-      assert_raises(Spike::CompileError) do
-        Spike::Compiler.new.add(<<~RUBY)
+      assert_raises(Swill::Ruby2JS::CompileError) do
+        Swill::Ruby2JS::Compiler.new.add(<<~RUBY)
           module Feature
             def self.included(base); base.extend(ClassMethods); end
             module ClassMethods
@@ -315,13 +303,13 @@ class CompilerTest < Minitest::Test
 
   def test_unsupported_reflection_is_a_build_error
     %w[public_send const_get define_method instance_exec].each do |method|
-      assert_raises(Spike::CompileError) { javascript("def read(value); #{method}(value); end") }
+      assert_raises(Swill::Ruby2JS::CompileError) { javascript("def read(value); #{method}(value); end") }
     end
   end
 
   def test_forward_superclasses_and_duplicate_inherited_includes_are_rejected
     source = "class Child < Parent; end\nclass Parent < TestObject; end"
-    assert_raises(Spike::CompileError) { compiler_with_test_object.add(source).javascript(runtime: "./runtime.mjs") }
+    assert_raises(Swill::Ruby2JS::CompileError) { compiler_with_test_object.add(source).javascript(runtime: "./runtime.mjs") }
     source = <<~RUBY
       module Feature
         def label; "feature"; end
@@ -333,7 +321,7 @@ class CompilerTest < Minitest::Test
         include Feature
       end
     RUBY
-    assert_raises(Spike::CompileError) { compiler_with_test_object.add(source).javascript(runtime: "./runtime.mjs") }
+    assert_raises(Swill::Ruby2JS::CompileError) { compiler_with_test_object.add(source).javascript(runtime: "./runtime.mjs") }
   end
 
   def test_both_ruby_include_orders_and_mixin_reflection_execute_correctly
@@ -503,12 +491,168 @@ class CompilerTest < Minitest::Test
     JS
   end
 
+  # One fixture over the core type tables, run on MRI and as compiled
+  # JavaScript; the two results must be the same JSON.
+  CORE_TYPES = <<~'RUBY'
+    class Core < TestObject
+      extend T::Sig
+
+      sig { params(text: String, maybe: T.nilable(String)).returns(T::Array[T.untyped]) }
+      def strings(text, maybe)
+        [text.to_s, text.length, text.size, text.include?("ra"), text.start_with?("G"), text.end_with?("z"),
+         text.to_i, "  12abc".to_i, "abc".to_i, "3.5kg".to_f, text.capitalize, text.chars, "  a  b ".split,
+         "a,b,,".split(","), text.slice(1, 3), text.slice(-2, 2), text.slice(0), text.slice(9, 1),
+         text.upcase.downcase, text.strip.empty?, text.dup, maybe.to_s, maybe.blank?, text.to_sym.to_s]
+      end
+
+      sig { params(number: Integer, other: Integer, ratio: Float).returns(T::Array[T.untyped]) }
+      def numbers(number, other, ratio)
+        [number.to_s, number.zero?, number.positive?, number.negative?, number.even?, number.odd?, number.abs,
+         number.clamp(0, 5), number.between?(1, 10), number / other, number % other, -7 / 2, -7 % 2,
+         ratio.floor, ratio.ceil, ratio.round, ratio.to_i, ratio.to_s, true.to_s, nil.to_s, nil.to_a, nil.to_i]
+      end
+
+      sig { params(items: T::Array[Integer], words: T::Array[String]).returns(T::Array[T.untyped]) }
+      def arrays(items, words)
+        copy = items.dup
+        copy << 4
+        copy.push(5)
+        copy.unshift(0)
+        popped = copy.pop
+        shifted = copy.shift
+        [items.count, items.first, items.last, items.index(3), items.index(99), items.reverse, items.sort,
+         items.uniq, [1, nil, 2].compact, items.sum, items.min, items.max, [].min, items.take(2), items.drop(2),
+         words.join, words.join("-"), items + [9], items - [1, 3], [[1, [2]], 3].flatten, copy, popped, shifted,
+         items, items.reject { |n| n > 2 }, items.find { |n| n > 1 }, items.detect { |n| n > 9 },
+         items.any? { |n| n > 5 }, items.all? { |n| n > 0 }, items.none? { |n| n > 5 }, items.count { |n| n.odd? },
+         items.sort_by { |n| -n }, items.flat_map { |n| [n, n * 10] }, items.min_by { |n| -n },
+         items.max_by { |n| -n }, words.select { |word| word.length }, indexed(words),
+         words.map { |word| word.upcase }]
+      end
+
+      sig { params(words: T::Array[String]).returns(T::Array[String]) }
+      def indexed(words)
+        pairs = []
+        words.each_with_index { |word, index| pairs << "#{index}:#{word}" }
+        pairs
+      end
+
+      sig { params(table: T::Hash[String, Integer]).returns(T::Array[T.untyped]) }
+      def hashes(table)
+        copy = table.dup
+        removed = copy.delete("a")
+        missing = copy.delete("zz")
+        [table.size, table.key?("a"), table.has_key?("zz"), table.include?("b"), table.keys, table.values,
+         table.fetch("a"), table.fetch("zz", 0), table.merge({"c" => 3}), table.empty?, {}.empty?, {}.blank?,
+         table.present?, copy, removed, missing, table.select { |key, value| value > 1 },
+         table.reject { |key, value| value > 1 }, table.map { |key, value| "#{key}=#{value}" },
+         table.any? { |key, value| value > 1 }, table.all? { |key, value| value > 5 },
+         table.count { |key, value| value.odd? }, counted(table)]
+      end
+
+      sig { params(table: T::Hash[String, Integer]).returns(Integer) }
+      def counted(table)
+        total = 0
+        table.each { |key, value| total = total + value }
+        total
+      end
+    end
+  RUBY
+
+  def test_core_type_methods_agree_with_mri
+    js = compiler_with_test_object.add(CORE_TYPES).javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "Runtime.intDiv(number, other)"
+    assert_includes js, "Runtime.append(copy, 4)"
+    assert_includes js, 'Runtime.split("  a  b ")'
+    assert_includes js, "Object.entries(table).forEach(([key, value]) =>"
+    assert_includes js, "Object.fromEntries(Object.entries(table).filter(([key, value]) => value > 1))"
+    assert_includes js, "words.filter((word) => word.length != null)", "Ruby truthiness decides a filter, not JavaScript's"
+    assert_includes js, "Runtime.stringify(maybe)", "to_s on a possibly nil receiver is nil-safe"
+    javascript_result = execute(js + <<~JS)
+      const core = new (Runtime.resolve("Core"))();
+      console.log(JSON.stringify([core.strings("Grace", null), core.numbers(7, -2, 2.5),
+        core.arrays([3, 1, 2], ["b", "", "a"]), core.hashes({a: 1, b: 2})]));
+    JS
+    # The MRI adapter supplies blank? and present?, as the runtime does in JS.
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
+      class TestObject; end
+      #{CORE_TYPES}
+      core = Core.new
+      puts JSON.generate([core.strings("Grace", nil), core.numbers(7, -2, 2.5),
+        core.arrays([3, 1, 2], ["b", "", "a"]), core.hashes({"a" => 1, "b" => 2})])
+    RUBY
+    assert status.success?, ruby
+    assert_equal JSON.parse(ruby), javascript_result
+  end
+
+  def test_core_type_methods_outside_the_tables_are_rejected_at_build_time
+    [
+      ["sig { params(text: String).void }\ndef go(text); text.center(3); end", "no lowering for String#center"],
+      ["sig { params(n: Integer).void }\ndef go(n); n.digits; end", "no lowering for Integer#digits"],
+      ["sig { params(items: T::Array[String]).void }\ndef go(items); items.each_slice(2) { |a| a }; end", "no lowering for T::Array[String]#each_slice with a block"],
+      ["sig { params(table: T::Hash[String, Integer]).void }\ndef go(table); table.dig(\"a\"); end", "no lowering for T::Hash[String, Integer]#dig"],
+      ["sig { params(text: String).void }\ndef go(text); text.include?; end", "String#include? takes 1 argument(s), not 0"]
+    ].each do |body, message|
+      error = assert_raises(Swill::Ruby2JS::CompileError, body) { javascript("extend T::Sig\n#{body}") }
+      assert_includes error.message, message
+    end
+    # Operators, indexing, and pragma-typed sends stay with the converter.
+    js = javascript("extend T::Sig\nsig { params(text: String, items: T::Array[Integer]).returns(T.untyped) }\ndef go(text, items); [text + \"!\", text[0], items[1], text.dup]; end")
+    assert_includes js, 'text + "!"'
+    assert_includes js, "items[1]"
+  end
+
+  def test_untyped_receivers_dispatch_through_installed_metadata
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Person < TestObject
+        extend T::Sig
+        property :name, type: String, default: "Ada"
+        sig { params(prefix: String).returns(String) }
+        def greet(prefix); "\#{prefix} \#{name}"; end
+        def initials; name.slice(0, 1); end
+      end
+      class Caller < TestObject
+        def read_name(thing); thing.name; end
+        def write_name(thing); thing.name = "Grace"; end
+        def greet(thing); thing.greet("Hello"); end
+        def plain_call(thing); thing.initials; end
+        def constructed
+          person = Person.new
+          person.greet("Hi")
+        end
+        def native(value); value[0] + value.length; end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    # Nothing about an untyped receiver is decided by name: every send is
+    # resolved through metadata at run time, as Ruby itself would resolve it.
+    assert_includes js, 'Runtime.read(thing, "name")'
+    assert_includes js, 'Runtime.write(thing, "name", "Grace")'
+    assert_includes js, 'Runtime.invoke(thing, "greet", "Hello")'
+    assert_includes js, 'Runtime.read(thing, "initials")'
+    assert_includes js, 'person.greet("Hi")', "constructing a collected class types the local"
+    assert_includes js, 'value[0] + Runtime.read(value, "length")', "indexing and operators stay native; length is a value reader"
+    assert_equal ["Ada", "Grace", "Hello Grace", "G", "Hi Ada", 3, "Unknown method or wrong arity: greet", "plain"], execute(js + <<~JS)
+      const caller = new (Runtime.resolve("Caller"))();
+      const person = new (Runtime.resolve("Person"))();
+      const results = [caller.read_name(person)];
+      caller.write_name(person);
+      results.push(person.name, caller.greet(person), caller.plain_call(person), caller.constructed(), caller.native([1, 2]));
+      try { caller.greet({}); } catch (error) { results.push(error.message); }
+      results.push(caller.read_name({name: "plain"}), "a plain object is a Hash: reads are key-value coding");
+      results.pop();
+      console.log(JSON.stringify(results));
+    JS
+  end
+
   def test_callables_are_invoked_with_their_arguments
     js = javascript(<<~'RUBY')
+      extend T::Sig
+      sig { params(callback: T.untyped, list: T::Array[Integer]).returns(T::Array[Integer]) }
       def run(callback, list)
         local = ->(value) { value * 2 }
         results = [callback.call(1), callback.(2), local.(3), @stored.call(4)]
-        list.forEach { |item| results.push(callback.call(item)) }
+        list.each { |item| results.push(callback.call(item)) }
         results
       end
       def bare(callback)
@@ -520,7 +664,7 @@ class CompilerTest < Minitest::Test
     assert_includes js, "let local = (value) => value * 2"
     assert_includes js, "local(3)"
     assert_includes js, "this._stored.call(null, 4)"
-    assert_includes js, "results.push(callback(item))"
+    assert_includes js, "Runtime.append(results, callback(item))", "push returns the array, as in Ruby"
     assert_includes js, "return callback()"
     refute_includes js, "this.lambda"
     assert_equal [11, 12, 6, 40, 15, "bare"], execute(js + <<~JS)
@@ -579,10 +723,9 @@ class CompilerTest < Minitest::Test
       "class Host < Swill::Controller\noutlet :field, type: Swill::View, optional: maybe\nend",
       "class Host < Swill::Controller\noutlet :field, type: Swill::View do\n42\nend\nend",
       "class Host < Swill::Controller\noutlet :field, type: Swill::View\noutlet :field, type: Swill::View\nend",
-      "class Host < Swill::View\noutlet :field, type: Swill::View\nend",
       "class Host < Swill::Controller\noutlet :field, type: Swill::View, key: :x\nend"
     ].each do |body|
-      assert_raises(Spike::CompileError, body) do
+      assert_raises(Swill::Ruby2JS::CompileError, body) do
         Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(body).javascript(runtime: "./runtime.mjs")
       end
     end
@@ -617,31 +760,56 @@ class CompilerTest < Minitest::Test
       const host = new (Runtime.resolve("Host"))();
       console.log(JSON.stringify(Runtime.restorations(host).map(r => [r.key, r.type])));
     JS
-    [
-      "restorable query",
-      "restorable :query, codec: :string",
-      "restorable :missing",
-      "restorable \"query.\"",
-      "restorable :query, key: :q\nrestorable :flag, key: :q"
-    ].each do |body|
-      assert_raises(Spike::CompileError, body) do
-        Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true)
-          .add("class Host < Swill::Controller\nproperty :query, type: String, default: \"\"\nproperty :flag, type: T::Boolean, default: false\n#{body}\nend")
-          .javascript(runtime: "./runtime.mjs")
-      end
-    end
-    assert_raises(Spike::CompileError) do
+    host = ->(body) do
       Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true)
-        .add("class Plain < Swill::Object\nproperty :query, type: String, default: \"\"\nrestorable :query\nend")
-        .javascript(runtime: "./runtime.mjs")
+        .add("class Host < Swill::Controller\nproperty :query, type: String, default: \"\"\nproperty :flag, type: T::Boolean, default: false\n#{body}\nend")
     end
+    # The declaration's shape is the compiler's; what it names is checked by
+    # the runtime when the bundle installs.
+    ["restorable query", "restorable :query, codec: :string", "restorable \"query.\""].each do |body|
+      assert_raises(Swill::Ruby2JS::CompileError, body) { host.(body).javascript(runtime: "./runtime.mjs") }
+    end
+    assert_includes execute_failing(host.("restorable :missing").javascript(runtime: "../lib/swill/runtime.mjs")),
+      "Restorable path must start with a declared property: missing"
+    assert_includes execute_failing(host.("restorable :query, key: :q\nrestorable :flag, key: :q").javascript(runtime: "../lib/swill/runtime.mjs")),
+      "Duplicate restorable key: q"
+  end
+
+  # The compiler emits what the source says; the runtime refuses what its
+  # property protocol cannot honor when the bundle installs.
+  def test_property_protocol_conflicts_fail_at_installation_not_compilation
+    js = javascript("property :count, type: Integer, default: 0\ndef count=(value); end")
+    assert_includes js, "set count(value)"
+    assert_includes execute_failing(js), "Setter method for declared property: count"
+    js = compiler_with_test_object
+      .add("class Base < TestObject\nproperty :count, type: Integer, default: 0\nend")
+      .add("class Sub < Base\ndef count=(value); end\nend")
+      .javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes execute_failing(js), "Setter method for declared property: count"
+    # Mutation hooks are the accepted form, on stored and computed properties.
+    js = javascript(<<~RUBY)
+      property :count, type: Integer, default: 0
+      property :total, type: Integer do
+        count * 2
+      end
+      def count_did_change(previous, value); end
+      def total_did_change(previous, value); end
+    RUBY
+    assert_equal [1, [["total", 0, 2], ["count", 0, 1]]], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      const seen = [];
+      object.count_did_change = (previous, value) => seen.push(["count", previous, value]);
+      object.total_did_change = (previous, value) => seen.push(["total", previous, value]);
+      object.count = 1;
+      console.log(JSON.stringify([object.count, seen]));
+    JS
   end
 
   def test_javascript_intrinsics_are_available_only_to_browser_boundary_code
     js = Swill::Ruby2JS::Compiler.new.add("class Decoder\ndef parse(text); JSON.parse(text); end\nend", javascript_only: true)
       .javascript(runtime: "./runtime.mjs")
     assert_includes js, "JSON.parse(text)"
-    error = assert_raises(Spike::CompileError) { javascript("def parse(text); JSON.parse(text); end") }
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def parse(text); JSON.parse(text); end") }
     assert_includes error.message, "unknown constant JSON"
     js = Swill::Ruby2JS::Compiler.new
       .add("class JSON\ndef parse(text); text; end\nend\nclass Decoder\ndef parse(text); JSON.new.parse(text); end\nend", javascript_only: true)
@@ -650,13 +818,15 @@ class CompilerTest < Minitest::Test
   end
 
   def test_constructors_taken_from_call_results_are_parenthesized
-    shared = javascript("def make(registry); registry.lookup(\"x\").new(1); end\ndef plain; TestObject.new; end")
-    assert_includes shared, 'new (registry.lookup("x"))(1)'
+    shared = compiler_with_test_object
+      .add("class Registry < TestObject\ndef lookup(name); TestObject; end\nend")
+      .add("class Example < TestObject\ndef make(registry); registry.lookup(\"x\").new(1); end\ndef plain; TestObject.new; end\nend")
+      .javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes shared, 'new (Runtime.invoke(registry, "lookup", "x"))(1)'
     assert_includes shared, "new TestObject()"
-    assert_equal ["x", 1], execute(shared + <<~JS)
-      const registry = {lookup: name => class { constructor(value) { this.name = name; this.value = value; } }};
-      const made = new (Runtime.resolve("Example"))().make(registry);
-      console.log(JSON.stringify([made.name, made.value]));
+    assert_equal true, execute(shared + <<~JS)
+      const made = new (Runtime.resolve("Example"))().make(new (Runtime.resolve("Registry"))());
+      console.log(JSON.stringify(made instanceof Runtime.resolve("TestObject")));
     JS
     browser = Swill::Ruby2JS::Compiler.new
       .add("class Maker\ndef make(name, element); Runtime.resolve(name).new(element); end\nend", javascript_only: true)
@@ -680,14 +850,10 @@ class CompilerTest < Minitest::Test
       end
 
       def label; "labelled"; end
-
-      def untyped(things)
-        things.each { |thing| thing }
-      end
     RUBY
     assert_includes js, "people.forEach((person) => {"
     assert_includes js, 'Runtime.respondsTo(person, "label")'
-    assert_includes js, "seen.push(person.label())", "block parameters take the element type"
+    assert_includes js, "Runtime.append(seen, person.label())", "block parameters take the element type"
     assert_includes js, "words.map((word) => Runtime.upcase(word))"
     assert_includes js, "words.filter((word) => Runtime.isEmpty(Runtime.strip(word)))"
     assert_includes js, 'words.includes("Ada")'
@@ -695,8 +861,9 @@ class CompilerTest < Minitest::Test
     assert_includes js, "words[0]"
     assert_includes js, "words.at(-1)"
     assert_includes js, 'Runtime.respondsTo(this, "survey")'
-    assert_includes js, "things.each(", "an untyped receiver keeps its Ruby method name"
-    assert_raises(Spike::CompileError) { javascript("def ask(name); respond_to?(name); end") }
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def untyped(things); things.each { |thing| thing }; end") }
+    assert_includes error.message, "block call each on an untyped receiver; give things a static type"
+    assert_raises(Swill::Ruby2JS::CompileError) { javascript("def ask(name); respond_to?(name); end") }
     assert_equal [["labelled"], ["ADA", " "], [" "], true, 2, "Ada", " ", true, false], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
       console.log(JSON.stringify(object.survey([object, {}], ["Ada", " "])));
@@ -706,8 +873,8 @@ class CompilerTest < Minitest::Test
   def test_raise_produces_error_objects_and_rejects_other_forms
     js = javascript('def boom; raise "nope"; end')
     assert_includes js, 'throw new Error("nope")'
-    assert_raises(Spike::CompileError) { javascript("def boom(value); raise value; end") }
-    assert_raises(Spike::CompileError) { javascript("def boom; raise; end") }
+    assert_raises(Swill::Ruby2JS::CompileError) { javascript("def boom(value); raise value; end") }
+    assert_raises(Swill::Ruby2JS::CompileError) { javascript("def boom; raise; end") }
     assert_equal ["nope", true], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
       try { object.boom(); } catch (error) { console.log(JSON.stringify([error.message, error instanceof Error])); }
@@ -784,7 +951,7 @@ class CompilerTest < Minitest::Test
 
   def test_non_type_pragmas_cannot_silently_desynchronize_metadata
     %w[skip extend nullish logical unknown].each do |pragma|
-      error = assert_raises(Spike::CompileError) do
+      error = assert_raises(Swill::Ruby2JS::CompileError) do
         javascript("def name # Pragma: #{pragma}\n\"Ada\"\nend")
       end
       assert_includes error.message, "unsupported spike pragma #{pragma}"
@@ -853,22 +1020,22 @@ class CompilerTest < Minitest::Test
   end
 
   def test_identifier_encoding_does_not_conflate_namespace_and_underscores
-    assert_equal "Record", Spike::Knowledge.identifier("Record")
-    assert_equal "Demo__Person", Spike::Knowledge.identifier("Demo::Person")
-    refute_equal Spike::Knowledge.identifier("A::B"), Spike::Knowledge.identifier("A__B")
+    assert_equal "Record", Swill::Ruby2JS::Knowledge.identifier("Record")
+    assert_equal "Demo__Person", Swill::Ruby2JS::Knowledge.identifier("Demo::Person")
+    refute_equal Swill::Ruby2JS::Knowledge.identifier("A::B"), Swill::Ruby2JS::Knowledge.identifier("A__B")
     names = %w[A::B A__B A_uB A_u::B Runtime Ruby_Runtime Superclass Ruby_Superclass]
-    assert_equal names.length, names.map { |name| Spike::Knowledge.identifier(name) }.uniq.length
+    assert_equal names.length, names.map { |name| Swill::Ruby2JS::Knowledge.identifier(name) }.uniq.length
   end
 
   def test_readable_class_headers_and_reference_based_wiring
-    framework = Spike::Compiler.new
+    framework = Swill::Ruby2JS::Compiler.new
       .add(File.read("lib/swill/core/observable.rb"), javascript_only: true)
       .add(File.read("lib/swill/core/object.rb"), javascript_only: true)
       .add(File.read("lib/swill/model/attributes.rb"))
       .add(File.read("lib/swill/model/dirty_tracking.rb"))
       .add(File.read("lib/swill/model/drafts.rb"))
       .add(File.read("lib/swill/model/base.rb"))
-    compiler = Spike::Compiler.new(imports: framework.knowledge.interface)
+    compiler = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface)
     compiler.add(File.read("examples/models.rb"))
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs", framework: "./framework.mjs")
     assert_includes js, "class Demo__Person extends Swill__Model__Base {"
@@ -883,7 +1050,7 @@ class CompilerTest < Minitest::Test
     framework_js = framework.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes framework_js, "let copy = new this.constructor"
     refute_includes framework_js, "Runtime.draft("
-    assert_equal js, Spike::Compiler.format_javascript(js)
+    assert_equal js, Swill::Ruby2JS::Compiler.format_javascript(js)
   end
 
   def test_source_constants_do_not_capture_runtime_or_mixin_plumbing_names
@@ -978,6 +1145,17 @@ class CompilerTest < Minitest::Test
     output, status = Open3.capture2e("node", path)
     assert status.success?, output
     JSON.parse(output)
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  # The bundle's own failure output, for checks that must fail at load time.
+  def execute_failing(js)
+    path = "build/compiler-test.mjs"
+    File.write(path, js)
+    output, status = Open3.capture2e("node", path)
+    refute status.success?, "expected the bundle to fail while installing"
+    output
   ensure
     File.delete(path) if File.exist?(path)
   end

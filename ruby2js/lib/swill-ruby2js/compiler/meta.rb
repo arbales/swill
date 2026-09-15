@@ -22,11 +22,13 @@ module Swill
               end
               fields << "properties: {\n#{properties.join(",\n")}\n}"
               attributes = entry["properties"].select { |property| property["attribute"] }
-              if attributes.any? && included_modules(entry).include?("Swill::Model::Attributes")
+              registries = attributes.any? ? seeded_registries(entry) : []
+              unless registries.empty?
                 seeds = attributes.map do |property|
                   "#{object_key(property['name'])}: {property: #{property['name'].to_json}, key: #{property['key'].to_json}}"
                 end
-                fields << "registries: {model_attributes: {\n#{seeds.join(",\n")}\n}}"
+                seeded = registries.map { |registry| "#{registry['name']}: {\n#{seeds.join(",\n")}\n}" }
+                fields << "registries: {#{seeded.join(",\n")}}"
               end
             end
             unless mixin || entry["restorations"].empty?
@@ -47,6 +49,15 @@ module Swill
         end
 
       private
+
+        # Registries that included ClassMethods declare as seeded by the
+        # attribute macro, anywhere in the entry's ancestry.
+        def seeded_registries(entry)
+          included_modules(entry).flat_map do |name|
+            mixin = knowledge.entries.find { |candidate| candidate["name"] == name }
+            (mixin ? mixin.fetch("registries", []) : []).select { |registry| registry["seeded_by"] == "attribute" }
+          end
+        end
 
         def object_key(name)
           # In a JS object literal, "__proto__": value changes the prototype.

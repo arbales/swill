@@ -27,6 +27,9 @@ module Swill
     sig { params(name: T.untyped).returns(T.untyped) }
     def self.resolve(name); end
 
+    sig { params(object: T.untyped, name: String).returns(T.untyped) }
+    def self.read(object, name); end
+
     sig { params(object: T.untyped, path: String).returns(T.untyped) }
     def self.readPath(object, path); end
 
@@ -66,6 +69,9 @@ module Swill
     sig { params(message: String).void }
     def self.warn(message); end
 
+    sig { params(left: T.untyped, right: T.untyped).returns(Integer) }
+    def self.compareValues(left, right); end
+
     sig { params(object: T.untyped).returns(T.untyped) }
     def self.outlets(object); end
 
@@ -79,8 +85,8 @@ module Swill
   module Declarations
     extend T::Sig
 
-    sig { params(name: Symbol, initial: Symbol).void }
-    def inheritable_registry(name, initial = :hash); end
+    sig { params(name: Symbol, initial: Symbol, seeded_by: T.nilable(Symbol)).void }
+    def inheritable_registry(name, initial = :hash, seeded_by: nil); end
 
     sig { params(name: Symbol).void }
     def class_setting(name); end

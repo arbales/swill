@@ -112,7 +112,9 @@ export function browserAPI(definitions, Runtime) {
   const Controller = definitions.Swill__Controller;
   const Application = definitions.Swill__Application;
   const View = definitions.Swill__View;
-  const roots = new Set([Controller, Application, View]);
+  const List = definitions.Swill__Controller__List;
+  const SortableList = definitions.Swill__Controller__SortableList;
+  const roots = new Set([Controller, Application, View, List, SortableList]);
 
   [
     ["binding_root", "bindingRoot"],
@@ -128,6 +130,15 @@ export function browserAPI(definitions, Runtime) {
   ].forEach(([internalName, publicName]) => bridge(Controller.prototype, internalName, publicName));
   bridge(Application.prototype, "application_did_launch", "applicationDidLaunch");
   bridge(Application.prototype, "application_will_terminate", "applicationWillTerminate");
+  [
+    ["make_row_element", "makeRowElement"],
+    ["configure_row", "configureRow"],
+    ["rows_are_views_predicate", "rowsAreViews"],
+    ["row_element_predicate", "isRowElement"],
+    ["selected_object_did_change", "selectedObjectDidChange"],
+    ["activate_selection", "activateSelection"]
+  ].forEach(([internalName, publicName]) => bridge(List.prototype, internalName, publicName));
+  bridge(SortableList.prototype, "sort_key_for", "sortKeyFor");
 
   function register(name, klass) {
     if (arguments.length === 1) {
@@ -178,6 +189,8 @@ export function browserAPI(definitions, Runtime) {
     Controller,
     Application,
     View,
+    List,
+    SortableList,
     register,
     start
   });

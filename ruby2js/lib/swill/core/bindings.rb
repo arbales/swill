@@ -2,7 +2,8 @@
 # frozen_string_literal: true
 
 module Swill
-  # Wires markup bindings for one controller's owned region.
+  # Wires markup bindings for one controller's owned region, or for a region
+  # such as a list row that belongs to a plain object.
   #
   #   bind="path"        two-way for form controls, one-way for text
   #   bind-prop="path"   one-way DOM property
@@ -19,32 +20,53 @@ module Swill
     def wire(controller)
       root = controller.view().element()
       prefix = controller.binding_root
-      wire_properties(controller, prefix, root)
-      wire_region(controller, prefix, root)
+      disposers = []
+      wire_properties(controller, prefix, root, disposers)
+      wire_region(controller, prefix, root, disposers)
+      controller.register_teardown(release(disposers))
       controller
     end
 
-    sig { params(controller: Controller, prefix: T.nilable(Symbol), element: T.untyped).void }
-    def wire_region(controller, prefix, element)
+    # A region owned by an object rather than a controller: paths resolve
+    # directly against the object, and the region's root may carry bind
+    # itself (bind="@" is the object). When that root is a controller's,
+    # only its represented object comes from here; the controller wires the
+    # rest as its own region. Returns the disposer.
+    sig { params(object: Swill::Object, element: T.untyped).returns(T.proc.void) }
+    def wire_object(object, element)
+      disposers = []
+      disposers.push(wire_element(object, element, nil)) if element.hasAttribute("bind")
+      unless element.hasAttribute("controller")
+        wire_properties(object, nil, element, disposers)
+        wire_region(object, nil, element, disposers)
+      end
+      release(disposers)
+    end
+
+    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: T.untyped, disposers: T.untyped).void }
+    def wire_region(object, prefix, element, disposers)
       each_child(element, ->(child) do
-        if child.hasAttribute("controller")
-          controller.register_teardown(wire_element(controller, child, prefix)) if child.hasAttribute("bind")
-        else
-          controller.register_teardown(wire_element(controller, child, prefix)) if child.hasAttribute("bind")
-          wire_properties(controller, prefix, child)
-          wire_region(controller, prefix, child)
+        disposers.push(wire_element(object, child, prefix)) if child.hasAttribute("bind")
+        unless child.hasAttribute("controller")
+          wire_properties(object, prefix, child, disposers)
+          wire_region(object, prefix, child, disposers)
         end
       end)
     end
 
-    sig { params(controller: Controller, prefix: T.nilable(Symbol), element: T.untyped).void }
-    def wire_properties(controller, prefix, element)
+    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: T.untyped, disposers: T.untyped).void }
+    def wire_properties(object, prefix, element, disposers)
       element.getAttributeNames().forEach do |name|
         if name.slice(0, 5) == "bind-"
           property = name.slice(5, name.length)
-          controller.register_teardown(wire_property(controller, prefix, element, property, element.getAttribute(name)))
+          disposers.push(wire_property(object, prefix, element, property, element.getAttribute(name)))
         end
       end
+    end
+
+    sig { params(disposers: T.untyped).returns(T.proc.void) }
+    def release(disposers)
+      ->() { disposers.forEach { |dispose| dispose.() } }
     end
 
     sig { params(prefix: T.nilable(Symbol), path: String).returns(String) }

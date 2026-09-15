@@ -12,6 +12,7 @@ module Swill
       include ::Ruby2JS::Filter::Pragma
       include SharedLowering
       include StaticTypes
+      include CoreTypes
 
         def options=(options)
           super
@@ -20,7 +21,6 @@ module Swill
           @scope = options.fetch(:spike_scope)
           @properties = options.fetch(:properties)
           @property_types = options.fetch(:property_types)
-          @all_properties = options.fetch(:all_properties)
           @compiled_class = options[:compiled_class]
           @compiled_parent = options[:compiled_parent]
           @entry = options.fetch(:entry)
@@ -87,20 +87,25 @@ module Swill
           logical_expression(:or, left, right)
         end
 
-        # Array iteration on a typed array receiver; block parameters take the
-        # element type so their own calls lower statically.
+        # A block on a typed array or hash lowers through the core type
+        # tables, with block parameters typed from the element or entry types.
+        # A block on an untyped receiver has no lowering: collected methods
+        # take no blocks, so only a collection can receive one, and its type
+        # must be declared.
         def on_block(node)
           call, args, body = node.children
+          return super unless call.type == :send
           receiver, method, *call_args = call.children
-          target = ARRAY_BLOCK_METHODS[method]
-          return super unless target && receiver && call_args.empty? && array_type?(static_type(receiver))
-          element_type = static_type(receiver)[/\AT::Array\[(.+)\]\z/, 1]
-          previous = @local_types
-          @local_types = previous.dup
-          args.children.each { |arg| @local_types[arg.children.first.to_s] = element_type } if element_type
-          s(:block, s(:call, process(receiver), target), args, process(body))
-        ensure
-          @local_types = previous if previous
+          if receiver && dynamic_receiver?(receiver)
+            raise CompileError, "block call #{method} on an untyped receiver; give #{receiver.loc.expression.source} a static type"
+          end
+          type = receiver && static_type(receiver)
+          kind = core_kind(type)
+          if kind
+            lowered = lower_core_block(node, kind, type, receiver, method, call_args, args, body)
+            return lowered if lowered
+          end
+          super
         end
 
         def on_send(node)
@@ -123,7 +128,7 @@ module Swill
             return s(:send, ruby_truthy(receiver), :!)
           end
           if receiver && receiver.type != :self
-            return receiver_send(receiver, method, args) || super
+            return receiver_send(node, receiver, method, args) || super
           end
           if @properties.include?(method.to_s) && args.empty?
             return s(:attr, receiver ? process(receiver) : s(:self), Knowledge.member(method).to_sym)
@@ -137,10 +142,11 @@ module Swill
     private
 
         # Static facts choose the operation. A receiver whose class is known gets
-        # direct property access or a direct call; a String receiver gets the
-        # shared value readers; only a receiver with no static type reaches the
-        # runtime reader, which is the same dynamic path bindings use.
-        def receiver_send(receiver, method, args)
+        # direct property access or a direct call; a core value type goes
+        # through its lowering table; a receiver with no static type is dynamic
+        # and reaches the runtime's metadata dispatch, the same path bindings
+        # use.
+        def receiver_send(node, receiver, method, args)
           name = method.to_s
           setter = name.match?(/\A[a-z_]\w*=\z/) && args.length == 1
           base = name.delete_suffix("=")
@@ -159,35 +165,39 @@ module Swill
             end
             return nil
           end
-          if string_type?(type)
-            reader = STRING_READERS[method]
-            return reader && args.empty? ? s(:call, s(:const, nil, :Runtime), reader, process(receiver)) : nil
+          if (kind = core_kind(type))
+            return lower_core(node, kind, type, receiver, method, args)
           end
-          if collection_type?(type) && %i[empty? blank? present?].include?(method) && args.empty?
-            return s(:call, s(:const, nil, :Runtime), STRING_READERS.fetch(method), process(receiver))
+          if method == :call && (type.nil? || type == "T.untyped" || type.start_with?("T.proc"))
+            return lower_call(receiver, args)
           end
-          if array_type?(type)
-            lowered = array_send(receiver, method, args)
-            return lowered if lowered
-          end
-          return nil unless type.nil? || type == "T.untyped" || type.start_with?("T.proc")
-          return lower_call(receiver, args) if method == :call
-          if args.empty? && (@all_properties.include?(name) || STRING_READERS.key?(method))
-            return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, name))
-          end
-          if setter && @all_properties.include?(base)
-            return s(:call, s(:const, nil, :Runtime), :write, process(receiver), s(:str, base), process(args.first))
-          end
-          nil
+          return nil unless dynamic_receiver?(receiver)
+          dynamic_send(node, receiver, name, setter, base, args)
         end
 
-        def array_send(receiver, method, args)
-          case method
-          when :include? then args.length == 1 ? s(:call, process(receiver), :includes, process(args.first)) : nil
-          when :size, :length then args.empty? ? s(:attr, process(receiver), :length) : nil
-          when :first then args.empty? ? s(:send, process(receiver), :[], s(:int, 0)) : nil
-          when :last then args.empty? ? s(:call, process(receiver), :at, s(:int, -1)) : nil
-          end
+        # An untyped receiver is resolved by name at run time, as Ruby would:
+        # a read, a write, or an invocation checked against installed metadata.
+        # Operators, indexing, construction, and pragma-typed sends stay with
+        # the converter, which knows their JavaScript form.
+        def dynamic_send(node, receiver, name, setter, base, args)
+          method = name.to_sym
+          return nil if NATIVE_SENDS.include?(method) || OPERATORS.include?(method)
+          # A node without a location was synthesized by a filter (Pragma
+          # rewriting dup to slice), not written in source; it is JavaScript.
+          return nil if node.loc.nil?
+          return nil if %i[array hash string].any? { |kind| pragma?(node, kind) }
+          runtime = s(:const, nil, :Runtime)
+          return s(:call, runtime, :write, process(receiver), s(:str, base), process(args.first)) if setter
+          return s(:call, runtime, :read, process(receiver), s(:str, name)) if args.empty?
+          s(:call, runtime, :invoke, process(receiver), s(:str, name), *process_all(args))
+        end
+
+        # Constants and self are never dynamic: class-level calls and implicit
+        # self resolve statically. Everything without a static type is.
+        def dynamic_receiver?(receiver)
+          return false if %i[const self].include?(receiver.type)
+          type = static_type(receiver)
+          type.nil? || type == "T.untyped"
         end
 
         # respond_to? asks the installed metadata, never the JavaScript object

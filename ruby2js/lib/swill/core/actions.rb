@@ -8,10 +8,17 @@ module Swill
 
     sig { params(controller: Controller).returns(Controller) }
     def wire(controller)
-      owned_matching(controller.view().element(), "[data-action]").forEach do |element|
-        controller.register_teardown(wire_element(controller, element))
-      end
+      controller.register_teardown(wire_into(controller, controller.view().element()))
       controller
+    end
+
+    # Actions in element's owned region dispatch from controller, as a list
+    # row's do from its list. Returns the disposer; elements already wired
+    # are left to their owner.
+    sig { params(controller: Controller, element: T.untyped).returns(T.proc.void) }
+    def wire_into(controller, element)
+      disposers = owned_matching(element, "[data-action]").map { |target| wire_element(controller, target) }
+      ->() { disposers.forEach { |dispose| dispose.() } }
     end
 
     sig { params(controller: Controller, element: T.untyped).returns(T.proc.void) }

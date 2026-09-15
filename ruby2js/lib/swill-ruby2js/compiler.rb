@@ -10,12 +10,42 @@ require_relative "names"
 require_relative "knowledge"
 require_relative "filters/shared_lowering"
 require_relative "filters/static_types"
+require_relative "filters/core_types"
 require_relative "filters/ruby_surface"
 require_relative "filters/ruby_calls"
 require_relative "filters/javascript_surface"
 
 module Swill
   module Ruby2JS
+    # The framework's own sources in compilation order, for the build and for
+    # tests that compile the framework.
+    FRAMEWORK_SOURCES = {
+      javascript_only: %w[
+        lib/swill/core/observable.rb
+        lib/swill/core/object.rb
+        lib/swill/core/ownership.rb
+        lib/swill/core/object_bindings.rb
+        lib/swill/core/responder.rb
+        lib/swill/core/view.rb
+        lib/swill/core/controller.rb
+        lib/swill/core/bindings.rb
+        lib/swill/core/actions.rb
+        lib/swill/core/outlets.rb
+        lib/swill/core/awakening.rb
+        lib/swill/core/fragments.rb
+        lib/swill/core/window.rb
+        lib/swill/core/application.rb
+        lib/swill/controller/list.rb
+        lib/swill/controller/sortable_list.rb
+      ].freeze,
+      shared: %w[
+        lib/swill/model/attributes.rb
+        lib/swill/model/dirty_tracking.rb
+        lib/swill/model/drafts.rb
+        lib/swill/model/base.rb
+      ].freeze
+    }.freeze
+
     # Orchestration: collect facts, validate the graph, convert each entry
     # with its surface, and emit definitions. Metadata emission lives in
     # compiler/meta.rb and Sorbet artifacts in compiler/sorbet.rb.
@@ -131,6 +161,10 @@ module Swill
 
       private
 
+        # What must hold for the graph to compile and emit: ancestry order and
+        # kinds, mixin shape, and members that would collide in JavaScript or
+        # be ambiguous to lower. What the runtime cannot install or honor is
+        # rejected by the runtime at installation instead.
         def validate!
           available = knowledge.entries.select { |entry| entry["imported"] }.map { |entry| entry["name"] }
           knowledge.local.each do |entry|
@@ -155,31 +189,13 @@ module Swill
             if entry["kind"] == "mixin" && (entry["properties"].any? || entry["includes"].any?)
               raise CompileError, "spike mixins support instance methods only"
             end
-            if entry["properties"].any? { |property| property["outlet"] } &&
-               !knowledge.descends_from?(entry, "Swill::Controller")
-              raise CompileError, "outlets require a Swill::Controller subclass in #{entry['name']}"
-            end
-            unless entry["restorations"].empty?
-              unless knowledge.descends_from?(entry, "Swill::Controller")
-                raise CompileError, "restorable requires a Swill::Controller subclass in #{entry['name']}"
-              end
-              entry["restorations"].each do |restoration|
-                segments = restoration["path"].split(".")
-                unless knowledge.property_entry(entry["name"], segments.first)
-                  raise CompileError, "restorable path must start with a declared property: #{restoration['path']}"
-                end
-                restoration["type"] = restoration_type(entry, segments)
-              end
-              keys = entry["restorations"].map { |restoration| restoration["key"] }
-              raise CompileError, "duplicate restorable key in #{entry['name']}" unless keys.uniq == keys
-            end
-            if entry["extends_class_methods"] && entry["class_methods"].empty? &&
-               entry["registries"].empty? && entry["settings"].empty?
-              raise CompileError, "ClassMethods module is missing or empty"
+            entry["restorations"].each do |restoration|
+              restoration["type"] = restoration_type(entry, restoration["path"].split("."))
             end
             members = entry["properties"].map { |p| [p["js"], p["name"]] } +
               entry["methods"].map { |m| [m["js"], m["name"]] }
             raise CompileError, "colliding members in #{entry['name']}" unless members.map(&:first).uniq.length == members.length
+            # A method with a property's name would be lowered as a property read.
             if entry["methods"].any? { |method| inherited_properties(entry).include?(method["name"]) }
               raise CompileError, "method/property overlap requires explicit lowering"
             end
@@ -187,45 +203,26 @@ module Swill
           end
         end
 
-        # The declared type at the end of a property path, followed through
-
+        # The declared type at the end of a restorable path, followed through
         # declared property types; nil when a segment is not statically typed.
-
+        # The runtime checks at installation that the path starts at a property.
         def restoration_type(entry, segments)
-
           owner = entry["name"]
-
           type = nil
-
           segments.each do |segment|
-
             property = owner && knowledge.property_entry(owner, segment)
-
             return nil unless property
-
             type = property["type"]
-
             inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
-
             owner = begin
-
               resolved = knowledge.resolve(inner, entry["name"].split("::"))
-
               knowledge.entries.any? { |candidate| candidate["name"] == resolved } ? resolved : nil
-
             rescue CompileError
-
               nil
-
             end
-
           end
-
           type
-
         end
-
-        
 
         def reference(name, scope)
           resolved = knowledge.resolve(name, scope)
@@ -247,10 +244,7 @@ module Swill
                           entry: entry,
                           compiled_class: compiled_class, compiled_parent: compiled_parent,
                           properties: inherited_properties(entry),
-                          property_types: inherited_property_types(entry),
-                          all_properties: knowledge.entries.flat_map do |e|
-                            (e["properties"] + e.fetch("included_properties", [])).map { |p| p["name"] }
-                          end).to_s
+                          property_types: inherited_property_types(entry)).to_s
         end
 
         def inherited_properties(entry)
@@ -284,7 +278,3 @@ end
 
 require_relative "compiler/meta"
 require_relative "compiler/sorbet"
-
-# Transitional compatibility for callers of the spike API. New code should use
-# Swill::Ruby2JS; this alias can be removed once downstream experiments migrate.
-Spike = Swill::Ruby2JS unless defined?(Spike)

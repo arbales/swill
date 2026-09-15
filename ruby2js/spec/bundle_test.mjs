@@ -188,3 +188,34 @@ test("Swill.start manually launches and terminates a JavaScript application", ()
   assert.equal(body.__swill_application__, null);
   assert.deepEqual(lifecycle.slice(-2), ["applicationWillTerminate", "viewDidDisappear"]);
 });
+
+test("JavaScript lists extend Swill.List and override row hooks in camel case", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  const seen = [];
+  class Roster extends Swill.List {
+    makeRowElement(item) {
+      const row = element("li", {});
+      row.textContent = item.name;
+      return row;
+    }
+    configureRow(row, item) { row.setAttribute("data-name", item.name); }
+    selectedObjectDidChange(_previous, object) { seen.push(object?.name ?? null); }
+  }
+  Swill.register(Roster);
+  const list = element("ul", {controller: "Roster"});
+  const body = element("body", {}, [list]);
+  const document = element("#document", {}, [body]);
+  document.defaultView = new Browser();
+  const application = Swill.start({root: body});
+  const [controller] = application.controllers();
+  assert.ok(controller instanceof Swill.List);
+  controller.represented_object = [{name: "Ada"}, {name: "Grace"}];
+  assert.deepEqual(list.children.map(row => [row.textContent, row.getAttribute("data-name")]), [["Ada", "Ada"], ["Grace", "Grace"]]);
+  list.children[1].click();
+  assert.deepEqual(seen, ["Grace"]);
+  assert.equal(controller.selected_object.name, "Grace");
+  assert.equal(controller.selected_object_id, null, "plain objects carry no id");
+  application.terminate();
+  assert.equal(list.children.length, 0);
+});

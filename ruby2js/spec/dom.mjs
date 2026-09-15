@@ -81,6 +81,25 @@ export class Element {
   removeAttribute(name) { delete this.attributes[name]; }
   getAttributeNames() { return Object.keys(this.attributes); }
 
+  // Backed by the class attribute, as in the DOM.
+  get classList() {
+    const names = () => (this.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
+    const write = list => list.length ? this.setAttribute("class", list.join(" ")) : this.removeAttribute("class");
+    const list = {
+      contains: name => names().includes(name),
+      add: name => { if (!names().includes(name)) write([...names(), name]); },
+      remove: name => write(names().filter(other => other !== name)),
+      toggle: (name, force) => {
+        const on = force ?? !names().includes(name);
+        if (on) list.add(name); else list.remove(name);
+        return on;
+      }
+    };
+    return list;
+  }
+
+  scrollIntoView() { this.ownerDocument.scrolledTo = this; }
+
   // tag, [attr], [attr=value], and combinations such as template[name].
   matches(selector) {
     return selector.split(",").map(part => part.trim()).some(simple => {
@@ -111,34 +130,46 @@ export class Element {
 
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
 
-  // ---- events: registration, once, and bubbling ----
+  // ---- events: registration, once, capture, and bubbling ----
 
   addEventListener(type, listener, options) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
-    this.listeners.get(type).push({listener, once: options?.once === true});
+    const capture = options === true || options?.capture === true;
+    this.listeners.get(type).push({listener, once: options?.once === true, capture});
   }
 
-  removeEventListener(type, listener) {
+  removeEventListener(type, listener, options) {
     const entries = this.listeners.get(type);
     if (!entries) return;
-    const index = entries.findIndex(entry => entry.listener === listener);
+    const capture = options === true || options?.capture === true;
+    const index = entries.findIndex(entry => entry.listener === listener && entry.capture === capture);
     if (index >= 0) entries.splice(index, 1);
   }
 
+  // Capture listeners run from the root down to the target, then bubbling
+  // ones from the target up, as in the DOM.
   dispatchEvent(event) {
     Object.defineProperty(event, "target", {value: this, configurable: true});
-    for (let node = this; node; node = node.parentElement) {
+    const path = [];
+    for (let node = this; node; node = node.parentElement) path.push(node);
+    const run = (node, capture) => {
       Object.defineProperty(event, "currentTarget", {value: node, configurable: true});
       for (const entry of [...(node.listeners.get(event.type) ?? [])]) {
-        if (entry.once) node.removeEventListener(event.type, entry.listener);
+        if (entry.capture !== capture) continue;
+        if (entry.once) node.removeEventListener(event.type, entry.listener, capture);
         entry.listener.call(node, event);
       }
+    };
+    for (const node of [...path].reverse()) run(node, true);
+    for (const node of path) {
+      run(node, false);
       if (!event.bubbles) break;
     }
     return true;
   }
 
-  click() { this.dispatchEvent(new Event("click", {bubbles: true})); }
+  click(init = {}) { this.dispatchEvent(Object.assign(new Event("click", {bubbles: true}), init)); }
+  doubleClick() { this.dispatchEvent(new Event("dblclick", {bubbles: true})); }
 
   // ---- focus: records activeElement on the document and fires focusin ----
 

@@ -1,27 +1,67 @@
-// Browser-only support. No Ruby object model, prototype patches, or eval.
-// Static declarations are installed by generated code; changing state lives
-// in the modules under runtime/. This object is the surface generated code
-// and framework Ruby call.
-import {install, include, installClass, inheritableRegistry, classSetting, resolve} from "./runtime/install.mjs";
+// Browser runtime surface used by generated and framework code.
+import {
+  install,
+  include,
+  installClass,
+  inheritableRegistry,
+  classSetting,
+  resolve
+} from "./runtime/install.mjs";
 import {observe, dispose} from "./runtime/properties.mjs";
-import {isTruthy, logicalAnd, logicalOr, isEqual, isBlank, isPresent, isEmpty, strip, upcase, downcase,
-  valueRead, decodeFragment, encodeFragment, NIL_READERS, VALUE_READERS} from "./runtime/values.mjs";
-import {read, segments, readPath, write, assertWritablePath, writePath, observePath, respondsTo, invoke,
-  performAction} from "./runtime/paths.mjs";
-import {isAttribute, validate_attribute, restorations, outlets, collect_attributes, apply_attributes} from "./runtime/attributes.mjs";
+import {
+  isTruthy, logicalAnd, logicalOr, isEqual,
+  isBlank, isPresent, isEmpty,
+  strip, upcase, downcase,
+  valueRead, NIL_READERS, VALUE_READERS,
+  decodeFragment, encodeFragment,
+  length, stringify, toInteger, toFloat, capitalize, split, slice,
+  sort, sortBy, minBy, maxBy, min, max, sum,
+  uniq, compact, flatten, reverse, indexOf,
+  append, prepend, difference, fetch, deleteKey,
+  intDiv, modulo, between, clamp, compareValues
+} from "./runtime/values.mjs";
+import {
+  read, segments, readPath,
+  write, assertWritablePath, writePath,
+  observePath, respondsTo, invoke, performAction
+} from "./runtime/paths.mjs";
+import {
+  isAttribute, validate_attribute,
+  restorations, outlets,
+  collect_attributes, apply_attributes
+} from "./runtime/attributes.mjs";
 
 export const Runtime = {
-  // installation and class configuration
-  install, include, installClass, inheritableRegistry, classSetting, resolve,
-  // values
-  isTruthy, logicalAnd, logicalOr, isEqual, isBlank, isPresent, isEmpty, strip, upcase, downcase, valueRead,
+  // Classes
+  install, include, installClass,
+  inheritableRegistry, classSetting, resolve,
+
+  // Values
+  isTruthy, logicalAnd, logicalOr, isEqual,
+  isBlank, isPresent, isEmpty,
+  strip, upcase, downcase, valueRead,
   decodeFragment, encodeFragment, NIL_READERS, VALUE_READERS,
-  // metadata-driven dispatch
-  read, segments, readPath, write, assertWritablePath, writePath, respondsTo, invoke, performAction,
-  // observation
+
+  // Ruby core semantics
+  length, stringify, toInteger, toFloat, capitalize, split, slice,
+  sort, sortBy, minBy, maxBy, min, max, sum,
+  uniq, compact, flatten, reverse, indexOf,
+  append, prepend, difference, fetch, deleteKey,
+  intDiv, modulo, between, clamp, compareValues,
+
+  // Dispatch
+  read, segments, readPath,
+  write, assertWritablePath, writePath,
+  respondsTo, invoke, performAction,
+
+  // Observation
   observe, observePath, dispose,
-  // declarations
+
+  // Declarations
   isAttribute, validate_attribute, restorations, outlets, collect_attributes, apply_attributes,
-  // The one console boundary: wrong untrusted URL input is reported, not raised.
-  warn(message) { console.warn(`[Swill] ${message}`); }
+
+  // Invalid URL input is reported, not raised.
+  warn(message) {
+    console.warn(`[Swill] ${message}`);
+  }
 };

@@ -14,7 +14,9 @@ module Swill
       module ClassMethods
         extend Swill::Declarations
 
-        inheritable_registry :model_attributes
+        # On MRI the attribute macro below seeds the registry; the compiler
+        # reads seeded_by to do the same from collected declarations.
+        inheritable_registry :model_attributes, seeded_by: :attribute
 
         def attribute(name, type:, default:, key: name)
           model_attributes[name] = {

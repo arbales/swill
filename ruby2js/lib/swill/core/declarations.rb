@@ -6,7 +6,10 @@ module Swill
   # recognizes these declarations statically; MRI executes this implementation
   # for source-shared model and contract tests.
   module Declarations
-    def inheritable_registry(name, initial = :hash)
+    # seeded_by names the declaration macro that fills the registry; on MRI
+    # that macro's own implementation does the seeding, so it is only read
+    # by the compiler.
+    def inheritable_registry(name, initial = :hash, seeded_by: nil)
       ivar = :"@#{name}"
       define_method(name) do
         existing = instance_variable_get(ivar)

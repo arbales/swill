@@ -1,6 +1,4 @@
-// Per-object observable state and the one property mutation path:
-//   read previous → coerce → compare → will-change → store → notify
-// Computed properties capture their dependencies while running.
+// Observable state and computed dependency tracking.
 import {declarations} from "./metadata.mjs";
 import {isEqual} from "./values.mjs";
 
@@ -8,15 +6,36 @@ const states = new WeakMap();
 const captures = [];
 
 function state(object) {
-  if (!states.has(object)) {
-    states.set(object, {values: new Map(), computed: new Map(), observers: new Map(), dependents: new Map()});
+  let current = states.get(object);
+  if (!current) {
+    current = {
+      values: new Map(),
+      computed: new Map(),
+      observers: new Map(),
+      dependents: new Map()
+    };
+
+    states.set(object, current);
+
+    // Hooked computed properties stay current.
+    for (const descriptor of declarations(object.constructor, "properties").values()) {
+      if (descriptor.computed && hooked(object, descriptor.name)) {
+        computedValue(object, descriptor);
+      }
+    }
   }
-  return states.get(object);
+
+  return current;
+}
+
+function hooked(object, name) {
+  return declarations(object.constructor, "methods").has(`${name}_did_change`);
 }
 
 export function record(object, name) {
   const frame = captures.at(-1);
   if (!frame) return;
+
   if (!frame.has(object)) frame.set(object, new Set());
   frame.get(object).add(name);
 }
@@ -29,16 +48,24 @@ function listeners(object, name, kind) {
 
 export function subscribe(object, name, callback, kind) {
   const descriptor = declarations(object.constructor, "properties").get(name);
-  if (!descriptor) throw new Error(`Unknown observable property: ${name}`);
+  if (!descriptor) {
+    throw new Error(`Unknown observable property: ${name}`);
+  }
+
   if (descriptor.computed) computedValue(object, descriptor);
+
   const set = listeners(object, name, kind);
   set.add(callback);
+
   return () => set.delete(callback);
 }
 
 export function storedValue(object, descriptor) {
   const values = state(object).values;
-  if (!values.has(descriptor.name)) values.set(descriptor.name, descriptor.defaultValue.call(object));
+  if (!values.has(descriptor.name)) {
+    values.set(descriptor.name, descriptor.defaultValue.call(object));
+  }
+
   return values.get(descriptor.name);
 }
 
@@ -46,15 +73,27 @@ export function computedValue(object, descriptor) {
   const slots = state(object).computed;
   let slot = slots.get(descriptor.name);
   if (!slot) {
-    slot = {valid: false, running: false, value: undefined, disposers: []};
+    slot = {
+      valid: false,
+      running: false,
+      value: undefined,
+      disposers: []
+    };
+
     slots.set(descriptor.name, slot);
   }
+
   if (slot.valid) return slot.value;
-  if (slot.running) throw new Error(`Computed cycle: ${descriptor.name}`);
+  if (slot.running) {
+    throw new Error(`Computed cycle: ${descriptor.name}`);
+  }
+
   slot.disposers.splice(0).forEach(dispose => dispose());
+
   const frame = new Map();
   slot.running = true;
   captures.push(frame);
+
   try {
     slot.value = descriptor.compute.call(object);
     slot.valid = true;
@@ -62,40 +101,64 @@ export function computedValue(object, descriptor) {
     captures.pop();
     slot.running = false;
   }
+
   for (const [dependency, names] of frame) {
     for (const name of names) {
-      slot.disposers.push(subscribe(dependency, name, () => invalidate(object, descriptor), "dependents"));
+      slot.disposers.push(
+        subscribe(
+          dependency,
+          name,
+          () => invalidate(object, descriptor),
+          "dependents"
+        )
+      );
     }
   }
+
   return slot.value;
 }
 
 function invalidate(object, descriptor) {
   const slot = state(object).computed.get(descriptor.name);
   if (!slot?.valid) return;
+
   const previous = slot.value;
   slot.valid = false;
-  for (const callback of [...listeners(object, descriptor.name, "dependents")]) callback();
-  if (listeners(object, descriptor.name, "observers").size) {
+
+  for (const callback of [
+    ...listeners(object, descriptor.name, "dependents")
+  ]) callback();
+
+  // Recompute only when a listener needs the result.
+  if (listeners(object, descriptor.name, "observers").size || hooked(object, descriptor.name)) {
     const value = computedValue(object, descriptor);
     if (!isEqual(previous, value)) notify(object, descriptor.name, previous, value);
   }
 }
 
 function notify(object, name, previous, value) {
-  for (const callback of [...listeners(object, name, "dependents")]) callback();
+  for (const callback of [
+    ...listeners(object, name, "dependents")
+  ]) callback();
+
   const hook = declarations(object.constructor, "methods").get(`${name}_did_change`);
   if (hook) object[hook.js](previous, value);
-  for (const callback of [...listeners(object, name, "observers")]) callback(value, previous);
+
+  for (const callback of [
+    ...listeners(object, name, "observers")
+  ]) callback(value, previous);
 }
 
+// Mutations always follow: coerce, compare, will-change, store, notify.
 export function writeProperty(object, descriptor, value) {
   const previous = storedValue(object, descriptor);
   value = object.coerce_property_value(descriptor.name, value, previous);
   if (isEqual(previous, value)) return value;
+
   object.property_will_change(descriptor.name, previous, value);
   state(object).values.set(descriptor.name, value);
   notify(object, descriptor.name, previous, value);
+
   return value;
 }
 
@@ -106,9 +169,11 @@ export function observe(object, name, callback) {
 export function dispose(object) {
   const current = states.get(object);
   if (!current) return;
+
   for (const slot of current.computed.values()) {
     slot.disposers.splice(0).forEach(dispose => dispose());
   }
+
   current.computed.clear();
   current.observers.clear();
   current.dependents.clear();

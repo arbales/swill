@@ -78,7 +78,7 @@ try {
     assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
-  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/index.html#main=farewell&main.n=2`}, sessionId);
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/index.html#main=farewell&main.n=2&people.selected=2`}, sessionId);
   await evaluate(`new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
     const poll = () => {
@@ -152,7 +152,7 @@ try {
       parent.name_field.element() === document.querySelector("input"),
       parent.badge === application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge")),
       parent.seed.name, parent.missing];
-  })()`), ["Hello ", "Badge 0", true, true, 4, true, true, "Ada", null]);
+  })()`), ["Hello ", "Badge 0", true, true, 5, true, true, "Ada", null]);
   // The editor is a child controller bound to the parent's person: its own
   // bindings resolve under represented_object, bind-* on its root is its own,
   // and the object binding mirrors the badge count into the parent.
@@ -185,7 +185,7 @@ try {
     dialog.querySelector("[data-action=close]").click();
     results.push(document.querySelector("dialog") === null, application.first_responder() === application.controllers()[0].name_field);
     return results;
-  })()`), ["farewell", "Farewell", "Badge 0", 4, "welcome", "Welcome", 1, "#main=welcome&main.n=0", true, true, true, true]);
+  })()`), ["farewell", "Farewell", "Badge 0", 5, "welcome", "Welcome", 1, "#main=welcome&main.n=0&people.selected=2", true, true, true, true]);
   // Back returns to the previous window content and its restored state.
   assert.deepEqual(await evaluate(`(async () => {
     const container = document.querySelector("[window=main]");
@@ -196,7 +196,59 @@ try {
     await new Promise(resolve => setTimeout(resolve, 0));
     const badge = container.children[0].__swill_view__.controller_value();
     return [...before, location.hash, container.getAttribute("name"), badge.count, badge.restored];
-  })()`), ["#main=welcome&main.n=0", "welcome", "#main=farewell&main.n=0", "farewell", 0, true]);
+  })()`), ["#main=welcome&main.n=0&people.selected=2", "welcome", "#main=farewell&main.n=0&people.selected=2", "farewell", 0, true]);
+  // The people list rendered rows from its template inside the people
+  // window and restored the selection the fragment named by id. Clicks and
+  // arrow keys select, the fragment follows, Enter hands the selection to
+  // the parent, and a row's button reaches the parent knowing its row.
+  assert.deepEqual(await evaluate(`(() => {
+    const list = document.querySelector("section[controller='Demo::PeopleList']");
+    const controller = list.__swill_view__.controller_value();
+    const application = document.body.__swill_application__;
+    const rows = () => Array.from(list.querySelectorAll("tbody tr"));
+    const names = () => rows().map(row => row.children[0].textContent);
+    const selected = () => rows().map(row => row.classList.contains("selected"));
+    const results = [names(), selected(), list.querySelector("output").textContent,
+      list.querySelector("[data-action=activate_selection]").disabled];
+    rows()[0].children[0].click();
+    results.push(selected(), controller.selected_object_id, list.querySelector("output").textContent, location.hash);
+    list.focus();
+    results.push(application.first_responder() === controller);
+    list.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowDown", bubbles: true}));
+    results.push(selected(), location.hash);
+    list.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
+    results.push(document.querySelector("p[bind]").textContent);
+    rows()[2].querySelector("button").click();
+    results.push(names(), controller.selected_object_id, selected(), document.querySelector("p[bind]").textContent);
+    return results;
+  })()`), [
+    ["Ada", "Grace", "Linus"], [false, true, false], "Grace", false,
+    [true, false, false], "1", "Ada", "#main=farewell&main.n=0&people.selected=1&people.dir=ascending",
+    true,
+    [false, true, false], "#main=farewell&main.n=0&people.selected=2&people.dir=ascending",
+    "Hello Grace",
+    ["Ada", "Grace"], "3", [false, false], "Hello Grace"
+  ]);
+  // Header cells sort the list through the sort_by action; the sort is
+  // written to the fragment, aria-sort follows the sorted column, and the
+  // selection follows its object through the reorder.
+  assert.deepEqual(await evaluate(`(() => {
+    const list = document.querySelector("section[controller='Demo::PeopleList']");
+    const rows = () => Array.from(list.querySelectorAll("tbody tr"));
+    const names = () => rows().map(row => row.children[0].textContent);
+    const headers = () => Array.from(list.querySelectorAll("th")).slice(0, 2).map(th => th.getAttribute("aria-sort"));
+    rows()[0].children[0].click();
+    const results = [names(), headers()];
+    list.querySelector("th[data-column=role]").click();
+    results.push(names(), headers(), rows().map(row => row.classList.contains("selected")), location.hash);
+    list.querySelector("th[data-column=role]").click();
+    results.push(names(), headers(), location.hash);
+    return results;
+  })()`), [
+    ["Ada", "Grace"], [null, null],
+    ["Grace", "Ada"], [null, "ascending"], [false, true], "#main=farewell&main.n=0&people.selected=1&people.dir=ascending&people.sort=role",
+    ["Ada", "Grace"], [null, "descending"], "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
+  ]);
   // Code-created content awakens through the MutationObserver, and removed
   // content is torn down, without any explicit call.
   assert.deepEqual(await evaluate(`(async () => {

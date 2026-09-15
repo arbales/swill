@@ -89,7 +89,17 @@ Controller subclasses may override `bindingRoot`, `decodeOutletData`,
 `viewWillAppear`, `viewDidAppear`, `viewWillDisappear`, and
 `viewDidDisappear`. Outlets are connected after `viewDidLoad` and before
 `awakeFromDOM`. Application subclasses may override `applicationDidLaunch`
-and `applicationWillTerminate`.
+and `applicationWillTerminate`. `Swill.List` subclasses may override
+`makeRowElement`, `configureRow`, `rowsAreViews`, `isRowElement`,
+`selectedObjectDidChange`, and `activateSelection`.
+
+Known gap: property change hooks are not yet available to JavaScript
+classes. The runtime dispatches `name_did_change` from a class's installed
+method table, and `Swill.register` fills that table only from `static
+actions`, so a `nameDidChange` method on a registered class is never called.
+Observe the property instead: `this.observe("name", (value, previous) => ...)`
+in `viewDidLoad`. Closing the gap means registering hook methods in the
+table and bridging their camel-case names, as the lifecycle hooks are.
 
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
 Register a JavaScript parent before its subclasses. For another root or a
@@ -157,7 +167,7 @@ Commit `Gemfile.lock` after verification.
 
 | Path | Responsibility |
 | --- | --- |
-| `lib/swill/` | Ruby-authored framework code |
+| `lib/swill/` | Ruby-authored framework code: `core/` for the kernel and `controller/` for higher-level controllers such as `List` |
 | `lib/swill/runtime.mjs`, `lib/swill/runtime/` | The runtime surface and its modules: metadata, properties, values, paths, installation, attributes |
 | `lib/swill/browser_api.mjs` | Plain JavaScript declarations, friendly class aliases, and manual startup |
 | `lib/swill-ruby2js/` | Compiler: knowledge collection, filters, emission, and Sorbet artifacts |
@@ -188,8 +198,8 @@ forms. Update it whenever the supported boundary changes.
 ### DOM boundaries
 
 `Swill::View`, `Swill::Controller`, `Swill::Ownership`, `Swill::Bindings`,
-`Swill::Actions`, and `Swill::Awakening` are Ruby-authored framework classes
-compiled with the JavaScript-only surface. DOM traversal, control rendering,
+`Swill::Actions`, `Swill::Awakening`, and `Swill::Controller::List` are
+Ruby-authored framework classes compiled with the JavaScript-only surface. DOM traversal, control rendering,
 event selection, action parsing, and listener ownership stay in those classes.
 The handwritten runtime only resolves metadata-aware key paths and dispatches
 generated method names.
@@ -233,8 +243,10 @@ controller itself, and a leading `@` binds against the controller regardless
 of the root. Reader chains may end in `strip`, `upcase`,
 `downcase`, `blank?`, `present?`, `empty?`, or `nil?`; the first three
 predicates answer for a nil intermediate, and any other reader on nil yields
-nil. A write through a missing owner is dropped; a read-only leaf on a
-writable control fails at wiring.
+nil. A segment that reaches a Hash reads its key, nil when absent, as
+key-value coding does for a dictionary; hash entries are not observable, so
+replace the hash to notify. A write through a missing owner is dropped; a
+read-only leaf on a writable control fails at wiring.
 
 A `bind` on a child controller's root belongs to the parent and assigns the
 child's `represented_object`, nil included; it is wired when the parent loads,
@@ -286,6 +298,35 @@ values; `load_window_content` pushes a history entry; Back/Forward reloads
 the content the fragment names without writing history. Unknown content and
 values of the wrong type are reported and ignored, since the URL is untrusted.
 
+`Swill::Controller::List` is the NSTableView analog. It clones one row per
+arranged object from its own `<template for="row">` into its `rows` outlet, or
+its root without one, and wires each row's `bind` and `bind-*` attributes
+against that object and its `data-action` attributes against the list, so a
+row's button reaches the list first and then the responder chain, and
+`row_for(sender)` tells a handler which row the sender sits in. Rows are views
+owned by the list; a `controller` inside a row awakens under the list, and
+`bind="@"` on its root hands it the row's object. The collection is
+`represented_object`, usually fed by the parent's `bind` on the list root; a
+new collection re-renders, and pre-rendered rows are replaced at awakening.
+Selection is by identity: `selected_objects` is stored, `selected_indexes` and
+`selected_object` derive from it, and `selected_object_id` follows the leading
+object's model id and can be written to select by id now or once the object
+arrives, which is what `restorable :selected_object_id` keeps in the fragment.
+A click selects, shift-click extends when `allows_multiple_selection` or the
+`multiple` attribute is on, arrow keys move the selection of a first-responder
+list, and Enter or a double-click sends `activate_selection` up the responder
+chain with the list as sender, quietly when nobody handles it.
+`selected_object_did_change(previous, object)` runs when the leading object
+changes.
+
+`Swill::Controller::SortableList` orders the rows by one column. `sort_key`
+and `sort_direction` (`ascending` or `descending`) are stored properties, so
+they bind and can be `restorable`; a header cell with `data-column="name"
+data-action="sort_by"` toggles that column, and `sort_states` maps the sorted
+column to its direction for `bind-aria-sort="sort_states.name"`. Values
+compare with nil last, numbers and booleans by value, and everything else as
+text, and the selection follows its objects through a reorder.
+
 ### Sorbet
 
 Declarations carry explicit types, and method signatures feed the compiler's
@@ -328,6 +369,14 @@ The implementation covers:
   observable, baseline-aware dirty tracking, shared with MRI;
 - window templates, named containers with replaceable content, dialogs, and
   observed awakening of code-created content;
+- list controllers: template rows bound to their objects, row views and row
+  controllers owned by the list, identity-based selection with a restorable
+  pending id, mouse and keyboard selection, and activation through the
+  responder chain;
+- common methods and blocks on typed String, Symbol, Integer, Float, Boolean,
+  nil, Array, and Hash receivers, with Ruby semantics checked against MRI and
+  a build error for anything outside the tables; sends on untyped receivers
+  resolve through installed metadata at run time;
 - keyed URL restoration of window content and controller state with
   Back/Forward, declared per path and typed from declarations;
 - generated RBIs and expression probes;

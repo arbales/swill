@@ -1,26 +1,26 @@
-// Declaration-driven views of an object: outlets, and the attribute
-// collection and application that models and drafts use.
+// Declaration-backed outlets and model attributes.
 import {declarations} from "./metadata.mjs";
 
 export function isAttribute(object, name) {
   return !!declarations(object.constructor, "properties").get(name)?.attribute;
 }
 
-// The validate_<name>(value, previous) convention, resolved from installed
-// method metadata rather than by probing the object.
+// Resolve validate_<name> through installed metadata.
 export function validate_attribute(object, name, value, previous) {
   if (!isAttribute(object, name)) return value;
   const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
-  return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
+  return validator && validator.arity === 2
+    ? object[validator.js](value, previous)
+    : value;
 }
 
-// restorable declarations, including inherited ones.
 export function restorations(object) {
   return declarations(object.constructor, "restorations");
 }
 
 export function outlets(object) {
-  return [...declarations(object.constructor, "properties").values()].filter(descriptor => descriptor.outlet);
+  return [...declarations(object.constructor, "properties").values()]
+    .filter(descriptor => descriptor.outlet);
 }
 
 export function collect_attributes(object) {

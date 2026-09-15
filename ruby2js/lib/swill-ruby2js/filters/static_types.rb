@@ -7,12 +7,9 @@ module Swill
     # which JavaScript operation that type justifies.
     module StaticTypes
 
-        STRING_READERS = {strip: :strip, upcase: :upcase, downcase: :downcase,
-                          blank?: :isBlank, present?: :isPresent, empty?: :isEmpty}.freeze
+        # Predicates every receiver answers, typed even when the receiver is not.
         BOOLEAN_READERS = %i[blank? present? empty? nil?].freeze
-        # Ruby collection idioms with one JavaScript array equivalent, applied only
-        # to receivers whose static type is an array.
-        ARRAY_BLOCK_METHODS = {each: :forEach, map: :map, select: :filter}.freeze
+        SCALARS = %w[String Integer Float Symbol].freeze
 
     private
 
@@ -29,15 +26,6 @@ module Swill
           @knowledge.entries.any? { |entry| entry["name"] == resolved } ? resolved : nil
         rescue CompileError
           nil
-        end
-
-        def string_type?(type)
-          %w[String T.nilable(String)].include?(type)
-        end
-
-        def collection_type?(type)
-          return false unless type
-          type == "Array" || type == "Hash" || type.start_with?("T::Array[", "T::Hash[")
         end
 
         def return_type(method)
@@ -95,7 +83,7 @@ module Swill
         def literal_type(node)
           return unless node.respond_to?(:type)
           {
-            str: "String", int: "Integer", true: "T::Boolean", false: "T::Boolean",
+            str: "String", int: "Integer", float: "Float", true: "T::Boolean", false: "T::Boolean",
             nil: "NilClass", sym: "Symbol", array: "Array", hash: "Hash"
           }[node.type]
         end
@@ -108,18 +96,25 @@ module Swill
           when :begin then node.children.length == 1 ? static_type(node.children.first) : nil
           when :lvar then @local_types[node.children.first.to_s]
           when :super, :zsuper then return_type(@current_method)
+          when :block
+            call = node.children.first
+            return nil unless call.type == :send
+            receiver, method, *call_args = call.children
+            return nil unless receiver && call_args.empty?
+            core_block_result_type(static_type(receiver), method)
           when :send
             receiver, method, *args = node.children
-            return "T::Boolean" if %i[== != !].include?(method)
+            # Constructing a collected class yields that class.
+            return swill_class(@knowledge.constant(receiver)) if receiver&.type == :const && method == :new
+            return "T::Boolean" if %i[== != ! < > <= >=].include?(method)
             return "T::Boolean" if BOOLEAN_READERS.include?(method) && args.empty? && receiver
             if receiver.nil? || receiver.type == :self
               return @property_types[method.to_s] if args.empty? && @property_types.key?(method.to_s)
               return return_type(@knowledge.method_entry(@entry["name"], method))
             end
             receiver_type = static_type(receiver)
-            if string_type?(receiver_type) && args.empty? && STRING_READERS.key?(method)
-              return "String"
-            end
+            core = core_result_type(receiver_type, method, args)
+            return core if core
             klass = swill_class(receiver_type)
             return nil unless klass
             property = @knowledge.property_entry(klass, method)
@@ -133,9 +128,9 @@ module Swill
           return :boolean if type == "T::Boolean"
           return :nil if type == "NilClass"
           if (match = type.match(/\AT\.nilable\((.+)\)\z/))
-            return %w[String Integer Symbol].include?(match[1]) ? :nullable_scalar : :native
+            return SCALARS.include?(match[1]) ? :nullable_scalar : :native
           end
-          return :scalar if %w[String Integer Symbol].include?(type)
+          return :scalar if SCALARS.include?(type)
           return :native if type.start_with?("T::Array[", "T::Hash[")
           return :native if type.match?(/\A(?:Array|Hash|[A-Z]\w*(?:::\w+)*)\z/)
           :unknown

@@ -25,6 +25,29 @@
   <section window="main" name="welcome"></section>
   <button data-action="swap_window">Swap window</button>
   <button data-action="open_palette">Open palette</button>
+  <script type="application/json" outlet="roster">[
+    {"id": "1", "name": "Ada", "job": "engineer"},
+    {"id": "2", "name": "Grace", "job": "admiral"},
+    {"id": "3", "name": "Linus", "job": "kernel"}
+  ]</script>
+  <section window="people">
+    <section controller="Demo::PeopleList" outlet="people_list" bind="people" multiple>
+      <table>
+        <thead outlet="header_view"><tr>
+          <th data-column="name" data-action="sort_by" bind-aria-sort="sort_states.name">Name</th>
+          <th data-column="role" data-action="sort_by" bind-aria-sort="sort_states.role">Role</th>
+          <th></th>
+        </tr></thead>
+        <tbody outlet="rows">
+          <template for="row">
+            <tr><td bind="name"></td><td bind="role"></td><td><button data-action="remove_person">Remove</button></td></tr>
+          </template>
+        </tbody>
+      </table>
+      <p>Selected: <output bind="@selected_object.name"></output></p>
+      <button data-action="activate_selection" bind-disabled="@selected_indexes.empty?">Edit selected</button>
+    </section>
+  </section>
   <p>Application launch, nested controller ownership, binding, action, and teardown smoke test.</p>
 </main>
 <template for="window" name="welcome">

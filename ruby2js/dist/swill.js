@@ -21,9 +21,18 @@
   function installMetadata(klass, properties, methods, restorations2 = []) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
-      properties: new Map([...declarations(parent, "properties"), ...properties.map((item) => [item.name, item])]),
-      methods: new Map([...declarations(parent, "methods"), ...methods.map((item) => [item.name, item])]),
-      restorations: [...declarations(parent, "restorations"), ...restorations2]
+      properties: new Map([
+        ...declarations(parent, "properties"),
+        ...properties.map((item) => [item.name, item])
+      ]),
+      methods: new Map([
+        ...declarations(parent, "methods"),
+        ...methods.map((item) => [item.name, item])
+      ]),
+      restorations: [
+        ...declarations(parent, "restorations"),
+        ...restorations2
+      ]
     });
   }
 
@@ -44,18 +53,27 @@
     if (left === right) return true;
     return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => isEqual(value, right[index]));
   }
+  function isPlainObject(value) {
+    if (value === null || typeof value !== "object") return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === null || Object.getPrototypeOf(prototype) === null;
+  }
   function isBlank(value) {
     if (value == null || value === false) return true;
     if (typeof value === "string") return stripString(value).length === 0;
     if (Array.isArray(value)) return value.length === 0;
+    if (isPlainObject(value)) return Object.keys(value).length === 0;
     return false;
   }
   function isPresent(value) {
     return !isBlank(value);
   }
   function isEmpty(value) {
-    if (typeof value === "string" || Array.isArray(value)) return value.length === 0;
-    throw new TypeError("empty? requires a string or array");
+    if (typeof value === "string" || Array.isArray(value)) {
+      return value.length === 0;
+    }
+    if (isPlainObject(value)) return Object.keys(value).length === 0;
+    throw new TypeError("empty? requires a string, array, or hash");
   }
   function strip(value) {
     if (typeof value !== "string") throw new TypeError("strip requires a string");
@@ -69,6 +87,140 @@
     if (typeof value !== "string") throw new TypeError("downcase requires a string");
     return value.toLowerCase();
   }
+  function length(value) {
+    if (typeof value === "string" || Array.isArray(value)) {
+      return value.length;
+    }
+    if (isPlainObject(value)) return Object.keys(value).length;
+    throw new TypeError("length requires a string, array, or hash");
+  }
+  function stringify(value) {
+    return value == null ? "" : String(value);
+  }
+  function toInteger(value) {
+    const match = /^\s*[+-]?\d+/.exec(String(value));
+    return match ? Number.parseInt(match[0], 10) : 0;
+  }
+  function toFloat(value) {
+    const match = /^\s*[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(String(value));
+    return match ? Number.parseFloat(match[0]) : 0;
+  }
+  function capitalize(value) {
+    if (typeof value !== "string") {
+      throw new TypeError("capitalize requires a string");
+    }
+    return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1).toLowerCase();
+  }
+  function split(value, separator) {
+    if (typeof value !== "string") {
+      throw new TypeError("split requires a string");
+    }
+    const parts = separator === void 0 || separator === " " ? stripString(value).split(/\s+/).filter((part) => part.length > 0) : value.split(separator);
+    while (parts.length > 0 && parts.at(-1) === "") parts.pop();
+    return parts;
+  }
+  function slice(value, start, count) {
+    if (typeof value !== "string") {
+      throw new TypeError("slice requires a string");
+    }
+    const from = start < 0 ? value.length + start : start;
+    if (count === void 0) {
+      return from >= 0 && from < value.length ? value[from] : null;
+    }
+    if (from < 0 || from > value.length || count < 0) return null;
+    return value.substr(from, count);
+  }
+  function compare(left, right) {
+    if (typeof left !== typeof right) {
+      throw new TypeError("comparison of mismatched types");
+    }
+    return left < right ? -1 : left > right ? 1 : 0;
+  }
+  function sort(values) {
+    return values.slice().sort(compare);
+  }
+  function sortBy(values, keyOf) {
+    return values.map((value, index) => ({ value, key: keyOf(value), index })).sort((left, right) => compare(left.key, right.key) || left.index - right.index).map((entry) => entry.value);
+  }
+  function minBy(values, keyOf) {
+    return values.length === 0 ? null : sortBy(values, keyOf)[0];
+  }
+  function maxBy(values, keyOf) {
+    return values.length === 0 ? null : sortBy(values, keyOf).at(-1);
+  }
+  function min(values) {
+    return values.length === 0 ? null : sort(values)[0];
+  }
+  function max(values) {
+    return values.length === 0 ? null : sort(values).at(-1);
+  }
+  function sum(values) {
+    return values.reduce((total, value) => total + value, 0);
+  }
+  function uniq(values) {
+    return values.filter(
+      (value, index) => values.findIndex((other) => isEqual(other, value)) === index
+    );
+  }
+  function compact(values) {
+    return values.filter((value) => value != null);
+  }
+  function flatten(values) {
+    return values.flat(Infinity);
+  }
+  function reverse(values) {
+    return values.slice().reverse();
+  }
+  function indexOf(values, wanted) {
+    const index = values.findIndex((value) => isEqual(value, wanted));
+    return index < 0 ? null : index;
+  }
+  function append(values, value) {
+    values.push(value);
+    return values;
+  }
+  function prepend(values, value) {
+    values.unshift(value);
+    return values;
+  }
+  function difference(values, removed) {
+    return values.filter(
+      (value) => !removed.some((other) => isEqual(other, value))
+    );
+  }
+  function fetch(hash, key, ...fallback) {
+    if (Object.hasOwn(hash, key)) return hash[key];
+    if (fallback.length > 0) return fallback[0];
+    throw new Error(`key not found: ${key}`);
+  }
+  function deleteKey(hash, key) {
+    if (!Object.hasOwn(hash, key)) return null;
+    const value = hash[key];
+    delete hash[key];
+    return value;
+  }
+  function intDiv(left, right) {
+    if (right === 0) throw new RangeError("divided by 0");
+    return Math.floor(left / right);
+  }
+  function modulo(left, right) {
+    if (right === 0) throw new RangeError("divided by 0");
+    return (left % right + right) % right;
+  }
+  function compareValues(left, right) {
+    if (left == null && right == null) return 0;
+    if (left == null) return 1;
+    if (right == null) return -1;
+    if (typeof left === "number" && typeof right === "number") return left - right;
+    if (typeof left === "boolean" && typeof right === "boolean") return Number(left) - Number(right);
+    return String(left).localeCompare(String(right));
+  }
+  function between(value, low, high) {
+    return value >= low && value <= high;
+  }
+  function clamp(value, low, high) {
+    return Math.min(Math.max(value, low), high);
+  }
   function valueRead(value, name) {
     switch (name) {
       case "nil?":
@@ -79,6 +231,9 @@
         return isPresent(value);
       case "empty?":
         return isEmpty(value);
+      case "size":
+      case "length":
+        return length(value);
       case "strip":
         return strip(value);
       case "upcase":
@@ -108,16 +263,41 @@
     return value == null || value === "" ? null : String(value);
   }
   var NIL_READERS = ["nil?", "blank?", "present?"];
-  var VALUE_READERS = ["nil?", "blank?", "present?", "empty?", "strip", "upcase", "downcase"];
+  var VALUE_READERS = [
+    "nil?",
+    "blank?",
+    "present?",
+    "empty?",
+    "size",
+    "length",
+    "strip",
+    "upcase",
+    "downcase"
+  ];
 
   // lib/swill/runtime/properties.mjs
   var states = /* @__PURE__ */ new WeakMap();
   var captures = [];
   function state(object) {
-    if (!states.has(object)) {
-      states.set(object, { values: /* @__PURE__ */ new Map(), computed: /* @__PURE__ */ new Map(), observers: /* @__PURE__ */ new Map(), dependents: /* @__PURE__ */ new Map() });
+    let current = states.get(object);
+    if (!current) {
+      current = {
+        values: /* @__PURE__ */ new Map(),
+        computed: /* @__PURE__ */ new Map(),
+        observers: /* @__PURE__ */ new Map(),
+        dependents: /* @__PURE__ */ new Map()
+      };
+      states.set(object, current);
+      for (const descriptor of declarations(object.constructor, "properties").values()) {
+        if (descriptor.computed && hooked(object, descriptor.name)) {
+          computedValue(object, descriptor);
+        }
+      }
     }
-    return states.get(object);
+    return current;
+  }
+  function hooked(object, name) {
+    return declarations(object.constructor, "methods").has(`${name}_did_change`);
   }
   function record(object, name) {
     const frame = captures.at(-1);
@@ -132,7 +312,9 @@
   }
   function subscribe(object, name, callback, kind) {
     const descriptor = declarations(object.constructor, "properties").get(name);
-    if (!descriptor) throw new Error(`Unknown observable property: ${name}`);
+    if (!descriptor) {
+      throw new Error(`Unknown observable property: ${name}`);
+    }
     if (descriptor.computed) computedValue(object, descriptor);
     const set = listeners(object, name, kind);
     set.add(callback);
@@ -140,18 +322,27 @@
   }
   function storedValue(object, descriptor) {
     const values = state(object).values;
-    if (!values.has(descriptor.name)) values.set(descriptor.name, descriptor.defaultValue.call(object));
+    if (!values.has(descriptor.name)) {
+      values.set(descriptor.name, descriptor.defaultValue.call(object));
+    }
     return values.get(descriptor.name);
   }
   function computedValue(object, descriptor) {
     const slots = state(object).computed;
     let slot = slots.get(descriptor.name);
     if (!slot) {
-      slot = { valid: false, running: false, value: void 0, disposers: [] };
+      slot = {
+        valid: false,
+        running: false,
+        value: void 0,
+        disposers: []
+      };
       slots.set(descriptor.name, slot);
     }
     if (slot.valid) return slot.value;
-    if (slot.running) throw new Error(`Computed cycle: ${descriptor.name}`);
+    if (slot.running) {
+      throw new Error(`Computed cycle: ${descriptor.name}`);
+    }
     slot.disposers.splice(0).forEach((dispose2) => dispose2());
     const frame = /* @__PURE__ */ new Map();
     slot.running = true;
@@ -165,7 +356,14 @@
     }
     for (const [dependency, names] of frame) {
       for (const name of names) {
-        slot.disposers.push(subscribe(dependency, name, () => invalidate(object, descriptor), "dependents"));
+        slot.disposers.push(
+          subscribe(
+            dependency,
+            name,
+            () => invalidate(object, descriptor),
+            "dependents"
+          )
+        );
       }
     }
     return slot.value;
@@ -175,17 +373,23 @@
     if (!slot?.valid) return;
     const previous = slot.value;
     slot.valid = false;
-    for (const callback of [...listeners(object, descriptor.name, "dependents")]) callback();
-    if (listeners(object, descriptor.name, "observers").size) {
+    for (const callback of [
+      ...listeners(object, descriptor.name, "dependents")
+    ]) callback();
+    if (listeners(object, descriptor.name, "observers").size || hooked(object, descriptor.name)) {
       const value = computedValue(object, descriptor);
       if (!isEqual(previous, value)) notify(object, descriptor.name, previous, value);
     }
   }
   function notify(object, name, previous, value) {
-    for (const callback of [...listeners(object, name, "dependents")]) callback();
+    for (const callback of [
+      ...listeners(object, name, "dependents")
+    ]) callback();
     const hook = declarations(object.constructor, "methods").get(`${name}_did_change`);
     if (hook) object[hook.js](previous, value);
-    for (const callback of [...listeners(object, name, "observers")]) callback(value, previous);
+    for (const callback of [
+      ...listeners(object, name, "observers")
+    ]) callback(value, previous);
   }
   function writeProperty(object, descriptor, value) {
     const previous = storedValue(object, descriptor);
@@ -217,7 +421,10 @@
   var classConfiguration = /* @__PURE__ */ new WeakMap();
   function configuration(klass) {
     if (!classConfiguration.has(klass)) {
-      classConfiguration.set(klass, { registries: /* @__PURE__ */ new Map(), settings: /* @__PURE__ */ new Map() });
+      classConfiguration.set(klass, {
+        registries: /* @__PURE__ */ new Map(),
+        settings: /* @__PURE__ */ new Map()
+      });
     }
     return classConfiguration.get(klass);
   }
@@ -226,19 +433,30 @@
     const mixins = Object.values(meta2.mixins ?? {});
     const incoming = new Map(mixins.map((item) => [item.factory, item]));
     for (const [name, descriptor] of entries) {
-      if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
+      if (classes.has(name)) {
+        throw new Error(`Duplicate class: ${name}`);
+      }
       if (!Object.hasOwn(descriptor, "constructor") || typeof descriptor.constructor !== "function") {
         throw new TypeError(`Missing constructor: ${name}`);
       }
       for (const mixin of descriptor.mixins ?? []) {
-        if (!incoming.has(mixin) && !mixinMetadata.has(mixin)) throw new Error(`Unknown mixin for ${name}`);
+        if (!incoming.has(mixin) && !mixinMetadata.has(mixin)) {
+          throw new Error(`Unknown mixin for ${name}`);
+        }
       }
     }
-    const pending = new Map(entries.map(([name, descriptor]) => [descriptor.constructor, { name, descriptor }]));
-    if (pending.size !== entries.length) throw new Error("Duplicate constructor in meta");
+    const pending = new Map(entries.map(([name, descriptor]) => [
+      descriptor.constructor,
+      { name, descriptor }
+    ]));
+    if (pending.size !== entries.length) {
+      throw new Error("Duplicate constructor in meta");
+    }
     const methods = (descriptors) => Object.entries(descriptors ?? {}).map(([name, descriptor]) => ({ name, js: name, ...descriptor }));
     for (const mixin of mixins) {
-      if (typeof mixin.factory !== "function") throw new Error("Mixin factory must be a function");
+      if (typeof mixin.factory !== "function") {
+        throw new Error("Mixin factory must be a function");
+      }
       if (mixin.classFactory !== void 0 && typeof mixin.classFactory !== "function") {
         throw new Error("ClassMethods factory must be a function");
       }
@@ -250,16 +468,32 @@
       for (const [klass, { name, descriptor }] of pending) {
         if (pending.has(Object.getPrototypeOf(klass))) continue;
         if (descriptor.mixins?.length) include(klass, descriptor.mixins, incoming);
-        const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({ name: name2, js: name2, ...property, computed: typeof property.compute === "function" }));
-        installClass(klass, name, properties, methods(descriptor.methods), descriptor.registries, descriptor.restorations ?? []);
+        const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({
+          name: name2,
+          js: name2,
+          ...property,
+          computed: typeof property.compute === "function"
+        }));
+        installClass(
+          klass,
+          name,
+          properties,
+          methods(descriptor.methods),
+          descriptor.registries,
+          descriptor.restorations ?? []
+        );
         pending.delete(klass);
         progress = true;
       }
-      if (!progress) throw new Error("Unresolvable superclass order in meta");
+      if (!progress) {
+        throw new Error("Unresolvable superclass order in meta");
+      }
     }
   }
   function include(klass, mixins, incoming = /* @__PURE__ */ new Map()) {
-    if (hasMetadata(klass)) throw new Error("Mixins must be attached before class installation");
+    if (hasMetadata(klass)) {
+      throw new Error("Mixins must be attached before class installation");
+    }
     let parent = Object.getPrototypeOf(klass);
     for (const mixin of mixins) {
       parent = mixin(parent);
@@ -290,7 +524,9 @@
   function classSetting(klass, name, values) {
     const own = configuration(klass).settings;
     if (values.length) {
-      if (values.length !== 1) throw new Error(`${name} expects zero or one argument`);
+      if (values.length !== 1) {
+        throw new Error(`${name} expects zero or one argument`);
+      }
       own.set(name, values[0]);
       return values[0];
     }
@@ -298,8 +534,36 @@
     const parent = Object.getPrototypeOf(klass);
     return typeof parent?.[name] === "function" ? parent[name]() : null;
   }
+  function rejectProtocolConflicts(klass, properties, restorations2) {
+    const parent = Object.getPrototypeOf(klass);
+    const declared = new Map([
+      ...declarations(parent, "properties"),
+      ...properties.map((property) => [property.name, property])
+    ]);
+    const own = Object.getOwnPropertyDescriptors(klass.prototype);
+    for (const property of declared.values()) {
+      if (own[property.js]?.set) {
+        throw new Error(`Setter method for declared property: ${property.name}`);
+      }
+    }
+    const keys = new Set(
+      declarations(parent, "restorations").map((restoration) => restoration.key)
+    );
+    for (const restoration of restorations2) {
+      if (!declared.has(restoration.path.split(".")[0])) {
+        throw new Error(`Restorable path must start with a declared property: ${restoration.path}`);
+      }
+      if (keys.has(restoration.key)) {
+        throw new Error(`Duplicate restorable key: ${restoration.key}`);
+      }
+      keys.add(restoration.key);
+    }
+  }
   function installClass(klass, name, properties, methods, registries = {}, restorations2 = []) {
-    if (classes.has(name)) throw new Error(`Duplicate class: ${name}`);
+    if (classes.has(name)) {
+      throw new Error(`Duplicate class: ${name}`);
+    }
+    rejectProtocolConflicts(klass, properties, restorations2);
     installMetadata(klass, properties, methods, restorations2);
     const propertyByName = new Map(properties.map((property) => [property.name, property]));
     for (const [registryName, seeds] of Object.entries(registries)) {
@@ -309,8 +573,14 @@
       const registry = klass[registryName]();
       for (const [name2, seed] of Object.entries(seeds)) {
         const property = propertyByName.get(seed.property);
-        if (!property) throw new Error(`Unknown registry property: ${seed.property}`);
-        registry[name2] = { ...seed, type: property.type, defaultValue: property.defaultValue };
+        if (!property) {
+          throw new Error(`Unknown registry property: ${seed.property}`);
+        }
+        registry[name2] = {
+          ...seed,
+          type: property.type,
+          defaultValue: property.defaultValue
+        };
       }
     }
     for (const descriptor of properties) {
@@ -320,22 +590,34 @@
           record(this, descriptor.name);
           return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
         },
-        ...descriptor.computed ? {} : { set(value) {
-          writeProperty(this, descriptor, value);
-        } }
+        ...descriptor.computed ? {} : {
+          set(value) {
+            writeProperty(this, descriptor, value);
+          }
+        }
       });
     }
     classes.set(name, klass);
   }
   function resolve(name) {
-    if (!classes.has(name)) throw new Error(`Unknown class: ${name}`);
+    if (!classes.has(name)) {
+      throw new Error(`Unknown class: ${name}`);
+    }
     return classes.get(name);
   }
 
   // lib/swill/runtime/paths.mjs
   function read(object, name) {
-    if (object == null) return NIL_READERS.includes(name) ? valueRead(object, name) : null;
-    if (typeof object !== "object" && typeof object !== "function") return valueRead(object, name);
+    if (object == null) {
+      return NIL_READERS.includes(name) ? valueRead(object, name) : null;
+    }
+    if (typeof object !== "object" && typeof object !== "function") {
+      return valueRead(object, name);
+    }
+    if (isPlainObject(object)) {
+      if (Object.hasOwn(object, name)) return object[name];
+      return VALUE_READERS.includes(name) ? valueRead(object, name) : null;
+    }
     const property = declarations(object.constructor, "properties").get(name);
     if (property) return object[property.js];
     const method = declarations(object.constructor, "methods").get(name);
@@ -350,10 +632,14 @@
     return segments(path).reduce((owner, name) => read(owner, name), object);
   }
   function write(object, name, value) {
-    if (object == null) throw new Error(`Cannot write ${name} on nil`);
+    if (object == null) {
+      throw new Error(`Cannot write ${name} on nil`);
+    }
     const property = declarations(object.constructor, "properties").get(name);
     if (property) {
-      if (property.computed) throw new Error(`Read-only property: ${name}`);
+      if (property.computed) {
+        throw new Error(`Read-only property: ${name}`);
+      }
       return writeProperty(object, property, value);
     }
     const method = declarations(object.constructor, "methods").get(`${name}=`);
@@ -365,12 +651,16 @@
   }
   function pathWriter(object, path) {
     const names = segments(path);
-    if (names.length === 0) throw new Error(`Read-only binding: ${path}`);
+    if (names.length === 0) {
+      throw new Error(`Read-only binding: ${path}`);
+    }
     const name = names.pop();
     const owner = names.reduce((target, segment) => read(target, segment), object);
     if (owner == null) return null;
     const descriptor = declarations(owner.constructor, "properties").get(name);
-    if (!descriptor || descriptor.computed) throw new Error(`Read-only binding: ${path}`);
+    if (!descriptor || descriptor.computed) {
+      throw new Error(`Read-only binding: ${path}`);
+    }
     return { owner, descriptor };
   }
   function assertWritablePath(object, path) {
@@ -390,11 +680,13 @@
       for (const name of segments(path)) {
         if (owner == null) break;
         if (declarations(owner.constructor, "properties").has(name)) {
-          disposers.push(subscribe(owner, name, () => {
-            if (!active) return;
-            rehook();
-            callback(readPath(object, path));
-          }, "observers"));
+          disposers.push(
+            subscribe(owner, name, () => {
+              if (!active) return;
+              rehook();
+              callback(readPath(object, path));
+            }, "observers")
+          );
         }
         owner = read(owner, name);
       }
@@ -407,7 +699,12 @@
   }
   function respondsTo(object, name) {
     if (object == null) return NIL_READERS.includes(name);
-    if (typeof object !== "object" && typeof object !== "function") return VALUE_READERS.includes(name);
+    if (typeof object !== "object" && typeof object !== "function") {
+      return VALUE_READERS.includes(name);
+    }
+    if (isPlainObject(object)) {
+      return Object.hasOwn(object, name) || VALUE_READERS.includes(name);
+    }
     const properties = declarations(object.constructor, "properties");
     const methods = declarations(object.constructor, "methods");
     if (name.endsWith("=")) {
@@ -417,13 +714,20 @@
     return properties.has(name) || methods.has(name);
   }
   function invoke(object, name, ...args) {
+    if (object == null) {
+      throw new Error(`Cannot call ${name} on nil`);
+    }
     const method = declarations(object.constructor, "methods").get(name);
-    if (!method || method.arity !== args.length) throw new Error(`Unknown action or wrong arity: ${name}`);
+    if (!method || method.arity !== args.length) {
+      throw new Error(`Unknown method or wrong arity: ${name}`);
+    }
     return object[method.js](...args);
   }
   function performAction(object, name, sender, event) {
     const method = declarations(object.constructor, "methods").get(name);
-    if (!method || method.arity > 2) throw new Error(`Unknown action or wrong arity: ${name}`);
+    if (!method || method.arity > 2) {
+      throw new Error(`Unknown action or wrong arity: ${name}`);
+    }
     return object[method.js](...[sender, event].slice(0, method.arity));
   }
 
@@ -465,14 +769,14 @@
 
   // lib/swill/runtime.mjs
   var Runtime = {
-    // installation and class configuration
+    // Classes
     install,
     include,
     installClass,
     inheritableRegistry,
     classSetting,
     resolve,
-    // values
+    // Values
     isTruthy,
     logicalAnd,
     logicalOr,
@@ -488,7 +792,37 @@
     encodeFragment,
     NIL_READERS,
     VALUE_READERS,
-    // metadata-driven dispatch
+    // Ruby core semantics
+    length,
+    stringify,
+    toInteger,
+    toFloat,
+    capitalize,
+    split,
+    slice,
+    sort,
+    sortBy,
+    minBy,
+    maxBy,
+    min,
+    max,
+    sum,
+    uniq,
+    compact,
+    flatten,
+    reverse,
+    indexOf,
+    append,
+    prepend,
+    difference,
+    fetch,
+    deleteKey,
+    intDiv,
+    modulo,
+    between,
+    clamp,
+    compareValues,
+    // Dispatch
     read,
     segments,
     readPath,
@@ -498,18 +832,18 @@
     respondsTo,
     invoke,
     performAction,
-    // observation
+    // Observation
     observe,
     observePath,
     dispose,
-    // declarations
+    // Declarations
     isAttribute,
     validate_attribute,
     restorations,
     outlets,
     collect_attributes,
     apply_attributes,
-    // The one console boundary: wrong untrusted URL input is reported, not raised.
+    // Invalid URL input is reported, not raised.
     warn(message) {
       console.warn(`[Swill] ${message}`);
     }
@@ -523,6 +857,8 @@
     Swill__Awakening: () => Swill__Awakening,
     Swill__Bindings: () => Swill__Bindings,
     Swill__Controller: () => Swill__Controller,
+    Swill__Controller__List: () => Swill__Controller__List,
+    Swill__Controller__SortableList: () => Swill__Controller__SortableList,
     Swill__Fragments: () => Swill__Fragments,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Model__Attributes: () => Swill__Model__Attributes,
@@ -629,13 +965,16 @@
     // property or a method of the wrong arity is an error there, not a reason
     // to keep walking. An action nobody handles is also an error.
     perform_action(name, sender, event) {
-      if (Runtime.respondsTo(this, name)) {
-        return Runtime.performAction(this, name, sender, event);
-      }
-      ;
-      let target = this.next_responder();
+      let target = this.action_target(name);
       if (!target) throw new Error(`Unhandled action: ${name}`);
-      return target.perform_action(name, sender, event);
+      return Runtime.performAction(target, name, sender, event);
+    }
+    // The first responder from here up the chain that responds to name, or
+    // nil when none does; for actions that are optional to handle.
+    action_target(name) {
+      if (Runtime.respondsTo(this, name)) return this;
+      let target = this.next_responder();
+      return target ? target.action_target(name) : null;
     }
     // ---- first responder ----
     //
@@ -895,40 +1234,48 @@
     wire(controller) {
       let root = controller.view().element();
       let prefix = controller.binding_root();
-      this.wire_properties(controller, prefix, root);
-      this.wire_region(controller, prefix, root);
+      let disposers = [];
+      this.wire_properties(controller, prefix, root, disposers);
+      this.wire_region(controller, prefix, root, disposers);
+      controller.register_teardown(this.release(disposers));
       return controller;
     }
-    wire_region(controller, prefix, element) {
+    // A region owned by an object rather than a controller: paths resolve
+    // directly against the object, and the region's root may carry bind
+    // itself (bind="@" is the object). When that root is a controller's,
+    // only its represented object comes from here; the controller wires the
+    // rest as its own region. Returns the disposer.
+    wire_object(object, element) {
+      let disposers = [];
+      if (element.hasAttribute("bind")) {
+        disposers.push(this.wire_element(object, element, null));
+      }
+      ;
+      if (!element.hasAttribute("controller")) {
+        this.wire_properties(object, null, element, disposers);
+        this.wire_region(object, null, element, disposers);
+      }
+      ;
+      return this.release(disposers);
+    }
+    wire_region(object, prefix, element, disposers) {
       return this.each_child(element, (child) => {
-        if (child.hasAttribute("controller")) {
-          if (child.hasAttribute("bind")) {
-            return controller.register_teardown(this.wire_element(
-              controller,
-              child,
-              prefix
-            ));
-          }
-        } else {
-          if (child.hasAttribute("bind")) {
-            controller.register_teardown(this.wire_element(
-              controller,
-              child,
-              prefix
-            ));
-          }
-          ;
-          this.wire_properties(controller, prefix, child);
-          return this.wire_region(controller, prefix, child);
+        if (child.hasAttribute("bind")) {
+          disposers.push(this.wire_element(object, child, prefix));
+        }
+        ;
+        if (!child.hasAttribute("controller")) {
+          this.wire_properties(object, prefix, child, disposers);
+          return this.wire_region(object, prefix, child, disposers);
         }
       });
     }
-    wire_properties(controller, prefix, element) {
+    wire_properties(object, prefix, element, disposers) {
       return element.getAttributeNames().forEach((name) => {
         if (name.slice(0, 5) === "bind-") {
           let property = name.slice(5, name.length);
-          controller.register_teardown(this.wire_property(
-            controller,
+          disposers.push(this.wire_property(
+            object,
             prefix,
             element,
             property,
@@ -936,6 +1283,9 @@
           ));
         }
       });
+    }
+    release(disposers) {
+      return () => disposers.forEach((dispose2) => dispose2());
     }
     resolve_path(prefix, path) {
       if (path[0] === "@") return path.slice(1, path.length) ?? "";
@@ -1023,8 +1373,18 @@
   };
   var Swill__Actions = class extends Swill__Object {
     wire(controller) {
-      this.owned_matching(controller.view().element(), "[data-action]").forEach((element) => controller.register_teardown(this.wire_element(controller, element)));
+      controller.register_teardown(this.wire_into(
+        controller,
+        controller.view().element()
+      ));
       return controller;
+    }
+    // Actions in element's owned region dispatch from controller, as a list
+    // row's do from its list. Returns the disposer; elements already wired
+    // are left to their owner.
+    wire_into(controller, element) {
+      let disposers = this.owned_matching(element, "[data-action]").map((target) => this.wire_element(controller, target));
+      return () => disposers.forEach((dispose2) => dispose2());
     }
     wire_element(controller, element) {
       let event_name, action_name;
@@ -1142,10 +1502,12 @@
       new Swill__Actions().wire(controller);
       return controller.awake_from_dom();
     }
+    // An element that already has a View, such as a list row created in code,
+    // is part of the tree whatever its attributes say.
     walk(element, owner, controllers) {
-      let view = null;
-      if (this.managed_predicate(element)) {
-        view = element.__swill_view__ ?? this.create_view(element);
+      let view = element.__swill_view__;
+      if (!view && this.managed_predicate(element)) view = this.create_view(element);
+      if (view) {
         if (owner && !view.superview()) owner.adopt_subview(view);
         if (element.hasAttribute("controller") && !view.controller_value()) {
           let controller_class = Runtime.resolve(element.getAttribute("controller"));
@@ -1812,8 +2174,418 @@
       return application;
     }
   };
+  var Swill__Controller__List = class extends Swill__Controller {
+    // NSTableHeaderView analog; never a row.
+    // Where rows mount; without it, rows go into the list's own element.
+    // Shift-click extends the selection from the last plain click. A multiple
+    // attribute on the root turns this on from markup.
+    // Indexes of the selected objects among the arranged objects, ascending.
+    // ---- selection ----
+    select_indexes(indexes) {
+      let arranged = this.arranged_objects();
+      let objects = [];
+      indexes.forEach((index) => {
+        if (index >= 0 && index < arranged.length) objects.push(arranged[index]);
+      });
+      return this.selected_objects = objects;
+    }
+    select_object(object) {
+      return this.selected_objects = object == null ? [] : [object];
+    }
+    deselect_all() {
+      return this.selected_objects = [];
+    }
+    select_first_if_nothing_selected() {
+      if (this.current_selection().length === 0 && this.arranged_objects().length > 0) {
+        return this.select_indexes([0]);
+      }
+    }
+    // Enter and double-click. By default the owner receives an
+    // activate_selection target-action with this list as the sender; when no
+    // responder handles it, nothing happens.
+    activate_selection() {
+      let target = this.next_responder();
+      let handler = target ? target.action_target("activate_selection") : null;
+      if (handler) {
+        return Runtime.performAction(
+          handler,
+          "activate_selection",
+          this,
+          null
+        );
+      }
+    }
+    // Runs when the leading selected object changes, not when only the
+    // indexes do. The runtime keeps selected_object current because this
+    // hook exists, and dispatches it before selected_objects_did_change.
+    selected_object_did_change(_previous, _object) {
+      return null;
+    }
+    // The arranged object at index, or nil.
+    object_at(index) {
+      let arranged = this.arranged_objects();
+      return index >= 0 && index < arranged.length ? arranged[index] : null;
+    }
+    // The index of the row containing element, or -1 when it is in none; the
+    // way an action handler learns which row its sender sits in.
+    row_for(element) {
+      let mount = this.container();
+      let node = element;
+      while (node && node.parentElement !== mount) {
+        node = node.parentElement;
+      }
+      ;
+      return node ? this.row_elements().indexOf(node) : -1;
+    }
+    // ---- lifecycle ----
+    view_did_load() {
+      super.view_did_load();
+      let root = this._view.element();
+      if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "0");
+      if (root.hasAttribute("multiple")) {
+        return this.allows_multiple_selection = true;
+      }
+    }
+    // After outlets connect, so rows and header_view are known.
+    awake_from_dom() {
+      super.awake_from_dom();
+      this.install_selection();
+      this._awakened = true;
+      return this.render_all();
+    }
+    represented_object_did_change(_previous, _objects) {
+      this._selection_anchor = null;
+      if (this._awakened) this.render_all();
+      return this.reconcile_selection();
+    }
+    selected_objects_did_change(_previous, objects) {
+      this.sync_selected_rows();
+      if (this._syncing_selection) return;
+      return this.syncing_selection(() => this.selected_object_id = this.identifier_for(this.leading(objects)));
+    }
+    // An id nobody carries clears the selection and stays pending.
+    selected_object_id_did_change(_previous, identifier) {
+      if (this._syncing_selection) return;
+      let object = this.object_with_id(identifier);
+      return this.syncing_selection(() => this.selected_objects = object ? [object] : []);
+    }
+    // ---- keyboard ----
+    // Taking the keyboard selects the first row when nothing is selected.
+    become_first_responder() {
+      if (!super.become_first_responder()) return false;
+      this.select_first_if_nothing_selected();
+      return true;
+    }
+    // Arrow keys move a single selection; everything else continues up.
+    key_down(event) {
+      let indexes, current, index;
+      let total = this.arranged_objects().length;
+      let key = event.key;
+      if (total > 0 && (key === "ArrowDown" || key === "ArrowUp")) {
+        event.preventDefault();
+        indexes = this.current_indexes();
+        current = indexes.length > 0 ? indexes[0] : -1;
+        index = key === "ArrowDown" ? current + 1 : current - 1;
+        if (index < 0) index = 0;
+        if (index > total - 1) index = total - 1;
+        this.select_indexes([index]);
+        this._selection_anchor = index;
+        return this._selection_anchor;
+      } else {
+        return super.key_down(event);
+      }
+    }
+    // Enter activates the selection when there is one.
+    insert_newline(event) {
+      if (this.current_selection().length > 0) {
+        event.preventDefault();
+        return this.activate_selection();
+      } else {
+        return super.insert_newline(event);
+      }
+    }
+    // ---- rows ----
+    // The objects the rows show, in order; subclasses may sort or filter.
+    arranged_objects() {
+      return this.represented_object ?? [];
+    }
+    // Where rows mount.
+    container() {
+      let mount = this.rows;
+      return mount ? mount.element() : this._view.element();
+    }
+    container_view() {
+      let mount = this.rows;
+      return mount ? mount : this._view;
+    }
+    // Rows in order: the container's children other than templates and
+    // whatever row_element? rejects.
+    row_elements() {
+      let found = [];
+      this.each_child(this.container(), (child) => {
+        if (child.tagName !== "TEMPLATE" && this.row_element_predicate(child)) {
+          return found.push(child);
+        }
+      });
+      return found;
+    }
+    // Override when other children share the container. The header view is
+    // never a row.
+    row_element_predicate(element) {
+      let header = this.header_view;
+      return header == null || header.element() !== element;
+    }
+    // Real views per row, or bare elements when many rows must stay cheap.
+    rows_are_views_predicate() {
+      return true;
+    }
+    row_template() {
+      let found = this.owned_matching(
+        this._view.element(),
+        'template[for="row"]'
+      );
+      return found.length > 0 ? found[0] : null;
+    }
+    // The element for item. Clones the row template; override to build rows
+    // in code. Bindings, actions, selection, and configure_row still apply.
+    make_row_element(_item) {
+      let template = this.row_template();
+      let node = template ? template.content.firstElementChild : null;
+      if (!node) {
+        throw new Error('List has no <template for="row"> and no make_row_element override');
+      }
+      ;
+      return node.cloneNode(true);
+    }
+    // NSTableView willDisplayCell analog.
+    configure_row(_element, _item) {
+      return null;
+    }
+    render_all() {
+      this.clear_rows();
+      this.arranged_objects().forEach((item) => this.attach_row(item));
+      return this.sync_selected_rows();
+    }
+    attach_row(item) {
+      let element = this.make_row_element(item);
+      this.container().appendChild(element);
+      if (this.rows_are_views_predicate()) {
+        let row_view = element.__swill_view__ ?? new Swill__View(element);
+        this.container_view().adopt_subview(row_view);
+      }
+      ;
+      let awakening = new Swill__Awakening();
+      let controllers = awakening.awaken(element);
+      let release_bindings = new Swill__Bindings().wire_object(
+        item,
+        element
+      );
+      let release_actions = new Swill__Actions().wire_into(this, element);
+      element.__swill_row__ = () => {
+        release_bindings();
+        return release_actions();
+      };
+      awakening.finish(controllers);
+      return this.configure_row(element, item);
+    }
+    clear_rows() {
+      return this.row_elements().forEach((element) => this.release_row(element));
+    }
+    release_row(element) {
+      new Swill__Awakening().detach(element);
+      let release = element.__swill_row__;
+      if (release) {
+        release();
+        element.__swill_row__ = null;
+      }
+      ;
+      let row_view = element.__swill_view__;
+      if (row_view) row_view.remove_from_superview();
+      return element.remove();
+    }
+    // Reflect the selection onto the rendered rows and keep the leading
+    // selected row in view.
+    sync_selected_rows() {
+      if (!this._awakened) return;
+      let indexes = this.current_indexes();
+      let elements = this.row_elements();
+      elements.forEach((element, index) => {
+        let selected = indexes.includes(index);
+        element.classList.toggle("selected", selected);
+        element.setAttribute("aria-selected", selected ? "true" : "false");
+      });
+      let first = indexes.length > 0 ? elements[indexes[0]] : null;
+      if (first?.scrollIntoView) return first.scrollIntoView({ block: "nearest" });
+    }
+    // ---- mouse: click selects, shift-click extends, double-click activates ----
+    install_selection() {
+      let root = this._view.element();
+      this._on_mouse_down = (event) => this.row_mouse_down(event);
+      this._on_click = (event) => this.row_clicked(event);
+      this._on_double_click = (event) => this.row_double_clicked(event);
+      root.addEventListener("mousedown", this._on_mouse_down);
+      root.addEventListener("click", this._on_click, true);
+      root.addEventListener("dblclick", this._on_double_click);
+      return this.register_teardown(() => {
+        root.removeEventListener("mousedown", this._on_mouse_down);
+        root.removeEventListener("click", this._on_click, true);
+        root.removeEventListener("dblclick", this._on_double_click);
+        this.clear_rows();
+        this._awakened = false;
+        return this._awakened;
+      });
+    }
+    // Shift-click extends the selection; suppress the browser's text
+    // selection sweep across rows.
+    row_mouse_down(event) {
+      if (!this.allows_multiple_selection || !event.shiftKey) return;
+      if (this.row_for(event.target) < 0) return;
+      event.preventDefault();
+      let owner_document = this._view.element().ownerDocument;
+      let selection = owner_document.getSelection ? owner_document.getSelection() : null;
+      if (selection) return selection.removeAllRanges();
+    }
+    row_clicked(event) {
+      let index = this.row_for(event.target);
+      if (index < 0) return;
+      let anchor = this._selection_anchor;
+      if (this.allows_multiple_selection && event.shiftKey && anchor != null) {
+        return this.select_range(anchor, index);
+      } else {
+        this.select_indexes([index]);
+        this._selection_anchor = index;
+        return this._selection_anchor;
+      }
+    }
+    row_double_clicked(event) {
+      let index = this.row_for(event.target);
+      if (index < 0) return;
+      this.select_indexes([index]);
+      this._selection_anchor = index;
+      return this.activate_selection();
+    }
+    select_range(anchor, index) {
+      let low = anchor < index ? anchor : index;
+      let high = anchor < index ? index : anchor;
+      let indexes = [];
+      let current = low;
+      while (current <= high) {
+        indexes.push(current);
+        current++;
+      }
+      ;
+      return this.select_indexes(indexes);
+    }
+    // ---- identity ----
+    // The model id of object as a string, or nil when it has none.
+    identifier_for(object) {
+      if (!object || !Runtime.respondsTo(object, "id")) return null;
+      let value = Runtime.read(object, "id");
+      return value == null ? null : `${value}`;
+    }
+    object_with_id(identifier) {
+      if (identifier == null || identifier === "") return null;
+      return this.arranged_objects().find((candidate) => this.identifier_for(candidate) === identifier);
+    }
+    // Selection survivors after the collection changed; when none remain, the
+    // id that is still wanted may now resolve.
+    reconcile_selection() {
+      let arranged = this.arranged_objects();
+      let survivors = this.current_selection().filter((object) => arranged.includes(object));
+      if (survivors.length === 0) {
+        let requested = this.object_with_id(this.selected_object_id);
+        if (requested) survivors = [requested];
+      }
+      ;
+      return this.syncing_selection(() => this.selected_objects = survivors);
+    }
+    // A write from one side of the selection to the other is marked so the
+    // other side's hook does not write back.
+    syncing_selection(callback) {
+      this._syncing_selection = true;
+      try {
+        return callback();
+      } finally {
+        this._syncing_selection = false;
+      }
+    }
+    leading(objects) {
+      return objects && objects.length > 0 ? objects[0] : null;
+    }
+    // The selection and its indexes as JavaScript arrays for the DOM code here.
+    current_selection() {
+      return this.selected_objects;
+    }
+    current_indexes() {
+      return this.selected_indexes;
+    }
+  };
+  var Swill__Controller__SortableList = class extends Swill__Controller__List {
+    // The sort_by action: the sender's column names the key.
+    sort_by(sender) {
+      let key = this.sort_key_for(sender);
+      if (key) return this.toggle_sort(key);
+    }
+    // Override when the column name lives elsewhere than data-column.
+    sort_key_for(sender) {
+      return sender.getAttribute("data-column");
+    }
+    // The same key flips the direction; a new key sorts ascending.
+    toggle_sort(key) {
+      return this.sort_key === key ? this.sort_direction = this.sort_direction === "ascending" ? "descending" : "ascending" : this.sort(
+        key,
+        "ascending"
+      );
+    }
+    // Set the key and direction together, re-rendering once.
+    sort(key, direction) {
+      this._changing_sort = true;
+      try {
+        this.sort_key = key;
+        this.sort_direction = direction;
+      } finally {
+        this._changing_sort = false;
+      }
+      ;
+      return this.sort_did_change();
+    }
+    awake_from_dom() {
+      super.awake_from_dom();
+      return this.sync_sort_states();
+    }
+    sort_key_did_change(_previous, _key) {
+      if (!this._changing_sort) return this.sort_did_change();
+    }
+    sort_direction_did_change(_previous, _direction) {
+      if (!this._changing_sort) return this.sort_did_change();
+    }
+    sort_did_change() {
+      this.sync_sort_states();
+      if (this._awakened) return this.render_all();
+    }
+    // The represented objects in sort order: nil values last when ascending,
+    // numbers and booleans by value, everything else as text.
+    arranged_objects() {
+      let objects = super.arranged_objects();
+      let key = this.sort_key;
+      if (!key) return objects;
+      let sign = this.sort_direction === "descending" ? -1 : 1;
+      return objects.slice().sort((left, right) => Runtime.compareValues(
+        Runtime.read(left, key),
+        Runtime.read(right, key)
+      ) * sign);
+    }
+    sync_sort_states() {
+      let key = this.sort_key;
+      let states2 = {};
+      if (key) states2[key] = this.sort_direction;
+      return this.sort_states = states2;
+    }
+  };
   function Swill__Model__Attributes(Superclass) {
     class Swill__Model__Attributes_Layer extends Superclass {
+      // On MRI the attribute macro below seeds the registry; the compiler
+      // reads seeded_by to do the same from collected declarations.
       collect_attributes() {
         return Runtime.collect_attributes(this);
       }
@@ -1868,17 +2640,14 @@
       }
       property_will_change(name, previous, value) {
         super.property_will_change(name, previous, value);
-        if (Runtime.isTruthy(Runtime.logicalOr(
-          this._dirty_suspensions,
-          () => 0
-        ) > 0)) return;
+        if (Runtime.logicalOr(this._dirty_suspensions, () => 0) > 0) return;
         if (!Runtime.isTruthy(Runtime.isAttribute(this, name))) return;
         return this.mark_attribute_dirty(name, previous, value);
       }
       mark_attribute_dirty(name, previous, value) {
         let baseline = this._dirty_baseline ||= {};
         let names = this.dirty_attributes;
-        if (Runtime.isTruthy(names.includes(name))) {
+        if (names.includes(name)) {
           if (Runtime.isEqual(baseline[name], value)) {
             return this.dirty_attributes = names.filter((candidate) => !Runtime.isEqual(candidate, name));
           }
@@ -1894,7 +2663,7 @@
     class Swill__Model__Drafts_Layer extends Superclass {
       draft() {
         let copy = new this.constructor();
-        copy.apply_attributes(this.collect_attributes());
+        Runtime.invoke(copy, "apply_attributes", this.collect_attributes());
         return copy;
       }
     }
@@ -2018,6 +2787,9 @@
           },
           "perform_action": {
             "arity": 3
+          },
+          "action_target": {
+            "arity": 1
           },
           "accepts_first_responder?": {
             "arity": 0,
@@ -2200,11 +2972,17 @@
           "wire": {
             "arity": 1
           },
+          "wire_object": {
+            "arity": 2
+          },
           "wire_region": {
-            "arity": 3
+            "arity": 4
           },
           "wire_properties": {
-            "arity": 3
+            "arity": 4
+          },
+          "release": {
+            "arity": 1
           },
           "resolve_path": {
             "arity": 2
@@ -2234,6 +3012,9 @@
         methods: {
           "wire": {
             "arity": 1
+          },
+          "wire_into": {
+            "arity": 2
           },
           "wire_element": {
             "arity": 2
@@ -2531,6 +3312,258 @@
           }
         }
       },
+      "Swill::Controller::List": {
+        constructor: Swill__Controller__List,
+        mixins: [Swill__Ownership],
+        properties: {
+          "header_view": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: true,
+            defaultValue: function default_header_view() {
+              return null;
+            }
+          },
+          "rows": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: true,
+            defaultValue: function default_rows() {
+              return null;
+            }
+          },
+          "allows_multiple_selection": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function default_allows_multiple_selection() {
+              return false;
+            }
+          },
+          "selected_objects": {
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue: function default_selected_objects() {
+              return [];
+            }
+          },
+          "selected_object_id": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue: function default_selected_object_id() {
+              return null;
+            }
+          },
+          "selected_indexes": {
+            type: "T::Array[Integer]",
+            attribute: false,
+            compute: function compute_selected_indexes() {
+              let selection = this.current_selection();
+              let found = [];
+              this.arranged_objects().forEach((object, index) => {
+                if (selection.includes(object)) found.push(index);
+              });
+              return found;
+            }
+          },
+          "selected_object": {
+            type: "T.untyped",
+            attribute: false,
+            compute: function compute_selected_object() {
+              return this.leading(this.current_selection());
+            }
+          }
+        },
+        methods: {
+          "select_indexes": {
+            "arity": 1
+          },
+          "select_object": {
+            "arity": 1
+          },
+          "deselect_all": {
+            "arity": 0
+          },
+          "select_first_if_nothing_selected": {
+            "arity": 0
+          },
+          "activate_selection": {
+            "arity": 0
+          },
+          "selected_object_did_change": {
+            "arity": 2
+          },
+          "object_at": {
+            "arity": 1
+          },
+          "row_for": {
+            "arity": 1
+          },
+          "view_did_load": {
+            "arity": 0
+          },
+          "awake_from_dom": {
+            "arity": 0
+          },
+          "represented_object_did_change": {
+            "arity": 2
+          },
+          "selected_objects_did_change": {
+            "arity": 2
+          },
+          "selected_object_id_did_change": {
+            "arity": 2
+          },
+          "become_first_responder": {
+            "arity": 0
+          },
+          "key_down": {
+            "arity": 1
+          },
+          "insert_newline": {
+            "arity": 1
+          },
+          "arranged_objects": {
+            "arity": 0
+          },
+          "container": {
+            "arity": 0
+          },
+          "container_view": {
+            "arity": 0
+          },
+          "row_elements": {
+            "arity": 0
+          },
+          "row_element?": {
+            "arity": 1,
+            "js": "row_element_predicate"
+          },
+          "rows_are_views?": {
+            "arity": 0,
+            "js": "rows_are_views_predicate"
+          },
+          "row_template": {
+            "arity": 0
+          },
+          "make_row_element": {
+            "arity": 1
+          },
+          "configure_row": {
+            "arity": 2
+          },
+          "render_all": {
+            "arity": 0
+          },
+          "attach_row": {
+            "arity": 1
+          },
+          "clear_rows": {
+            "arity": 0
+          },
+          "release_row": {
+            "arity": 1
+          },
+          "sync_selected_rows": {
+            "arity": 0
+          },
+          "install_selection": {
+            "arity": 0
+          },
+          "row_mouse_down": {
+            "arity": 1
+          },
+          "row_clicked": {
+            "arity": 1
+          },
+          "row_double_clicked": {
+            "arity": 1
+          },
+          "select_range": {
+            "arity": 2
+          },
+          "identifier_for": {
+            "arity": 1
+          },
+          "object_with_id": {
+            "arity": 1
+          },
+          "reconcile_selection": {
+            "arity": 0
+          },
+          "syncing_selection": {
+            "arity": 1
+          },
+          "leading": {
+            "arity": 1
+          },
+          "current_selection": {
+            "arity": 0
+          },
+          "current_indexes": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Controller::SortableList": {
+        constructor: Swill__Controller__SortableList,
+        properties: {
+          "sort_key": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue: function default_sort_key() {
+              return null;
+            }
+          },
+          "sort_direction": {
+            type: "String",
+            attribute: false,
+            defaultValue: function default_sort_direction() {
+              return "ascending";
+            }
+          },
+          "sort_states": {
+            type: "T::Hash[String, String]",
+            attribute: false,
+            defaultValue: function default_sort_states() {
+              return {};
+            }
+          }
+        },
+        methods: {
+          "sort_by": {
+            "arity": 1
+          },
+          "sort_key_for": {
+            "arity": 1
+          },
+          "toggle_sort": {
+            "arity": 1
+          },
+          "sort": {
+            "arity": 2
+          },
+          "awake_from_dom": {
+            "arity": 0
+          },
+          "sort_key_did_change": {
+            "arity": 2
+          },
+          "sort_direction_did_change": {
+            "arity": 2
+          },
+          "sort_did_change": {
+            "arity": 0
+          },
+          "arranged_objects": {
+            "arity": 0
+          },
+          "sync_sort_states": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::Model::Base": {
         constructor: Swill__Model__Base,
         mixins: [Swill__Model__Attributes, Swill__Model__DirtyTracking, Swill__Model__Drafts],
@@ -2674,7 +3707,9 @@
     const Controller = definitions.Swill__Controller;
     const Application = definitions.Swill__Application;
     const View = definitions.Swill__View;
-    const roots = /* @__PURE__ */ new Set([Controller, Application, View]);
+    const List = definitions.Swill__Controller__List;
+    const SortableList = definitions.Swill__Controller__SortableList;
+    const roots = /* @__PURE__ */ new Set([Controller, Application, View, List, SortableList]);
     [
       ["binding_root", "bindingRoot"],
       ["decode_outlet_data", "decodeOutletData"],
@@ -2689,6 +3724,15 @@
     ].forEach(([internalName, publicName]) => bridge(Controller.prototype, internalName, publicName));
     bridge(Application.prototype, "application_did_launch", "applicationDidLaunch");
     bridge(Application.prototype, "application_will_terminate", "applicationWillTerminate");
+    [
+      ["make_row_element", "makeRowElement"],
+      ["configure_row", "configureRow"],
+      ["rows_are_views_predicate", "rowsAreViews"],
+      ["row_element_predicate", "isRowElement"],
+      ["selected_object_did_change", "selectedObjectDidChange"],
+      ["activate_selection", "activateSelection"]
+    ].forEach(([internalName, publicName]) => bridge(List.prototype, internalName, publicName));
+    bridge(SortableList.prototype, "sort_key_for", "sortKeyFor");
     function register(name, klass) {
       if (arguments.length === 1) {
         klass = name;
@@ -2735,6 +3779,8 @@
       Controller,
       Application,
       View,
+      List,
+      SortableList,
       register,
       start
     });

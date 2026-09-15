@@ -250,7 +250,7 @@ test("action dispatch uses generated method names and validates arity", () => {
   assert.ok(controller.person instanceof Person);
   assert.notEqual(controller.person, before, "clear resets to a fresh person");
   assert.throws(() => Runtime.invoke(controller, "clear", 1), /wrong arity/);
-  assert.throws(() => Runtime.invoke(controller, "toString"), /Unknown action/);
+  assert.throws(() => Runtime.invoke(controller, "toString"), /Unknown method/);
   assert.throws(() => Runtime.performAction(controller, "toString", {}, {}), /Unknown action/);
 });
 
@@ -462,6 +462,42 @@ test("invalid meta is rejected before registering preceding valid classes", () =
   }}), /Unknown mixin/);
   assert.throws(() => Runtime.resolve("Test::Valid"), /Unknown class/);
   assert.throws(() => Runtime.install({classes: {"Test::Missing": {}}}), /Missing constructor/);
+});
+
+test("installation rejects a setter for a declared property, before registering the class", () => {
+  const stored = () => ({count: {defaultValue() { return 0; }}});
+  class Shadowed extends SwillObject { set count(_value) {} }
+  assert.throws(() => Runtime.install({classes: {"Test::Shadowed": {constructor: Shadowed, properties: stored()}}}),
+    /Setter method for declared property: count/);
+  assert.throws(() => Runtime.resolve("Test::Shadowed"), /Unknown class/);
+  class SetterBase extends SwillObject {}
+  Runtime.install({classes: {"Test::SetterBase": {constructor: SetterBase, properties: stored()}}});
+  class SetterSub extends SetterBase { set count(_value) {} }
+  assert.throws(() => Runtime.install({classes: {"Test::SetterSub": {constructor: SetterSub}}}),
+    /Setter method for declared property: count/, "a setter shadowing an inherited accessor bypasses the protocol");
+});
+
+test("a did_change hook runs for stored properties and keeps a computed property current", () => {
+  class Tally extends SwillObject {
+    constructor() { super(); this.seen = []; }
+    count_did_change(previous, value) { this.seen.push(["count", previous, value]); }
+    total_did_change(previous, value) { this.seen.push(["total", previous, value]); }
+  }
+  Runtime.install({classes: {"Test::Tally": {
+    constructor: Tally,
+    properties: {count: {defaultValue() { return 1; }}, total: {compute() { return this.count * 2; }}},
+    methods: {count_did_change: {arity: 2}, total_did_change: {arity: 2}}
+  }}});
+  const tally = new Tally();
+  tally.count = 2;
+  assert.deepEqual(tally.seen, [["total", 2, 4], ["count", 1, 2]],
+    "nothing observes total, yet its hook ran on the dependency change, before the stored hook");
+  tally.count = 2;
+  assert.equal(tally.seen.length, 2, "an equal write is not a change");
+  assert.equal(tally.total, 4);
+  tally.dispose();
+  tally.count = 3;
+  assert.deepEqual(tally.seen.slice(2), [["count", 2, 3]], "a disposed object's computed hooks are released");
 });
 
 // ---- nested controller ownership ----
@@ -860,7 +896,9 @@ test("respond_to? answers from metadata for objects, nil, and plain values", () 
   assert.equal(Runtime.respondsTo(null, "nil?"), true);
   assert.equal(Runtime.respondsTo(null, "strip"), false);
   assert.equal(Runtime.respondsTo("Ada", "strip"), true);
-  assert.equal(Runtime.respondsTo({name: "plain"}, "name"), false);
+  assert.equal(Runtime.respondsTo({name: "plain"}, "name"), true, "a plain object is a Hash whose keys are readable");
+  assert.equal(Runtime.read({name: "plain"}, "name"), "plain");
+  assert.equal(Runtime.read({name: "plain"}, "missing"), null, "a missing key is nil, as key-value coding on a dictionary");
 });
 
 test("binding roots and @ resolve paths against the right object", () => {
@@ -939,7 +977,7 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   f.parent.person = new Person();
   assert.equal(field.readOnly, true, "disposed property bindings stop updating");
   assert.equal(Runtime.isEmpty([]), true);
-  assert.throws(() => Runtime.isEmpty(42), /requires a string or array/);
+  assert.throws(() => Runtime.isEmpty(42), /requires a string, array, or hash/);
 });
 
 test("object bindings keep a target equal to a source path and release on teardown", () => {
@@ -1223,4 +1261,317 @@ test("fragment routing is inert without a browser window", () => {
   const application = new Launcher().launch(f.document);
   assert.ok(application.controllers().length > 0);
   application.terminate();
+});
+
+// ---- list controllers: rows, selection, ownership, restoration ----
+
+const PeopleList = Runtime.resolve("Demo::PeopleList");
+
+// The example's roster table: the parent decodes the roster JSON into people
+// and the list shows them through bind="people". The list sits in the people
+// window so its selection is kept in the fragment by id.
+function peoplePage(hash = "", rowTemplate = null) {
+  const seed = element("script", {type: "application/json", outlet: "seed"});
+  seed.textContent = '{"name": "Ada"}';
+  const nameInput = element("input", {bind: "person.name", outlet: "name_field"});
+  const badge = element("section", {controller: "Demo::Badge", outlet: "badge"}, [element("p", {bind: "title"})]);
+  const roster = element("script", {type: "application/json", outlet: "roster"});
+  roster.textContent = JSON.stringify([
+    {id: "1", name: "Ada", job: "engineer"}, {id: "2", name: "Grace", job: "admiral"}, {id: "3", name: "Linus", job: "kernel"}
+  ]);
+  const template = element("template", {for: "row"}, [rowTemplate ?? element("tr", {}, [
+    element("td", {bind: "name"}), element("td", {bind: "role"}),
+    element("td", {}, [element("button", {"data-action": "remove_person"})])
+  ])]);
+  const stale = element("tr", {}, [element("td", {})]);
+  stale.children[0].textContent = "pre-rendered";
+  const rows = element("tbody", {outlet: "rows"}, [template, stale]);
+  const nameHeader = element("th", {"data-column": "name", "data-action": "sort_by", "bind-aria-sort": "sort_states.name"});
+  const roleHeader = element("th", {"data-column": "role", "data-action": "sort_by", "bind-aria-sort": "sort_states.role"});
+  const header = element("thead", {outlet: "header_view"}, [element("tr", {}, [nameHeader, roleHeader, element("th", {})])]);
+  const selected = element("output", {bind: "@selected_object.name"});
+  const edit = element("button", {"data-action": "activate_selection", "bind-disabled": "@selected_indexes.empty?"});
+  const list = element("section", {controller: "Demo::PeopleList", outlet: "people_list", bind: "people"}, [
+    element("table", {}, [header, rows]), selected, edit
+  ]);
+  const peopleWindow = element("section", {window: "people"}, [list]);
+  const title = element("p", {bind: "title"});
+  const main = element("main", {controller: "Demo::Controller"}, [seed, title, nameInput, badge, roster, peopleWindow]);
+  const body = element("body", {application: "Demo::Application"}, [main]);
+  const document = element("#document", {}, [body]);
+  document.readyState = "complete";
+  document.defaultView = new Browser(hash);
+  const application = new Launcher().launch(document);
+  const [parent, , controller] = application.controllers();
+  const rowsOf = () => rows.children.filter(child => child.tagName === "TR");
+  return {application, document, browser: document.defaultView, parent, controller, list, rows, header, template,
+    stale, selected, edit, title, rowsOf, nameHeader, roleHeader};
+}
+
+// A list with no rows outlet and no bind, hosted by a controller that does
+// not handle activate_selection.
+function bareList() {
+  const template = element("template", {for: "row"}, [element("li", {bind: "name"})]);
+  const list = element("ul", {controller: "Demo::PeopleList"}, [template]);
+  const host = element("section", {controller: "Demo::Badge"}, [list]);
+  const body = element("body", {application: "Demo::Application"}, [host]);
+  const document = element("#document", {}, [body]);
+  document.readyState = "complete";
+  document.defaultView = new Browser();
+  const application = new Launcher().launch(document);
+  const [badge, controller] = application.controllers();
+  const items = () => list.children.filter(child => child.tagName === "LI");
+  return {application, document, list, controller, badge, template, items};
+}
+
+test("a list renders a row per object from its template, binds cells to the object, and owns the rows", () => {
+  const f = peoplePage();
+  const [ada, grace, linus] = f.parent.people;
+  assert.ok(f.controller instanceof PeopleList);
+  assert.equal(f.controller.parent(), f.parent);
+  assert.equal(f.controller.represented_object, f.parent.people, 'bind="people" feeds the list');
+  assert.deepEqual(f.rowsOf().map(row => row.children.map(cell => cell.textContent)),
+    [["Ada", "engineer", ""], ["Grace", "admiral", ""], ["Linus", "kernel", ""]]);
+  assert.equal(f.stale.parentElement, null, "pre-rendered rows are replaced");
+  assert.equal(f.template.parentElement, f.rows, "the template stays inert in place");
+  assert.equal(f.list.getAttribute("tabindex"), "0", "the list is focusable");
+  assert.equal(f.controller.rows.element(), f.rows);
+  assert.equal(f.controller.header_view.element(), f.header);
+  const rowViews = Array.from(f.controller.rows.subviews());
+  assert.deepEqual(rowViews.map(view => view.element()), f.rowsOf(), "rows are views under the rows outlet");
+  assert.equal(rowViews[0].owner(), f.controller);
+  assert.equal(f.controller.row_for(f.rowsOf()[1].children[0]), 1, "an element inside a row knows its row");
+  assert.equal(f.controller.row_for(f.list), -1);
+  assert.equal(f.controller.row_for(f.template), -1);
+  assert.equal(f.controller.object_at(2), linus);
+  assert.equal(f.controller.object_at(3), null);
+  ada.name = "Ada Lovelace";
+  assert.equal(f.rowsOf()[0].children[0].textContent, "Ada Lovelace", "cells observe their object");
+  const oldRow = f.rowsOf()[0];
+  f.parent.people = [linus, ada];
+  assert.deepEqual(f.rowsOf().map(row => row.children[0].textContent), ["Linus", "Ada Lovelace"]);
+  assert.equal(oldRow.parentElement, null, "a new collection replaces the rows");
+  ada.name = "Ada";
+  assert.equal(oldRow.children[0].textContent, "Ada Lovelace", "released rows stop observing");
+  assert.equal(f.rowsOf()[1].children[0].textContent, "Ada");
+  assert.equal(f.controller.rows.subviews().length, 2, "released row views leave the tree");
+  assert.equal(f.parent.people.length, 2);
+  f.template.remove();
+  assert.throws(() => { f.parent.people = [grace]; }, /no <template for="row">/);
+});
+
+test("clicks select by identity, shift-click extends, and the selection shows on rows and paths", () => {
+  const f = peoplePage();
+  const [ada, grace, linus] = f.parent.people;
+  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object, f.controller.selected_object_id,
+    f.edit.disabled, f.selected.textContent], [[], null, null, true, ""]);
+  f.rowsOf()[1].children[0].click();
+  assert.deepEqual(Array.from(f.controller.selected_objects), [grace]);
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [1]);
+  assert.equal(f.controller.selected_object, grace);
+  assert.equal(f.controller.selected_object_id, "2", "the selection names its object by id");
+  assert.deepEqual(f.rowsOf().map(row => [row.classList.contains("selected"), row.getAttribute("aria-selected")]),
+    [[false, "false"], [true, "true"], [false, "false"]]);
+  assert.equal(f.document.scrolledTo, f.rowsOf()[1], "the leading selected row is scrolled into view");
+  assert.equal(f.selected.textContent, "Grace", "@ paths read through the computed selected_object");
+  assert.equal(f.edit.disabled, false, "bind-* observes the computed indexes");
+  assert.equal(f.controller.selection_changes, 1, "selected_object_did_change ran once");
+  f.rowsOf()[2].children[0].click({shiftKey: true});
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [2], "shift-click is a plain click without allows_multiple_selection");
+  f.controller.allows_multiple_selection = true;
+  f.rowsOf()[0].children[0].click({shiftKey: true});
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [0, 1, 2], "shift-click extends from the anchor");
+  assert.equal(f.controller.selected_object, ada, "the lowest row leads a range");
+  assert.equal(f.controller.selected_object_id, "1");
+  assert.equal(f.controller.selection_changes, 3);
+  f.parent.people = [linus, grace, ada];
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [0, 1, 2]);
+  assert.equal(f.controller.selection_changes, 3, "reordering changes no object");
+  f.controller.select_object(grace);
+  f.parent.people = [ada, grace];
+  assert.deepEqual([Array.from(f.controller.selected_indexes), f.controller.selected_object_id], [[1], "2"],
+    "the selection follows its object through a new collection");
+  f.parent.people = [ada, linus];
+  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id], [[], "2"],
+    "an object that left is no longer selected, but its id stays wanted");
+  assert.deepEqual([f.selected.textContent, f.edit.disabled], ["", true]);
+  f.parent.people = [grace, ada];
+  assert.deepEqual([f.controller.selected_object, Array.from(f.controller.selected_indexes)], [grace, [0]],
+    "the wanted id resolves when its object returns");
+  f.controller.deselect_all();
+  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id, f.edit.disabled], [[], null, true]);
+  assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, false]);
+  f.controller.select_indexes([1, 5]);
+  assert.deepEqual(Array.from(f.controller.selected_objects), [ada], "out-of-range indexes are ignored");
+});
+
+test("row actions dispatch from the list knowing their row, and activation reaches the owner", () => {
+  const f = peoplePage();
+  const [ada, grace, linus] = f.parent.people;
+  f.rowsOf()[0].children[2].children[0].click();
+  assert.deepEqual(Array.from(f.parent.people), [grace, linus], "the row's button reached the parent's remove_person");
+  assert.deepEqual(f.rowsOf().map(row => row.children[0].textContent), ["Grace", "Linus"]);
+  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id], [[], "1"],
+    "the click selected the row before its action removed it");
+  f.rowsOf()[1].children[0].doubleClick();
+  assert.equal(f.controller.selected_object, linus);
+  assert.equal(f.parent.person, linus, "double-click activates: the parent received the list as sender");
+  assert.equal(f.title.textContent, "Hello Linus");
+  f.parent.reset_person();
+  f.edit.click();
+  assert.equal(f.parent.person, linus, "the list's own activate_selection button is handled by the list first");
+  assert.equal(f.controller.action_target("activate_selection"), f.controller);
+  assert.equal(f.parent.action_target("activate_selection"), f.parent);
+  assert.equal(f.controller.action_target("vanish"), null);
+  f.controller.teardown();
+  assert.equal(f.rowsOf().length, 0, "teardown removes the rows");
+  assert.equal(f.controller.rows.subviews().length, 0);
+  f.parent.people = [ada];
+  assert.equal(f.rowsOf().length, 0, "a torn-down list no longer renders");
+});
+
+test("the keyboard moves a single selection from the first responder and Enter activates it", () => {
+  const f = peoplePage();
+  const [, grace] = f.parent.people;
+  assert.equal(f.application.make_first_responder(f.controller), true);
+  assert.equal(f.document.activeElement, f.list, "the list root took focus through its tabindex");
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [0], "becoming first responder selects the first row");
+  const key = name => f.list.dispatchEvent(keyEvent("keydown", name));
+  key("ArrowDown");
+  key("ArrowDown");
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [2]);
+  key("ArrowDown");
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [2], "the end clamps");
+  key("ArrowUp");
+  key("ArrowUp");
+  key("ArrowUp");
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [0], "the start clamps");
+  key("ArrowDown");
+  key("Enter");
+  assert.equal(f.parent.person, grace, "Enter activates the selection");
+  key("Escape");
+  assert.notEqual(f.parent.person, grace, "Escape continues up to the parent's cancel_operation");
+  f.controller.deselect_all();
+  const seen = [];
+  f.application.insert_newline = () => seen.push("application");
+  key("Enter");
+  assert.deepEqual(seen, ["application"], "Enter without a selection continues up the chain");
+  f.parent.people = [];
+  key("ArrowDown");
+  assert.deepEqual(Array.from(f.controller.selected_indexes), [], "arrows do nothing in an empty list");
+});
+
+test("without a rows outlet rows mount in the list itself, and an unhandled activation is quiet", () => {
+  const f = bareList();
+  const people = ["Ada", "Grace"].map(name => { const person = new Person(); person.name = name; return person; });
+  f.controller.represented_object = people;
+  assert.deepEqual(f.items().map(item => item.textContent), ["Ada", "Grace"], "bind on the row root binds to the object");
+  assert.deepEqual(Array.from(f.controller.view().subviews()).map(view => view.element()), f.items());
+  f.items()[0].click();
+  assert.equal(f.controller.selected_object, people[0]);
+  assert.equal(f.controller.selected_object_id, null, "an object without an id gives the selection none");
+  f.items()[1].click();
+  assert.equal(f.controller.selected_object, people[1], "id-less selection still moves");
+  assert.equal(f.badge.action_target("activate_selection"), null);
+  f.items()[1].doubleClick();
+  assert.equal(f.controller.selected_object, people[1], "nobody handling activate_selection is not an error");
+  assert.throws(() => f.controller.perform_action("activate_selection_now", null, null), /Unhandled action/);
+});
+
+test("a controller inside a row belongs to the list and is fed the row's object", () => {
+  const rowTemplate = element("tr", {controller: "Demo::PersonEditor", bind: "@"}, [
+    element("td", {}, [element("input", {bind: "name"})])
+  ]);
+  const f = peoplePage("", rowTemplate);
+  const [ada] = f.parent.people;
+  const editors = Array.from(f.controller.child_controllers());
+  assert.equal(editors.length, 3);
+  assert.ok(editors[0] instanceof PersonEditor);
+  assert.equal(editors[0].represented_object, ada, 'bind="@" hands the row controller its object');
+  assert.equal(editors[0].parent(), f.controller);
+  assert.equal(editors[0].view().element(), f.rowsOf()[0], "the row view is the row controller's root");
+  const input = f.rowsOf()[0].children[0].children[0];
+  assert.equal(input.value, "Ada");
+  input.value = "Ada L";
+  input.dispatchEvent(new Event("input"));
+  assert.equal(ada.name, "Ada L", "row controller bindings resolve under its represented object");
+  const gone = [];
+  editors.forEach((editor, index) => { editor.view_did_disappear = () => gone.push(index); });
+  f.parent.people = [ada];
+  assert.deepEqual(gone, [0, 1, 2], "re-rendering tears down row controllers");
+  assert.equal(f.controller.child_controllers().length, 1);
+  assert.equal(f.controller.child_controllers()[0].represented_object, ada);
+  assert.deepEqual(Array.from(new Awakening().wire(f.rowsOf()[0])), [], "the observer finds nothing new in a rendered row");
+  f.controller.teardown();
+  assert.deepEqual([f.rowsOf().length, f.controller.child_controllers().length], [0, 0]);
+});
+
+test("a list's selection restores by id from the fragment and follows it afterwards", () => {
+  const f = peoplePage("#people.selected=2");
+  const [ada, grace, linus] = f.parent.people;
+  assert.equal(f.controller.selected_object, grace, "the fragment selected by id once the roster was in place");
+  assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, true, false]);
+  assert.equal(f.browser.location.hash, "#people.selected=2");
+  f.rowsOf()[0].children[0].click();
+  assert.equal(f.browser.location.hash, "#people.selected=1&people.dir=ascending",
+    "a new selection replaces the fragment value; every restorable value is written, defaults included");
+  f.controller.selected_object_id = "3";
+  assert.equal(f.controller.selected_object, linus, "writing the id selects");
+  f.controller.selected_object_id = "9";
+  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id, f.browser.location.hash],
+    [[], "9", "#people.selected=9&people.dir=ascending"], "an unknown id clears the selection and stays wanted");
+  const late = new SpecialPerson();
+  late.id = "9";
+  late.name = "Nine";
+  f.parent.people = [ada, late];
+  assert.equal(f.controller.selected_object, late, "the wanted id resolves when its object arrives");
+  f.browser.navigate("#people.selected=1");
+  assert.equal(f.controller.selected_object, ada, "the fragment reapplies on navigation");
+  f.controller.deselect_all();
+  assert.equal(f.browser.location.hash, "#people.dir=ascending", "no selection leaves the fragment");
+  assert.equal(f.browser.entries.length, 2, "selection changes add no history entries");
+});
+
+test("a sortable list orders rows by a column, flips on repeat, and keeps the selection", () => {
+  const f = peoplePage();
+  const [, grace] = f.parent.people;
+  const names = () => f.rowsOf().map(row => row.children[0].textContent);
+  const sorts = () => [f.nameHeader.getAttribute("aria-sort"), f.roleHeader.getAttribute("aria-sort")];
+  assert.deepEqual(names(), ["Ada", "Grace", "Linus"]);
+  assert.deepEqual([f.controller.sort_key, f.controller.sort_direction, {...f.controller.sort_states}], [null, "ascending", {}]);
+  assert.deepEqual(sorts(), [null, null]);
+  f.controller.select_object(grace);
+  f.roleHeader.click();
+  assert.deepEqual(names(), ["Grace", "Ada", "Linus"], "the header's sort_by action sorts by its column");
+  assert.deepEqual([f.controller.sort_key, f.controller.sort_direction], ["role", "ascending"]);
+  assert.deepEqual(sorts(), [null, "ascending"], "bind-aria-sort reads the column's state from the sort_states hash");
+  assert.deepEqual([f.controller.selected_object, Array.from(f.controller.selected_indexes)], [grace, [0]], "the selection follows its object");
+  assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [true, false, false]);
+  f.roleHeader.click();
+  assert.deepEqual(names(), ["Linus", "Ada", "Grace"], "the same column flips the direction");
+  assert.deepEqual(sorts(), [null, "descending"]);
+  f.nameHeader.click();
+  assert.deepEqual(names(), ["Ada", "Grace", "Linus"], "a new column sorts ascending");
+  assert.deepEqual(sorts(), ["ascending", null]);
+  f.controller.sort(null, "ascending");
+  assert.deepEqual([names(), sorts(), {...f.controller.sort_states}], [["Ada", "Grace", "Linus"], [null, null], {}], "no key restores the represented order");
+  f.controller.sort_direction = "descending";
+  assert.deepEqual(names(), ["Ada", "Grace", "Linus"], "a direction without a key changes nothing");
+  f.controller.sort_key = "name";
+  assert.deepEqual(names(), ["Linus", "Grace", "Ada"], "setting the key alone sorts with the current direction");
+  assert.equal(f.controller.selected_object, grace);
+  const [ada] = f.parent.people;
+  f.parent.people = [grace, ada];
+  assert.deepEqual(names(), ["Grace", "Ada"], "a new collection is sorted too");
+});
+
+test("a sortable list restores its sort from the fragment and writes changes back", () => {
+  const f = peoplePage("#people.sort=role&people.dir=descending");
+  const names = () => f.rowsOf().map(row => row.children[0].textContent);
+  assert.deepEqual(names(), ["Linus", "Ada", "Grace"], "the fragment chose the column and direction");
+  assert.equal(f.roleHeader.getAttribute("aria-sort"), "descending");
+  assert.equal(f.browser.location.hash, "#people.sort=role&people.dir=descending");
+  f.nameHeader.click();
+  assert.equal(f.browser.location.hash, "#people.sort=name&people.dir=ascending", "the sort replaces the fragment values");
+  assert.equal(f.browser.entries.length, 1, "sorting adds no history entries");
 });

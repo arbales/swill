@@ -47,11 +47,13 @@ module Swill
       controller.awake_from_dom
     end
 
+    # An element that already has a View, such as a list row created in code,
+    # is part of the tree whatever its attributes say.
     sig { params(element: T.untyped, owner: T.nilable(View), controllers: T.untyped).void }
     def walk(element, owner, controllers)
-      view = nil
-      if managed?(element)
-        view = element.__swill_view__ || create_view(element)
+      view = element.__swill_view__
+      view = create_view(element) if !view && managed?(element)
+      if view
         owner.adopt_subview(view) if owner && !view.superview()
         if element.hasAttribute("controller") && !view.controller_value()
           controller_class = Runtime.resolve(element.getAttribute("controller"))

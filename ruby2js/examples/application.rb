@@ -18,6 +18,11 @@ module Demo
     # Kept equal to the badge outlet's count by an object binding.
     property :badge_count, type: Integer, default: 0
 
+    # The roster JSON becomes people; the list shows them through bind="people".
+    property :people, type: T::Array[Demo::Person], default: []
+    outlet :roster, type: T.untyped, optional: true
+    outlet :people_list, type: Demo::PeopleList, optional: true
+
     property :title, type: String do
       current = person
       if current
@@ -39,10 +44,41 @@ module Demo
       current.name = data["name"] if current && data
       current_badge = badge
       bind(:badge_count, to: current_badge, key_path: "count") if current_badge
+      rows = roster
+      self.people = people_from(rows) if rows
       # Start with the name field focused; the field is a View, so it accepts.
       app = application
       field = name_field
       app.make_first_responder(field) if app && field
+    end
+
+    # Enter, a double-click, or the list's own button hand its selection here:
+    # the selected person becomes the one being edited.
+    sig { params(sender: Demo::PeopleList).void }
+    def activate_selection(sender)
+      self.person = sender.selected_object
+    end
+
+    # A row's remove button. The sender is the button, so the list says which
+    # row it sits in; the list re-renders from the new array.
+    sig { params(sender: T.untyped).void }
+    def remove_person(sender)
+      list = people_list
+      return unless list
+      removed = list.object_at(list.row_for(sender))
+      self.people = people.select { |candidate| candidate != removed }
+    end
+
+    sig { params(rows: T::Array[T.untyped]).returns(T::Array[Demo::Person]) }
+    def people_from(rows)
+      rows.map { |row| person_from(row) }
+    end
+
+    sig { params(row: T.untyped).returns(Demo::Person) }
+    def person_from(row)
+      person = Demo::SpecialPerson.new
+      person.apply_attributes(row)
+      person
     end
 
     # Escape in any owned field bubbles here through the responder chain.
@@ -147,6 +183,25 @@ module Demo
 end
 
 module Demo
+  # The roster table. Rows are cloned from its <template for="row"> and bind
+  # to each person; the selection and sort order are kept in the URL under
+  # the people window, so a reload or Back/Forward shows the same view.
+  class PeopleList < Swill::Controller::SortableList
+    extend T::Sig
+
+    restorable :selected_object_id, key: :selected
+    restorable :sort_key, key: :sort
+    restorable :sort_direction, key: :dir
+
+    # How many times a different person became the selected one.
+    property :selection_changes, type: Integer, default: 0
+
+    sig { override.params(previous: T.untyped, object: T.untyped).void }
+    def selected_object_did_change(previous, object)
+      self.selection_changes = selection_changes + 1
+    end
+  end
+
   # Bound by its parent through bind="person" on its root; its own bindings
   # resolve under represented_object, so bind="name" edits the person.
   class PersonEditor < Swill::Controller

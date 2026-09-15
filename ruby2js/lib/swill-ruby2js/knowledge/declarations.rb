@@ -7,10 +7,11 @@ module Swill
     class Knowledge
       
         DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|T::(?:Array|Hash)\[[\w:., ]+\]|[A-Z]\w*(?:::\w+)*)\z/
+        DECLARATION_MACROS = %i[property attribute outlet].freeze
 
         def declaration?(node)
           call = node.type == :block ? node.children.first : node
-          call.type == :send && call.children.first.nil? && %i[property attribute outlet].include?(call.children[1])
+          call.type == :send && call.children.first.nil? && DECLARATION_MACROS.include?(call.children[1])
         end
 
         # Validate source before filters can erase or transform it (Pragma can
@@ -30,48 +31,28 @@ module Swill
         end
 
         # restorable :query, key: :q — a bindable path whose value the
-
-        # application keeps in the URL fragment. Types are resolved at validation.
-
+        # application keeps in the URL fragment. The leaf type is derived at
+        # validation; the runtime checks the path at installation.
         def collect_restorable(entry, node)
-
           _, _, path, options = node.children
-
           unless path && %i[sym str].include?(path.type)
-
             raise CompileError, "restorable path must be a literal symbol or string"
-
           end
-
           key = nil
-
           if options
-
             raise CompileError, "restorable accepts only key:" unless options.type == :hash
-
             options.children.each do |pair|
-
               name, value = pair.children
-
               raise CompileError, "restorable accepts only key:" unless name.type == :sym && name.children.first == :key
-
               raise CompileError, "restorable key must be a literal symbol or string" unless %i[sym str].include?(value.type)
-
               key = value.children.first.to_s
-
             end
-
           end
-
           text = path.children.first.to_s
-
           raise CompileError, "restorable path must be a dotted property path" unless text.match?(/\A[a-z_]\w*(?:\.[a-z_]\w*)*\z/)
-
           entry["restorations"] << {"path" => text, "key" => key || text}
-
         end
 
-        
 
         def collect_property(entry, node)
           call = node.type == :block ? node.children.first : node

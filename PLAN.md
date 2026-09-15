@@ -78,15 +78,48 @@ The initial kernel and DOM-boundary spike is complete and verified:
   between the load phase and `controller_did_load`, with
   `controller_did_restore(restored)`, `main=content` and `main.key=value`
   fragment keys, push on navigation, replace on state change, and
-  Back/Forward reloading fragment-named content without writing history.
+  Back/Forward reloading fragment-named content without writing history;
+- list controllers: `Swill::Controller::List` clones template rows bound
+  straight to their objects, owns row views and any controller inside a row
+  (`bind="@"` hands it the row's object), wires row actions to the list with
+  `row_for(sender)`, selects by identity with derived `selected_indexes` and
+  `selected_object`, keeps a restorable `selected_object_id` that resolves
+  now or when the object arrives, and routes clicks, shift-click ranges,
+  arrow keys, Enter, and double-click activation through the responder
+  chain. A computed property with a `did_change` hook is now kept current so
+  the hook runs on every dependency change;
+- compiler audit (September 2026): the compiler rejects what it cannot
+  compile or emit, and the runtime rejects metadata it cannot install or
+  honor. Sends on untyped receivers are dynamic through `Runtime.read`,
+  `write`, and `invoke` rather than chosen by a global property-name
+  heuristic, and a block on an untyped receiver is rejected; `Const.new`
+  types its result; setter methods for declared properties and `restorable`
+  paths are checked at installation; which classes may declare `outlet` and
+  `restorable` is Sorbet's rule; registry seeding is declared in source with
+  `inheritable_registry :name, seeded_by: :attribute` instead of a module
+  name known to the compiler; the `Spike` alias and duplicated checks are
+  gone;
+- core value types: per-type lowering tables for String, Symbol, Integer,
+  Float, Boolean, nil, Array, and Hash receivers and for array and hash
+  blocks, with runtime helpers where Ruby's rule differs (integer division,
+  `split`, `slice`, `sort`, `index`, `push`, `fetch`, and others), Ruby
+  truthiness for filtering blocks, typed results for chains, one fixture
+  compared between MRI and JavaScript, and a build error for any method
+  outside the tables;
+- sortable lists: `Swill::Controller::SortableList` with stored, restorable
+  `sort_key` and `sort_direction`, a `sort_by` header action from
+  `data-column`, `sort_states` for `aria-sort` bindings, Ruby-shaped value
+  comparison, and selection kept by identity through reorders. Key paths
+  read a Hash segment by key, as key-value coding does for dictionaries.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: List Controllers
+## Immediate Next Slice: Editors and Inline Editing
 
 Model work beyond step 1 is deferred (decided September 2026) until the UI
-surface is complete. Roadmap item 5 is done; next is item 6, beginning with
-list selection and row ownership.
+surface is complete. List selection, row ownership, and sortable lists are
+done; item 6 continues with editors, inline editing, and detached drafts,
+then native text and select controls.
 
 ## Ordered Roadmap
 
@@ -144,8 +177,9 @@ authorization, and transactions do not move into the browser.
 
 ### 6. Higher-Level Controllers and Controls
 
-- Port list selection and row ownership first.
-- Then add sortable lists, editors, inline editing, and detached drafts.
+- Port list selection and row ownership first (done).
+- Then add sortable lists (done), editors, inline editing, and detached
+  drafts.
 - Add native text/select controls before custom wrappers.
 - Prefer application-shaped APIs over broad compiler support added only for a
   single implementation technique.
@@ -211,6 +245,19 @@ After the model vertical slice and one Giraffic flow, decide whether to:
 Stop or narrow the experiment if production features repeatedly require
 application-specific lowering, general reflection, runtime source
 interpretation, or duplicated framework protocols.
+
+## Known Gaps
+
+Recorded so they are fixed deliberately rather than rediscovered:
+
+- JavaScript classes registered with `Swill.register` cannot use
+  `name_did_change` hooks: the runtime dispatches hooks from the installed
+  method table, which registration fills only from `static actions`. Fix by
+  registering hook methods and bridging their camel-case names like the
+  lifecycle hooks (September 2026).
+- The core value type tables (`filters/core_types.rb`) cover common methods
+  and blocks; a method outside them is a build error. Grow the tables as
+  real code needs them, each entry with its MRI comparison.
 
 ## Explicitly Deferred
 

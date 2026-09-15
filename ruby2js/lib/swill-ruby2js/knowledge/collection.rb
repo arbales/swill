@@ -141,11 +141,10 @@ module Swill
           statements(node.children.last).each do |statement|
             if statement.type == :def
               method, args, = statement.children
-              if entry["name"] == "Swill::Model::Attributes" && method == :attribute
-                # `attribute` is a compile-time class-body declaration in JavaScript.
-                # Its ordinary Ruby implementation remains the MRI source of truth;
-                # collect_property and generated registry seeds lower that one
-                # finite protocol without compiling its metaprogramming body.
+              if DECLARATION_MACROS.include?(method)
+                # A class method named after a declaration macro is its MRI
+                # implementation. The compiler lowers the declaration itself
+                # (collect_property) and never compiles that body.
                 next
               end
               unless args.children.all? { |arg| arg.type == :arg }
@@ -154,18 +153,14 @@ module Swill
               validate_expression!(statement.children.last)
               entry["class_methods"] << statement
             elsif statement.type == :send && statement.children[0..1] == [nil, :extend] &&
-                  constant(statement.children.fetch(2)).end_with?("Declarations")
+                  constant(statement.children.fetch(2)) == "Swill::Declarations"
               # The compiler implements this finite declaration protocol directly.
             elsif statement.type == :send && statement.children.first.nil? &&
                   %i[inheritable_registry class_setting].include?(statement.children[1])
               _, macro, name, *options = statement.children
               raise CompileError, "#{macro} name must be a literal symbol" unless name&.type == :sym
               if macro == :inheritable_registry
-                initial = options.empty? ? :hash : options.first&.children&.first
-                unless options.length <= 1 && options.first&.type != :block && %i[hash array].include?(initial)
-                  raise CompileError, "registry storage must be :hash or :array"
-                end
-                entry["registries"] << {"name" => name.children.first.to_s, "initial" => initial.to_s}
+                entry["registries"] << collect_registry(name, options)
               else
                 raise CompileError, "class_setting coercion blocks are outside this slice" unless options.empty?
                 entry["settings"] << name.children.first.to_s
@@ -178,6 +173,27 @@ module Swill
           end
           names = entry["registries"].map { |item| item["name"] } + entry["settings"]
           raise CompileError, "duplicate class declaration" unless names.uniq == names
+        end
+
+        # inheritable_registry :name [, :array] [, seeded_by: :attribute]. A
+        # registry seeded by a declaration macro receives, in every class that
+        # inherits it, one entry per declaration made with that macro.
+        def collect_registry(name, options)
+          keywords = options.last&.type == :hash ? options.pop : nil
+          initial = options.empty? ? :hash : options.first&.children&.first
+          unless options.length <= 1 && options.first&.type != :block && %i[hash array].include?(initial)
+            raise CompileError, "registry storage must be :hash or :array"
+          end
+          seeded_by = nil
+          keywords&.children&.each do |pair|
+            key, value = pair.children
+            unless key.type == :sym && key.children.first == :seeded_by &&
+                   value.type == :sym && value.children.first == :attribute
+              raise CompileError, "inheritable_registry accepts only seeded_by: :attribute"
+            end
+            seeded_by = value.children.first.to_s
+          end
+          {"name" => name.children.first.to_s, "initial" => initial.to_s, "seeded_by" => seeded_by}
         end
 
     end
