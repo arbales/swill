@@ -12,7 +12,7 @@ module Demo
     # is decoded, and an optional outlet may be absent.
     outlet :name_field, type: Swill::View
     outlet :badge, type: Demo::Badge
-    outlet :seed, type: T.untyped
+    outlet :seed, type: T::Hash[String, String]
     outlet :missing, type: Swill::View, optional: true
 
     # Kept equal to the badge outlet's count by an object binding.
@@ -20,7 +20,7 @@ module Demo
 
     # The roster JSON becomes people; the list shows them through bind="people".
     property :people, type: T::Array[Demo::Person], default: []
-    outlet :roster, type: T.untyped, optional: true
+    outlet :roster, type: T::Array[Demo::Person], optional: true
     outlet :people_list, type: Demo::PeopleList, optional: true
 
     property :title, type: String do
@@ -39,17 +39,14 @@ module Demo
 
     sig { void }
     def awake_from_dom
-      current = person
-      data = seed
-      current.name = data["name"] if current && data
-      current_badge = badge
-      bind(:badge_count, to: current_badge, key_path: "count") if current_badge
-      rows = roster
-      self.people = people_from(rows) if rows
+      # Required outlets are connected by now, and view_did_load set a person.
+      T.must(person).name = T.must(seed).fetch("name")
+      bind(:badge_count, to: T.must(badge), key_path: "count")
+      self.people = T.must(roster) if roster
       # Start with the name field focused; the field is a View, so it accepts.
+      # A controller awakened outside an application has none to ask.
       app = application
-      field = name_field
-      app.make_first_responder(field) if app && field
+      app.make_first_responder(T.must(name_field)) if app
     end
 
     # Enter, a double-click, or the list's own button hand its selection here:
@@ -69,16 +66,12 @@ module Demo
       self.people = people.select { |candidate| candidate != removed }
     end
 
-    sig { params(rows: T::Array[T.untyped]).returns(T::Array[Demo::Person]) }
-    def people_from(rows)
-      rows.map { |row| person_from(row) }
-    end
-
-    sig { params(row: T.untyped).returns(Demo::Person) }
-    def person_from(row)
-      person = Demo::SpecialPerson.new
-      person.apply_attributes(row)
-      person
+    # The roster script holds rows; the outlet holds people. The awakening
+    # checks the result against the outlet's type.
+    sig { override.params(name: String, value: T.untyped).returns(T.untyped) }
+    def decode_outlet_data(name, value)
+      return value unless name == "roster"
+      T.cast(value, T::Array[Hash]).map { |row| Demo::SpecialPerson.from_attributes(row) }
     end
 
     # Escape in any owned field bubbles here through the responder chain.
@@ -101,8 +94,7 @@ module Demo
     # Reached through the responder chain from a nested controller's button.
     sig { void }
     def shout
-      current = person
-      current.name = current.name.upcase if current
+      T.must(person).name = T.must(person).name.upcase
     end
   end
 

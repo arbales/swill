@@ -6,6 +6,7 @@ module Swill
     # Lowerings both surfaces share.
     module SharedLowering
       include ::Ruby2JS::Filter::SEXP
+      include SorbetOperations
 
         # Ruby exceptions become JavaScript Error objects so browsers keep stack
         # traces and callers can tell errors from thrown values. Only a literal

@@ -25,13 +25,14 @@ module Swill
       object.respond_to?(validator) ? object.public_send(validator, value, previous) : value
     end
 
+    # The wire key first, then the name; a wire hash from JSON has string
+    # keys, a Ruby caller may pass symbols, as the JavaScript runtime's
+    # plain objects accept either spelling.
     def self.apply_attributes(object, source)
       object.class.model_attributes.each_value do |descriptor|
-        key = descriptor[:key]
-        name = descriptor[:name]
-        value = source[key] if source.key?(key)
-        value = source[name] if !source.key?(key) && source.key?(name)
-        object.public_send("#{name}=", value) if source.key?(key) || source.key?(name)
+        candidates = [descriptor[:key], descriptor[:name]].flat_map { |key| [key, key.to_s] }
+        found = candidates.find { |key| source.key?(key) }
+        object.public_send("#{descriptor[:name]}=", source[found]) if found
       end
       object
     end

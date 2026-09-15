@@ -599,6 +599,9 @@
     }
     classes.set(name, klass);
   }
+  function registered(name) {
+    return classes.get(name);
+  }
   function resolve(name) {
     if (!classes.has(name)) {
       throw new Error(`Unknown class: ${name}`);
@@ -731,6 +734,53 @@
     return object[method.js](...[sender, event].slice(0, method.arity));
   }
 
+  // lib/swill/runtime/types.mjs
+  function must(value) {
+    if (value == null) throw new TypeError("T.must received nil");
+    return value;
+  }
+  function cast(value, type) {
+    if (!conforms(value, type)) {
+      throw new TypeError(`T.cast expected ${type}, got ${describe(value)}`);
+    }
+    return value;
+  }
+  function absurd(value) {
+    throw new TypeError(`T.absurd reached with ${describe(value)}`);
+  }
+  function conforms(value, type) {
+    const nilable = /^T\.nilable\((.+)\)$/.exec(type);
+    if (nilable) return value == null || conforms(value, nilable[1]);
+    switch (type) {
+      case "T.untyped":
+        return true;
+      case "NilClass":
+        return value == null;
+      case "String":
+      case "Symbol":
+        return typeof value === "string";
+      case "Integer":
+        return Number.isInteger(value);
+      case "Float":
+        return typeof value === "number";
+      case "T::Boolean":
+        return typeof value === "boolean";
+      default:
+    }
+    if (type === "Array" || type.startsWith("T::Array[")) return Array.isArray(value);
+    if (type === "Hash" || type.startsWith("T::Hash[")) return isPlainObject(value);
+    const klass = registered(type) ?? globalThis[type];
+    if (typeof klass !== "function") throw new Error(`Unknown class: ${type}`);
+    return value instanceof klass;
+  }
+  function describe(value) {
+    if (value == null) return "nil";
+    if (Array.isArray(value)) return "Array";
+    if (isPlainObject(value)) return "Hash";
+    if (typeof value === "object") return value.constructor?.name ?? "object";
+    return typeof value;
+  }
+
   // lib/swill/runtime/attributes.mjs
   function isAttribute(object, name) {
     return !!declarations(object.constructor, "properties").get(name)?.attribute;
@@ -822,6 +872,11 @@
     between,
     clamp,
     compareValues,
+    // Sorbet runtime operations
+    must,
+    cast,
+    absurd,
+    conforms,
     // Dispatch
     read,
     segments,
@@ -1424,7 +1479,7 @@
         Runtime.write(
           controller,
           name,
-          this.value_for(controller, name, element)
+          this.value_for(controller, by_name[name], element)
         );
       });
       declared.forEach((descriptor) => {
@@ -1447,13 +1502,24 @@
         if (!child.hasAttribute("controller")) return this.collect(child, found);
       });
     }
-    value_for(controller, name, element) {
+    // The element decides what the value is: decoded JSON, the inert
+    // template, a child controller, or a view. The declaration decides what it
+    // must be: a typed outlet's value is checked against the declared type,
+    // shallowly, as T.cast checks, so a mismatch fails here by outlet name
+    // rather than at first use.
+    value_for(controller, descriptor, element) {
+      let name = descriptor.name;
+      let value = this.materialize(controller, name, element);
+      let typed = descriptor.type && descriptor.type !== "T.untyped";
+      if (typed && !Runtime.conforms(value, descriptor.type)) {
+        throw new Error(`Outlet ${name} expects ${descriptor.type}`);
+      }
+      ;
+      return value;
+    }
+    materialize(controller, name, element) {
       if (element.tagName === "SCRIPT" && element.type === "application/json") {
-        let text = element.textContent.trim();
-        return controller.decode_outlet_data(
-          name,
-          text.length === 0 ? null : JSON.parse(text)
-        );
+        return this.decode(controller, name, element);
       }
       ;
       if (element.tagName === "TEMPLATE") return element;
@@ -1461,6 +1527,13 @@
       if (!view) throw new Error(`Outlet ${name} is not a managed element`);
       let owner = view.controller_value();
       return owner ? owner : view;
+    }
+    decode(controller, name, element) {
+      let text = element.textContent.trim();
+      return controller.decode_outlet_data(
+        name,
+        text.length === 0 ? null : JSON.parse(text)
+      );
     }
   };
   var Swill__Awakening = class extends Swill__Object {
@@ -2586,6 +2659,8 @@
     class Swill__Model__Attributes_Layer extends Superclass {
       // On MRI the attribute macro below seeds the registry; the compiler
       // reads seeded_by to do the same from collected declarations.
+      // Materialize an instance from a wire hash keyed by attribute keys,
+      // as Opal's Base.new(values) does.
       collect_attributes() {
         return Runtime.collect_attributes(this);
       }
@@ -2606,6 +2681,9 @@
   }
   function Swill__Model__Attributes_ClassMethods(Superclass) {
     class Swill__Model__Attributes_ClassMethods_Layer extends Object {
+      from_attributes(source) {
+        return Runtime.invoke(new this(), "apply_attributes", source);
+      }
       model_attributes() {
         return Runtime.inheritableRegistry(this, "model_attributes", "hash");
       }
@@ -3036,6 +3114,12 @@
             "arity": 2
           },
           "value_for": {
+            "arity": 3
+          },
+          "materialize": {
+            "arity": 3
+          },
+          "decode": {
             "arity": 3
           }
         }
@@ -3604,7 +3688,7 @@
   Runtime.install(meta);
 
   // lib/swill/browser_api.mjs
-  var registered = /* @__PURE__ */ new WeakSet();
+  var registered2 = /* @__PURE__ */ new WeakSet();
   var isObject = (value) => value !== null && typeof value === "object";
   function assertDescriptorMap(value, declaration) {
     if (!isObject(value) || Array.isArray(value)) {
@@ -3742,14 +3826,14 @@
       if (typeof name !== "string" || name.trim().length === 0) {
         throw new TypeError("Registered classes need a name");
       }
-      if (registered.has(klass)) throw new Error(`Class already registered: ${name}`);
+      if (registered2.has(klass)) throw new Error(`Class already registered: ${name}`);
       const parent = Object.getPrototypeOf(klass);
-      if (!roots.has(parent) && !registered.has(parent)) {
+      if (!roots.has(parent) && !registered2.has(parent)) {
         throw new Error(`Register the parent class before ${name}`);
       }
       const { properties, methods } = declarationsFor(klass);
       Runtime2.install({ classes: { [name]: { constructor: klass, properties, methods } } });
-      registered.add(klass);
+      registered2.add(klass);
       return klass;
     }
     function start(options = {}) {
@@ -3762,7 +3846,7 @@
       if (typeof ApplicationClass !== "function" || ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application)) {
         throw new TypeError("application must extend Swill.Application");
       }
-      if (ApplicationClass !== Application && !registered.has(ApplicationClass)) {
+      if (ApplicationClass !== Application && !registered2.has(ApplicationClass)) {
         throw new Error("Register the application class before starting it");
       }
       const application = new ApplicationClass();

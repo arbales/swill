@@ -45,6 +45,7 @@ module Swill
 
         def on_send(node)
           receiver, method, *args = node.children
+          return lower_sorbet(node) if SorbetOperations.operation?(node)
           return lower_raise(args) if receiver.nil? && method == :raise
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
           return lower_call(receiver, args) if method == :call && receiver && receiver.type != :self

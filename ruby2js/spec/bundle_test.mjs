@@ -22,6 +22,9 @@ test("script loading installs both artifacts using a single runtime", () => {
   assert.ok(person instanceof Base);
   assert.ok(person instanceof Runtime.resolve("Swill::Object"));
   assert.equal(Runtime.invoke(person, "rename", " Ada "), "[<Ada>]");
+  const materialized = Runtime.resolve("Demo::SpecialPerson").from_attributes({name: "Grace", job: " lead "});
+  assert.ok(materialized instanceof Base);
+  assert.deepEqual([materialized.name, materialized.role], ["Grace", "lead"], "from_attributes applies through validation");
   controller.person = person;
   const changes = [];
   const dispose = Runtime.observePath(controller, "title", value => changes.push(value));

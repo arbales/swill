@@ -214,9 +214,11 @@ Controllers declare `outlet :name, type: ...` and markup names the element with
 `outlet="name"`. Outlets connect between `view_did_load` and bindings, only from
 the controller's owned region including child-controller roots. The value is
 the child controller, the element's view, an inert `<template>`, or JSON from a
-`<script type="application/json">` passed through `decode_outlet_data`.
-Undeclared, duplicate, and unresolved required outlets raise; `optional: true`
-outlets may be absent. Binding and action
+`<script type="application/json">` passed through `decode_outlet_data`. The
+declared type names the value, `T::Hash[String, String]` for a JSON object or
+`Swill::View` for an input, and a typed outlet's value is checked against it
+at awakening. Undeclared, duplicate, unresolved required, and mistyped outlets
+raise; `optional: true` outlets may be absent. Binding and action
 scans stop at nested `[controller]` boundaries, so each element is wired by its
 direct owner only. Awakening runs `view_did_load`, wiring, and `awake_from_dom`
 for each controller children first, then `controller_did_load`, then the
@@ -340,9 +342,13 @@ property :label, type: String do
 end
 ```
 
-`extend T::Sig` and `sig` are erased from output. Runtime Sorbet operations are
-rejected and no browser `sorbet-runtime` is bundled. The build generates RBIs
-for declared accessors and type-check-only probes for declaration expressions.
+`extend T::Sig` and `sig` are erased from output. `T.must`, `T.cast`, `T.let`,
+`T.assert_type!`, `T.unsafe`, and `T.absurd` compile to runtime checks with
+sorbet-runtime's behavior, and the compiler uses their types: `T.must(person)`
+on a nilable property lowers to a direct call on the class, and `T.unsafe`
+makes the sends on its result dynamic. No other `T` construct is allowed in a
+body, and no browser `sorbet-runtime` is bundled. The build generates RBIs for
+declared accessors and type-check-only probes for declaration expressions.
 
 ## Current scope
 
@@ -365,8 +371,9 @@ The implementation covers:
   represented objects for child controllers, and object-to-object bindings;
 - application-owned first responder with focus reconciliation and key routing
   through the responder chain;
-- model attributes with `validate_<name>(value, previous)` validation and
-  observable, baseline-aware dirty tracking, shared with MRI;
+- model attributes with `validate_<name>(value, previous)` validation,
+  `from_attributes` materialization from a wire hash, and observable,
+  baseline-aware dirty tracking, shared with MRI;
 - window templates, named containers with replaceable content, dialogs, and
   observed awakening of code-created content;
 - list controllers: template rows bound to their objects, row views and row
@@ -383,9 +390,9 @@ The implementation covers:
 - readable and minified script bundles with source maps.
 
 It does not claim general Ruby modules, reflection, mutable declaration defaults,
-runtime Sorbet operations, dynamic class mutation, list and editor
-controllers, controls, or a complete model-layer port. Unsupported forms fail
-compilation.
+Sorbet constructs beyond the compiled `T` operations, dynamic class mutation,
+editor controllers, controls, or a complete model-layer port. Unsupported forms
+fail compilation.
 
 Extend this scope through additional controller, awakening, binding, and model
 slices tested against existing behavior.

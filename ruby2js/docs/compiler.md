@@ -124,7 +124,8 @@ property :label, type: String do
 end
 
 outlet :name_field, type: Swill::View
-outlet :seed, type: T.untyped, optional: true
+outlet :seed, type: T::Hash[String, String]
+outlet :extra, type: T.untyped, optional: true
 ```
 
 | Rule | Detail |
@@ -133,6 +134,7 @@ outlet :seed, type: T.untyped, optional: true
 | Keywords | `type:` required; `default:` optional for `property`, required for `attribute`; `key:` only meaningful for `attribute`; `optional:` only for `outlet` |
 | Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, `T::Array[...]`, `T::Hash[...]`, a constant path, or `T.untyped` as an explicit opt-out of static lowering |
 | Outlets | A stored, nilable, observable property with `outlet` and `optional` metadata, connected at awakening; never computed and never defaulted. The macro is declared on `Swill::Controller` in the RBI, so Sorbet limits it to controllers |
+| Outlet types | Name the connected value: a framework class for a view or child controller, `T::Hash[...]` or `T::Array[...]` for decoded JSON, `T.untyped` for anything. A class type is resolved to its installed name after collection and must be a class. Awakening checks a typed outlet's value against the type shallowly, as `T.cast` does, so a JSON script that decodes to the wrong shape, or that is connected where a view is declared, fails by outlet name |
 | Defaults | Literal string, integer, `nil`, `true`, `false`, or an empty `[]` or `{}`; the generated default is a function, so each instance gets its own collection. Non-empty collection literals are rejected |
 | Computed | Block form, `do`/`end` or braces, no block arguments, no `default:`; `attribute` cannot be computed |
 | Key | Literal symbol or string; defaults to the name |
@@ -236,7 +238,9 @@ export const meta = {
                   compute: function compute_label() { return this.loud ? Runtime.upcase(this.name) : this.name; }},
         "blank?": {js: "blank_predicate", type: "T::Boolean", attribute: false, compute: ...},
         "badge": {type: "T.nilable(Demo::Badge)", attribute: false, outlet: true, optional: false,
-                  defaultValue: function default_badge() { return null; }}
+                  defaultValue: function default_badge() { return null; }},
+        "seed": {type: "T.nilable(T::Hash[String, String])", attribute: false, outlet: true, optional: false,
+                 defaultValue: function default_seed() { return null; }}
       },
       registries: {model_attributes: {"name": {property: "name", key: "name"}}},
       methods: {"greeting": {"arity": 0}, "rename": {"arity": 1}}
@@ -275,7 +279,7 @@ runtime nor the framework classes. Only `Swill` is global.
 
 `Swill.register` converts `static properties`, `static outlets`, explicit
 actions, and native getters into the same `meta.classes` descriptors emitted
-by the compiler. It then delegates to `Runtime.install`; JavaScript classes do
+by the compiler. An outlet descriptor takes `optional`; its value is untyped. It then delegates to `Runtime.install`; JavaScript classes do
 not have a separate observation or dispatch path.
 
 ### Sorbet artifacts
@@ -303,6 +307,8 @@ Each entry is compiled with one of two filter chains, chosen by the
 | `initialize` | Rejected | Compiles to `constructor` |
 | `raise "message"` | `throw new Error("message")` | Same |
 | `callback.call(x)` / `callback.(x)` | `callback(x)` for a local; `receiver.call(null, x)` otherwise | Same |
+| `T.must(x)`, `T.cast(x, Type)`, `T.let`, `T.assert_type!`, `T.unsafe`, `T.absurd` | Runtime checks with sorbet-runtime's behavior; the result is typed | Same, without static typing |
+| `receiver&.name(args)` | Rejected: the lowerings would keep the call and drop the guard, and `?.` yields `undefined` where Ruby yields `nil` | Native `?.` |
 | `lookup(name).new(x)` | `new (lookup(name))(x)`; an unparenthesized form would construct `lookup` | Same |
 | `->(x) { ... }` | Arrow function | Arrow function |
 | Constants | Resolved in Ruby scope to encoded identifiers | Same, except a JavaScript intrinsic such as `JSON` passes through when no source constant of that name is in scope |
@@ -338,6 +344,9 @@ the runtime is reached only where a fact is genuinely unavailable.
 | `receiver.strip` / `upcase` / `downcase` on a `String` receiver | `String` |
 | `receiver.blank?` / `present?` / `empty?` / `nil?` | `T::Boolean` |
 | `(expression)` | The inner expression's type |
+| `T.must(expression)` | The expression's type without `T.nilable`; none when the expression is `nil` or untyped |
+| `T.cast(expression, Type)`, `T.let(expression, Type)`, `T.assert_type!(expression, Type)` | `Type`, as written |
+| `T.unsafe(expression)` | `T.untyped`, so sends on it are dynamic |
 
 Nilable wrappers are unwrapped where the rule says "class type". Anything not
 listed has no static type.
@@ -455,6 +464,29 @@ above: a send on one is dynamic, and a block on one is rejected.
 | `Swill::Runtime` | `Runtime` |
 | Any other constant | Resolved through Ruby lexical scope to an encoded identifier; unknown constants are rejected |
 
+### Sorbet runtime operations
+
+Executable code may use the `T` methods below; they compile to runtime
+checks with sorbet-runtime's behavior, so shared Ruby behaves the same on MRI
+and in the browser, and they give the static typer facts. No other `T`
+construct is allowed in a body, and no `sorbet-runtime` is bundled.
+
+| Source | Emitted | Runtime behavior |
+| --- | --- | --- |
+| `T.must(value)` | `Runtime.must(value)` | Throws `TypeError` for `null` or `undefined`, else returns the value |
+| `T.cast(value, Type)`, `T.let(value, Type)`, `T.assert_type!(value, Type)` | `Runtime.cast(value, "Type")` | Throws `TypeError` unless the value conforms, else returns it |
+| `T.unsafe(value)` | `value` | None |
+| `T.absurd(value)` | `Runtime.absurd(value)` | Always throws `TypeError` |
+
+A checkable `Type` is a declaration type, `Float`, `Symbol`, `NilClass`, or
+`T.untyped`. A class name is resolved in Ruby scope and emitted as the name the
+class is installed under, so the check is `instanceof` against the installed
+class; on the JavaScript-only surface a JavaScript intrinsic such as `Element`
+is also accepted. `T::Array[...]` and `T::Hash[...]` check the container only,
+not its elements, as sorbet-runtime does. Unions, procs, mixins, and unknown
+constants are rejected. `T.let` on an assignment keeps its check and types the
+local; the upstream Pragma filter would otherwise erase it.
+
 ### Exceptions
 
 `raise "message"` and `raise "interpolated #{message}"` compile to
@@ -521,6 +553,15 @@ registered from JavaScript, which the compiler never sees.
 | `upcase(value)` / `downcase(value)` | `toUpperCase` / `toLowerCase`; non-strings throw `TypeError` |
 | `length`, `stringify`, `toInteger`, `toFloat`, `capitalize`, `split`, `slice`, `sort`, `sortBy`, `minBy`, `maxBy`, `min`, `max`, `sum`, `uniq`, `compact`, `flatten`, `reverse`, `indexOf`, `append`, `prepend`, `difference`, `fetch`, `deleteKey`, `intDiv`, `modulo`, `between`, `clamp` | Core type methods whose Ruby rule differs from JavaScript's; the core value types section lists which method each serves. `isBlank`, `isEmpty`, and `length` also accept a plain object as a Hash |
 
+### Sorbet runtime operations
+
+| Function | Semantics |
+| --- | --- |
+| `must(value)` | Returns the value; throws `TypeError` for `null` or `undefined` |
+| `cast(value, type)` | Returns the value when it conforms to the type text (a declaration type, `Float`, `Symbol`, `NilClass`, `T.untyped`, or an installed class name); otherwise throws `TypeError`. Containers are checked shallowly |
+| `absurd(value)` | Throws `TypeError` |
+| `conforms(value, type)` | The check behind `cast`, as a boolean; awakening uses it for typed outlets |
+
 ### Observation
 
 | Function | Behavior |
@@ -535,6 +576,7 @@ registered from JavaScript, which the compiler never sees.
 | --- | --- |
 | `collect_attributes(object)` | `{key: value}` for every stored `attribute` declaration, including inherited ones |
 | `apply_attributes(object, source)` | Assigns each attribute from `source[key]`, else `source[name]`, through the property protocol |
+| `Model::Attributes.from_attributes(source)` | Class method from the shared mixin: `new` plus `apply_attributes`, so `decode_outlet_data` can hand an outlet typed `T::Array[Person]` real people |
 | `inheritableRegistry(klass, name, "hash" \| "array")` | Returns the class's own registry, created on first access as a copy of the parent's |
 | `classSetting(klass, name, values)` | With one value, stores it; with none, returns the class's own value or the parent's; more than one value throws |
 
@@ -580,10 +622,10 @@ where it is raised:
 | Top level | Anything other than `class` and `module` |
 | Constants | Unknown or non-static constants; reopened or duplicate constants; a superclass or mixin defined later in the same build; a superclass that is a mixin; an include target that is a class |
 | Methods | Names outside `/\A[a-z_]\w*[!?=]?\z/`; `method_missing`; `initialize` on the shared surface; optional, keyword, splat, or block parameters; a method whose name is also an inherited property |
-| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, or a non-literal `optional:`; `restorable` with a non-literal path or key, any keyword but `key:`, or a path that is not dotted property names. Which classes may declare `outlet` and `restorable` is Sorbet's rule, from the handwritten RBI; whether a `restorable` path starts at a declared property, and whether keys collide, is checked by the runtime at installation |
+| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, or a non-literal `optional:`; an `outlet` whose class type is a mixin; `restorable` with a non-literal path or key, any keyword but `key:`, or a path that is not dotted property names. Which classes may declare `outlet` and `restorable` is Sorbet's rule, from the handwritten RBI; whether a `restorable` path starts at a declared property, and whether keys collide, is checked by the runtime at installation |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
-| Expressions | `T.must`, `T.cast`, `T.let`, `T.unsafe`, `T::Struct`, and any other `T` constant in executable bodies; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments |
+| Expressions | Any `T` construct in an executable body other than `T.must`, `T.cast`, `T.let`, `T.assert_type!`, `T.unsafe`, and `T.absurd` with the right number of arguments; a type argument outside the checkable types, or naming a mixin or an unknown constant; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments; safe navigation (`&.`) on the shared surface |
 | `ClassMethods` registries | `inheritable_registry` keywords other than `seeded_by: :attribute` |
 | Exceptions | Any `raise` form other than a literal message string |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |

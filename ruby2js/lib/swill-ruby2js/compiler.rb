@@ -8,6 +8,7 @@ require "ruby2js/filter/pragma"
 require "ruby2js/filter/return"
 require_relative "names"
 require_relative "knowledge"
+require_relative "filters/sorbet_operations"
 require_relative "filters/shared_lowering"
 require_relative "filters/static_types"
 require_relative "filters/core_types"
@@ -192,6 +193,7 @@ module Swill
             entry["restorations"].each do |restoration|
               restoration["type"] = restoration_type(entry, restoration["path"].split("."))
             end
+            resolve_outlet_types(entry)
             members = entry["properties"].map { |p| [p["js"], p["name"]] } +
               entry["methods"].map { |m| [m["js"], m["name"]] }
             raise CompileError, "colliding members in #{entry['name']}" unless members.map(&:first).uniq.length == members.length
@@ -200,6 +202,22 @@ module Swill
               raise CompileError, "method/property overlap requires explicit lowering"
             end
             available << entry["name"]
+          end
+        end
+
+        # Awakening checks each connected outlet against its declared type by
+        # name, so an outlet's class type is written as the name the class is
+        # installed under. Resolved here, after every entry is collected.
+        def resolve_outlet_types(entry)
+          entry["properties"].each do |property|
+            next unless property["outlet"]
+            type = property["type"]
+            inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
+            next unless inner.match?(/\A[A-Z]\w*(?:::\w+)*\z/) && !%w[String Integer Float Symbol NilClass Array Hash].include?(inner)
+            resolved = knowledge.resolve(inner, entry["name"].split("::"))
+            target = knowledge.entries.find { |candidate| candidate["name"] == resolved }
+            raise CompileError, "outlet #{property['name']}: #{inner} is not a class" unless target["kind"] == "class"
+            property["type"] = type.sub(inner, resolved)
           end
         end
 

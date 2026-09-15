@@ -103,6 +103,7 @@ module Swill
             return nil unless receiver && call_args.empty?
             core_block_result_type(static_type(receiver), method)
           when :send
+            return sorbet_operation_type(node) if SorbetOperations.operation?(node)
             receiver, method, *args = node.children
             # Constructing a collected class yields that class.
             return swill_class(@knowledge.constant(receiver)) if receiver&.type == :const && method == :new
@@ -120,6 +121,22 @@ module Swill
             property = @knowledge.property_entry(klass, method)
             return property["type"] if property && args.empty?
             return_type(@knowledge.method_entry(klass, method))
+          end
+        end
+
+        # T.must strips nilability, T.unsafe forgets the type, and the checked
+        # operations assert theirs.
+        def sorbet_operation_type(node)
+          method = node.children[1]
+          value, type = SorbetOperations.arguments(node)
+          case method
+          when :must
+            inner = static_type(value)
+            return nil if inner.nil? || inner == "NilClass"
+            inner[/\AT\.nilable\((.+)\)\z/, 1] || inner
+          when :unsafe then "T.untyped"
+          when :absurd then nil
+          else type
           end
         end
 

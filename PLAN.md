@@ -110,7 +110,18 @@ The initial kernel and DOM-boundary spike is complete and verified:
   `sort_key` and `sort_direction`, a `sort_by` header action from
   `data-column`, `sort_states` for `aria-sort` bindings, Ruby-shaped value
   comparison, and selection kept by identity through reorders. Key paths
-  read a Hash segment by key, as key-value coding does for dictionaries.
+  read a Hash segment by key, as key-value coding does for dictionaries;
+- Sorbet runtime operations: `T.must`, `T.cast`, `T.let`, `T.assert_type!`,
+  `T.unsafe`, and `T.absurd` compile to runtime checks with sorbet-runtime's
+  behavior on both surfaces, and the static typer uses their types, so
+  `T.must(person).name` replaces a guarded local copy. Other `T` constructs
+  stay rejected; one fixture is compared between MRI and JavaScript;
+- typed outlets: an outlet's type names its value (`T::Hash[String, String]`
+  for decoded JSON, a framework class for a view or controller), class names
+  resolve to installed names, and awakening checks the connected value
+  against the type so a mistyped outlet fails by name. `decode_outlet_data`
+  materializes models with `Model::Attributes.from_attributes`, so the demo
+  controller no longer builds people itself.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
@@ -255,6 +266,11 @@ Recorded so they are fixed deliberately rather than rediscovered:
   method table, which registration fills only from `static actions`. Fix by
   registering hook methods and bridging their camel-case names like the
   lifecycle hooks (September 2026).
+- Safe navigation (`&.`) is rejected on the shared surface (September 2026):
+  the send lowerings would keep the call and drop the guard, and JavaScript's
+  `?.` yields `undefined` where Ruby yields `nil`. Lower it to a guarded form
+  that yields `null` once a use appears; the JavaScript-only surface keeps
+  native `?.`.
 - The core value type tables (`filters/core_types.rb`) cover common methods
   and blocks; a method outside them is a build error. Grow the tables as
   real code needs them, each entry with its MRI comparison.
@@ -264,7 +280,8 @@ Recorded so they are fixed deliberately rather than rediscovered:
 - general Ruby module semantics and arbitrary `included` hooks;
 - `prepend`, runtime class mutation, metaprogramming, and mutable declaration
   defaults;
-- runtime Sorbet operations or a browser `sorbet-runtime`;
+- a browser `sorbet-runtime`; `T` operations beyond the compiled set (unions,
+  procs, `T::Struct`, `T::Enum`);
 - arbitrary ActiveSupport compatibility;
 - server ORM behavior, transactions, and authorization;
 - publishing an npm package or introducing a client package toolchain.

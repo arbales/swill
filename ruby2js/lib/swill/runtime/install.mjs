@@ -241,6 +241,11 @@ export function installClass(klass, name, properties, methods, registries = {}, 
 }
 
 // Markup resolves registered classes only.
+// The installed class for a name, or undefined.
+export function registered(name) {
+  return classes.get(name);
+}
+
 export function resolve(name) {
   if (!classes.has(name)) {
     throw new Error(`Unknown class: ${name}`);

@@ -78,6 +78,13 @@ class SharedTest < Minitest::Test
     File.write("build/mri-dirty.json", JSON.pretty_generate("steps" => steps, "changes" => changes) + "\n")
   end
 
+  def test_from_attributes_materializes_a_model_from_a_wire_hash
+    person = Demo::SpecialPerson.from_attributes("name" => "Ada", "job" => " lead ")
+    assert_instance_of Demo::SpecialPerson, person
+    assert_equal "Ada", person.name
+    assert_equal "lead", person.role, "attributes apply through validation"
+  end
+
   def test_draft_is_shared_ruby_orchestration
     person = Demo::SpecialPerson.new
     person.id = "42"

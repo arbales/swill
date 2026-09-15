@@ -18,6 +18,12 @@ module Swill
         # extract type hints from T.let, which is not annotation-only on MRI).
         def validate_expression!(node)
           return unless node.respond_to?(:type)
+          # T.must and the other compiled Sorbet operations: the value is
+          # validated; the type argument is annotation, checked for shape here.
+          if SorbetOperations.operation?(node)
+            value, = SorbetOperations.arguments(node)
+            return validate_expression!(value)
+          end
           if node.type == :const
             name = constant(node)
             if name == "T" || name.start_with?("T::")

@@ -22,7 +22,7 @@ module Swill
         raise "Undeclared outlet: #{name}" unless by_name[name]
         raise "Duplicate outlet: #{name}" if connected[name]
         connected[name] = true
-        Runtime.write(controller, name, value_for(controller, name, element))
+        Runtime.write(controller, name, value_for(controller, by_name[name], element))
       end
       declared.forEach do |descriptor|
         raise "Unresolved outlet: #{descriptor.name}" if !descriptor.optional && !connected[descriptor.name]
@@ -47,17 +47,34 @@ module Swill
       end)
     end
 
+    # The element decides what the value is: decoded JSON, the inert
+    # template, a child controller, or a view. The declaration decides what it
+    # must be: a typed outlet's value is checked against the declared type,
+    # shallowly, as T.cast checks, so a mismatch fails here by outlet name
+    # rather than at first use.
+    sig { params(controller: Controller, descriptor: T.untyped, element: T.untyped).returns(T.untyped) }
+    def value_for(controller, descriptor, element)
+      name = descriptor.name
+      value = materialize(controller, name, element)
+      typed = descriptor.type && descriptor.type != "T.untyped"
+      raise "Outlet #{name} expects #{descriptor.type}" if typed && !Runtime.conforms(value, descriptor.type)
+      value
+    end
+
     sig { params(controller: Controller, name: String, element: T.untyped).returns(T.untyped) }
-    def value_for(controller, name, element)
-      if element.tagName == "SCRIPT" && element.type == "application/json"
-        text = element.textContent.trim()
-        return controller.decode_outlet_data(name, text.length == 0 ? nil : JSON.parse(text))
-      end
+    def materialize(controller, name, element)
+      return decode(controller, name, element) if element.tagName == "SCRIPT" && element.type == "application/json"
       return element if element.tagName == "TEMPLATE"
       view = element.__swill_view__
       raise "Outlet #{name} is not a managed element" unless view
       owner = view.controller_value()
       owner ? owner : view
+    end
+
+    sig { params(controller: Controller, name: String, element: T.untyped).returns(T.untyped) }
+    def decode(controller, name, element)
+      text = element.textContent.trim()
+      controller.decode_outlet_data(name, text.length == 0 ? nil : JSON.parse(text))
     end
   end
 end

@@ -100,17 +100,159 @@ class CompilerTest < Minitest::Test
     end
   end
 
-  def test_runtime_sorbet_constructs_are_not_silently_erased
-    %w[must cast let unsafe].each do |operation|
-      assert_raises(Swill::Ruby2JS::CompileError) { javascript("def name; T.#{operation}(nil); end") }
+  # Sorbet's runtime operations compile to checks with sorbet-runtime's
+  # behavior and give the typer facts. The fixture runs on MRI (which has
+  # sorbet-runtime) and as JavaScript; results and failures must agree.
+  SORBET_OPERATIONS = <<~'RUBY'
+    class Person < TestObject
+      extend T::Sig
+      property :name, type: String, default: ""
+      sig { returns(String) }
+      def greeting; "Hi #{name}"; end
     end
-    assert_raises(Swill::Ruby2JS::CompileError) { javascript("def name; T::Struct.new; end") }
-    assert_raises(Swill::Ruby2JS::CompileError) do
-      javascript("def name; value = T.let([], T::Array[String]); value; end")
+
+    class Holder < TestObject
+      extend T::Sig
+      property :person, type: T.nilable(Person), default: nil
+
+      sig { returns(String) }
+      def must_greeting; T.must(person).greeting; end
+
+      sig { params(value: T.untyped).returns(String) }
+      def cast_name(value); T.cast(value, Person).name; end
+
+      sig { params(value: T.untyped).returns(Integer) }
+      def let_count(value)
+        items = T.let(value, T::Array[String])
+        items << "x"
+        items.length
+      end
+
+      sig { params(value: T.untyped).returns(T.nilable(String)) }
+      def nilable_cast(value); T.cast(value, T.nilable(String)); end
+
+      sig { params(value: T.untyped).returns(T.untyped) }
+      def unsafe_length(value); T.unsafe(value).length; end
+
+      sig { params(flag: T::Boolean).returns(String) }
+      def either(flag)
+        case flag
+        when true then "yes"
+        when false then "no"
+        else T.absurd(flag)
+        end
+      end
     end
-    assert_raises(Swill::Ruby2JS::CompileError) do
-      javascript("property :name, type: String do\nvalue = T.let('Ada', String)\nvalue\nend")
+  RUBY
+
+  def test_sorbet_runtime_operations_are_lowered_checked_and_typed
+    js = compiler_with_test_object.add(SORBET_OPERATIONS).javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "Runtime.must(this.person).greeting()", "T.must strips nilability, so the call is direct"
+    assert_includes js, 'Runtime.cast(value, "Person").name', "T.cast types the receiver as the class"
+    assert_includes js, 'items = Runtime.cast(value, "T::Array[String]")'
+    assert_includes js, 'Runtime.append(items, "x")', "a T.let local is typed from its declaration"
+    assert_includes js, 'Runtime.read(value, "length")', "T.unsafe forgets the type; the send is dynamic"
+    assert_includes js, "Runtime.absurd(flag)"
+    refute_match(/\bT\.(?:must|cast|let|unsafe|absurd)\(/, js, "no sorbet-runtime call survives")
+    javascript_result = execute(js + <<~JS)
+      const holder = new (Runtime.resolve("Holder"))();
+      const person = new (Runtime.resolve("Person"))();
+      person.name = "Ada";
+      holder.person = person;
+      const failures = [];
+      for (const attempt of [() => { holder.person = null; holder.must_greeting(); },
+                             () => holder.cast_name("Ada"), () => holder.let_count("Ada"),
+                             () => holder.nilable_cast(3)]) {
+        try { attempt(); failures.push(null); } catch (error) { failures.push(error.constructor.name); }
+      }
+      holder.person = person;
+      console.log(JSON.stringify([holder.must_greeting(), holder.cast_name(person), holder.let_count(["a"]),
+        holder.nilable_cast(null), holder.unsafe_length("abc"), holder.either(false), failures]));
+    JS
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
+      class TestObject < Swill::Object; end
+      #{SORBET_OPERATIONS}
+      holder = Holder.new
+      person = Person.new
+      person.name = "Ada"
+      holder.person = person
+      failures = [-> { holder.person = nil; holder.must_greeting }, -> { holder.cast_name("Ada") },
+                  -> { holder.let_count("Ada") }, -> { holder.nilable_cast(3) }].map do |attempt|
+        attempt.call
+        nil
+      rescue TypeError
+        "TypeError"
+      end
+      holder.person = person
+      puts JSON.generate([holder.must_greeting, holder.cast_name(person), holder.let_count(["a"]),
+        holder.nilable_cast(nil), holder.unsafe_length("abc"), holder.either(false), failures])
+    RUBY
+    assert status.success?, ruby
+    assert_equal JSON.parse(ruby), javascript_result
+  end
+
+  def test_sorbet_runtime_operations_work_on_the_javascript_surface
+    compiler = Swill::Ruby2JS::Compiler.new
+    compiler.add("class Node; end\nclass Holder\ndef pick(value, node); T.cast(value, Node).next; T.must(node).size; end\nend", javascript_only: true)
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, 'Runtime.cast(value, "Node").next'
+    assert_includes js, "Runtime.must(node).size"
+  end
+
+  # A csend would reach the send lowerings and come out as a plain call.
+  def test_safe_navigation_is_rejected_on_the_shared_surface
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript("extend T::Sig\nproperty :other, type: T.nilable(Example), default: nil\nsig { returns(T.untyped) }\ndef go; other&.go; end")
     end
+    assert_includes error.message, "safe navigation (&.) is not lowered on the shared surface"
+    compiler = Swill::Ruby2JS::Compiler.new
+    compiler.add("class Node\ndef go(other); other&.go(); end\nend", javascript_only: true)
+    assert_includes compiler.javascript(runtime: "../lib/swill/runtime.mjs"), "other?.go()"
+  end
+
+  def test_other_sorbet_constructs_and_uncheckable_types_are_rejected
+    [
+      ["def name; T::Struct.new; end", "unsupported runtime Sorbet construct T::Struct"],
+      ["def name; T.reveal_type(1); end", "unsupported runtime Sorbet construct T"],
+      ["def name; T.must(1, 2); end", "T.must takes 1 argument(s), not 2"],
+      ["def name; T.cast(1, T.any(String, Integer)); end", "unsupported type in T.cast: T.any(String, Integer)"],
+      ["def name; T.let(1, Missing); end", "T.let to Missing: not a class the runtime can check"],
+      ["def name; T.cast(1, Comparable); end", "T.cast to Comparable: not a class the runtime can check"]
+    ].each do |body, message|
+      error = assert_raises(Swill::Ruby2JS::CompileError, body) { javascript(body) }
+      assert_includes error.message, message
+    end
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add("module Tracking; end\nclass Example < TestObject\ndef name(value); T.cast(value, Tracking); end\nend")
+        .javascript(runtime: "../lib/swill/runtime.mjs")
+    end
+    assert_includes error.message, "T.cast to Tracking: a mixin is not checkable"
+  end
+
+  def test_outlet_types_name_the_value_and_resolve_to_installed_classes
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Demo
+        class Person < TestObject; end
+        class Host < TestObject
+          extend T::Sig
+          outlet :seed, type: T::Hash[String, String]
+          outlet :rows, type: T::Array[Hash], optional: true
+          outlet :owner, type: Person
+          sig { returns(String) }
+          def seeded; T.must(seed).fetch("name"); end
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, 'Runtime.fetch(Runtime.must(this.seed), "name")', "the outlet reads as its declared type"
+    assert_match(/"seed": \{\s*type: "T\.nilable\(T::Hash\[String, String\]\)"/, js)
+    assert_match(/"owner": \{\s*type: "T\.nilable\(Demo::Person\)"/, js, "a class type is resolved to its installed name")
+    assert_includes compiler.rbi, "sig { returns(T.nilable(T::Hash[String, String])) }"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add("module Tracking; end\nclass Example < TestObject\noutlet :seed, type: Tracking\nend")
+        .javascript(runtime: "../lib/swill/runtime.mjs")
+    end
+    assert_includes error.message, "outlet seed: Tracking is not a class"
   end
 
   def test_dynamic_declarations_and_mutable_defaults_are_rejected

@@ -843,6 +843,28 @@ test("outlet mistakes fail at awakening with the outlet name", () => {
   empty.textContent = "  ";
   const [host] = awaken([empty]);
   assert.equal(host.panel, null, "an empty JSON outlet decodes to nil");
+  // A typed outlet's value is checked against its type, whatever the element:
+  // a div or an array where a Hash is declared, or JSON where a controller is.
+  const Typed = class extends SwillController {};
+  Runtime.install({classes: {"Test::TypedOutlets": {constructor: Typed, properties: {
+    seed: outletDescriptor("T.nilable(Hash)"),
+    people: outletDescriptor("T.nilable(Array)", true),
+    badge: outletDescriptor("T.nilable(Demo::Badge)", true)
+  }}}});
+  const awakenTyped = children => new Awakening().wire(element("body", {}, [
+    element("main", {controller: "Test::TypedOutlets"}, children)
+  ]));
+  const jsonScript = (outlet, text) => {
+    const script = element("script", {type: "application/json", outlet});
+    script.textContent = text;
+    return script;
+  };
+  assert.throws(() => awakenTyped([element("div", {klass: "Test::Highlight", outlet: "seed"})]), /Outlet seed expects T.nilable\(Hash\)/);
+  assert.throws(() => awakenTyped([jsonScript("seed", "[1]")]), /Outlet seed expects T.nilable\(Hash\)/);
+  assert.throws(() => awakenTyped([jsonScript("seed", "{}"), jsonScript("badge", "{}")]), /Outlet badge expects T.nilable\(Demo::Badge\)/);
+  const [typed] = awakenTyped([jsonScript("seed", '{"a": 1}'), jsonScript("people", "  ")]);
+  assert.equal(JSON.stringify(typed.seed), '{"a":1}');
+  assert.equal(typed.people, null, "an empty script is nil, which a nilable outlet accepts");
   const inner = element("div", {outlet: "panel"});
   const nested = element("section", {controller: "Demo::Badge"}, [inner]);
   assert.throws(() => awaken([nested]), /Unresolved outlet: panel/,

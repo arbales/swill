@@ -25,6 +25,7 @@ import {
   write, assertWritablePath, writePath,
   observePath, respondsTo, invoke, performAction
 } from "./runtime/paths.mjs";
+import {must, cast, absurd, conforms} from "./runtime/types.mjs";
 import {
   isAttribute, validate_attribute,
   restorations, outlets,
@@ -48,6 +49,9 @@ export const Runtime = {
   uniq, compact, flatten, reverse, indexOf,
   append, prepend, difference, fetch, deleteKey,
   intDiv, modulo, between, clamp, compareValues,
+
+  // Sorbet runtime operations
+  must, cast, absurd, conforms,
 
   // Dispatch
   read, segments, readPath,

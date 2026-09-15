@@ -120,19 +120,17 @@
       return this.reset_person();
     }
     awake_from_dom() {
-      let current = this.person;
-      let data = this.seed;
-      if (Runtime.isTruthy(current && data)) current.name = data.name;
-      let current_badge = this.badge;
-      if (current_badge) {
-        this.bind("badge_count", { to: current_badge, key_path: "count" });
-      }
-      ;
-      let rows = this.roster;
-      if (Runtime.isTruthy(rows)) this.people = this.people_from(rows);
+      Runtime.must(this.person).name = Runtime.fetch(
+        Runtime.must(this.seed),
+        "name"
+      );
+      this.bind(
+        "badge_count",
+        { to: Runtime.must(this.badge), key_path: "count" }
+      );
+      if (this.roster) this.people = Runtime.must(this.roster);
       let app = this.application();
-      let field = this.name_field;
-      if (Runtime.isTruthy(app && field)) return app.make_first_responder(field);
+      if (app) return app.make_first_responder(Runtime.must(this.name_field));
     }
     // Enter, a double-click, or the list's own button hand its selection here:
     // the selected person becomes the one being edited.
@@ -147,13 +145,11 @@
       let removed = list.object_at(list.row_for(sender));
       return this.people = this.people.filter((candidate) => candidate !== removed);
     }
-    people_from(rows) {
-      return rows.map((row) => this.person_from(row));
-    }
-    person_from(row) {
-      let person = new Demo__SpecialPerson();
-      person.apply_attributes(row);
-      return person;
+    // The roster script holds rows; the outlet holds people. The awakening
+    // checks the result against the outlet's type.
+    decode_outlet_data(name, value) {
+      if (name !== "roster") return value;
+      return Runtime.cast(value, "T::Array[Hash]").map((row) => Demo__SpecialPerson.from_attributes(row));
     }
     // Escape in any owned field bubbles here through the responder chain.
     cancel_operation(event) {
@@ -168,8 +164,7 @@
     }
     // Reached through the responder chain from a nested controller's button.
     shout() {
-      let current = this.person;
-      if (current) return current.name = Runtime.upcase(current.name);
+      return Runtime.must(this.person).name = Runtime.upcase(Runtime.must(this.person).name);
     }
   };
   var Demo__Badge = class extends Swill__Controller {
@@ -456,7 +451,7 @@
             }
           },
           "seed": {
-            type: "T.untyped",
+            type: "T.nilable(T::Hash[String, String])",
             attribute: false,
             outlet: true,
             optional: false,
@@ -488,7 +483,7 @@
             }
           },
           "roster": {
-            type: "T.untyped",
+            type: "T.nilable(T::Array[Demo::Person])",
             attribute: false,
             outlet: true,
             optional: true,
@@ -527,11 +522,8 @@
           "remove_person": {
             "arity": 1
           },
-          "people_from": {
-            "arity": 1
-          },
-          "person_from": {
-            "arity": 1
+          "decode_outlet_data": {
+            "arity": 2
           },
           "cancel_operation": {
             "arity": 1

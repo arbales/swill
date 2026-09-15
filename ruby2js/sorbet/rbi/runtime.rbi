@@ -75,6 +75,9 @@ module Swill
     sig { params(object: T.untyped).returns(T.untyped) }
     def self.outlets(object); end
 
+    sig { params(value: T.untyped, type: String).returns(T::Boolean) }
+    def self.conforms(value, type); end
+
     sig { params(object: T.untyped).returns(T::Hash[T.untyped, T.untyped]) }
     def self.collect_attributes(object); end
 
@@ -165,11 +168,23 @@ module Swill::Model::Drafts
   def collect_attributes; end
 end
 
+# The mixin's class-side protocol. Sorbet learns here what the source's
+# included hook does at run time (base.extend(ClassMethods)), and that inside
+# those methods self is a model class.
+module Swill::Model::Attributes
+  extend T::Helpers
+  mixes_in_class_methods(ClassMethods)
+end
+
 module Swill::Model::Attributes::ClassMethods
   extend T::Sig
+  extend T::Helpers
+  extend T::Generic
+  has_attached_class!(:out) { {upper: Swill::Model::Base} }
+  requires_ancestor { T.class_of(Swill::Model::Base) }
 
-  sig { params(name: Symbol, type: T.untyped, default: T.untyped).void }
-  def property(name, type:, default:); end
+  sig { params(source: T::Hash[T.untyped, T.untyped]).returns(T.attached_class) }
+  def from_attributes(source); end
 end
 
 module NameTracking

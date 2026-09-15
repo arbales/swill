@@ -22,3 +22,4 @@ lib/swill/model/base.rb
 --dir=sorbet/rbi
 --dir=sorbet/checks
 --silence-dev-message
+--enable-experimental-requires-ancestor

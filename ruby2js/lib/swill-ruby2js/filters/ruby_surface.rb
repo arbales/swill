@@ -108,8 +108,29 @@ module Swill
           super
         end
 
+        # T.let on an assignment is lowered here, before Pragma would erase it
+        # without its check. The local's static type comes from the declared
+        # type through infer_local_types.
+        def on_lvasgn(node)
+          name, value = node.children
+          return super unless SorbetOperations.operation?(value)
+          node.updated(nil, [name, process(value)])
+        end
+
+        def on_ivasgn(node)
+          name, value = node.children
+          return super unless SorbetOperations.operation?(value)
+          node.updated(nil, [name, process(value)])
+        end
+
         def on_send(node)
           receiver, method, *args = node.children
+          # The lowerings below would keep the call and drop the nil guard, and
+          # JavaScript's ?. yields undefined where Ruby yields nil.
+          if node.type == :csend
+            raise CompileError, "safe navigation (&.) is not lowered on the shared surface; guard #{receiver.loc.expression.source} with a local"
+          end
+          return lower_sorbet(node) if SorbetOperations.operation?(node)
           return lower_raise(args) if receiver.nil? && method == :raise
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
           return lower_respond_to(receiver, args) if method == :respond_to?
