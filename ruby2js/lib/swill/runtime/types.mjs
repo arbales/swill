@@ -26,6 +26,7 @@ export function conforms(value, type) {
   const nilable = /^T\.nilable\((.+)\)$/.exec(type);
   if (nilable) return value == null || conforms(value, nilable[1]);
 
+  if (type.startsWith("T.proc")) return typeof value === "function";
   switch (type) {
     case "T.untyped":
       return true;

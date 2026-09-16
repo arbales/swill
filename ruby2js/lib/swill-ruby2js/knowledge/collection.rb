@@ -7,7 +7,7 @@ module Swill
     class Knowledge
       private
 
-        def collect_scope(nodes, scope, javascript_only)
+        def collect_scope(nodes, scope)
           nodes.each do |node|
             if node.type == :module
               name, body = node.children
@@ -17,10 +17,10 @@ module Swill
               # Collect those two roles independently instead of treating the
               # presence of any nested declaration as proof that it is only a
               # namespace. Empty modules remain valid (inert) mixins.
-              collect_entry(node, scope, "mixin", javascript_only) if children.empty? || nested.length != children.length
-              collect_scope(nested, scope + [constant(name)], javascript_only)
+              collect_entry(node, scope, "mixin") if children.empty? || nested.length != children.length
+              collect_scope(nested, scope + [constant(name)])
             elsif node.type == :class
-              collect_entry(node, scope, "class", javascript_only)
+              collect_entry(node, scope, "class")
             else
               raise CompileError, "unsupported top-level #{node.type}: #{node.loc.expression.source}"
             end
@@ -32,13 +32,13 @@ module Swill
           node.type == :module && constant(node.children.first) != "ClassMethods"
         end
 
-        def collect_entry(node, scope, kind, javascript_only)
+        def collect_entry(node, scope, kind)
           name = (scope + [constant(node.children.first)]).join("::")
           raise CompileError, "reopened/duplicate constant #{name}" if entries.any? { |e| e["name"] == name }
 
           entry = {
             "name" => name, "identifier" => self.class.identifier(name),
-            "kind" => kind, "scope" => scope, "node" => node, "javascript_only" => javascript_only,
+            "kind" => kind, "scope" => scope, "node" => node,
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
             "includes" => [], "properties" => [], "methods" => [], "static_methods" => [], "included_properties" => [],
             "class_methods" => [], "registries" => [], "settings" => [], "restorations" => []
@@ -47,8 +47,7 @@ module Swill
           statements(node.children.last).each do |child|
             if child.type == :def
               method, args, = child.children
-              unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) &&
-                     method != :method_missing && (javascript_only || method != :initialize)
+              unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :method_missing
                 raise CompileError, "unsupported method definition #{method}"
               end
               unless args.children.all? { |arg| arg.type == :arg }

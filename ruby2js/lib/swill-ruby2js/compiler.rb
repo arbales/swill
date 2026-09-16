@@ -14,41 +14,35 @@ require_relative "filters/static_types"
 require_relative "filters/core_types"
 require_relative "filters/ruby_surface"
 require_relative "filters/ruby_calls"
-require_relative "filters/javascript_surface"
 
 module Swill
   module Ruby2JS
-    # The framework's own sources in compilation order, for the build and for
-    # tests that compile the framework.
-    FRAMEWORK_SOURCES = {
-      javascript_only: %w[
-        lib/swill/core/observable.rb
-        lib/swill/core/object.rb
-        lib/swill/core/ownership.rb
-        lib/swill/core/object_bindings.rb
-        lib/swill/core/responder.rb
-        lib/swill/core/view.rb
-        lib/swill/core/controller.rb
-        lib/swill/core/bindings.rb
-        lib/swill/core/actions.rb
-        lib/swill/core/outlets.rb
-        lib/swill/core/awakening.rb
-        lib/swill/core/fragments.rb
-        lib/swill/core/window.rb
-        lib/swill/core/application.rb
-        lib/swill/controller/list.rb
-        lib/swill/controller/sortable_list.rb
-        lib/swill/controller/editor.rb
-        lib/swill/controller/inline_editor.rb
-        lib/swill/controller/editable_list.rb
-      ].freeze,
-      shared: %w[
-        lib/swill/model/attributes.rb
-        lib/swill/model/dirty_tracking.rb
-        lib/swill/model/drafts.rb
-        lib/swill/model/base.rb
-      ].freeze
-    }.freeze
+    # The framework's own sources in compilation order.
+    FRAMEWORK_SOURCES = %w[
+      lib/swill/core/observable.rb
+      lib/swill/core/object.rb
+      lib/swill/core/ownership.rb
+      lib/swill/core/object_bindings.rb
+      lib/swill/core/responder.rb
+      lib/swill/core/view.rb
+      lib/swill/core/controller.rb
+      lib/swill/core/bindings.rb
+      lib/swill/core/actions.rb
+      lib/swill/core/outlets.rb
+      lib/swill/core/awakening.rb
+      lib/swill/core/fragments.rb
+      lib/swill/core/window.rb
+      lib/swill/core/application.rb
+      lib/swill/controller/list.rb
+      lib/swill/controller/sortable_list.rb
+      lib/swill/controller/editor.rb
+      lib/swill/controller/inline_editor.rb
+      lib/swill/controller/editable_list.rb
+      lib/swill/model/attributes.rb
+      lib/swill/model/dirty_tracking.rb
+      lib/swill/model/drafts.rb
+      lib/swill/model/base.rb
+    ].freeze
 
     # Orchestration: collect facts, validate the graph, convert each entry
     # with its surface, and emit definitions. Metadata emission lives in
@@ -60,8 +54,8 @@ module Swill
           @knowledge = Knowledge.new(imports)
         end
 
-        def add(source, file: "(spike)", javascript_only: false)
-          knowledge.collect(source, file, javascript_only: javascript_only)
+        def add(source, file: "(spike)")
+          knowledge.collect(source, file)
           self
         end
 
@@ -251,15 +245,10 @@ module Swill
         end
 
         def convert(source, entry, compiled_class: nil, compiled_parent: nil)
-          filters = entry["javascript_only"] ?
-            [JavaScriptSurface, ::Ruby2JS::Filter::Return] :
-            [RubySurface, ::Ruby2JS::Filter::Return, RubyCalls]
-          # Shared Ruby chooses operators from static types, so a native `||`
-          # must stay logical: `false ?? x` would keep Ruby's falsy value. The
-          # JavaScript-only surface keeps Ruby2JS's own operator selection.
-          ::Ruby2JS.convert(source, filters: filters,
-                          eslevel: 2022, comparison: :identity, truthy: :js,
-                          **(entry["javascript_only"] ? {} : {or: :logical}),
+          # Ruby chooses operators from static types, so a native `||` must
+          # stay logical: `false ?? x` would keep Ruby's falsy value.
+          ::Ruby2JS.convert(source, filters: [RubySurface, ::Ruby2JS::Filter::Return, RubyCalls],
+                          eslevel: 2022, comparison: :identity, truthy: :js, or: :logical,
                           underscored_private: true,
                           knowledge: knowledge, spike_scope: entry["scope"],
                           entry: entry,

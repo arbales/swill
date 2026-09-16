@@ -17,11 +17,16 @@ module Swill
       nil
     end
 
-    sig { params(element: T.untyped).returns(Controller) }
+    sig { void }
+    def initialize
+      super()
+      @teardowns = T.let([], T::Array[T.proc.void])
+    end
+
+    sig { params(element: Element).returns(Controller) }
     def attach(element)
       @view = View.of(element) || View.new(element)
       @view.controller = self
-      @teardowns = []
       self
     end
 
@@ -33,14 +38,14 @@ module Swill
     # Ownership is derived from the sparse view tree and never stored twice.
     sig { returns(T.nilable(Controller)) }
     def parent
-      superview = @view.superview()
+      superview = @view.superview
       superview ? superview.owner() : nil
     end
 
-    # Direct child controllers in tree order, as a JavaScript array.
-    sig { returns(T.untyped) }
+    # Direct child controllers in tree order.
+    sig { returns(T::Array[Controller]) }
     def child_controllers
-      found = []
+      found = T.let([], T::Array[Controller])
       collect_child_controllers(@view, found)
       found
     end
@@ -49,7 +54,7 @@ module Swill
     # DOM so fragments awakened later and multiple applications both work.
     sig { returns(T.nilable(Application)) }
     def application
-      nearest_application(@view.element())
+      nearest_application(@view.element)
     end
 
     # A nested controller answers to its parent; a root controller answers to
@@ -61,7 +66,7 @@ module Swill
 
     sig { params(dispose: T.proc.void).void }
     def register_teardown(dispose)
-      @teardowns.push(dispose)
+      @teardowns << dispose
     end
 
     # Releases this controller's listeners and observers, then its descendants,
@@ -71,37 +76,37 @@ module Swill
     # focus; becoming and resigning move DOM focus accordingly.
     sig { override.returns(T::Boolean) }
     def accepts_first_responder?
-      @view.first_focusable_element() != nil
+      @view.first_focusable_element != nil
     end
 
     sig { override.returns(T::Boolean) }
     def become_first_responder
       return false unless super
-      @view.focus_element()
+      @view.focus_element
       true
     end
 
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
     def resign_first_responder(next_responder)
       return false unless super(next_responder)
-      @view.blur_element()
+      @view.blur_element
       true
     end
 
     sig { void }
     def teardown
-      return if @view.controller_value() != self
+      return if @view.controller_value != self
       view_will_disappear
       current_application = application
-      current_application.release_first_responder(@view.element()) if current_application
-      @teardowns.forEach { |dispose| dispose.() }
+      current_application.release_first_responder(@view.element) if current_application
+      @teardowns.each { |dispose| dispose.() }
       @teardowns = []
       unbind_all
       dispose
-      child_controllers.forEach { |child| child.teardown() }
+      child_controllers.each { |child| child.teardown }
       # Plain outlet views are released too; re-awakening adopts them again.
-      @view.subviews().forEach { |subview| @view.release_subview(subview) }
-      @view.remove_from_superview()
+      @view.subviews.each { |subview| @view.release_subview(subview) }
+      @view.remove_from_superview
       @view.controller = nil
       view_did_disappear
     end
@@ -140,19 +145,19 @@ module Swill
     sig { void }
     def view_did_disappear; end
 
-    sig { params(element: T.untyped).returns(T.nilable(Application)) }
+    sig { params(element: T.nilable(Element)).returns(T.nilable(Application)) }
     def nearest_application(element)
       return nil unless element
       found = element.__swill_application__
       found ? found : nearest_application(element.parentElement)
     end
 
-    sig { params(view: View, found: T.untyped).void }
+    sig { params(view: View, found: T::Array[Controller]).void }
     def collect_child_controllers(view, found)
-      view.subviews().forEach do |subview|
-        controller = subview.controller_value()
+      view.subviews.each do |subview|
+        controller = subview.controller_value
         if controller
-          found.push(controller)
+          found << controller
         else
           collect_child_controllers(subview, found)
         end

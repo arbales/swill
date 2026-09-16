@@ -17,18 +17,18 @@ module Swill
       path = options[:key_path]
       sync = ->(value) { Runtime.write(self, target, value) }
       sync.(Runtime.readPath(source, path))
-      object_bindings.push({target: target, dispose: Runtime.observePath(source, path, sync)})
+      object_bindings << {target: target, dispose: Runtime.observePath(source, path, sync)}
       self
     end
 
     sig { params(target: Symbol).returns(T.untyped) }
     def unbind(target)
-      remaining = []
-      object_bindings.forEach do |binding|
-        if binding.target == target
-          binding.dispose.()
+      remaining = T.let([], T::Array[T::Hash[Symbol, T.untyped]])
+      object_bindings.each do |binding|
+        if binding[:target] == target
+          binding[:dispose].()
         else
-          remaining.push(binding)
+          remaining << binding
         end
       end
       @object_bindings = remaining
@@ -37,12 +37,12 @@ module Swill
 
     sig { returns(T.untyped) }
     def unbind_all
-      object_bindings.forEach { |binding| binding.dispose.() }
+      object_bindings.each { |binding| binding[:dispose].() }
       @object_bindings = []
       self
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[T::Hash[Symbol, T.untyped]]) }
     def object_bindings
       @object_bindings = [] unless @object_bindings
       @object_bindings

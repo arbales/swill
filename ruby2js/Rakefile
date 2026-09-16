@@ -7,10 +7,7 @@ DIST = File.join(ROOT, "dist")
 
 def compile_spike
   framework = Swill::Ruby2JS::Compiler.new
-  Swill::Ruby2JS::FRAMEWORK_SOURCES[:javascript_only].each do |path|
-    framework.add(File.read(path), file: path, javascript_only: true)
-  end
-  Swill::Ruby2JS::FRAMEWORK_SOURCES[:shared].each do |path|
+  Swill::Ruby2JS::FRAMEWORK_SOURCES.each do |path|
     framework.add(File.read(path), file: path)
   end
   FileUtils.mkdir_p(DIST)
@@ -51,6 +48,7 @@ def compile_spike
   end
   rbi = framework.rbi + application.rbi.lines.drop(2).join
   File.write("sorbet/rbi/generated.rbi", rbi)
+  File.write("sorbet/rbi/dom.rbi", Swill::Ruby2JS::DOM.rbi)
   FileUtils.mkdir_p("sorbet/checks")
   File.write("sorbet/checks/declarations.rb", framework.type_probes + application.type_probes.lines.drop(2).join)
 end

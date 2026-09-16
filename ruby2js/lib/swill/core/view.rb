@@ -8,17 +8,17 @@ module Swill
   class View < Responder
     extend T::Sig
 
-    sig { params(element: T.untyped).void }
+    sig { params(element: Element).void }
     def initialize(element)
       super()
       @element = element
-      @controller = nil
-      @superview = nil
-      @subviews = []
+      @controller = T.let(nil, T.nilable(Controller))
+      @superview = T.let(nil, T.nilable(View))
+      @subviews = T.let([], T::Array[View])
       element.__swill_view__ = self
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(Element) }
     def element
       @element
     end
@@ -38,8 +38,8 @@ module Swill
       @superview
     end
 
-    # Adopted child views in adoption order, as a JavaScript array.
-    sig { returns(T.untyped) }
+    # Adopted child views in adoption order.
+    sig { returns(T::Array[View]) }
     def subviews
       @subviews
     end
@@ -59,13 +59,13 @@ module Swill
       previous = child.superview()
       previous.release_subview(child) if previous
       child.assign_superview(self)
-      @subviews.push(child)
+      @subviews << child
       child
     end
 
     sig { params(child: View).void }
     def release_subview(child)
-      @subviews = @subviews.filter { |candidate| candidate != child }
+      @subviews = @subviews.select { |candidate| candidate != child }
       child.assign_superview(nil)
     end
 
@@ -89,13 +89,13 @@ module Swill
     # ---- elements: the DOM work a controller leaves to its view ----
 
     # The View on an element, or nil when it has none.
-    sig { params(element: T.untyped).returns(T.nilable(View)) }
+    sig { params(element: Element).returns(T.nilable(View)) }
     def self.of(element)
-      element.__swill_view__ || nil
+      element.__swill_view__
     end
 
     # The controller rooted at an element, or nil.
-    sig { params(element: T.untyped).returns(T.nilable(Controller)) }
+    sig { params(element: Element).returns(T.nilable(Controller)) }
     def self.controller_for(element)
       view = View.of(element)
       view ? view.controller_value() : nil
@@ -106,58 +106,58 @@ module Swill
       @element.hasAttribute(name)
     end
 
-    sig { params(element: T.untyped).returns(T::Boolean) }
+    sig { params(element: Element).returns(T::Boolean) }
     def contains?(element)
       @element.contains(element)
     end
 
     # A fresh element from an inert template's content, or nil when the
     # template has none.
-    sig { params(template: T.untyped).returns(T.untyped) }
+    sig { params(template: HTMLTemplateElement).returns(T.nilable(Element)) }
     def clone_template(template)
       node = template.content.firstElementChild
       node ? node.cloneNode(true) : nil
     end
 
-    sig { params(element: T.untyped).void }
+    sig { params(element: Element).void }
     def append(element)
       @element.appendChild(element)
     end
 
-    sig { params(anchor: T.untyped, element: T.untyped).void }
+    sig { params(anchor: Element, element: Element).void }
     def insert_after(anchor, element)
       anchor.after(element)
     end
 
-    sig { params(element: T.untyped).void }
+    sig { params(element: Element).void }
     def remove(element)
-      element.remove()
+      element.remove
     end
 
     # The direct child of this view's element that contains element, or nil.
-    sig { params(element: T.untyped).returns(T.untyped) }
+    sig { params(element: Element).returns(T.nilable(Element)) }
     def child_containing(element)
-      node = element
+      node = T.let(element, T.nilable(Element))
       node = node.parentElement while node && node.parentElement != @element
       node
     end
 
     # A state class on a child element.
-    sig { params(element: T.untyped, name: String, on: T::Boolean).void }
+    sig { params(element: Element, name: String, on: T::Boolean).void }
     def mark(element, name, on)
       element.classList.toggle(name, on)
     end
 
     # The selected state, as a class and for assistive technology.
-    sig { params(element: T.untyped, on: T::Boolean).void }
+    sig { params(element: Element, on: T::Boolean).void }
     def mark_selected(element, on)
       mark(element, "selected", on)
       element.setAttribute("aria-selected", on ? "true" : "false")
     end
 
-    sig { params(element: T.untyped).void }
+    sig { params(element: Element).void }
     def reveal(element)
-      element.scrollIntoView({block: "nearest"}) if element.scrollIntoView
+      element.scrollIntoView({block: "nearest"})
     end
 
     # Keyboard focus needs a tab stop.
@@ -169,9 +169,8 @@ module Swill
     # Drop the browser's text selection, as before a shift-click sweep.
     sig { void }
     def clear_text_selection
-      owner_document = @element.ownerDocument
-      selection = owner_document.getSelection ? owner_document.getSelection() : nil
-      selection.removeAllRanges() if selection
+      selection = @element.ownerDocument.getSelection
+      selection.removeAllRanges if selection
     end
 
     # An event listener on this view's element; the returned callable
@@ -190,7 +189,7 @@ module Swill
     end
 
     # This element when it is focusable, else its first focusable descendant.
-    sig { returns(T.untyped) }
+    sig { returns(T.nilable(Element)) }
     def first_focusable_element
       @element.matches(focusable_selector) ? @element : @element.querySelector(focusable_selector)
     end
@@ -198,13 +197,13 @@ module Swill
     sig { void }
     def focus_element
       target = first_focusable_element
-      target.focus() if target
+      target.focus if target
     end
 
     sig { void }
     def blur_element
       target = first_focusable_element
-      target.blur() if target
+      target.blur if target
     end
 
     # A view wraps a focusable element, so it accepts by default; becoming

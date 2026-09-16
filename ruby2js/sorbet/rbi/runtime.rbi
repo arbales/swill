@@ -99,23 +99,6 @@ module Swill
   end
 end
 
-# Browser intrinsics used by the JavaScript-only surface.
-class Promise
-  extend T::Sig
-  sig { params(executor: T.untyped).void }
-  def initialize(executor); end
-end
-
-class MutationObserver
-  extend T::Sig
-  sig { params(callback: T.untyped).void }
-  def initialize(callback); end
-  sig { params(target: T.untyped, options: T.untyped).void }
-  def observe(target, options); end
-  sig { void }
-  def disconnect; end
-end
-
 class Swill::Object
   extend T::Sig
 
@@ -136,20 +119,6 @@ class Swill::Controller
 
   sig { params(path: T.any(Symbol, String), key: T.nilable(T.any(Symbol, String))).void }
   def self.restorable(path, key: nil); end
-end
-
-class URLSearchParams
-  extend T::Sig
-  sig { params(text: String).void }
-  def initialize(text); end
-  sig { params(callback: T.untyped).void }
-  def forEach(callback); end
-  sig { params(key: String).void }
-  def delete(key); end
-  sig { params(key: String, value: String).void }
-  def set(key, value); end
-  sig { returns(String) }
-  def toString; end
 end
 
 module Swill::Model::DirtyTracking

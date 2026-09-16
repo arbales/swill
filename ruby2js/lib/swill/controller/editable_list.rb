@@ -21,10 +21,10 @@ module Swill
     sig { override.void }
     def activate_selection
       indexes = current_indexes
-      if indexes.length > 0
-        begin_editing(indexes[0])
-      else
+      if indexes.empty?
         super
+      else
+        begin_editing(T.must(indexes[0]))
       end
     end
 
@@ -47,7 +47,7 @@ module Swill
       original = object_at(index)
       return false unless original
       return false if editing? && !end_editing(true)
-      copy = original.respond_to?(:draft) ? original.draft() : original.dup
+      copy = original.respond_to?(:draft) ? original.draft : original.dup
       open_editor(index, original, copy)
     end
 
@@ -60,7 +60,7 @@ module Swill
       return true unless editor && index != nil
       copy = nil
       if commit
-        return false unless editor.commit_editing()
+        return false unless editor.commit_editing
         copy = self.edited_object
         error = validation_error(copy)
         if error
@@ -68,7 +68,7 @@ module Swill
           return false
         end
       else
-        editor.discard_editing()
+        editor.discard_editing
       end
       close_editor
       if commit
@@ -100,7 +100,7 @@ module Swill
       end_editing(true)
     end
 
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def cancel_operation(event)
       if editing?
         end_editing(false)
@@ -136,7 +136,7 @@ module Swill
         original.apply_draft(copy)
         return original
       end
-      source = self.represented_object || []
+      source = T.let(self.represented_object || [], T::Array[T.untyped])
       source_index = source.index(original)
       values = source.dup
       values[source_index] = copy if source_index
@@ -150,7 +150,7 @@ module Swill
     sig { params(object: T.untyped).returns(T.untyped) }
     def validation_error(object)
       return nil unless object && object.respond_to?(:validate)
-      object.validate()
+      object.validate
     end
 
     # Whether a focus-out commit should proceed. Override to confirm.
@@ -175,17 +175,17 @@ module Swill
     # ---- rows and the editor ----
 
     # The editor sits among the rows while editing, but is not one.
-    sig { override.params(element: T.untyped).returns(T::Boolean) }
+    sig { override.params(element: Element).returns(T::Boolean) }
     def row_element?(element)
       return false unless super(element)
       editor = @editor
-      editor == nil || editor.view().element() != element
+      editor == nil || editor.view.element != element
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(T.nilable(HTMLTemplateElement)) }
     def editor_template
-      found = owned_matching(@view.element(), 'template[for="editor"]')
-      found.length > 0 ? found[0] : nil
+      found = owned_matching(@view.element, 'template[for="editor"]')
+      found.empty? ? nil : T.cast(found[0], HTMLTemplateElement)
     end
 
     sig { params(index: Integer, original: T.untyped, copy: T.untyped).returns(T::Boolean) }
@@ -195,16 +195,18 @@ module Swill
       row = row_elements[index]
       return false unless row
       node = container_view.clone_template(template)
+      raise 'The editor template is empty' unless node
       self.edited_object = copy
       container_view.mark(row, "being-edited", true)
       container_view.insert_after(row, node)
       Awakening.wire(node)
-      editor = View.controller_for(node)
-      unless editor.is_a?(Controller::InlineEditor)
+      found = View.controller_for(node)
+      unless found.is_a?(Controller::InlineEditor)
         Awakening.detach(node)
         container_view.remove(node)
         raise 'The editor template root must be a Swill::Controller::InlineEditor'
       end
+      editor = T.cast(found, Controller::InlineEditor)
       editor.bind(:represented_object, to: self, key_path: "edited_object")
       @editor = editor
       @editing_index = index
@@ -222,7 +224,7 @@ module Swill
       @editing_original = nil
       self.edited_object = nil
       return unless editor
-      element = editor.view().element()
+      element = editor.view.element
       Awakening.detach(element)
       container_view.remove(element)
     end

@@ -8,24 +8,26 @@ module Swill
   class Fragments < Swill::Object
     extend T::Sig
 
-    sig { params(browser: T.untyped).void }
+    sig { params(browser: T.nilable(DOMWindow)).void }
     def initialize(browser)
       super()
       @browser = browser
       @suspended = false
-      @on_change = nil
+      @on_change = T.let(nil, T.nilable(T.proc.params(event: Event).void))
     end
 
     sig { returns(T::Boolean) }
     def available?
-      @browser != nil && @browser.location != nil && @browser.history != nil
+      browser = @browser
+      browser != nil && browser.location != nil && browser.history != nil
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(T::Hash[String, String]) }
     def params
-      found = {}
-      return found unless available?
-      search = URLSearchParams.new(@browser.location.hash.replace(/^#/, ""))
+      found = T.let({}, T::Hash[String, String])
+      browser = @browser
+      return found unless browser && available?
+      search = URLSearchParams.new(browser.location.hash.sub(/^#/, ""))
       search.forEach(->(value, key) { found[key] = value })
       found
     end
@@ -35,21 +37,22 @@ module Swill
     sig { params(key: String, value: T.nilable(String), history: Symbol).void }
     def write(key, value, history)
       return if history == :none || @suspended
-      return unless available?
-      location = @browser.location
-      search = URLSearchParams.new(location.hash.replace(/^#/, ""))
+      browser = @browser
+      return unless browser && available?
+      location = browser.location
+      search = URLSearchParams.new(location.hash.sub(/^#/, ""))
       if value == nil
         search.delete(key)
       else
         search.set(key, value)
       end
-      query = search.toString()
-      next_url = location.pathname + location.search + (query.length > 0 ? "#" + query : "")
+      query = search.toString
+      next_url = location.pathname + location.search + (query.empty? ? "" : "#" + query)
       return if next_url == location.pathname + location.search + location.hash
       if history == :push
-        @browser.history.pushState(nil, "", next_url)
+        browser.history.pushState(nil, "", next_url)
       else
-        @browser.history.replaceState(nil, "", next_url)
+        browser.history.replaceState(nil, "", next_url)
       end
     end
 
@@ -67,17 +70,21 @@ module Swill
 
     sig { params(callback: T.proc.void).void }
     def observe(callback)
-      return unless available?
-      @on_change = ->(_event) { callback.() }
-      @browser.addEventListener("popstate", @on_change)
-      @browser.addEventListener("hashchange", @on_change)
+      browser = @browser
+      return unless browser && available?
+      on_change = ->(_event) { callback.() }
+      @on_change = on_change
+      browser.addEventListener("popstate", on_change)
+      browser.addEventListener("hashchange", on_change)
     end
 
     sig { void }
     def release
-      return unless @on_change
-      @browser.removeEventListener("popstate", @on_change)
-      @browser.removeEventListener("hashchange", @on_change)
+      on_change = @on_change
+      browser = @browser
+      return unless on_change && browser
+      browser.removeEventListener("popstate", on_change)
+      browser.removeEventListener("hashchange", on_change)
       @on_change = nil
     end
   end

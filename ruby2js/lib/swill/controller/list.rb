@@ -35,8 +35,8 @@ module Swill
     # Indexes of the selected objects among the arranged objects, ascending.
     property :selected_indexes, type: T::Array[Integer] do
       selection = current_selection
-      found = []
-      arranged_objects.forEach { |object, index| found.push(index) if selection.includes(object) }
+      found = T.let([], T::Array[Integer])
+      arranged_objects.each_with_index { |object, index| found << index if selection.include?(object) }
       found
     end
 
@@ -46,12 +46,12 @@ module Swill
 
     # ---- selection ----
 
-    sig { params(indexes: T.untyped).void }
+    sig { params(indexes: T::Array[Integer]).void }
     def select_indexes(indexes)
       arranged = arranged_objects
-      objects = []
-      indexes.forEach do |index|
-        objects.push(arranged[index]) if index >= 0 && index < arranged.length
+      objects = T.let([], T::Array[T.untyped])
+      indexes.each do |index|
+        objects << arranged[index] if index >= 0 && index < arranged.length
       end
       self.selected_objects = objects
     end
@@ -68,7 +68,7 @@ module Swill
 
     sig { void }
     def select_first_if_nothing_selected
-      select_indexes([0]) if current_selection.length == 0 && arranged_objects.length > 0
+      select_indexes([0]) if current_selection.empty? && !arranged_objects.empty?
     end
 
     # Enter and double-click. By default the owner receives an
@@ -96,7 +96,7 @@ module Swill
 
     # The index of the row containing element, or -1 when it is in none; the
     # way an action handler learns which row its sender sits in.
-    sig { params(element: T.untyped).returns(Integer) }
+    sig { params(element: Element).returns(Integer) }
     def row_for(element)
       row = container_view.child_containing(element)
       index = row ? row_elements.index(row) : nil
@@ -154,14 +154,14 @@ module Swill
     end
 
     # Arrow keys move a single selection; everything else continues up.
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def key_down(event)
       total = arranged_objects.length
       key = event.key
       if total > 0 && (key == "ArrowDown" || key == "ArrowUp")
-        event.preventDefault()
+        event.preventDefault
         indexes = current_indexes
-        current = indexes.length > 0 ? indexes[0] : -1
+        current = indexes.empty? ? -1 : T.must(indexes[0])
         index = key == "ArrowDown" ? current + 1 : current - 1
         index = 0 if index < 0
         index = total - 1 if index > total - 1
@@ -173,10 +173,10 @@ module Swill
     end
 
     # Enter activates the selection when there is one.
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def insert_newline(event)
-      if current_selection.length > 0
-        event.preventDefault()
+      if !current_selection.empty?
+        event.preventDefault
         activate_selection
       else
         super
@@ -186,16 +186,16 @@ module Swill
     # ---- rows ----
 
     # The objects the rows show, in order; subclasses may sort or filter.
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[T.untyped]) }
     def arranged_objects
-      self.represented_object || []
+      T.let(self.represented_object || [], T::Array[T.untyped])
     end
 
     # Where rows mount.
-    sig { returns(T.untyped) }
+    sig { returns(Element) }
     def container
       mount = self.rows
-      mount ? mount.element() : @view.element()
+      mount ? mount.element : @view.element
     end
 
     sig { returns(View) }
@@ -206,19 +206,19 @@ module Swill
 
     # Rows in order: the container's children other than templates and
     # whatever row_element? rejects.
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[Element]) }
     def row_elements
-      found = []
-      each_child(container, ->(child) { found.push(child) if child.tagName != "TEMPLATE" && row_element?(child) })
+      found = T.let([], T::Array[Element])
+      each_child(container, ->(child) { found << child if child.tagName != "TEMPLATE" && row_element?(child) })
       found
     end
 
     # Override when other children share the container. The header view is
     # never a row.
-    sig { params(element: T.untyped).returns(T::Boolean) }
+    sig { params(element: Element).returns(T::Boolean) }
     def row_element?(element)
       header = self.header_view
-      header == nil || header.element() != element
+      header == nil || header.element != element
     end
 
     # Real views per row, or bare elements when many rows must stay cheap.
@@ -227,15 +227,15 @@ module Swill
       true
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(T.nilable(HTMLTemplateElement)) }
     def row_template
-      found = owned_matching(@view.element(), 'template[for="row"]')
-      found.length > 0 ? found[0] : nil
+      found = owned_matching(@view.element, 'template[for="row"]')
+      found.empty? ? nil : T.cast(found[0], HTMLTemplateElement)
     end
 
     # The element for item. Clones the row template; override to build rows
     # in code. Bindings, actions, selection, and configure_row still apply.
-    sig { params(_item: T.untyped).returns(T.untyped) }
+    sig { params(_item: T.untyped).returns(Element) }
     def make_row_element(_item)
       template = row_template
       node = template ? container_view.clone_template(template) : nil
@@ -244,13 +244,13 @@ module Swill
     end
 
     # NSTableView willDisplayCell analog.
-    sig { params(_element: T.untyped, _item: T.untyped).void }
+    sig { params(_element: Element, _item: T.untyped).void }
     def configure_row(_element, _item); end
 
     sig { void }
     def render_all
       clear_rows
-      arranged_objects.forEach { |item| attach_row(item) }
+      arranged_objects.each { |item| attach_row(item) }
       sync_selected_rows
     end
 
@@ -279,10 +279,10 @@ module Swill
 
     sig { void }
     def clear_rows
-      row_elements.forEach { |element| release_row(element) }
+      row_elements.each { |element| release_row(element) }
     end
 
-    sig { params(element: T.untyped).void }
+    sig { params(element: Element).void }
     def release_row(element)
       Awakening.detach(element)
       release = element.__swill_row__
@@ -291,7 +291,7 @@ module Swill
         element.__swill_row__ = nil
       end
       row_view = View.of(element)
-      row_view.remove_from_superview() if row_view
+      row_view.remove_from_superview if row_view
       container_view.remove(element)
     end
 
@@ -302,10 +302,10 @@ module Swill
       return unless @awakened
       indexes = current_indexes
       elements = row_elements
-      elements.forEach do |element, index|
-        container_view.mark_selected(element, indexes.includes(index))
+      elements.each_with_index do |element, index|
+        container_view.mark_selected(element, indexes.include?(index))
       end
-      first = indexes.length > 0 ? elements[indexes[0]] : nil
+      first = indexes.empty? ? nil : elements[T.must(indexes[0])]
       container_view.reveal(first) if first
     end
 
@@ -328,15 +328,15 @@ module Swill
 
     # Shift-click extends the selection; suppress the browser's text
     # selection sweep across rows.
-    sig { params(event: T.untyped).void }
+    sig { params(event: MouseEvent).void }
     def row_mouse_down(event)
       return unless self.allows_multiple_selection && event.shiftKey
       return if row_for(event.target) < 0
-      event.preventDefault()
+      event.preventDefault
       @view.clear_text_selection
     end
 
-    sig { params(event: T.untyped).void }
+    sig { params(event: MouseEvent).void }
     def row_clicked(event)
       index = row_for(event.target)
       return if index < 0
@@ -349,7 +349,7 @@ module Swill
       end
     end
 
-    sig { params(event: T.untyped).void }
+    sig { params(event: MouseEvent).void }
     def row_double_clicked(event)
       index = row_for(event.target)
       return if index < 0
@@ -362,10 +362,10 @@ module Swill
     def select_range(anchor, index)
       low = anchor < index ? anchor : index
       high = anchor < index ? index : anchor
-      indexes = []
+      indexes = T.let([], T::Array[Integer])
       current = low
       while current <= high
-        indexes.push(current)
+        indexes << current
         current += 1
       end
       select_indexes(indexes)
@@ -392,8 +392,8 @@ module Swill
     sig { void }
     def reconcile_selection
       arranged = arranged_objects
-      survivors = current_selection.filter { |object| arranged.includes(object) }
-      if survivors.length == 0
+      survivors = current_selection.select { |object| arranged.include?(object) }
+      if survivors.empty?
         requested = object_with_id(self.selected_object_id)
         survivors = [requested] if requested
       end
@@ -417,13 +417,12 @@ module Swill
       objects && objects.length > 0 ? objects[0] : nil
     end
 
-    # The selection and its indexes as JavaScript arrays for the DOM code here.
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[T.untyped]) }
     def current_selection
       self.selected_objects
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[Integer]) }
     def current_indexes
       self.selected_indexes
     end

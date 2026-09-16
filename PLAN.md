@@ -122,6 +122,16 @@ The initial kernel and DOM-boundary spike is complete and verified:
   against the type so a mistyped outlet fails by name. `decode_outlet_data`
   materializes models with `Model::Attributes.from_attributes`, so the demo
   controller no longer builds people itself.
+- one compilation surface (16 September 2026): the JavaScript-only surface
+  is gone. The browser is described once in `knowledge/dom.rb`, which
+  generates `sorbet/rbi/dom.rbi` and drives native lowering, so framework
+  signatures say `Element`, `Event`, or `Document` where a DOM value is
+  meant and the receiver's type decides between Ruby and JavaScript
+  semantics; `T.untyped` is always a Ruby object dispatched by name. Lambdas
+  and blocks take their parameter types from the callee's signature or the
+  DOM table; locals and instance variables merge their assignments' types;
+  `initialize` and `def self.` are allowed anywhere. The framework's browser
+  code is now Ruby with typed arrays and Ruby core methods;
 - editors: `Swill::Controller::Editor` (represented_object as binding root,
   NSEditor's boolean `commit_editing` and `discard_editing` on Enter and
   Escape, also adopted by the TypeScript original), `Controller::InlineEditor` (ends
@@ -134,28 +144,12 @@ The initial kernel and DOM-boundary spike is complete and verified:
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: One Compilation Surface
+## Immediate Next Slice: Native Controls
 
-Decided 16 September 2026: retire the JavaScript-only surface. It exists so
-DOM-heavy framework files can leave DOM values untyped, and it answers one
-question per file ("is an untyped receiver a JavaScript object or a Ruby
-one?") that is really a question per receiver. The receiver typing added on
-that surface already overrides the file default wherever a type is known.
-
-The slice: declare the DOM and the JavaScript intrinsics the framework uses
-(`Element`, `Node`, `Event`, `KeyboardEvent`, `Document`, `Window`,
-`HTMLTemplateElement`, `JSON`, `MutationObserver`, ...) in a Sorbet RBI;
-replace `T.untyped` with those types in framework signatures where a DOM
-value is meant; lower a DOM-typed receiver natively (property access, calls,
-JavaScript truthiness and identity); keep Ruby semantics for framework
-classes, core value types, and `T.untyped` (dynamic dispatch); allow
-`initialize` by class rather than by file. Then remove `javascript_only`, the
-second filter chain, the two source lists, and the parentheses convention.
-Portability to MRI becomes a property Sorbet can see: a file naming no DOM
-type is shareable.
-
-After that, item 6 continues with native text and select controls, including
-the control-to-editor resignation delegate
+Model work beyond step 1 is deferred (decided September 2026) until the UI
+surface is complete. Lists, sortable lists, editors, and inline editing are
+done, and the compiler has one surface; item 6 continues with native text and
+select controls, including the control-to-editor resignation delegate
 (`control_should_resign_first_responder`) the inline editor is prepared for.
 
 ## Ordered Roadmap
@@ -295,8 +289,8 @@ Recorded so they are fixed deliberately rather than rediscovered:
 - Safe navigation (`&.`) is rejected on the shared surface (September 2026):
   the send lowerings would keep the call and drop the guard, and JavaScript's
   `?.` yields `undefined` where Ruby yields `nil`. Lower it to a guarded form
-  that yields `null` once a use appears; the JavaScript-only surface keeps
-  native `?.`.
+  that yields `null` once a use appears; a DOM-typed receiver keeps native
+  `?.`.
 - The core value type tables (`filters/core_types.rb`) cover common methods
   and blocks; a method outside them is a build error. Grow the tables as
   real code needs them, each entry with its MRI comparison.

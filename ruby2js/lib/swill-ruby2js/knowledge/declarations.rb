@@ -6,7 +6,7 @@ module Swill
     # The property, attribute, and outlet declaration DSL.
     class Knowledge
       
-        DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|T::(?:Array|Hash)\[[\w:., ]+\]|[A-Z]\w*(?:::\w+)*)\z/
+        DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)\z/
         DECLARATION_MACROS = %i[property attribute outlet].freeze
 
         def declaration?(node)

@@ -18,9 +18,9 @@ module Swill
 
     sig { params(controller: Controller).returns(Controller) }
     def wire(controller)
-      root = controller.view().element()
+      root = controller.view.element
       prefix = controller.binding_root
-      disposers = []
+      disposers = T.let([], T::Array[T.proc.void])
       wire_properties(controller, prefix, root, disposers)
       wire_region(controller, prefix, root, disposers)
       controller.register_teardown(release(disposers))
@@ -32,10 +32,10 @@ module Swill
     # itself (bind="@" is the object). When that root is a controller's,
     # only its represented object comes from here; the controller wires the
     # rest as its own region. Returns the disposer.
-    sig { params(object: Swill::Object, element: T.untyped).returns(T.proc.void) }
+    sig { params(object: Swill::Object, element: Element).returns(T.proc.void) }
     def wire_object(object, element)
-      disposers = []
-      disposers.push(wire_element(object, element, nil)) if element.hasAttribute("bind")
+      disposers = T.let([], T::Array[T.proc.void])
+      disposers << wire_element(object, element, nil) if element.hasAttribute("bind")
       unless element.hasAttribute("controller")
         wire_properties(object, nil, element, disposers)
         wire_region(object, nil, element, disposers)
@@ -43,10 +43,10 @@ module Swill
       release(disposers)
     end
 
-    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: T.untyped, disposers: T.untyped).void }
+    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: Element, disposers: T::Array[T.proc.void]).void }
     def wire_region(object, prefix, element, disposers)
       each_child(element, ->(child) do
-        disposers.push(wire_element(object, child, prefix)) if child.hasAttribute("bind")
+        disposers << wire_element(object, child, prefix) if child.hasAttribute("bind")
         unless child.hasAttribute("controller")
           wire_properties(object, prefix, child, disposers)
           wire_region(object, prefix, child, disposers)
@@ -54,19 +54,18 @@ module Swill
       end)
     end
 
-    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: T.untyped, disposers: T.untyped).void }
+    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: Element, disposers: T::Array[T.proc.void]).void }
     def wire_properties(object, prefix, element, disposers)
-      element.getAttributeNames().forEach do |name|
-        if name.slice(0, 5) == "bind-"
-          property = name.slice(5, name.length)
-          disposers.push(wire_property(object, prefix, element, property, element.getAttribute(name)))
-        end
+      element.getAttributeNames.each do |name|
+        next unless name.start_with?("bind-")
+        property = T.must(name.slice(5, name.length))
+        disposers << wire_property(object, prefix, element, property, T.must(element.getAttribute(name)))
       end
     end
 
-    sig { params(disposers: T.untyped).returns(T.proc.void) }
+    sig { params(disposers: T::Array[T.proc.void]).returns(T.proc.void) }
     def release(disposers)
-      ->() { disposers.forEach { |dispose| dispose.() } }
+      ->() { disposers.each { |dispose| dispose.() } }
     end
 
     sig { params(prefix: T.nilable(Symbol), path: String).returns(String) }
@@ -78,11 +77,11 @@ module Swill
 
     # A value binding. On a child controller's root the value becomes the
     # child's represented object; otherwise it renders into the element.
-    sig { params(object: Swill::Object, element: T.untyped, prefix: T.nilable(Symbol)).returns(T.proc.void) }
+    sig { params(object: Swill::Object, element: Element, prefix: T.nilable(Symbol)).returns(T.proc.void) }
     def wire_element(object, element, prefix)
-      path = resolve_path(prefix, element.getAttribute("bind"))
+      path = resolve_path(prefix, T.must(element.getAttribute("bind")))
       view = element.__swill_view__
-      child = view ? view.controller_value() : nil
+      child = view ? view.controller_value : nil
       return wire_represented_object(object, child, path) if child
       form_control = element.matches("input, textarea, select")
       writable = form_control && !element.hasAttribute("readonly")
@@ -122,7 +121,7 @@ module Swill
       Runtime.observePath(object, path, sync)
     end
 
-    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: T.untyped, property: String, path: String).returns(T.proc.void) }
+    sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: Element, property: String, path: String).returns(T.proc.void) }
     def wire_property(object, prefix, element, property, path)
       resolved = resolve_path(prefix, path)
       name = property == "readonly" ? "readOnly" : property
@@ -131,9 +130,9 @@ module Swill
       Runtime.observePath(object, resolved, render)
     end
 
-    sig { params(element: T.untyped, property: String, value: T.untyped).void }
+    sig { params(element: Element, property: String, value: T.untyped).void }
     def write_property(element, property, value)
-      if property.slice(0, 5) == "data-" || property.slice(0, 5) == "aria-"
+      if property.start_with?("data-") || property.start_with?("aria-")
         if value == nil || value == ""
           element.removeAttribute(property)
         else

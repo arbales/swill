@@ -15,7 +15,7 @@ module Swill
 
         # Sends the converter owns whatever the receiver: construction,
         # exceptions, callables, indexing, and unary operators.
-        NATIVE_SENDS = %i[new raise lambda proc [] []= -@ +@ ! =~ !~].freeze
+        NATIVE_SENDS = %i[new raise lambda proc [] []= -@ +@ ! =~ !~ is_a? kind_of? instance_of?].freeze
         OPERATORS = ::Ruby2JS::Filter::Processor::BINARY_OPERATORS
 
         # Each entry: [arities, result type, form]. A result of :receiver is
@@ -35,6 +35,7 @@ module Swill
           blank?: [0, BOOLEAN, [:runtime, :isBlank]],
           present?: [0, BOOLEAN, [:runtime, :isPresent]],
           strip: [0, "String", [:runtime, :strip]],
+          sub: [2, "String", [:call, :replace]],
           upcase: [0, "String", [:runtime, :upcase]],
           downcase: [0, "String", [:runtime, :downcase]],
           capitalize: [0, "String", [:runtime, :capitalize]],
@@ -172,6 +173,7 @@ module Swill
           none?: [:some, BOOLEAN, :truthy, :negate],
           count: [:filter, "Integer", :truthy, :length],
           sort_by: [[:runtime, :sortBy], :receiver, :plain],
+          sort: [[:runtime, :sortWith], :receiver, :plain],
           min_by: [[:runtime, :minBy], :nilable_element, :plain],
           max_by: [[:runtime, :maxBy], :nilable_element, :plain]
         }.freeze
@@ -237,6 +239,8 @@ module Swill
           @local_types = previous.dup
           args = s(:args, s(:mlhs, *args.children)) if kind == :hash && args.children.length == 2
           type_block_parameters(kind, type, method, args)
+          # Locals the body assigns from its parameters are typed in its scope.
+          infer_local_types(body) if body
           body_node =
             case mode
             when :truthy then truthy_body(body, false)
@@ -265,6 +269,11 @@ module Swill
         def core_result_type(type, method, args)
           kind = core_kind(type)
           return nil unless kind
+          # Indexing stays native; its result is the element or value, or nil.
+          if method == :[] && args.length == 1
+            return resolve_core_result(:nilable_element, type) if kind == :array
+            return resolve_core_result(:nilable_value, type) if kind == :hash
+          end
           entry = TABLES.fetch(kind)[method]
           return nil unless entry && entry[0] === args.length
           return nil if kind == :integer && %i[/ %].include?(method) && static_type(args.first) != "Integer"

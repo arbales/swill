@@ -166,6 +166,11 @@ export function sort(values) {
   return values.slice().sort(compare);
 }
 
+// Ruby sort with a block: a sorted copy, by the comparator.
+export function sortWith(values, comparator) {
+  return values.slice().sort(comparator);
+}
+
 export function sortBy(values, keyOf) {
   return values
     .map((value, index) => ({value, key: keyOf(value), index}))

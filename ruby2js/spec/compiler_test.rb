@@ -43,19 +43,24 @@ class CompilerTest < Minitest::Test
     assert_includes js, "name()"
   end
 
-  def test_javascript_only_source_uses_native_constructor_and_dom_calls
+  def test_dom_typed_source_compiles_to_native_calls
     compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add(<<~RUBY, javascript_only: true)
+    compiler.add(<<~RUBY)
       class BrowserView
+        extend T::Sig
+        sig { params(element: Element).void }
         def initialize(element)
           super()
           @element = element
+          @listener = T.let(nil, T.untyped)
         end
 
-        def wire()
-          @element.addEventListener("click") { |event| event.preventDefault() }
+        sig { void }
+        def wire
+          @element.addEventListener("click") { |event| event.preventDefault }
         end
 
+        sig { params(callback: T.proc.params(event: Event).void, event: Event).void }
         def notify(callback, event)
           callback.(event)
           @listener.call(event)
@@ -65,16 +70,16 @@ class CompilerTest < Minitest::Test
     js = compiler.javascript(runtime: "./runtime.mjs")
     assert_includes js, "constructor(element)"
     assert_match(/this\._element\.addEventListener\(\s*"click"/, js)
+    assert_includes js, "event.preventDefault()", "a native callback's parameter is typed by the DOM table"
     assert_includes js, "callback(event)"
     assert_includes js, "this._listener.call(null, event)"
     refute_includes js, "Runtime.read"
-    refute_includes js, "ReactiveObject"
   end
 
   def test_binding_and_action_dom_behavior_is_compiled_from_framework_ruby
     compiler = Swill::Ruby2JS::Compiler.new
-    Swill::Ruby2JS::FRAMEWORK_SOURCES[:javascript_only].each do |path|
-      compiler.add(File.read(path), file: path, javascript_only: true)
+    Swill::Ruby2JS::FRAMEWORK_SOURCES.each do |path|
+      compiler.add(File.read(path), file: path)
     end
 
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
@@ -191,11 +196,11 @@ class CompilerTest < Minitest::Test
     assert_equal JSON.parse(ruby), javascript_result
   end
 
-  # Ruby forms with no JavaScript spelling keep their Ruby meaning on the
-  # JavaScript surface instead of being mangled into property reads.
-  def test_ruby_queries_dup_and_warn_are_lowered_on_the_javascript_surface
+  # An untyped receiver is dispatched by Ruby name at run time, whatever
+  # the form of the send; is_a? is JavaScript's instanceof.
+  def test_ruby_queries_dup_and_warn_dispatch_dynamically_on_untyped_receivers
     compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add(<<~'RUBY', javascript_only: true)
+    compiler.add(<<~'RUBY')
       class Probe
         def go(x)
           warn("oops #{x}")
@@ -207,7 +212,7 @@ class CompilerTest < Minitest::Test
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes js, "Runtime.warn(`oops ${x}`)"
     assert_includes js, 'Runtime.read(x, "dirty?")'
-    assert_includes js, "x == null"
+    assert_match(/x ===? null/, js)
     assert_includes js, 'Runtime.read(x, "empty?")'
     assert_includes js, 'Runtime.respondsTo(x, "draft")'
     assert_includes js, 'Runtime.read(x, "dup")'
@@ -216,10 +221,9 @@ class CompilerTest < Minitest::Test
     assert_includes js, 'Runtime.invoke(x, "index", 1)', "a Ruby core method JavaScript lacks keeps Ruby's meaning"
     assert_includes js, 'Runtime.read(x, "first")'
     assert_includes js, 'Runtime.read(x, "to_s")'
-    assert_includes js, "x.someMember()", "a snake_case call is a Ruby member in its JavaScript spelling"
-    assert_includes js, "x.someProperty,", "without parentheses it is a property read"
-    assert_includes js, "x.otherProperty = 1"
-    refute_match(/x\.(dirty|nil|empty|dup|respond_to)\b/, js)
+    assert_includes js, 'Runtime.read(x, "some_member")', "a zero-argument send reads through metadata, method or property"
+    assert_includes js, 'Runtime.read(x, "some_property")'
+    assert_includes js, 'Runtime.write(x, "other_property", 1)'
     shared = javascript("def go; warn(\"shared\"); end")
     assert_includes shared, 'Runtime.warn("shared")'
     own = javascript("def warn(message); message; end\ndef go; warn(\"mine\"); end")
@@ -252,11 +256,19 @@ class CompilerTest < Minitest::Test
       console.log(JSON.stringify([registry.makeOne("x").tag, registry.firstOf(["a", "b"]), registry.firstOf([])]));
     JS
     surface = Swill::Ruby2JS::Compiler.new
-    surface.add("class Node\ndef self.of(element); element.__swill_view__; end\ndef self.find_root(node); Node.of(node); end\nend", javascript_only: true)
+    surface.add(<<~RUBY)
+      class Leaf
+        extend T::Sig
+        sig { params(element: Element).returns(T.untyped) }
+        def self.of(element); element.__swill_view__; end
+        sig { params(node: Element).returns(T.untyped) }
+        def self.find_root(node); Leaf.of(node); end
+      end
+    RUBY
     js = surface.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes js, "static of(element) {"
     assert_includes js, "static findRoot(node) {"
-    assert_includes js, "return Node.of(node);"
+    assert_includes js, "return Leaf.of(node);"
     error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def self.new; end") }
     assert_includes error.message, "unsupported method definition self.new"
     error = assert_raises(Swill::Ruby2JS::CompileError) do
@@ -265,64 +277,66 @@ class CompilerTest < Minitest::Test
     assert_includes error.message, "included"
   end
 
-  # On the JavaScript surface a receiver whose class is known gets Ruby
-  # calls and property access from the compiler's knowledge, not from the
-  # parentheses; unknown receivers keep the parentheses convention.
-  def test_javascript_surface_resolves_typed_receivers_from_knowledge
+  # A receiver whose class is known gets Ruby calls and property access from
+  # the compiler's knowledge, not from parentheses; a DOM-typed receiver is
+  # native, with the DOM table deciding listed members and the source's
+  # parentheses deciding unlisted ones.
+  def test_typed_receivers_resolve_from_knowledge_and_dom_receivers_from_the_table
     compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add(<<~RUBY, javascript_only: true)
+    compiler.add(<<~RUBY)
       class Widget
         extend T::Sig
         property :count, type: Integer, default: 0
         sig { returns(Integer) }
         def tally; count; end
-        sig { params(element: T.untyped).returns(T.nilable(Widget)) }
+        sig { params(element: Element).returns(T.nilable(Widget)) }
         def self.of(element); element.__widget__; end
       end
       class Holder
         extend T::Sig
+        sig { params(element: Element).void }
         def initialize(element)
           super()
           @widget = Widget.new
           @element = element
         end
-        sig { params(other: Widget, node: T.untyped).returns(T.untyped) }
+        sig { params(other: Widget, node: Element).returns(T.untyped) }
         def go(other, node)
           found = Widget.of(node)
           other.count = other.tally
           @widget.count = @widget.tally + found.tally
           @element.tally()
-          [other.count, found.count, node.count, node.tally(), node.tally, other.next_widget, other&.tally]
+          [other.count, found.count, node.parentElement, node.tally(), node.tally, other.next_widget]
         end
       end
     RUBY
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes js, "other.count = other.tally();", "a typed parameter: property write and a call without parentheses"
     assert_includes js, "this._widget.count = this._widget.tally() + found.tally();", "an ivar assigned one class, and a local typed by a static method's signature"
-    assert_includes js, "this._element.tally();", "an untyped ivar stays native"
+    assert_includes js, "this._element.tally();", "a DOM-typed ivar is native"
     assert_includes js, "found.count,", "a declared property reads"
-    assert_includes js, "      node.count,\n      node.tally(),\n      node.tally,\n", "an unknown receiver keeps the parentheses convention"
-    assert_includes js, "other.nextWidget", "a member the class does not declare falls back to the snake_case rule"
-    assert_includes js, "other?.tally()", "safe navigation keeps its guard"
+    assert_includes js, "      node.parentElement,\n      node.tally(),\n      node.tally,\n", "a listed DOM member reads; an unlisted one follows the parentheses"
+    assert_includes js, "other.nextWidget()", "a member the class does not declare falls back to an explicit call"
   end
 
-  def test_sorbet_runtime_operations_work_on_the_javascript_surface
+  def test_sorbet_runtime_operations_type_their_results
     compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add("class Node; end\nclass Holder\ndef pick(value, node); T.cast(value, Node).next; T.must(node).size; end\nend", javascript_only: true)
+    compiler.add("class Leaf\nextend T::Sig\nsig { returns(Integer) }\ndef size; 1; end\nend\nclass Holder\ndef pick(value, node); T.cast(value, Leaf).size; T.must(node).size; end\nend")
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
-    assert_includes js, 'Runtime.cast(value, "Node").next'
-    assert_includes js, "Runtime.must(node).size"
+    assert_includes js, 'Runtime.cast(value, "Leaf").size()', "a cast receiver calls its collected method"
+    assert_includes js, 'Runtime.read(Runtime.must(node), "size")', "an untyped receiver stays dynamic after T.must"
   end
 
-  # A csend would reach the send lowerings and come out as a plain call.
-  def test_safe_navigation_is_rejected_on_the_shared_surface
+  # On a Ruby receiver a csend would reach the send lowerings and come out
+  # as a plain call; on a DOM receiver ?. is JavaScript's own.
+  def test_safe_navigation_is_rejected_on_ruby_receivers_and_native_on_dom_ones
     error = assert_raises(Swill::Ruby2JS::CompileError) do
       javascript("extend T::Sig\nproperty :other, type: T.nilable(Example), default: nil\nsig { returns(T.untyped) }\ndef go; other&.go; end")
     end
-    assert_includes error.message, "safe navigation (&.) is not lowered on the shared surface"
+    assert_includes error.message, "safe navigation (&.) is not lowered on a Ruby receiver"
     compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add("class Node\ndef go(other); other&.go(); end\nend", javascript_only: true)
-    assert_includes compiler.javascript(runtime: "../lib/swill/runtime.mjs"), "other?.go()"
+    compiler.add("class Leaf\nextend T::Sig\nsig { params(other: T.nilable(Element)).void }\ndef go(other); other&.remove(); end\nend")
+    assert_includes compiler.javascript(runtime: "../lib/swill/runtime.mjs"), "other?.remove()"
   end
 
   def test_other_sorbet_constructs_and_uncheckable_types_are_rejected
@@ -933,7 +947,7 @@ class CompilerTest < Minitest::Test
 
   def test_outlets_are_nilable_observable_properties_on_controllers
     compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add(<<~RUBY, javascript_only: true)
+    compiler.add(<<~RUBY)
       module Swill
         class Object; end
         class Responder < Swill::Object; end
@@ -983,7 +997,7 @@ class CompilerTest < Minitest::Test
       "class Host < Swill::Controller\noutlet :field, type: Swill::View, key: :x\nend"
     ].each do |body|
       assert_raises(Swill::Ruby2JS::CompileError, body) do
-        Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(body).javascript(runtime: "./runtime.mjs")
+        Swill::Ruby2JS::Compiler.new.add(framework).add(body).javascript(runtime: "./runtime.mjs")
       end
     end
   end
@@ -996,7 +1010,7 @@ class CompilerTest < Minitest::Test
         class Controller < Responder; end
       end
     RUBY
-    compiler = Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true).add(<<~RUBY)
+    compiler = Swill::Ruby2JS::Compiler.new.add(framework).add(<<~RUBY)
       class Person < Swill::Object
         property :age, type: Integer, default: 0
       end
@@ -1018,7 +1032,7 @@ class CompilerTest < Minitest::Test
       console.log(JSON.stringify(Runtime.restorations(host).map(r => [r.key, r.type])));
     JS
     host = ->(body) do
-      Swill::Ruby2JS::Compiler.new.add(framework, javascript_only: true)
+      Swill::Ruby2JS::Compiler.new.add(framework)
         .add("class Host < Swill::Controller\nproperty :query, type: String, default: \"\"\nproperty :flag, type: T::Boolean, default: false\n#{body}\nend")
     end
     # The declaration's shape is the compiler's; what it names is checked by
@@ -1062,16 +1076,18 @@ class CompilerTest < Minitest::Test
     JS
   end
 
-  def test_javascript_intrinsics_are_available_only_to_browser_boundary_code
-    js = Swill::Ruby2JS::Compiler.new.add("class Decoder\ndef parse(text); JSON.parse(text); end\nend", javascript_only: true)
-      .javascript(runtime: "./runtime.mjs")
+  # The browser's intrinsics and DOM classes pass through by name on either
+  # surface; a source constant of the same name still wins, encoded so it
+  # cannot shadow the global.
+  def test_javascript_intrinsics_and_dom_classes_pass_through_by_name
+    js = javascript("extend T::Sig\nsig { params(text: String).returns(T.untyped) }\ndef parse(text); JSON.parse(text); end")
     assert_includes js, "JSON.parse(text)"
-    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def parse(text); JSON.parse(text); end") }
-    assert_includes error.message, "unknown constant JSON"
     js = Swill::Ruby2JS::Compiler.new
-      .add("class JSON\ndef parse(text); text; end\nend\nclass Decoder\ndef parse(text); JSON.new.parse(text); end\nend", javascript_only: true)
+      .add("class JSON\ndef parse(text); text; end\nend\nclass Decoder\ndef parse(text); JSON.new.parse(text); end\nend")
       .javascript(runtime: "./runtime.mjs")
     assert_includes js, "new Ruby_JSON().parse(text)"
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def go; Nope.parse(1); end") }
+    assert_includes error.message, "unknown constant Nope"
   end
 
   def test_constructors_taken_from_call_results_are_parenthesized
@@ -1086,7 +1102,7 @@ class CompilerTest < Minitest::Test
       console.log(JSON.stringify(made instanceof Runtime.resolve("TestObject")));
     JS
     browser = Swill::Ruby2JS::Compiler.new
-      .add("class Maker\ndef make(name, element); Runtime.resolve(name).new(element); end\nend", javascript_only: true)
+      .add("class Maker\ndef make(name, element); Runtime.resolve(name).new(element); end\nend")
       .javascript(runtime: "./runtime.mjs")
     assert_includes browser, "new (Runtime.resolve(name))(element)"
   end
@@ -1286,8 +1302,8 @@ class CompilerTest < Minitest::Test
 
   def test_readable_class_headers_and_reference_based_wiring
     framework = Swill::Ruby2JS::Compiler.new
-      .add(File.read("lib/swill/core/observable.rb"), javascript_only: true)
-      .add(File.read("lib/swill/core/object.rb"), javascript_only: true)
+      .add(File.read("lib/swill/core/observable.rb"))
+      .add(File.read("lib/swill/core/object.rb"))
       .add(File.read("lib/swill/model/attributes.rb"))
       .add(File.read("lib/swill/model/dirty_tracking.rb"))
       .add(File.read("lib/swill/model/drafts.rb"))

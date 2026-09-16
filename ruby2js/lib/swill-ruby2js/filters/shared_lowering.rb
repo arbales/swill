@@ -81,27 +81,6 @@ module Swill
           s(:call, s(:const, nil, :Runtime), :warn, process(args.first))
         end
 
-        # Ruby forms with no JavaScript spelling, on a receiver whose class is
-        # not known: nil? is a null check; a predicate name (dirty?, empty?)
-        # and the core value methods JavaScript lacks (index, first, dup, ...)
-        # go through the runtime's dynamic dispatch, which knows declared
-        # members and carries Ruby's rule for plain values.
-        RUBY_CORE_QUERIES = %i[is_a? kind_of? instance_of? respond_to? equal? eql?].freeze
-        RUBY_VALUE_SENDS = %i[index first last dup compact uniq reverse sum min max take drop
-                              to_s to_i to_f to_sym strip upcase downcase capitalize].freeze
-
-        def lower_ruby_query(receiver, method, args)
-          return nil if RUBY_CORE_QUERIES.include?(method)
-          name = method.to_s
-          if method == :nil? && args.empty?
-            return s(:send, process(receiver), :==, s(:nil))
-          end
-          return nil unless name.end_with?("?") || RUBY_VALUE_SENDS.include?(method)
-          runtime = s(:const, nil, :Runtime)
-          return s(:call, runtime, :read, process(receiver), s(:str, name)) if args.empty?
-          s(:call, runtime, :invoke, process(receiver), s(:str, name), *process_all(args))
-        end
-
     end
   end
 end

@@ -10,19 +10,19 @@ module Swill
     extend T::Sig
     include Ownership
 
-    sig { params(root: T.untyped).returns(T.untyped) }
+    sig { params(root: Element).returns(T::Array[Controller]) }
     def self.wire(root)
       new.wire(root)
     end
 
-    sig { params(node: T.untyped).void }
+    sig { params(node: Element).void }
     def self.detach(node)
       new.detach(node)
     end
 
     # Returns the new controllers in document order. Awakening a fragment that
     # already sits under a live view adopts it into that view's tree.
-    sig { params(root: T.untyped).returns(T.untyped) }
+    sig { params(root: Element).returns(T::Array[Controller]) }
     def wire(root)
       controllers = awaken(root)
       finish(controllers)
@@ -32,20 +32,20 @@ module Swill
     # The load phase only: view_did_load, outlets, bindings, actions, and
     # awake_from_dom, children first. The application restores window state
     # between this and finish.
-    sig { params(root: T.untyped).returns(T.untyped) }
+    sig { params(root: Element).returns(T::Array[Controller]) }
     def awaken(root)
-      controllers = []
+      controllers = T.let([], T::Array[Controller])
       walk(root, nearest_view(root.parentElement), controllers)
-      each_reversed(controllers, ->(controller) { load(controller) })
+      controllers.reverse.each { |controller| load(controller) }
       controllers
     end
 
     # controller_did_load once per controller, then appearance.
-    sig { params(controllers: T.untyped).void }
+    sig { params(controllers: T::Array[Controller]).void }
     def finish(controllers)
-      each_reversed(controllers, ->(controller) { controller.controller_did_load() })
-      each_reversed(controllers, ->(controller) { controller.view_will_appear() })
-      each_reversed(controllers, ->(controller) { controller.view_did_appear() })
+      controllers.reverse.each { |controller| controller.controller_did_load }
+      controllers.reverse.each { |controller| controller.view_will_appear }
+      controllers.reverse.each { |controller| controller.view_did_appear }
     end
 
     sig { params(controller: Controller).void }
@@ -59,17 +59,16 @@ module Swill
 
     # An element that already has a View, such as a list row created in code,
     # is part of the tree whatever its attributes say.
-    sig { params(element: T.untyped, owner: T.nilable(View), controllers: T.untyped).void }
+    sig { params(element: Element, owner: T.nilable(View), controllers: T::Array[Controller]).void }
     def walk(element, owner, controllers)
       view = element.__swill_view__
       view = create_view(element) if !view && managed?(element)
       if view
-        owner.adopt_subview(view) if owner && !view.superview()
-        if element.hasAttribute("controller") && !view.controller_value()
-          controller_class = Runtime.resolve(element.getAttribute("controller"))
-          controller = controller_class.new()
+        owner.adopt_subview(view) if owner && !view.superview
+        if element.hasAttribute("controller") && !view.controller_value
+          controller = T.cast(Runtime.resolve(T.must(element.getAttribute("controller"))).new, Controller)
           controller.attach(element)
-          controllers.push(controller)
+          controllers << controller
         end
       end
       next_owner = view || owner
@@ -78,7 +77,7 @@ module Swill
 
     # A live element with klass, controller, or outlet. Templates and JSON
     # scripts are inert content, never objects.
-    sig { params(element: T.untyped).returns(T::Boolean) }
+    sig { params(element: Element).returns(T::Boolean) }
     def managed?(element)
       return false unless element.nodeType == 1
       return false if element.tagName == "TEMPLATE" || element.tagName == "SCRIPT"
@@ -86,53 +85,43 @@ module Swill
     end
 
     # klass names a View subclass; a plain managed element gets a plain View.
-    sig { params(element: T.untyped).returns(View) }
+    sig { params(element: Element).returns(View) }
     def create_view(element)
       name = element.getAttribute("klass")
       return View.new(element) unless name
-      view_class = Runtime.resolve(name)
-      view = view_class.new(element)
+      view = Runtime.resolve(name).new(element)
       raise "#{name} is not a Swill::View" unless view.is_a?(View)
       view
     end
 
     # Every controller in a subtree in document order, the node included.
-    sig { params(node: T.untyped).returns(T.untyped) }
+    sig { params(node: Element).returns(T::Array[Controller]) }
     def controllers_within(node)
-      found = []
+      found = T.let([], T::Array[Controller])
       collect_controllers(node, found)
       found
     end
 
-    sig { params(element: T.untyped, found: T.untyped).void }
+    sig { params(element: Element, found: T::Array[Controller]).void }
     def collect_controllers(element, found)
       view = element.__swill_view__
-      controller = view ? view.controller_value() : nil
-      found.push(controller) if controller
+      controller = view ? view.controller_value : nil
+      found << controller if controller
       each_child(element, ->(child) { collect_controllers(child, found) })
     end
 
     # The counterpart of wire for a subtree being removed. Teardown recurses
     # into descendants and is idempotent, so document order is fine.
-    sig { params(node: T.untyped).void }
+    sig { params(node: Element).void }
     def detach(node)
-      controllers_within(node).forEach { |controller| controller.teardown() }
+      controllers_within(node).each { |controller| controller.teardown }
     end
 
-    sig { params(element: T.untyped).returns(T.nilable(View)) }
+    sig { params(element: T.nilable(Element)).returns(T.nilable(View)) }
     def nearest_view(element)
       return nil unless element
       view = element.__swill_view__
       view ? view : nearest_view(element.parentElement)
-    end
-
-    sig { params(controllers: T.untyped, callback: T.proc.params(controller: T.untyped).void).void }
-    def each_reversed(controllers, callback)
-      index = controllers.length - 1
-      while index >= 0
-        callback.(controllers[index])
-        index -= 1
-      end
     end
   end
 end

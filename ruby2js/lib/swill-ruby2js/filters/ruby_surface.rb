@@ -66,7 +66,15 @@ module Swill
           # Built-in filters introduce JS intrinsics as locationless nodes. Source
           # constants still use the spike's namespace rules, even with these names.
           return node if !node.loc && JS_INTRINSICS.include?(name)
-          resolved = @knowledge.resolve(name, @scope)
+          resolved = begin
+            @knowledge.resolve(name, @scope)
+          rescue CompileError
+            # The handwritten runtime, the browser's own classes, and the
+            # intrinsics pass through by name when no source constant matches.
+            return s(:const, nil, :Runtime) if name == "Runtime"
+            return node if JS_INTRINSICS.include?(name) || DOM.native?(name)
+            raise
+          end
           s(:const, nil, Knowledge.identifier(resolved).to_sym)
         end
 
@@ -95,6 +103,12 @@ module Swill
           call, args, body = node.children
           return super unless call.type == :send
           receiver, method, *call_args = call.children
+          # A block on a native receiver is a JavaScript callback, its
+          # parameters typed as the DOM member declares them.
+          if receiver && native_type?(static_type(receiver))
+            types = native_callback_types(static_type(receiver), method, call_args.length) || []
+            return with_parameter_types(args, types, body) { super(node) }
+          end
           if receiver && dynamic_receiver?(receiver)
             raise CompileError, "block call #{method} on an untyped receiver; give #{receiver.loc.expression.source} a static type"
           end
@@ -145,8 +159,8 @@ module Swill
           return s(:send, s(:self), :new, *process_all(args)) if bare_new?(receiver, method)
           # The lowerings below would keep the call and drop the nil guard, and
           # JavaScript's ?. yields undefined where Ruby yields nil.
-          if node.type == :csend
-            raise CompileError, "safe navigation (&.) is not lowered on the shared surface; guard #{receiver.loc.expression.source} with a local"
+          if node.type == :csend && !native_type?(static_type(receiver))
+            raise CompileError, "safe navigation (&.) is not lowered on a Ruby receiver; guard #{receiver.loc.expression.source} with a local"
           end
           return lower_sorbet(node) if SorbetOperations.operation?(node)
           return lower_raise(args) if receiver.nil? && method == :raise
@@ -176,6 +190,12 @@ module Swill
           if method.to_s.end_with?("=") && @properties.include?(method.to_s.delete_suffix("="))
             return s(:send, receiver ? process(receiver) : s(:self), Knowledge.member(method).to_sym, *process_all(args))
           end
+          # A collected method on self: its signature types the lambdas
+          # passed to it.
+          if !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
+             (entry = @knowledge.method_entry(@entry["name"], method))
+            return s(:call, receiver ? process(receiver) : s(:self), entry["js"].to_sym, *typed_arguments(entry, args))
+          end
           super
         end
 
@@ -193,17 +213,26 @@ module Swill
           type = static_type(receiver)
           # nil? is defined for every value, including nil itself.
           return s(:send, process(receiver), :==, s(:nil)) if method == :nil? && args.empty?
+          return lower_native(node, receiver, method, args, type) if native_type?(type)
           if (klass = swill_class(type))
             if args.empty? && @knowledge.property_entry(klass, name)
               return s(:attr, process(receiver), Knowledge.member(method).to_sym)
             end
-            if setter && @knowledge.property_entry(klass, base)
-              return s(:send, process(receiver), method, process(args.first))
+            if setter && (@knowledge.property_entry(klass, base) || @knowledge.method_entry(klass, name))
+              return s(:send, process(receiver), Knowledge.member(method).to_sym, process(args.first))
             end
-            if @knowledge.method_entry(klass, name)
-              return s(:call, process(receiver), Knowledge.member(method).to_sym, *process_all(args))
+            if (entry = @knowledge.method_entry(klass, name))
+              return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
             end
             return nil
+          end
+          if receiver.type == :const && (constant_class = swill_class(@knowledge.constant(receiver))) &&
+             (entry = @knowledge.static_method_entry(constant_class, name))
+            return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
+          end
+          if receiver.type == :const && method == :new && DOM.native?(@knowledge.constant(receiver))
+            constant = @knowledge.constant(receiver)
+            return s(:send, process(receiver), :new, *native_arguments(constant, :new, args))
           end
           if (kind = core_kind(type))
             return lower_core(node, kind, type, receiver, method, args)
@@ -213,6 +242,76 @@ module Swill
           end
           return nil unless dynamic_receiver?(receiver)
           dynamic_send(node, receiver, name, setter, base, args)
+        end
+
+        # A DOM or JavaScript receiver. The DOM table says whether a member is
+        # a property or a method, whatever the source's parentheses; a member
+        # it does not list follows them. Operators and indexing stay with the
+        # converter. Safe navigation is JavaScript's own here.
+        def lower_native(node, receiver, method, args, type)
+          name = method.to_s
+          return nil if OPERATORS.include?(method) || NATIVE_SENDS.include?(method)
+          target = process(receiver)
+          args = native_arguments(type, method, args)
+          if name.match?(/\A[A-Za-z_]\w*=\z/) && args.length == 1
+            return s(:send, target, method, args.first)
+          end
+          inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
+          member = inner == "JavaScript" ? nil : DOM.member(inner, name)
+          kind = member ? member[0] : nil
+          return s(:attr, target, method) if %i[attr accessor].include?(kind)
+          return s(:attr, target, method) if kind.nil? && args.empty? && !node.is_method?
+          # Safe navigation is JavaScript's own; the source's parentheses stay.
+          return node.updated(:csend, [target, method, *args]) if node.type == :csend
+          s(:call, target, method, *args)
+        end
+
+        # Arguments to a native member, lambdas typed as the DOM table
+        # declares the member's callbacks. Processed here, once.
+        def native_arguments(type, method, args)
+          args.each_with_index.map do |arg, index|
+            if lambda_literal?(arg)
+              process_lambda(arg, native_callback_types(type, method, index) || [])
+            else
+              process(arg)
+            end
+          end
+        end
+
+        # Parameter types for a block or lambda body, and the locals the body
+        # assigns from them, scoped to the body.
+        def with_parameter_types(args_node, types, body)
+          names = args_node.children.map { |arg| arg.children.first.to_s }
+          previous = @local_types
+          @local_types = @local_types.dup
+          names.each_with_index { |name, index| @local_types[name] = types[index] if types[index] }
+          infer_local_types(body) if body
+          yield
+        ensure
+          @local_types = previous
+        end
+
+        # Arguments to a collected method. A lambda literal passed where the
+        # signature says T.proc.params(...) gets those parameter types, so
+        # its body lowers as the callee will call it.
+        def typed_arguments(entry, args)
+          types = entry.fetch("parameters", {}).values
+          args.each_with_index.map do |arg, index|
+            if lambda_literal?(arg)
+              process_lambda(arg, proc_parameter_types(types[index]))
+            else
+              process(arg)
+            end
+          end
+        end
+
+        def lambda_literal?(node)
+          node.type == :block && node.children.first.type == :send &&
+            node.children.first.children[0..1] == [nil, :lambda]
+        end
+
+        def process_lambda(node, parameter_types)
+          with_parameter_types(node.children[1], parameter_types, node.children[2]) { process(node) }
         end
 
         # An untyped receiver is resolved by name at run time, as Ruby would:

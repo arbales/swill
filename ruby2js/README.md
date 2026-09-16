@@ -199,7 +199,7 @@ forms. Update it whenever the supported boundary changes.
 
 `Swill::View`, `Swill::Controller`, `Swill::Ownership`, `Swill::Bindings`,
 `Swill::Actions`, `Swill::Awakening`, and `Swill::Controller::List` are
-Ruby-authored framework classes compiled with the JavaScript-only surface. DOM traversal, control rendering,
+Ruby-authored framework classes compiled from Ruby that names DOM types. DOM traversal, control rendering,
 event selection, action parsing, and listener ownership stay in those classes.
 The handwritten runtime only resolves metadata-aware key paths and dispatches
 generated method names.

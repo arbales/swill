@@ -10,15 +10,23 @@ module Swill
     extend T::Sig
     include Ownership
 
-    sig { params(root: T.untyped).returns(Application) }
+    sig { void }
+    def initialize
+      super()
+      @windows = T.let([], T::Array[Window])
+      @controllers = T.let([], T::Array[Controller])
+      @templates = T.let({}, T::Hash[String, Element])
+      @captured = T.let({}, T::Hash[String, Element])
+      @first_responder = T.let(nil, T.nilable(Responder))
+      @observer = T.let(nil, T.nilable(MutationObserver))
+    end
+
+    sig { params(root: Element).returns(Application) }
     def launch(root)
       @root = root
       root.__swill_application__ = self
-      @windows = []
-      @templates = {}
-      @captured = {}
-      @on_focus = ->(event) { sync_first_responder(event.target, event.relatedTarget) }
-      @on_focus_out = ->(event) { focus_left(event.relatedTarget) }
+      @on_focus = ->(event) { focus_in(event) }
+      @on_focus_out = ->(event) { focus_out(event) }
       @on_key_down = ->(event) { first_responder.key_down(event) }
       @on_key_up = ->(event) { first_responder.key_up(event) }
       root.addEventListener("focusin", @on_focus)
@@ -40,12 +48,12 @@ module Swill
     end
 
     # Every controller awakened at launch, in document order.
-    sig { returns(T::Array[T.untyped]) }
+    sig { returns(T::Array[Controller]) }
     def controllers
       @controllers
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(Element) }
     def root
       @root
     end
@@ -55,11 +63,12 @@ module Swill
     def terminate
       return unless @root.__swill_application__ == self
       application_will_terminate
-      @fragments.release()
-      @observer.disconnect() if @observer
-      @windows.forEach { |window| release_window(window) }
+      @fragments.release
+      observer = @observer
+      observer.disconnect if observer
+      @windows.each { |window| release_window(window) }
       @windows = []
-      @controllers.forEach { |controller| controller.teardown() }
+      @controllers.each { |controller| controller.teardown }
       @controllers = []
       @root.removeEventListener("focusin", @on_focus)
       @root.removeEventListener("focusout", @on_focus_out)
@@ -92,19 +101,19 @@ module Swill
     def load_window_content_with(window_name, content_name, history)
       window = window_named(window_name)
       raise "No window container: #{window_name}" unless window
-      container = window.root()
+      container = window.root
       previous = first_responder
       awakening = Awakening.new
       each_child(container, ->(child) { awakening.detach(child) })
-      container.replaceChildren()
+      container.replaceChildren
       container.appendChild(clone_window_content(content_name))
       container.setAttribute("name", content_name)
       controllers = awakening.awaken(container)
       window.assign_content(content_name, top_controller_in(container))
-      @fragments.write(window.name(), content_name, history)
+      @fragments.write(window.name, content_name, history)
       restore_window_state(window, history != :none, history != :none)
       awakening.finish(controllers)
-      controller = window.controller()
+      controller = window.controller
       if controller
         make_first_responder(controller)
       elsif attached?(previous)
@@ -121,25 +130,24 @@ module Swill
       show_window_in(name, @root)
     end
 
-    sig { params(name: String, into: T.untyped).returns(Window) }
+    sig { params(name: String, into: Element).returns(Window) }
     def show_window_in(name, into)
       node = clone_window_content(name)
       into.appendChild(node)
       awakening = Awakening.new
       controllers = awakening.awaken(node)
-      view = node.__swill_view__
-      controller = view ? view.controller_value() : nil
+      controller = View.controller_for(node)
       unless controller
         # Leave nothing behind: whatever the template awakened is torn down.
         awakening.detach(node)
-        node.remove()
+        node.remove
         raise "Window root has no controller: #{name}"
       end
-      node.show() if node.show
+      node.show if node.tagName == "DIALOG"
       window = Window.new(name, node)
       window.assign_content(name, controller)
       window.save_first_responder(first_responder)
-      @windows.push(window)
+      @windows << window
       restore_window_state(window, false, false)
       awakening.finish(controllers)
       make_first_responder(controller)
@@ -150,9 +158,9 @@ module Swill
     def dismiss(controller)
       window = window_containing(controller)
       return false unless window
-      @windows = @windows.filter { |candidate| candidate != window }
-      saved = window.saved_first_responder()
-      window.dismiss()
+      @windows = @windows.select { |candidate| candidate != window }
+      saved = window.saved_first_responder
+      window.dismiss
       make_first_responder(saved) if saved && attached?(saved)
       true
     end
@@ -189,9 +197,19 @@ module Swill
       true
     end
 
+    sig { params(event: Event).void }
+    def focus_in(event)
+      sync_first_responder(event.target, event.relatedTarget)
+    end
+
+    sig { params(event: Event).void }
+    def focus_out(event)
+      focus_left(event.relatedTarget)
+    end
+
     # The browser already moved focus; reconcile the first responder without
     # re-running become. A resign refusal restores focus to the refuser.
-    sig { params(target: T.untyped, previous: T.untyped).void }
+    sig { params(target: Element, previous: T.nilable(Element)).void }
     def sync_first_responder(target, previous)
       responder = responder_for(target)
       current = first_responder
@@ -207,13 +225,13 @@ module Swill
     # back here. A null destination (the browser's own chrome, or dead space
     # in the page) leaves it alone, as Cocoa does, so keys still reach it
     # when focus returns.
-    sig { params(destination: T.untyped).void }
+    sig { params(destination: T.nilable(Element)).void }
     def focus_left(destination)
       @first_responder = nil if destination && !@root.contains(destination)
     end
 
     # A first responder inside a region being torn down falls back here.
-    sig { params(element: T.untyped).void }
+    sig { params(element: Element).void }
     def release_first_responder(element)
       owner = responder_element(first_responder)
       @first_responder = nil if owner && (owner == element || element.contains(owner))
@@ -221,27 +239,27 @@ module Swill
 
     # The responder for a DOM location: the first managed view above it,
     # which yields its controller for a controller root and itself otherwise.
-    sig { params(element: T.untyped).returns(T.nilable(Responder)) }
+    sig { params(element: T.nilable(Element)).returns(T.nilable(Responder)) }
     def responder_for(element)
       return nil unless element
       view = element.__swill_view__
-      return view.controller_value() || view if view
+      return view.controller_value || view if view
       responder_for(element.parentElement)
     end
 
-    sig { params(responder: Responder).returns(T.untyped) }
+    sig { params(responder: Responder).returns(T.nilable(Element)) }
     def responder_element(responder)
-      return responder.view().element() if responder.is_a?(Controller)
-      return responder.element() if responder.is_a?(View)
+      return T.cast(responder, Controller).view.element if responder.is_a?(Controller)
+      return T.cast(responder, View).element if responder.is_a?(View)
       nil
     end
 
-    sig { params(responder: Responder, previous: T.untyped).void }
+    sig { params(responder: Responder, previous: T.nilable(Element)).void }
     def restore_focus(responder, previous)
       owner = responder_element(responder)
       return unless owner
-      target = previous && owner.contains(previous) ? previous : owner.__swill_view__.first_focusable_element()
-      target.focus() if target
+      target = previous && owner.contains(previous) ? previous : T.must(owner.__swill_view__).first_focusable_element
+      target.focus if target
     end
 
     # ---- window templates, containers, and content ----
@@ -251,13 +269,13 @@ module Swill
     sig { void }
     def scan_templates
       @root.querySelectorAll("template[name]").forEach do |template|
-        name = template.getAttribute("name")
+        name = T.must(template.getAttribute("name"))
         @templates[name] = template if template.getAttribute("for") == "window" || template.parentElement == @root
       end
     end
 
     # Rescans once on a miss so templates inserted after launch are found.
-    sig { params(name: String).returns(T.untyped) }
+    sig { params(name: String).returns(T.nilable(Element)) }
     def window_template(name)
       found = @templates[name]
       return found if found
@@ -265,23 +283,22 @@ module Swill
       @templates[name]
     end
 
-    sig { params(name: String).returns(T.untyped) }
+    sig { params(name: String).returns(Element) }
     def clone_window_content(name)
       captured = @captured[name]
       return captured.cloneNode(true) if captured
       template = window_template(name)
       raise "No window content template: #{name}" unless template
-      content = template.content
-      node = content ? content.firstElementChild : template.firstElementChild
+      node = T.cast(template, HTMLTemplateElement).content.firstElementChild
       raise "Empty window template: #{name}" unless node
       node.cloneNode(true)
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[Element]) }
     def window_containers
-      found = []
-      found.push(@root) if @root.hasAttribute("window")
-      @root.querySelectorAll("[window]").forEach { |container| found.push(container) }
+      found = T.let([], T::Array[Element])
+      found << @root if @root.hasAttribute("window")
+      @root.querySelectorAll("[window]").forEach { |container| found << container }
       found
     end
 
@@ -290,15 +307,15 @@ module Swill
     # template their name attribute (or window name) selects.
     sig { void }
     def prepare_window_containers
-      params = @fragments.params()
-      window_containers.forEach do |container|
-        window_name = container.getAttribute("window")
+      params = @fragments.params
+      window_containers.each do |container|
+        window_name = T.must(container.getAttribute("window"))
         default_name = container.getAttribute("name") || window_name
         first = container.firstElementChild
         @captured[default_name] = first.cloneNode(true) if first && !@captured[default_name]
         content_name = requested_content(window_name, default_name, params[window_name])
         next if first && content_name == default_name
-        container.replaceChildren()
+        container.replaceChildren
         container.appendChild(clone_window_content(content_name))
         container.setAttribute("name", content_name)
       end
@@ -306,7 +323,7 @@ module Swill
 
     # The fragment may name the content to show; unknown names are reported
     # and the default stands.
-    sig { params(window_name: String, default_name: String, requested: T.untyped).returns(String) }
+    sig { params(window_name: String, default_name: String, requested: T.nilable(String)).returns(String) }
     def requested_content(window_name, default_name, requested)
       return default_name if requested == nil || requested == default_name
       return requested if window_content?(requested)
@@ -316,23 +333,23 @@ module Swill
 
     sig { void }
     def register_window_containers
-      window_containers.forEach do |container|
-        window = Window.new(container.getAttribute("window"), container)
+      window_containers.each do |container|
+        window = Window.new(T.must(container.getAttribute("window")), container)
         window.assign_content(container.getAttribute("name"), top_controller_in(container))
-        @windows.push(window)
+        @windows << window
       end
     end
 
     # The first controller inside the container whose parent is outside it.
-    sig { params(container: T.untyped).returns(T.nilable(Controller)) }
+    sig { params(container: Element).returns(T.nilable(Controller)) }
     def top_controller_in(container)
       Awakening.new.controllers_within(container).find { |controller| top_within?(controller, container) }
     end
 
-    sig { params(controller: Controller, container: T.untyped).returns(T::Boolean) }
+    sig { params(controller: Controller, container: Element).returns(T::Boolean) }
     def top_within?(controller, container)
       parent = controller.parent
-      parent == nil || !container.contains(parent.view().element())
+      parent == nil || !container.contains(parent.view.element)
     end
 
     sig { params(window: Window, name: String).returns(T::Boolean) }
@@ -363,7 +380,7 @@ module Swill
     def release_window(window)
       if window.container?
         window.dispose_restoration
-        Awakening.new.detach(window.root)
+        Awakening.detach(window.root)
       else
         window.dismiss
       end
@@ -380,18 +397,18 @@ module Swill
     def restore_window_state(window, prune_stale, write_content)
       stale = window.dispose_restoration
       controller = window.controller
-      declarations = controller ? Runtime.restorations(controller) : []
+      declarations = T.let(controller ? Runtime.restorations(controller) : [], T::Array[T.untyped])
       keys = declarations.map { |declaration| window.scoped_key(declaration.key) }
       content = window.content_name
       @fragments.write(window.name, content, :replace) if write_content && content
       if prune_stale
-        stale.forEach { |key| @fragments.write(key, nil, :replace) unless keys.includes(key) }
+        stale.each { |key| @fragments.write(key, nil, :replace) unless keys.include?(key) }
       end
       return unless controller
-      params = @fragments.params()
+      params = @fragments.params
       applied = 0
       @fragments.suspended(->() do
-        declarations.forEach do |declaration|
+        declarations.each do |declaration|
           text = params[window.scoped_key(declaration.key)]
           next if text == nil
           value = Runtime.decodeFragment(declaration.type, text)
@@ -400,8 +417,8 @@ module Swill
           applied += 1
         end
       end)
-      controller.controller_did_restore(applied > 0) if declarations.length > 0
-      declarations.forEach do |declaration|
+      controller.controller_did_restore(applied > 0) unless declarations.empty?
+      declarations.each do |declaration|
         disposer = Runtime.observePath(controller, declaration.path, ->(_value) { write_window_state(window) })
         window.add_restoration(disposer, window.scoped_key(declaration.key))
       end
@@ -409,7 +426,7 @@ module Swill
 
     sig { void }
     def restore_launched_windows
-      @windows.forEach { |window| restore_window_state(window, false, true) }
+      @windows.each { |window| restore_window_state(window, false, true) }
     end
 
     # Push the controller's current restorable state into the fragment.
@@ -417,7 +434,7 @@ module Swill
     def write_window_state(window)
       controller = window.controller
       return unless controller
-      Runtime.restorations(controller).forEach do |declaration|
+      T.let(Runtime.restorations(controller), T::Array[T.untyped]).each do |declaration|
         value = Runtime.encodeFragment(Runtime.readPath(controller, declaration.path))
         @fragments.write(window.scoped_key(declaration.key), value, :replace)
       end
@@ -427,11 +444,11 @@ module Swill
     # it without touching history; otherwise its state is reapplied.
     sig { void }
     def apply_fragment
-      params = @fragments.params()
-      @windows.forEach { |window| apply_fragment_to(window, params) }
+      params = @fragments.params
+      @windows.each { |window| apply_fragment_to(window, params) }
     end
 
-    sig { params(window: Window, params: T.untyped).void }
+    sig { params(window: Window, params: T::Hash[String, String]).void }
     def apply_fragment_to(window, params)
       return unless window.container?
       requested = params[window.name]
@@ -449,17 +466,18 @@ module Swill
     # Code-created content awakens through the same path as markup: the
     # observer wires added subtrees and detaches removed ones. Explicit wiring
     # before the observer runs is harmless, since both are idempotent.
-    sig { params(root: T.untyped).void }
+    sig { params(root: Element).void }
     def watch(root)
       return unless defined?(MutationObserver)
       awakening = Awakening.new
-      @observer = MutationObserver.new(->(records, _observer) do
-        records.forEach do |record|
+      observer = MutationObserver.new(->(records, _observer) do
+        records.each do |record|
           record.removedNodes.forEach { |node| awakening.detach(node) if node.nodeType == 1 }
           record.addedNodes.forEach { |node| awakening.wire(node) if node.nodeType == 1 }
         end
       end)
-      @observer.observe(root, {childList: true, subtree: true})
+      observer.observe(root, {childList: true, subtree: true})
+      @observer = observer
     end
   end
 
@@ -469,7 +487,7 @@ module Swill
   class Launcher < Swill::Object
     extend T::Sig
 
-    sig { params(document: T.untyped).void }
+    sig { params(document: Document).void }
     def install(document)
       if document.readyState == "loading"
         document.addEventListener("DOMContentLoaded", ->(_event) { launch(document) }, {once: true})
@@ -480,20 +498,20 @@ module Swill
 
     # A page without an [application] element is inert; a page naming an
     # unregistered class fails closed through Runtime.resolve.
-    sig { params(document: T.untyped).returns(T.nilable(Application)) }
+    sig { params(document: Document).returns(T.nilable(Application)) }
     def launch(document)
       element = document.querySelector("[application]")
       return nil unless element
-      return element.__swill_application__ if element.__swill_application__
-      application_class = Runtime.resolve(element.getAttribute("application"))
-      application = application_class.new()
+      running = element.__swill_application__
+      return running if running
+      application = T.cast(Runtime.resolve(T.must(element.getAttribute("application"))).new, Application)
       application.launch(element)
       # A persisted pagehide means the page may return from the back-forward
       # cache with its controllers intact, so only a real unload terminates.
       # The listener stays installed because a persisted pagehide can precede
       # the real one.
-      document.defaultView.addEventListener("pagehide", ->(event) do
-        application.terminate() unless event.persisted
+      T.must(document.defaultView).addEventListener("pagehide", ->(event) do
+        application.terminate unless T.cast(event, PageTransitionEvent).persisted
       end)
       application
     end

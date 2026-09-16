@@ -15,7 +15,7 @@ import {
   valueRead, NIL_READERS, VALUE_READERS,
   decodeFragment, encodeFragment,
   length, stringify, toInteger, toFloat, capitalize, split, slice,
-  sort, sortBy, minBy, maxBy, min, max, sum,
+  sort, sortWith, sortBy, minBy, maxBy, min, max, sum,
   uniq, compact, flatten, reverse, indexOf,
   append, prepend, difference, fetch, deleteKey,
   intDiv, modulo, between, clamp, compareValues
@@ -45,7 +45,7 @@ export const Runtime = {
 
   // Ruby core semantics
   length, stringify, toInteger, toFloat, capitalize, split, slice,
-  sort, sortBy, minBy, maxBy, min, max, sum,
+  sort, sortWith, sortBy, minBy, maxBy, min, max, sum,
   uniq, compact, flatten, reverse, indexOf,
   append, prepend, difference, fetch, deleteKey,
   intDiv, modulo, between, clamp, compareValues,

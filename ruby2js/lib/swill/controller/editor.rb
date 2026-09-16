@@ -25,13 +25,13 @@ module Swill
     sig { void }
     def discard_editing; end
 
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def insert_newline(event)
-      event.preventDefault()
+      event.preventDefault
       commit_editing
     end
 
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def cancel_operation(event)
       discard_editing
     end

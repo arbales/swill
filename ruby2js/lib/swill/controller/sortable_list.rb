@@ -16,14 +16,14 @@ module Swill
     property :sort_states, type: T::Hash[String, String], default: {}
 
     # The sort_by action: the sender's column names the key.
-    sig { params(sender: T.untyped).void }
+    sig { params(sender: Element).void }
     def sort_by(sender)
       key = sort_key_for(sender)
       toggle_sort(key) if key
     end
 
     # Override when the column name lives elsewhere than data-column.
-    sig { params(sender: T.untyped).returns(T.nilable(String)) }
+    sig { params(sender: Element).returns(T.nilable(String)) }
     def sort_key_for(sender)
       sender.getAttribute("data-column")
     end
@@ -75,21 +75,21 @@ module Swill
 
     # The represented objects in sort order: nil values last when ascending,
     # numbers and booleans by value, everything else as text.
-    sig { override.returns(T.untyped) }
+    sig { override.returns(T::Array[T.untyped]) }
     def arranged_objects
       objects = super
       key = self.sort_key
       return objects unless key
       sign = self.sort_direction == "descending" ? -1 : 1
-      objects.slice().sort(->(left, right) do
+      objects.sort do |left, right|
         Runtime.compareValues(Runtime.read(left, key), Runtime.read(right, key)) * sign
-      end)
+      end
     end
 
     sig { void }
     def sync_sort_states
       key = self.sort_key
-      states = {}
+      states = T.let({}, T::Hash[String, String])
       states[key] = self.sort_direction if key
       self.sort_states = states
     end

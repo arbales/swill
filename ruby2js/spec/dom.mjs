@@ -106,6 +106,7 @@ export class Element {
   }
 
   scrollIntoView() { this.ownerDocument.scrolledTo = this; }
+  getSelection() { return null; }
 
   // tag, [attr], [attr=value], and combinations such as template[name].
   matches(selector) {

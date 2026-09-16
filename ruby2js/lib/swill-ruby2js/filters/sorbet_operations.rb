@@ -20,7 +20,8 @@ module Swill
         # The types a check can name: the declaration types plus Float,
         # Symbol, NilClass, and T.untyped. Unions, procs, and generics other
         # than Array and Hash are not checkable here.
-        TYPE = /\A(?:String|Integer|Float|Symbol|NilClass|T::Boolean|T\.untyped|T\.nilable\((?:String|Integer|Float|Symbol|[A-Z]\w*(?:::\w+)*)\)|T::(?:Array|Hash)\[[\w:., ]+\]|[A-Z]\w*(?:::\w+)*)\z/
+        SIMPLE_TYPE = /(?:String|Integer|Float|Symbol|NilClass|T::Boolean|T\.untyped|T\.proc\.void|T\.proc\.params\([^()]*\)\.(?:void|returns\([^()]*\))|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)/
+        TYPE = /\A(?:#{SIMPLE_TYPE}|T\.nilable\(#{SIMPLE_TYPE}\))\z/
 
         def self.operation?(node)
           return false unless node.respond_to?(:type) && node.type == :send
@@ -58,7 +59,12 @@ module Swill
           when :must then s(:call, runtime, :must, process(value))
           when :absurd then s(:call, runtime, :absurd, process(value))
           when :unsafe then process(value)
-          else s(:call, runtime, :cast, process(value), s(:str, checkable_type(type, method)))
+          else
+            # The browser's own classes are not the runtime's to check, and
+            # T.untyped checks nothing: such a cast is an annotation for
+            # Sorbet and the typer.
+            return process(value) if type == "T.untyped" || DOM.native?(type[/\AT\.nilable\((.+)\)\z/, 1] || type)
+            s(:call, runtime, :cast, process(value), s(:str, checkable_type(type, method)))
           end
         end
 
@@ -80,7 +86,7 @@ module Swill
             raise CompileError, "T.#{method} to #{inner}: a mixin is not checkable" unless entry["kind"] == "class"
             return type.sub(inner, resolved)
           end
-          return type if @entry["javascript_only"] && JS_INTRINSICS.include?(inner)
+          return type if JS_INTRINSICS.include?(inner) || DOM.native?(inner)
           raise CompileError, "T.#{method} to #{inner}: not a class the runtime can check"
         end
 

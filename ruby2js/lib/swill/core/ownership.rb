@@ -8,7 +8,7 @@ module Swill
   module Ownership
     extend T::Sig
 
-    sig { params(element: T.untyped, callback: T.proc.params(child: T.untyped).void).void }
+    sig { params(element: Element, callback: T.proc.params(child: Element).void).void }
     def each_child(element, callback)
       children = element.children
       index = 0
@@ -20,7 +20,7 @@ module Swill
 
     # Visit root and its owned descendants. A nested controller root is a
     # boundary: neither it nor anything inside it belongs to this owner.
-    sig { params(root: T.untyped, callback: T.proc.params(element: T.untyped).void).void }
+    sig { params(root: Element, callback: T.proc.params(element: Element).void).void }
     def each_owned(root, callback)
       callback.(root)
       each_child(root, ->(child) do
@@ -28,11 +28,11 @@ module Swill
       end)
     end
 
-    sig { params(root: T.untyped, selector: String).returns(T.untyped) }
+    sig { params(root: Element, selector: String).returns(T::Array[Element]) }
     def owned_matching(root, selector)
-      found = []
+      found = T.let([], T::Array[Element])
       each_owned(root, ->(element) do
-        found.push(element) if element.matches(selector)
+        found << element if element.matches(selector)
       end)
       found
     end

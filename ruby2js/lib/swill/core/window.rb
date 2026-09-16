@@ -9,16 +9,17 @@ module Swill
   class Window < Swill::Object
     extend T::Sig
 
-    sig { params(name: String, root: T.untyped).void }
+    sig { params(name: String, root: Element).void }
     def initialize(name, root)
       super()
       @name = name
       @root = root
-      @controller = nil
-      @content_name = nil
-      @saved_first_responder = nil
-      @restoration_disposers = []
-      @restoration_keys = []
+      @controller = T.let(nil, T.nilable(Controller))
+      @content_name = T.let(nil, T.nilable(String))
+      @saved_first_responder = T.let(nil, T.nilable(Responder))
+      @restoration_disposers = T.let([], T::Array[T.proc.void])
+      @restoration_keys = T.let([], T::Array[String])
+      @resolve_closed = T.let(nil, T.untyped)
       @closed = Promise.new(->(resolve, _reject) { @resolve_closed = resolve })
     end
 
@@ -34,19 +35,19 @@ module Swill
 
     sig { params(disposer: T.proc.void, key: String).void }
     def add_restoration(disposer, key)
-      @restoration_disposers.push(disposer)
-      @restoration_keys.push(key)
+      @restoration_disposers << disposer
+      @restoration_keys << key
     end
 
     # Release the current restoration subscriptions; returns the scoped keys
     # they covered so a caller can prune ones the next controller will not own.
-    sig { returns(T.untyped) }
+    sig { returns(T::Array[String]) }
     def dispose_restoration
       disposers = @restoration_disposers
       keys = @restoration_keys
       @restoration_disposers = []
       @restoration_keys = []
-      disposers.forEach { |dispose| dispose.() }
+      disposers.each { |dispose| dispose.() }
       keys
     end
 
@@ -55,7 +56,7 @@ module Swill
       @name
     end
 
-    sig { returns(T.untyped) }
+    sig { returns(Element) }
     def root
       @root
     end
@@ -71,7 +72,7 @@ module Swill
     end
 
     # Resolves with nil when the window is dismissed.
-    sig { returns(T.untyped) }
+    sig { returns(Promise) }
     def closed
       @closed
     end
@@ -100,16 +101,16 @@ module Swill
 
     sig { params(candidate: Controller).returns(T::Boolean) }
     def contains_controller?(candidate)
-      candidate == @controller || @root.contains(candidate.view().element())
+      candidate == @controller || @root.contains(candidate.view.element)
     end
 
     # Tear down the subtree, close a dialog, remove the root, and resolve.
     sig { void }
     def dismiss
       dispose_restoration
-      Awakening.new.detach(@root)
-      @root.close() if @root.close
-      @root.remove()
+      Awakening.detach(@root)
+      @root.close if @root.tagName == "DIALOG"
+      @root.remove
       @resolve_closed.(nil)
     end
   end

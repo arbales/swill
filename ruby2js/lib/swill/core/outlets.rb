@@ -12,19 +12,19 @@ module Swill
 
     sig { params(controller: Controller).returns(Controller) }
     def connect(controller)
-      declared = Runtime.outlets(controller)
-      return controller if declared.length == 0
-      by_name = {}
-      declared.forEach { |descriptor| by_name[descriptor.name] = descriptor }
-      connected = {}
-      candidates(controller.view().element()).forEach do |element|
-        name = element.getAttribute("outlet")
+      declared = T.let(Runtime.outlets(controller), T::Array[T.untyped])
+      return controller if declared.empty?
+      by_name = T.let({}, T::Hash[String, T.untyped])
+      declared.each { |descriptor| by_name[descriptor.name] = descriptor }
+      connected = T.let({}, T::Hash[String, T::Boolean])
+      candidates(controller.view.element).each do |element|
+        name = T.must(element.getAttribute("outlet"))
         raise "Undeclared outlet: #{name}" unless by_name[name]
         raise "Duplicate outlet: #{name}" if connected[name]
         connected[name] = true
         Runtime.write(controller, name, value_for(controller, by_name[name], element))
       end
-      declared.forEach do |descriptor|
+      declared.each do |descriptor|
         raise "Unresolved outlet: #{descriptor.name}" if !descriptor.optional && !connected[descriptor.name]
       end
       controller
@@ -32,17 +32,17 @@ module Swill
 
     # Owned descendants carrying an outlet attribute, plus boundary elements
     # themselves. The root is never its own outlet.
-    sig { params(root: T.untyped).returns(T.untyped) }
+    sig { params(root: Element).returns(T::Array[Element]) }
     def candidates(root)
-      found = []
+      found = T.let([], T::Array[Element])
       collect(root, found)
       found
     end
 
-    sig { params(element: T.untyped, found: T.untyped).void }
+    sig { params(element: Element, found: T::Array[Element]).void }
     def collect(element, found)
       each_child(element, ->(child) do
-        found.push(child) if child.hasAttribute("outlet")
+        found << child if child.hasAttribute("outlet")
         collect(child, found) unless child.hasAttribute("controller")
       end)
     end
@@ -52,7 +52,7 @@ module Swill
     # must be: a typed outlet's value is checked against the declared type,
     # shallowly, as T.cast checks, so a mismatch fails here by outlet name
     # rather than at first use.
-    sig { params(controller: Controller, descriptor: T.untyped, element: T.untyped).returns(T.untyped) }
+    sig { params(controller: Controller, descriptor: T.untyped, element: Element).returns(T.untyped) }
     def value_for(controller, descriptor, element)
       name = descriptor.name
       value = materialize(controller, name, element)
@@ -61,20 +61,20 @@ module Swill
       value
     end
 
-    sig { params(controller: Controller, name: String, element: T.untyped).returns(T.untyped) }
+    sig { params(controller: Controller, name: String, element: Element).returns(T.untyped) }
     def materialize(controller, name, element)
       return decode(controller, name, element) if element.tagName == "SCRIPT" && element.type == "application/json"
       return element if element.tagName == "TEMPLATE"
       view = element.__swill_view__
       raise "Outlet #{name} is not a managed element" unless view
-      owner = view.controller_value()
+      owner = view.controller_value
       owner ? owner : view
     end
 
-    sig { params(controller: Controller, name: String, element: T.untyped).returns(T.untyped) }
+    sig { params(controller: Controller, name: String, element: Element).returns(T.untyped) }
     def decode(controller, name, element)
-      text = element.textContent.trim()
-      controller.decode_outlet_data(name, text.length == 0 ? nil : JSON.parse(text))
+      text = element.textContent.strip
+      controller.decode_outlet_data(name, text.empty? ? nil : JSON.parse(text))
     end
   end
 end

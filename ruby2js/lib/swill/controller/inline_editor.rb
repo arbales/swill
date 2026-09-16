@@ -9,14 +9,14 @@ module Swill
   class Controller::InlineEditor < Controller::Editor
     extend T::Sig
 
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def insert_newline(event)
-      event.preventDefault()
+      event.preventDefault
       host = editing_host
       host ? host.end_editing(true) : commit_editing
     end
 
-    sig { override.params(event: T.untyped).void }
+    sig { override.params(event: KeyboardEvent).void }
     def cancel_operation(event)
       host = editing_host
       host ? host.end_editing(false) : discard_editing
@@ -45,10 +45,10 @@ module Swill
       owner && owner.respond_to?(:editor_should_end_editing) ? owner : nil
     end
 
-    sig { params(responder: T.nilable(Responder)).returns(T.untyped) }
+    sig { params(responder: T.nilable(Responder)).returns(T.nilable(Element)) }
     def responder_element(responder)
-      return responder.view().element() if responder.is_a?(Controller)
-      return responder.element() if responder.is_a?(View)
+      return T.cast(responder, Controller).view.element if responder.is_a?(Controller)
+      return T.cast(responder, View).element if responder.is_a?(View)
       nil
     end
   end

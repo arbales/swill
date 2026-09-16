@@ -22,10 +22,10 @@ module Swill
           @entries = imports.map { |entry| entry.merge("imported" => true) }
         end
 
-        def collect(source, file, javascript_only: false)
+        def collect(source, file)
           ast, comments = ::Ruby2JS.parse(source, file)
-          # This shared-Ruby spike accepts type hints, not JavaScript-only control
-          # pragmas (notably skip/extend, which would invalidate collected metadata).
+          # Type-hint pragmas only; control pragmas (notably skip/extend)
+          # would invalidate collected metadata.
           Array(comments[:_raw]).each do |comment|
             comment.text.scan(/#\s*Pragma:\s*(\S+)/i).flatten.each do |name|
               unless %w[array hash string].include?(name)
@@ -33,7 +33,7 @@ module Swill
               end
             end
           end
-          collect_scope(statements(ast), [], javascript_only)
+          collect_scope(statements(ast), [])
           self
         end
 
@@ -126,6 +126,7 @@ module Swill
   end
 end
 
+require_relative "knowledge/dom"
 require_relative "knowledge/collection"
 require_relative "knowledge/signatures"
 require_relative "knowledge/declarations"

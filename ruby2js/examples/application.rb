@@ -168,7 +168,7 @@ module Demo
     sig { void }
     def reset
       controllers.each do |controller|
-        controller.clear if controller.respond_to?(:clear)
+        T.unsafe(controller).clear if controller.respond_to?(:clear)
       end
     end
   end

@@ -16,7 +16,7 @@ module Swill
         # Ordinary names stay ordinary; namespaces use __. Escape source
         # underscores first so A::B and A__B remain distinct. The single
         # underscore in Ruby_Runtime cannot occur in an encoded source name.
-        return "Ruby_#{name}" if (%w[Runtime Superclass] + JS_INTRINSICS).include?(name)
+        return "Ruby_#{name}" if (%w[Runtime Superclass] + JS_INTRINSICS + DOM::CLASSES.keys).include?(name)
         name.split("::").map { |part| part.gsub("_", "_u") }.join("__")
       end
 

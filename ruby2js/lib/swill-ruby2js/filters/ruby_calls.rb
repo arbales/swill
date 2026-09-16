@@ -10,7 +10,7 @@ module Swill
 
         def on_send(node)
           receiver, method, *args = node.children
-          return super if %i[new raise lambda proc].include?(method)
+          return super if %i[new raise lambda proc is_a? kind_of? instance_of?].include?(method)
           # Operators and indexing are native converter syntax, not named methods.
           return super if ::Ruby2JS::Filter::Processor::BINARY_OPERATORS.include?(method) ||
             %i[[] []=].include?(method)

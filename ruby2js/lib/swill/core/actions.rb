@@ -15,26 +15,23 @@ module Swill
     # Actions in element's owned region dispatch from controller, as a list
     # row's do from its list. Returns the disposer; elements already wired
     # are left to their owner.
-    sig { params(controller: Controller, element: T.untyped).returns(T.proc.void) }
+    sig { params(controller: Controller, element: Element).returns(T.proc.void) }
     def wire_into(controller, element)
       disposers = owned_matching(element, "[data-action]").map { |target| wire_element(controller, target) }
-      ->() { disposers.forEach { |dispose| dispose.() } }
+      ->() { disposers.each { |dispose| dispose.() } }
     end
 
-    sig { params(controller: Controller, element: T.untyped).returns(T.proc.void) }
+    # data-action="name" on click, or "event:name".
+    sig { params(controller: Controller, element: Element).returns(T.proc.void) }
     def wire_element(controller, element)
-      if element.__swill_action__
-        return ->() {}
-      end
-
-      specification = element.getAttribute("data-action").trim()
-      if specification.length == 0
-        return ->() {}
-      end
-      separator = specification.indexOf(":")
-      if separator >= 0
-        event_name = specification.slice(0, separator)
-        action_name = specification.slice(separator + 1)
+      return ->() {} if element.__swill_action__
+      attribute = element.getAttribute("data-action")
+      specification = attribute ? attribute.strip : ""
+      return ->() {} if specification.empty?
+      if specification.include?(":")
+        parts = specification.split(":")
+        event_name = T.must(parts[0])
+        action_name = T.must(parts[1])
       else
         event_name = "click"
         action_name = specification

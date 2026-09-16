@@ -147,6 +147,9 @@
   function sort(values) {
     return values.slice().sort(compare);
   }
+  function sortWith(values, comparator) {
+    return values.slice().sort(comparator);
+  }
   function sortBy(values, keyOf) {
     return values.map((value, index) => ({ value, key: keyOf(value), index })).sort((left, right) => compare(left.key, right.key) || left.index - right.index).map((entry) => entry.value);
   }
@@ -831,6 +834,7 @@
   function conforms(value, type) {
     const nilable = /^T\.nilable\((.+)\)$/.exec(type);
     if (nilable) return value == null || conforms(value, nilable[1]);
+    if (type.startsWith("T.proc")) return typeof value === "function";
     switch (type) {
       case "T.untyped":
         return true;
@@ -932,6 +936,7 @@
     split,
     slice,
     sort,
+    sortWith,
     sortBy,
     minBy,
     maxBy,
@@ -1054,9 +1059,9 @@
         });
       }
       ownedMatching(root, selector) {
-        let found = [];
+        let found = Runtime.cast([], "T::Array[Element]");
         this.eachOwned(root, (element) => {
-          if (element.matches(selector)) return found.push(element);
+          if (element.matches(selector)) return Runtime.append(found, element);
         });
         return found;
       }
@@ -1071,15 +1076,21 @@
         let path = options.key_path;
         let sync = (value) => Runtime.write(this, target, value);
         sync(Runtime.readPath(source, path));
-        this.objectBindings().push({
-          target,
-          dispose: Runtime.observePath(source, path, sync)
-        });
+        Runtime.append(
+          this.objectBindings(),
+          { target, dispose: Runtime.observePath(source, path, sync) }
+        );
         return this;
       }
       unbind(target) {
-        let remaining = [];
-        this.objectBindings().forEach((binding) => binding.target === target ? binding.dispose.call(null) : remaining.push(binding));
+        let remaining = Runtime.cast(
+          [],
+          "T::Array[T::Hash[Symbol, T.untyped]]"
+        );
+        this.objectBindings().forEach((binding) => binding.target === target ? binding.dispose.call(null) : Runtime.append(
+          remaining,
+          binding
+        ));
         this._object_bindings = remaining;
         return this;
       }
@@ -1099,44 +1110,30 @@
     nextResponder() {
       return null;
     }
-    // Target/action: the first responder in the chain that responds to the
-    // name handles it, as respond_to? would decide in Ruby. A same-named
-    // property or a method of the wrong arity is an error there, not a reason
-    // to keep walking. An action nobody handles is also an error.
     performAction(name, sender, event) {
       let target = this.actionTarget(name);
       if (!target) throw new Error(`Unhandled action: ${name}`);
       return Runtime.performAction(target, name, sender, event);
     }
-    // The first responder from here up the chain that responds to name, or
-    // nil when none does; for actions that are optional to handle.
+    // TODO: It's unclear to me that this is the right place to handle this bubbling.
     actionTarget(name) {
-      if (Runtime.respondsTo(this, name)) return this;
+      if (Runtime.isTruthy(Runtime.respondsTo(this, name))) return this;
       let target = this.nextResponder();
       return target ? target.actionTarget(name) : null;
     }
-    // ---- first responder ----
-    //
-    // The policy gate for being made first responder by focus or the key loop.
-    // Views accept; a bare responder refuses.
     acceptsFirstResponder() {
       return false;
     }
-    // Return false to refuse; set up state such as focus otherwise. Never
-    // call directly; ask the application.
+    // Return false to refuse to become First Reponder.
     becomeFirstResponder() {
       return true;
     }
-    // Return false to keep first responder status; the incoming responder is
-    // passed so a refusal can be selective.
+    // Return false to refuse to resign to the provided next Reaponder.
     resignFirstResponder(next_responder) {
       return true;
     }
-    // ---- key events ----
-    //
-    // Well-known keys route to named methods; everything else, and the named
-    // methods themselves, continue up the chain.
     keyDown(event) {
+      let target;
       switch (event.key) {
         case "Escape":
           return this.cancelOperation(event);
@@ -1145,29 +1142,34 @@
         case "Tab":
           return this.complete(event);
         default:
-          return this.nextResponder()?.keyDown(event);
+          target = this.nextResponder();
+          if (Runtime.isTruthy(target)) return Runtime.invoke(target, "key_down", event);
       }
     }
     keyUp(event) {
-      return this.nextResponder()?.keyUp(event);
+      let target = this.nextResponder();
+      if (target) return target.keyUp(event);
     }
     cancelOperation(event) {
-      return this.nextResponder()?.cancelOperation(event);
+      let target = this.nextResponder();
+      if (target) return target.cancelOperation(event);
     }
     insertNewline(event) {
-      return this.nextResponder()?.insertNewline(event);
+      let target = this.nextResponder();
+      if (target) return target.insertNewline(event);
     }
     complete(event) {
-      return this.nextResponder()?.complete(event);
+      let target = this.nextResponder();
+      if (target) return target.complete(event);
     }
   };
   var Swill__View = class _Swill__View extends Swill__Responder {
     constructor(element) {
       super();
       this._element = element;
-      this._controller = null;
-      this._superview = null;
-      this._subviews = [];
+      this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
+      this._superview = Runtime.cast(null, "T.nilable(Swill::View)");
+      this._subviews = Runtime.cast([], "T::Array[View]");
       element.__swill_view__ = this;
     }
     element() {
@@ -1183,7 +1185,7 @@
     superview() {
       return this._superview;
     }
-    // Adopted child views in adoption order, as a JavaScript array.
+    // Adopted child views in adoption order.
     subviews() {
       return this._subviews;
     }
@@ -1199,7 +1201,7 @@
       let previous = child.superview();
       if (previous) previous.releaseSubview(child);
       child.assignSuperview(this);
-      this._subviews.push(child);
+      Runtime.append(this._subviews, child);
       return child;
     }
     releaseSubview(child) {
@@ -1216,12 +1218,12 @@
       return this._superview;
     }
     nextResponder() {
-      return this._controller ?? this._superview;
+      return this._controller || this._superview;
     }
     // ---- elements: the DOM work a controller leaves to its view ----
     // The View on an element, or nil when it has none.
     static of(element) {
-      return element.__swill_view__ ?? null;
+      return element.__swill_view__;
     }
     // The controller rooted at an element, or nil.
     static controllerFor(element) {
@@ -1268,7 +1270,7 @@
       return element.setAttribute("aria-selected", on ? "true" : "false");
     }
     reveal(element) {
-      if (element.scrollIntoView) return element.scrollIntoView({ block: "nearest" });
+      return element.scrollIntoView({ block: "nearest" });
     }
     // Keyboard focus needs a tab stop.
     ensureFocusable() {
@@ -1278,8 +1280,7 @@
     }
     // Drop the browser's text selection, as before a shift-click sweep.
     clearTextSelection() {
-      let owner_document = this._element.ownerDocument;
-      let selection = owner_document.getSelection ? owner_document.getSelection() : null;
+      let selection = this._element.ownerDocument.getSelection();
       if (selection) return selection.removeAllRanges();
     }
     // An event listener on this view's element; the returned callable
@@ -1322,10 +1323,13 @@
     bindingRoot() {
       return null;
     }
+    constructor() {
+      super();
+      this._teardowns = Runtime.cast([], "T::Array[T.proc.void]");
+    }
     attach(element) {
-      this._view = Swill__View.of(element) ?? new Swill__View(element);
+      this._view = Swill__View.of(element) || new Swill__View(element);
       this._view.controller = this;
-      this._teardowns = [];
       return this;
     }
     view() {
@@ -1336,9 +1340,9 @@
       let superview = this._view.superview();
       return superview ? superview.owner() : null;
     }
-    // Direct child controllers in tree order, as a JavaScript array.
+    // Direct child controllers in tree order.
     childControllers() {
-      let found = [];
+      let found = Runtime.cast([], "T::Array[Controller]");
       this.collectChildControllers(this._view, found);
       return found;
     }
@@ -1350,10 +1354,10 @@
     // A nested controller answers to its parent; a root controller answers to
     // the application, which is the top of the responder chain.
     nextResponder() {
-      return this.parent() ?? this.application();
+      return this.parent() || this.application();
     }
     registerTeardown(dispose2) {
-      return this._teardowns.push(dispose2);
+      return Runtime.append(this._teardowns, dispose2);
     }
     // Releases this controller's listeners and observers, then its descendants,
     // exactly once. The element keeps its View, so the region can be awakened
@@ -1432,7 +1436,7 @@
       return view.subviews().forEach((subview) => {
         let controller = subview.controllerValue();
         if (controller) {
-          found.push(controller);
+          Runtime.append(found, controller);
         } else {
           this.collectChildControllers(subview, found);
         }
@@ -1443,7 +1447,7 @@
     wire(controller) {
       let root = controller.view().element();
       let prefix = controller.bindingRoot();
-      let disposers = [];
+      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
       this.wireProperties(controller, prefix, root, disposers);
       this.wireRegion(controller, prefix, root, disposers);
       controller.registerTeardown(this.release(disposers));
@@ -1455,9 +1459,9 @@
     // only its represented object comes from here; the controller wires the
     // rest as its own region. Returns the disposer.
     wireObject(object, element) {
-      let disposers = [];
+      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
       if (element.hasAttribute("bind")) {
-        disposers.push(this.wireElement(object, element, null));
+        Runtime.append(disposers, this.wireElement(object, element, null));
       }
       ;
       if (!element.hasAttribute("controller")) {
@@ -1470,7 +1474,7 @@
     wireRegion(object, prefix, element, disposers) {
       return this.eachChild(element, (child) => {
         if (child.hasAttribute("bind")) {
-          disposers.push(this.wireElement(object, child, prefix));
+          Runtime.append(disposers, this.wireElement(object, child, prefix));
         }
         ;
         if (!child.hasAttribute("controller")) {
@@ -1481,37 +1485,45 @@
     }
     wireProperties(object, prefix, element, disposers) {
       return element.getAttributeNames().forEach((name) => {
-        if (name.slice(0, 5) === "bind-") {
-          let property = name.slice(5, name.length);
-          disposers.push(this.wireProperty(
-            object,
-            prefix,
-            element,
-            property,
-            element.getAttribute(name)
-          ));
-        }
+        if (!name.startsWith("bind-")) return;
+        let property = Runtime.must(Runtime.slice(name, 5, name.length));
+        Runtime.append(disposers, this.wireProperty(
+          object,
+          prefix,
+          element,
+          property,
+          Runtime.must(element.getAttribute(name))
+        ));
       });
     }
     release(disposers) {
       return () => disposers.forEach((dispose2) => dispose2());
     }
     resolvePath(prefix, path) {
-      if (path[0] === "@") return path.slice(1, path.length) ?? "";
+      if (path[0] === "@") {
+        return Runtime.logicalOr(
+          Runtime.slice(path, 1, path.length),
+          () => ""
+        );
+      }
+      ;
       if (prefix == null) return path;
       return path.length === 0 ? `${prefix}` : `${prefix}.${path}`;
     }
     // A value binding. On a child controller's root the value becomes the
     // child's represented object; otherwise it renders into the element.
     wireElement(object, element, prefix) {
-      let path = this.resolvePath(prefix, element.getAttribute("bind"));
+      let path = this.resolvePath(
+        prefix,
+        Runtime.must(element.getAttribute("bind"))
+      );
       let view = element.__swill_view__;
       let child = view ? view.controllerValue() : null;
       if (child) return this.wireRepresentedObject(object, child, path);
       let form_control = element.matches("input, textarea, select");
       let writable = form_control && !element.hasAttribute("readonly");
       let checkbox = element.type === "checkbox";
-      if (writable) Runtime.assertWritablePath(object, path);
+      if (Runtime.isTruthy(writable)) Runtime.assertWritablePath(object, path);
       let render = (_value) => {
         let value = Runtime.readPath(object, path);
         if (checkbox) {
@@ -1529,10 +1541,12 @@
         let value = checkbox ? element.checked : element.value;
         return Runtime.writePath(object, path, value);
       };
-      if (writable) element.addEventListener(event_name, handler);
+      if (Runtime.isTruthy(writable)) element.addEventListener(event_name, handler);
       return () => {
         dispose2();
-        if (writable) return element.removeEventListener(event_name, handler);
+        if (Runtime.isTruthy(writable)) {
+          return element.removeEventListener(event_name, handler);
+        }
       };
     }
     wireRepresentedObject(object, child, path) {
@@ -1548,7 +1562,7 @@
       return Runtime.observePath(object, resolved, render);
     }
     writeProperty(element, property, value) {
-      if (property.slice(0, 5) === "data-" || property.slice(0, 5) === "aria-") {
+      if (property.startsWith("data-") || property.startsWith("aria-")) {
         if (value == null || value === "") {
           element.removeAttribute(property);
         } else {
@@ -1558,7 +1572,7 @@
         return;
       }
       ;
-      if ((property === "href" || property === "src") && value == null) {
+      if (Runtime.isTruthy((property === "href" || property === "src") && value == null)) {
         element.removeAttribute(property);
         element[property] = "";
         return;
@@ -1595,15 +1609,17 @@
       let disposers = this.ownedMatching(element, "[data-action]").map((target) => this.wireElement(controller, target));
       return () => disposers.forEach((dispose2) => dispose2());
     }
+    // data-action="name" on click, or "event:name".
     wireElement(controller, element) {
       let event_name, action_name;
       if (element.__swill_action__) return () => null;
-      let specification = element.getAttribute("data-action").trim();
-      if (specification.length === 0) return () => null;
-      let separator = specification.indexOf(":");
-      if (separator >= 0) {
-        event_name = specification.slice(0, separator);
-        action_name = specification.slice(separator + 1);
+      let attribute = element.getAttribute("data-action");
+      let specification = attribute != null ? Runtime.strip(attribute) : "";
+      if (Runtime.isEmpty(specification)) return () => null;
+      if (specification.includes(":")) {
+        let parts = Runtime.split(specification, ":");
+        event_name = Runtime.must(parts[0]);
+        action_name = Runtime.must(parts[1]);
       } else {
         event_name = "click";
         action_name = specification;
@@ -1620,14 +1636,20 @@
   };
   var Swill__Outlets = class extends Swill__Object {
     connect(controller) {
-      let declared = Runtime.outlets(controller);
-      if (declared.length === 0) return controller;
-      let by_name = {};
-      declared.forEach((descriptor) => by_name[descriptor.name] = descriptor);
-      let connected = {};
+      let declared = Runtime.cast(
+        Runtime.outlets(controller),
+        "T::Array[T.untyped]"
+      );
+      if (Runtime.isEmpty(declared)) return controller;
+      let by_name = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      declared.forEach((descriptor) => by_name[Runtime.read(descriptor, "name")] = descriptor);
+      let connected = Runtime.cast({}, "T::Hash[String, T::Boolean]");
       this.candidates(controller.view().element()).forEach((element) => {
-        let name = element.getAttribute("outlet");
-        if (!by_name[name]) throw new Error(`Undeclared outlet: ${name}`);
+        let name = Runtime.must(element.getAttribute("outlet"));
+        if (!Runtime.isTruthy(by_name[name])) {
+          throw new Error(`Undeclared outlet: ${name}`);
+        }
+        ;
         if (connected[name]) throw new Error(`Duplicate outlet: ${name}`);
         connected[name] = true;
         Runtime.write(
@@ -1637,8 +1659,14 @@
         );
       });
       declared.forEach((descriptor) => {
-        if (!descriptor.optional && !connected[descriptor.name]) {
-          throw new Error(`Unresolved outlet: ${descriptor.name}`);
+        if (Runtime.isTruthy(!Runtime.isTruthy(Runtime.read(
+          descriptor,
+          "optional"
+        )) && !connected[Runtime.read(descriptor, "name")])) {
+          throw new Error(`Unresolved outlet: ${Runtime.read(
+            descriptor,
+            "name"
+          )}`);
         }
       });
       return controller;
@@ -1646,13 +1674,13 @@
     // Owned descendants carrying an outlet attribute, plus boundary elements
     // themselves. The root is never its own outlet.
     candidates(root) {
-      let found = [];
+      let found = Runtime.cast([], "T::Array[Element]");
       this.collect(root, found);
       return found;
     }
     collect(element, found) {
       return this.eachChild(element, (child) => {
-        if (child.hasAttribute("outlet")) found.push(child);
+        if (child.hasAttribute("outlet")) Runtime.append(found, child);
         if (!child.hasAttribute("controller")) return this.collect(child, found);
       });
     }
@@ -1662,17 +1690,26 @@
     // shallowly, as T.cast checks, so a mismatch fails here by outlet name
     // rather than at first use.
     valueFor(controller, descriptor, element) {
-      let name = descriptor.name;
+      let name = Runtime.read(descriptor, "name");
       let value = this.materialize(controller, name, element);
-      let typed = descriptor.type && descriptor.type !== "T.untyped";
-      if (typed && !Runtime.conforms(value, descriptor.type)) {
-        throw new Error(`Outlet ${name} expects ${descriptor.type}`);
+      let typed = Runtime.logicalAnd(
+        Runtime.read(descriptor, "type"),
+        () => Runtime.read(descriptor, "type") !== "T.untyped"
+      );
+      if (Runtime.isTruthy(Runtime.logicalAnd(typed, () => !Runtime.isTruthy(Runtime.conforms(
+        value,
+        Runtime.read(descriptor, "type")
+      ))))) {
+        throw new Error(`Outlet ${name} expects ${Runtime.read(
+          descriptor,
+          "type"
+        )}`);
       }
       ;
       return value;
     }
     materialize(controller, name, element) {
-      if (element.tagName === "SCRIPT" && element.type === "application/json") {
+      if (Runtime.isTruthy(element.tagName === "SCRIPT" && element.type === "application/json")) {
         return this.decode(controller, name, element);
       }
       ;
@@ -1683,19 +1720,19 @@
       return owner ? owner : view;
     }
     decode(controller, name, element) {
-      let text = element.textContent.trim();
+      let text = Runtime.strip(element.textContent);
       return controller.decodeOutletData(
         name,
-        text.length === 0 ? null : JSON.parse(text)
+        Runtime.isEmpty(text) ? null : JSON.parse(text)
       );
     }
   };
   var Swill__Awakening = class extends Swill__Object {
     static wire(root) {
-      return new this().wire(root);
+      return Runtime.invoke(new this(), "wire", root);
     }
     static detach(node) {
-      return new this().detach(node);
+      return Runtime.invoke(new this(), "detach", node);
     }
     // Returns the new controllers in document order. Awakening a fragment that
     // already sits under a live view adopts it into that view's tree.
@@ -1708,25 +1745,16 @@
     // awake_from_dom, children first. The application restores window state
     // between this and finish.
     awaken(root) {
-      let controllers = [];
+      let controllers = Runtime.cast([], "T::Array[Controller]");
       this.walk(root, this.nearestView(root.parentElement), controllers);
-      this.eachReversed(controllers, (controller) => this.load(controller));
+      Runtime.reverse(controllers).forEach((controller) => this.load(controller));
       return controllers;
     }
     // controller_did_load once per controller, then appearance.
     finish(controllers) {
-      this.eachReversed(
-        controllers,
-        (controller) => controller.controllerDidLoad()
-      );
-      this.eachReversed(
-        controllers,
-        (controller) => controller.viewWillAppear()
-      );
-      return this.eachReversed(
-        controllers,
-        (controller) => controller.viewDidAppear()
-      );
+      Runtime.reverse(controllers).forEach((controller) => controller.controllerDidLoad());
+      Runtime.reverse(controllers).forEach((controller) => controller.viewWillAppear());
+      return Runtime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
     }
     load(controller) {
       controller.viewDidLoad();
@@ -1739,18 +1767,23 @@
     // is part of the tree whatever its attributes say.
     walk(element, owner, controllers) {
       let view = element.__swill_view__;
-      if (!view && this.isManaged(element)) view = this.createView(element);
+      if (Runtime.isTruthy(!view && this.isManaged(element))) {
+        view = this.createView(element);
+      }
+      ;
       if (view) {
-        if (owner && !view.superview()) owner.adoptSubview(view);
-        if (element.hasAttribute("controller") && !view.controllerValue()) {
-          let controller_class = Runtime.resolve(element.getAttribute("controller"));
-          let controller = new controller_class();
-          controller.attach(element);
-          controllers.push(controller);
+        if (Runtime.isTruthy(owner && !view.superview())) owner.adoptSubview(view);
+        if (Runtime.isTruthy(element.hasAttribute("controller") && !view.controllerValue())) {
+          let controller = Runtime.cast(
+            new (Runtime.resolve(Runtime.must(element.getAttribute("controller"))))(),
+            "Swill::Controller"
+          );
+          Runtime.invoke(controller, "attach", element);
+          Runtime.append(controllers, controller);
         }
       }
       ;
-      let next_owner = view ?? owner;
+      let next_owner = view || owner;
       return this.eachChild(
         element,
         (child) => this.walk(child, next_owner, controllers)
@@ -1769,9 +1802,8 @@
     // klass names a View subclass; a plain managed element gets a plain View.
     createView(element) {
       let name = element.getAttribute("klass");
-      if (!name) return new Swill__View(element);
-      let view_class = Runtime.resolve(name);
-      let view = new view_class(element);
+      if (name == null) return new Swill__View(element);
+      let view = new (Runtime.resolve(name))(element);
       if (!(view instanceof Swill__View)) {
         throw new Error(`${name} is not a Swill::View`);
       }
@@ -1780,14 +1812,14 @@
     }
     // Every controller in a subtree in document order, the node included.
     controllersWithin(node) {
-      let found = [];
+      let found = Runtime.cast([], "T::Array[Controller]");
       this.collectControllers(node, found);
       return found;
     }
     collectControllers(element, found) {
       let view = element.__swill_view__;
       let controller = view ? view.controllerValue() : null;
-      if (controller) found.push(controller);
+      if (controller) Runtime.append(found, controller);
       return this.eachChild(
         element,
         (child) => this.collectControllers(child, found)
@@ -1803,28 +1835,29 @@
       let view = element.__swill_view__;
       return view ? view : this.nearestView(element.parentElement);
     }
-    eachReversed(controllers, callback) {
-      let index = controllers.length - 1;
-      while (index >= 0) {
-        callback(controllers[index]);
-        index--;
-      }
-    }
   };
   var Swill__Fragments = class extends Swill__Object {
     constructor(browser) {
       super();
       this._browser = browser;
       this._suspended = false;
-      this._on_change = null;
+      this._on_change = Runtime.cast(
+        null,
+        "T.nilable(T.proc.params(event:Event).void)"
+      );
     }
     isAvailable() {
-      return this._browser != null && this._browser.location != null && this._browser.history != null;
+      let browser = this._browser;
+      return Runtime.logicalAnd(
+        browser != null && browser.location != null,
+        () => browser.history != null
+      );
     }
     params() {
-      let found = {};
-      if (!this.isAvailable()) return found;
-      let search = new URLSearchParams(this._browser.location.hash.replace(
+      let found = Runtime.cast({}, "T::Hash[String, String]");
+      let browser = this._browser;
+      if (!Runtime.isTruthy(browser && this.isAvailable())) return found;
+      let search = new URLSearchParams(browser.location.hash.replace(
         /^#/m,
         ""
       ));
@@ -1835,8 +1868,9 @@
     // a no-op. Writes are also dropped while fragment state is being applied.
     write(key, value, history) {
       if (history === "none" || this._suspended) return;
-      if (!this.isAvailable()) return;
-      let location = this._browser.location;
+      let browser = this._browser;
+      if (!Runtime.isTruthy(browser && this.isAvailable())) return;
+      let location = browser.location;
       let search = new URLSearchParams(location.hash.replace(/^#/m, ""));
       if (value == null) {
         search.delete(key);
@@ -1845,13 +1879,16 @@
       }
       ;
       let query = search.toString();
-      let next_url = location.pathname + location.search + (query.length > 0 ? "#" + query : "");
-      if (next_url === location.pathname + location.search + location.hash) return;
-      return history === "push" ? this._browser.history.pushState(
+      let next_url = location.pathname + location.search + (Runtime.isEmpty(query) ? "" : "#" + query);
+      if (Runtime.isEqual(
+        next_url,
+        location.pathname + location.search + location.hash
+      )) return;
+      return history === "push" ? browser.history.pushState(
         null,
         "",
         next_url
-      ) : this._browser.history.replaceState(null, "", next_url);
+      ) : browser.history.replaceState(null, "", next_url);
     }
     // Run callback with writes suppressed, so observers fired by applying
     // fragment values do not write back mid-application.
@@ -1864,15 +1901,19 @@
       }
     }
     observe(callback) {
-      if (!this.isAvailable()) return;
-      this._on_change = (_event) => callback();
-      this._browser.addEventListener("popstate", this._on_change);
-      return this._browser.addEventListener("hashchange", this._on_change);
+      let browser = this._browser;
+      if (!Runtime.isTruthy(browser && this.isAvailable())) return;
+      let on_change = (_event) => callback();
+      this._on_change = on_change;
+      browser.addEventListener("popstate", on_change);
+      return browser.addEventListener("hashchange", on_change);
     }
     release() {
-      if (!this._on_change) return;
-      this._browser.removeEventListener("popstate", this._on_change);
-      this._browser.removeEventListener("hashchange", this._on_change);
+      let on_change = this._on_change;
+      let browser = this._browser;
+      if (!Runtime.isTruthy(Runtime.logicalAnd(on_change, () => browser))) return;
+      browser.removeEventListener("popstate", on_change);
+      browser.removeEventListener("hashchange", on_change);
       this._on_change = null;
       return this._on_change;
     }
@@ -1882,11 +1923,18 @@
       super();
       this._name = name;
       this._root = root;
-      this._controller = null;
-      this._content_name = null;
-      this._saved_first_responder = null;
-      this._restoration_disposers = [];
-      this._restoration_keys = [];
+      this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
+      this._content_name = Runtime.cast(null, "T.nilable(String)");
+      this._saved_first_responder = Runtime.cast(
+        null,
+        "T.nilable(Swill::Responder)"
+      );
+      this._restoration_disposers = Runtime.cast(
+        [],
+        "T::Array[T.proc.void]"
+      );
+      this._restoration_keys = Runtime.cast([], "T::Array[String]");
+      this._resolve_closed = null;
       this._closed = new Promise((resolve2, _reject) => {
         this._resolve_closed = resolve2;
         return this._resolve_closed;
@@ -1900,8 +1948,8 @@
       return `${this._name}.${key}`;
     }
     addRestoration(disposer, key) {
-      this._restoration_disposers.push(disposer);
-      return this._restoration_keys.push(key);
+      Runtime.append(this._restoration_disposers, disposer);
+      return Runtime.append(this._restoration_keys, key);
     }
     // Release the current restoration subscriptions; returns the scoped keys
     // they covered so a caller can prune ones the next controller will not own.
@@ -1951,21 +1999,30 @@
     // Tear down the subtree, close a dialog, remove the root, and resolve.
     dismiss() {
       this.disposeRestoration();
-      new Swill__Awakening().detach(this._root);
-      if (this._root.close) this._root.close();
+      Swill__Awakening.detach(this._root);
+      if (this._root.tagName === "DIALOG") this._root.close();
       this._root.remove();
       return this._resolve_closed.call(null, null);
     }
   };
   var Swill__Application = class extends Swill__Responder {
+    constructor() {
+      super();
+      this._windows = Runtime.cast([], "T::Array[Window]");
+      this._controllers = Runtime.cast([], "T::Array[Controller]");
+      this._templates = Runtime.cast({}, "T::Hash[String, Element]");
+      this._captured = Runtime.cast({}, "T::Hash[String, Element]");
+      this._first_responder = Runtime.cast(
+        null,
+        "T.nilable(Swill::Responder)"
+      );
+      this._observer = null;
+    }
     launch(root) {
       this._root = root;
       root.__swill_application__ = this;
-      this._windows = [];
-      this._templates = {};
-      this._captured = {};
-      this._on_focus = (event) => this.syncFirstResponder(event.target, event.relatedTarget);
-      this._on_focus_out = (event) => this.focusLeft(event.relatedTarget);
+      this._on_focus = (event) => this.focusIn(event);
+      this._on_focus_out = (event) => this.focusOut(event);
       this._on_key_down = (event) => this.firstResponder().keyDown(event);
       this._on_key_up = (event) => this.firstResponder().keyUp(event);
       root.addEventListener("focusin", this._on_focus);
@@ -1997,10 +2054,11 @@
       if (this._root.__swill_application__ !== this) return;
       this.applicationWillTerminate();
       this._fragments.release();
-      if (this._observer) this._observer.disconnect();
+      let observer = this._observer;
+      if (observer) observer.disconnect();
       this._windows.forEach((window) => this.releaseWindow(window));
       this._windows = [];
-      this._controllers.forEach((controller) => controller.teardown());
+      this._controllers.forEach((controller) => Runtime.read(controller, "teardown"));
       this._controllers = [];
       this._root.removeEventListener("focusin", this._on_focus);
       this._root.removeEventListener("focusout", this._on_focus_out);
@@ -2064,19 +2122,18 @@
       into.appendChild(node);
       let awakening = new Swill__Awakening();
       let controllers = awakening.awaken(node);
-      let view = node.__swill_view__;
-      let controller = view ? view.controllerValue() : null;
+      let controller = Swill__View.controllerFor(node);
       if (!controller) {
         awakening.detach(node);
         node.remove();
         throw new Error(`Window root has no controller: ${name}`);
       }
       ;
-      if (node.show) node.show();
+      if (node.tagName === "DIALOG") node.show();
       let window = new Swill__Window(name, node);
       window.assignContent(name, controller);
       window.saveFirstResponder(this.firstResponder());
-      this._windows.push(window);
+      Runtime.append(this._windows, window);
       this.restoreWindowState(window, false, false);
       awakening.finish(controllers);
       this.makeFirstResponder(controller);
@@ -2088,34 +2145,46 @@
       this._windows = this._windows.filter((candidate) => candidate !== window);
       let saved = window.savedFirstResponder();
       window.dismiss();
-      if (saved && this.isAttached(saved)) this.makeFirstResponder(saved);
+      if (Runtime.isTruthy(saved && this.isAttached(saved))) {
+        this.makeFirstResponder(saved);
+      }
+      ;
       return true;
     }
     windowNamed(name) {
       return this._windows.find((window) => this.matchesContainer(window, name));
     }
     isWindowContent(name) {
-      return (this._captured[name] ?? this.windowTemplate(name)) != null;
+      return (this._captured[name] || this.windowTemplate(name)) != null;
     }
     // ---- first responder ----
     // The application itself when nothing more specific holds it.
     firstResponder() {
-      return this._first_responder ?? this;
+      return this._first_responder || this;
     }
     // Cocoa's makeFirstResponder: a responder that does not accept is refused
     // up front; the current first responder may refuse to resign; a responder
     // that refuses to become leaves the application as first responder.
     makeFirstResponder(responder) {
-      if (responder && !responder.acceptsFirstResponder()) return false;
+      if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
+        return false;
+      }
+      ;
       let current = this.firstResponder();
       if (responder === current) return true;
       if (!current.resignFirstResponder(responder)) return false;
       this._first_responder = null;
-      if (responder && responder.becomeFirstResponder()) {
+      if (Runtime.isTruthy(responder && responder.becomeFirstResponder())) {
         this._first_responder = responder;
       }
       ;
       return true;
+    }
+    focusIn(event) {
+      return this.syncFirstResponder(event.target, event.relatedTarget);
+    }
+    focusOut(event) {
+      return this.focusLeft(event.relatedTarget);
     }
     // The browser already moved focus; reconcile the first responder without
     // re-running become. A resign refusal restores focus to the refuser.
@@ -2136,7 +2205,7 @@
     // in the page) leaves it alone, as Cocoa does, so keys still reach it
     // when focus returns.
     focusLeft(destination) {
-      if (destination && !this._root.contains(destination)) {
+      if (Runtime.isTruthy(destination && !this._root.contains(destination))) {
         this._first_responder = null;
         return this._first_responder;
       }
@@ -2144,7 +2213,7 @@
     // A first responder inside a region being torn down falls back here.
     releaseFirstResponder(element) {
       let owner = this.responderElement(this.firstResponder());
-      if (owner && (owner === element || element.contains(owner))) {
+      if (Runtime.isTruthy(owner && (owner === element || element.contains(owner)))) {
         this._first_responder = null;
         return this._first_responder;
       }
@@ -2154,21 +2223,24 @@
     responderFor(element) {
       if (!element) return null;
       let view = element.__swill_view__;
-      if (view) return view.controllerValue() ?? view;
+      if (view) return view.controllerValue() || view;
       return this.responderFor(element.parentElement);
     }
     responderElement(responder) {
       if (responder instanceof Swill__Controller) {
-        return responder.view().element();
+        return Runtime.cast(responder, "Swill::Controller").view().element();
       }
       ;
-      if (responder instanceof Swill__View) return responder.element();
+      if (responder instanceof Swill__View) {
+        return Runtime.cast(responder, "Swill::View").element();
+      }
+      ;
       return null;
     }
     restoreFocus(responder, previous) {
       let owner = this.responderElement(responder);
       if (!owner) return;
-      let target = previous && owner.contains(previous) ? previous : owner.__swill_view__.firstFocusableElement();
+      let target = Runtime.isTruthy(previous && owner.contains(previous)) ? previous : Runtime.must(owner.__swill_view__).firstFocusableElement();
       if (target) return target.focus();
     }
     // ---- window templates, containers, and content ----
@@ -2176,9 +2248,9 @@
     // under the root. Templates are inert; content is cloned from them.
     scanTemplates() {
       return this._root.querySelectorAll("template[name]").forEach((template) => {
-        let name = template.getAttribute("name");
+        let name = Runtime.must(template.getAttribute("name"));
         if (template.getAttribute("for") === "window" || template.parentElement === this._root) {
-          this._templates[name] = template;
+          return this._templates[name] = template;
         }
       });
     }
@@ -2194,15 +2266,14 @@
       if (captured) return captured.cloneNode(true);
       let template = this.windowTemplate(name);
       if (!template) throw new Error(`No window content template: ${name}`);
-      let content = template.content;
-      let node = content ? content.firstElementChild : template.firstElementChild;
+      let node = template.content.firstElementChild;
       if (!node) throw new Error(`Empty window template: ${name}`);
       return node.cloneNode(true);
     }
     windowContainers() {
-      let found = [];
-      if (this._root.hasAttribute("window")) found.push(this._root);
-      this._root.querySelectorAll("[window]").forEach((container) => found.push(container));
+      let found = Runtime.cast([], "T::Array[Element]");
+      if (this._root.hasAttribute("window")) Runtime.append(found, this._root);
+      this._root.querySelectorAll("[window]").forEach((container) => Runtime.append(found, container));
       return found;
     }
     // Before awakening: capture pre-rendered content under the container's
@@ -2211,10 +2282,13 @@
     prepareWindowContainers() {
       let params = this._fragments.params();
       return this.windowContainers().forEach((container) => {
-        let window_name = container.getAttribute("window");
-        let default_name = container.getAttribute("name") ?? window_name;
+        let window_name = Runtime.must(container.getAttribute("window"));
+        let default_name = Runtime.logicalOr(
+          container.getAttribute("name"),
+          () => window_name
+        );
         let first = container.firstElementChild;
-        if (first && !this._captured[default_name]) {
+        if (Runtime.isTruthy(first && !this._captured[default_name])) {
           this._captured[default_name] = first.cloneNode(true);
         }
         ;
@@ -2223,7 +2297,7 @@
           default_name,
           params[window_name]
         );
-        if (first && content_name === default_name) return;
+        if (Runtime.isTruthy(first && content_name === default_name)) return;
         container.replaceChildren();
         container.appendChild(this.cloneWindowContent(content_name));
         container.setAttribute("name", content_name);
@@ -2239,12 +2313,12 @@
     }
     registerWindowContainers() {
       return this.windowContainers().forEach((container) => {
-        let window = new Swill__Window(container.getAttribute("window"), container);
+        let window = new Swill__Window(Runtime.must(container.getAttribute("window")), container);
         window.assignContent(
           container.getAttribute("name"),
           this.topControllerIn(container)
         );
-        this._windows.push(window);
+        Runtime.append(this._windows, window);
       });
     }
     // The first controller inside the container whose parent is outside it.
@@ -2274,7 +2348,7 @@
     releaseWindow(window) {
       if (window.isContainer()) {
         window.disposeRestoration();
-        return new Swill__Awakening().detach(window.root());
+        return Swill__Awakening.detach(window.root());
       } else {
         return window.dismiss();
       }
@@ -2288,10 +2362,13 @@
     restoreWindowState(window, prune_stale, write_content) {
       let stale = window.disposeRestoration();
       let controller = window.controller();
-      let declarations2 = controller ? Runtime.restorations(controller) : [];
-      let keys = declarations2.map((declaration) => window.scopedKey(declaration.key));
+      let declarations2 = Runtime.cast(
+        controller ? Runtime.restorations(controller) : [],
+        "T::Array[T.untyped]"
+      );
+      let keys = declarations2.map((declaration) => window.scopedKey(Runtime.read(declaration, "key")));
       let content = window.contentName();
-      if (write_content && content) {
+      if (Runtime.isTruthy(write_content && content)) {
         this._fragments.write(window.name(), content, "replace");
       }
       ;
@@ -2305,21 +2382,34 @@
       let params = this._fragments.params();
       let applied = 0;
       this._fragments.suspended(() => declarations2.forEach((declaration) => {
-        let text = params[window.scopedKey(declaration.key)];
+        let text = params[window.scopedKey(Runtime.read(declaration, "key"))];
         if (text == null) return;
-        let value = Runtime.decodeFragment(declaration.type, text);
+        let value = Runtime.decodeFragment(
+          Runtime.read(declaration, "type"),
+          text
+        );
         if (value == null) return;
-        Runtime.writePath(controller, declaration.path, value);
+        Runtime.writePath(
+          controller,
+          Runtime.read(declaration, "path"),
+          value
+        );
         applied++;
       }));
-      if (declarations2.length > 0) controller.controllerDidRestore(applied > 0);
+      if (!Runtime.isEmpty(declarations2)) {
+        controller.controllerDidRestore(applied > 0);
+      }
+      ;
       return declarations2.forEach((declaration) => {
         let disposer = Runtime.observePath(
           controller,
-          declaration.path,
+          Runtime.read(declaration, "path"),
           (_value) => this.writeWindowState(window)
         );
-        window.addRestoration(disposer, window.scopedKey(declaration.key));
+        window.addRestoration(
+          disposer,
+          window.scopedKey(Runtime.read(declaration, "key"))
+        );
       });
     }
     restoreLaunchedWindows() {
@@ -2329,13 +2419,16 @@
     writeWindowState(window) {
       let controller = window.controller();
       if (!controller) return;
-      return Runtime.restorations(controller).forEach((declaration) => {
+      return Runtime.cast(
+        Runtime.restorations(controller),
+        "T::Array[T.untyped]"
+      ).forEach((declaration) => {
         let value = Runtime.encodeFragment(Runtime.readPath(
           controller,
-          declaration.path
+          Runtime.read(declaration, "path")
         ));
         this._fragments.write(
-          window.scopedKey(declaration.key),
+          window.scopedKey(Runtime.read(declaration, "key")),
           value,
           "replace"
         );
@@ -2350,7 +2443,7 @@
     applyFragmentTo(window, params) {
       if (!window.isContainer()) return;
       let requested = params[window.name()];
-      if (requested != null && requested !== window.contentName()) {
+      if (Runtime.isTruthy(requested != null && requested !== window.contentName())) {
         return this.isWindowContent(requested) ? this.loadWindowContentWith(
           window.name(),
           requested,
@@ -2364,17 +2457,19 @@
     // observer wires added subtrees and detaches removed ones. Explicit wiring
     // before the observer runs is harmless, since both are idempotent.
     watch(root) {
-      if (typeof MutationObserver === "undefined") return;
+      if (!Runtime.isTruthy(typeof MutationObserver !== "undefined")) return;
       let awakening = new Swill__Awakening();
-      this._observer = new MutationObserver((records, _observer) => records.forEach((record2) => {
+      let observer = new MutationObserver((records, _observer) => records.forEach((record2) => {
         record2.removedNodes.forEach((node) => {
-          if (node.nodeType === 1) awakening.detach(node);
+          if (node.nodeType === 1) return awakening.detach(node);
         });
         record2.addedNodes.forEach((node) => {
-          if (node.nodeType === 1) awakening.wire(node);
+          if (node.nodeType === 1) return awakening.wire(node);
         });
       }));
-      return this._observer.observe(root, { childList: true, subtree: true });
+      observer.observe(root, { childList: true, subtree: true });
+      this._observer = observer;
+      return this._observer;
     }
   };
   var Swill__Launcher = class extends Swill__Object {
@@ -2390,13 +2485,19 @@
     launch(document2) {
       let element = document2.querySelector("[application]");
       if (!element) return null;
-      if (element.__swill_application__) return element.__swill_application__;
-      let application_class = Runtime.resolve(element.getAttribute("application"));
-      let application = new application_class();
+      let running = element.__swill_application__;
+      if (running) return running;
+      let application = Runtime.cast(
+        new (Runtime.resolve(Runtime.must(element.getAttribute("application"))))(),
+        "Swill::Application"
+      );
       application.launch(element);
-      document2.defaultView.addEventListener("pagehide", (event) => {
-        if (!event.persisted) return application.terminate();
-      });
+      Runtime.must(document2.defaultView).addEventListener(
+        "pagehide",
+        (event) => {
+          if (!event.persisted) return application.terminate();
+        }
+      );
       return application;
     }
   };
@@ -2409,9 +2510,11 @@
     // ---- selection ----
     selectIndexes(indexes) {
       let arranged = this.arrangedObjects();
-      let objects = [];
+      let objects = Runtime.cast([], "T::Array[T.untyped]");
       indexes.forEach((index) => {
-        if (index >= 0 && index < arranged.length) objects.push(arranged[index]);
+        if (Runtime.isTruthy(index >= 0 && index < arranged.length)) {
+          Runtime.append(objects, arranged[index]);
+        }
       });
       return this.selectedObjects = objects;
     }
@@ -2422,7 +2525,7 @@
       return this.selectedObjects = [];
     }
     selectFirstIfNothingSelected() {
-      if (this.currentSelection().length === 0 && this.arrangedObjects().length > 0) {
+      if (Runtime.isTruthy(Runtime.isEmpty(this.currentSelection()) && !Runtime.isEmpty(this.arrangedObjects()))) {
         return this.selectIndexes([0]);
       }
     }
@@ -2450,13 +2553,13 @@
     // The arranged object at index, or nil.
     objectAt(index) {
       let arranged = this.arrangedObjects();
-      return index >= 0 && index < arranged.length ? arranged[index] : null;
+      return Runtime.isTruthy(index >= 0 && index < arranged.length) ? arranged[index] : null;
     }
     // The index of the row containing element, or -1 when it is in none; the
     // way an action handler learns which row its sender sits in.
     rowFor(element) {
       let row = this.containerView().childContaining(element);
-      let index = row ? Runtime.invoke(this.rowElements(), "index", row) : null;
+      let index = row ? Runtime.indexOf(this.rowElements(), row) : null;
       return index == null ? -1 : index;
     }
     // ---- lifecycle ----
@@ -2488,7 +2591,7 @@
     selectedObjectIdDidChange(_previous, identifier) {
       if (this._syncing_selection) return;
       let object = this.objectWithId(identifier);
-      return this.syncingSelection(() => this.selectedObjects = object ? [object] : []);
+      return this.syncingSelection(() => this.selectedObjects = Runtime.isTruthy(object) ? [object] : []);
     }
     // ---- keyboard ----
     // Taking the keyboard selects the first row when nothing is selected.
@@ -2502,10 +2605,10 @@
       let indexes, current, index;
       let total = this.arrangedObjects().length;
       let key = event.key;
-      if (total > 0 && (key === "ArrowDown" || key === "ArrowUp")) {
+      if (Runtime.isTruthy(total > 0 && (key === "ArrowDown" || key === "ArrowUp"))) {
         event.preventDefault();
         indexes = this.currentIndexes();
-        current = indexes.length > 0 ? indexes[0] : -1;
+        current = Runtime.read(indexes, "empty?") ? -1 : Runtime.must(indexes[0]);
         index = key === "ArrowDown" ? current + 1 : current - 1;
         if (index < 0) index = 0;
         if (index > total - 1) index = total - 1;
@@ -2518,7 +2621,7 @@
     }
     // Enter activates the selection when there is one.
     insertNewline(event) {
-      if (this.currentSelection().length > 0) {
+      if (!Runtime.isEmpty(this.currentSelection())) {
         event.preventDefault();
         return this.activateSelection();
       } else {
@@ -2528,7 +2631,10 @@
     // ---- rows ----
     // The objects the rows show, in order; subclasses may sort or filter.
     arrangedObjects() {
-      return this.representedObject ?? [];
+      return Runtime.cast(
+        Runtime.logicalOr(this.representedObject, () => []),
+        "T::Array[T.untyped]"
+      );
     }
     // Where rows mount.
     container() {
@@ -2542,10 +2648,10 @@
     // Rows in order: the container's children other than templates and
     // whatever row_element? rejects.
     rowElements() {
-      let found = [];
+      let found = Runtime.cast([], "T::Array[Element]");
       this.eachChild(this.container(), (child) => {
-        if (child.tagName !== "TEMPLATE" && this.isRowElement(child)) {
-          return found.push(child);
+        if (Runtime.isTruthy(child.tagName !== "TEMPLATE" && this.isRowElement(child))) {
+          return Runtime.append(found, child);
         }
       });
       return found;
@@ -2565,7 +2671,7 @@
         this._view.element(),
         'template[for="row"]'
       );
-      return found.length > 0 ? found[0] : null;
+      return Runtime.isEmpty(found) ? null : found[0];
     }
     // The element for item. Clones the row template; override to build rows
     // in code. Bindings, actions, selection, and configure_row still apply.
@@ -2591,7 +2697,7 @@
       let element = this.makeRowElement(item);
       this.containerView().append(element);
       if (this.rowsAreViews()) {
-        let row_view = Swill__View.of(element) ?? new Swill__View(element);
+        let row_view = Swill__View.of(element) || new Swill__View(element);
         this.containerView().adoptSubview(row_view);
       }
       ;
@@ -2616,7 +2722,7 @@
       Swill__Awakening.detach(element);
       let release = element.__swill_row__;
       if (release) {
-        release();
+        release.call();
         element.__swill_row__ = null;
       }
       ;
@@ -2631,7 +2737,7 @@
       let indexes = this.currentIndexes();
       let elements = this.rowElements();
       elements.forEach((element, index) => this.containerView().markSelected(element, indexes.includes(index)));
-      let first = indexes.length > 0 ? elements[indexes[0]] : null;
+      let first = Runtime.isEmpty(indexes) ? null : elements[Runtime.must(indexes[0])];
       if (first) return this.containerView().reveal(first);
     }
     // ---- mouse: click selects, shift-click extends, double-click activates ----
@@ -2663,7 +2769,7 @@
     // Shift-click extends the selection; suppress the browser's text
     // selection sweep across rows.
     rowMouseDown(event) {
-      if (!this.allowsMultipleSelection || !event.shiftKey) return;
+      if (!Runtime.isTruthy(this.allowsMultipleSelection && event.shiftKey)) return;
       if (this.rowFor(event.target) < 0) return;
       event.preventDefault();
       return this._view.clearTextSelection();
@@ -2672,7 +2778,10 @@
       let index = this.rowFor(event.target);
       if (index < 0) return;
       let anchor = this._selection_anchor;
-      if (this.allowsMultipleSelection && event.shiftKey && anchor != null) {
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        this.allowsMultipleSelection && event.shiftKey,
+        () => anchor != null
+      ))) {
         return this.selectRange(anchor, index);
       } else {
         this.selectIndexes([index]);
@@ -2690,10 +2799,10 @@
     selectRange(anchor, index) {
       let low = anchor < index ? anchor : index;
       let high = anchor < index ? index : anchor;
-      let indexes = [];
+      let indexes = Runtime.cast([], "T::Array[Integer]");
       let current = low;
       while (current <= high) {
-        indexes.push(current);
+        Runtime.append(indexes, current);
         current++;
       }
       ;
@@ -2702,8 +2811,11 @@
     // ---- identity ----
     // The model id of object as a string, or nil when it has none.
     identifierFor(object) {
-      if (!object || !Runtime.respondsTo(object, "id")) return null;
-      let value = object.id;
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
+        object,
+        () => Runtime.respondsTo(object, "id")
+      ))) return null;
+      let value = Runtime.read(object, "id");
       return value == null ? null : `${value}`;
     }
     objectWithId(identifier) {
@@ -2715,9 +2827,9 @@
     reconcileSelection() {
       let arranged = this.arrangedObjects();
       let survivors = this.currentSelection().filter((object) => arranged.includes(object));
-      if (survivors.length === 0) {
+      if (Runtime.isEmpty(survivors)) {
         let requested = this.objectWithId(this.selectedObjectId);
-        if (requested) survivors = [requested];
+        if (Runtime.isTruthy(requested)) survivors = [requested];
       }
       ;
       return this.syncingSelection(() => this.selectedObjects = survivors);
@@ -2733,9 +2845,11 @@
       }
     }
     leading(objects) {
-      return objects && objects.length > 0 ? objects[0] : null;
+      return Runtime.isTruthy(Runtime.logicalAnd(
+        objects,
+        () => Runtime.read(objects, "length") > 0
+      )) ? objects[0] : null;
     }
-    // The selection and its indexes as JavaScript arrays for the DOM code here.
     currentSelection() {
       return this.selectedObjects;
     }
@@ -2747,7 +2861,7 @@
     // The sort_by action: the sender's column names the key.
     sortBy(sender) {
       let key = this.sortKeyFor(sender);
-      if (key) return this.toggleSort(key);
+      if (key != null) return this.toggleSort(key);
     }
     // Override when the column name lives elsewhere than data-column.
     sortKeyFor(sender) {
@@ -2791,17 +2905,17 @@
     arrangedObjects() {
       let objects = super.arrangedObjects();
       let key = this.sortKey;
-      if (!key) return objects;
+      if (key == null) return objects;
       let sign = this.sortDirection === "descending" ? -1 : 1;
-      return objects.slice().sort((left, right) => Runtime.compareValues(
+      return Runtime.sortWith(objects, (left, right) => Runtime.compareValues(
         Runtime.read(left, key),
         Runtime.read(right, key)
       ) * sign);
     }
     syncSortStates() {
       let key = this.sortKey;
-      let states2 = {};
-      if (key) states2[key] = this.sortDirection;
+      let states2 = Runtime.cast({}, "T::Hash[String, String]");
+      if (key != null) states2[key] = this.sortDirection;
       return this.sortStates = states2;
     }
   };
@@ -2830,11 +2944,19 @@
     insertNewline(event) {
       event.preventDefault();
       let host = this.editingHost();
-      return host ? host.endEditing(true) : this.commitEditing();
+      return Runtime.isTruthy(host) ? Runtime.invoke(
+        host,
+        "end_editing",
+        true
+      ) : this.commitEditing();
     }
     cancelOperation(event) {
       let host = this.editingHost();
-      return host ? host.endEditing(false) : this.discardEditing();
+      return Runtime.isTruthy(host) ? Runtime.invoke(
+        host,
+        "end_editing",
+        false
+      ) : this.discardEditing();
     }
     resignFirstResponder(next_responder) {
       if (!this.allowResignationTo(next_responder)) return false;
@@ -2844,24 +2966,31 @@
     // host means the editor is already released.
     allowResignationTo(responder) {
       let element = this.responderElement(responder);
-      if (element && this._view.contains(element)) return true;
+      if (Runtime.isTruthy(element && this._view.contains(element))) return true;
       let host = this.editingHost();
-      return host ? host.editorShouldEndEditing(this) : true;
+      return Runtime.isTruthy(host) ? Runtime.invoke(
+        host,
+        "editor_should_end_editing",
+        this
+      ) : true;
     }
     // The parent, when it hosts inline editing.
     editingHost() {
       let owner = this.parent();
-      return owner && Runtime.respondsTo(
+      return Runtime.isTruthy(owner && Runtime.respondsTo(
         owner,
         "editor_should_end_editing"
-      ) ? owner : null;
+      )) ? owner : null;
     }
     responderElement(responder) {
       if (responder instanceof Swill__Controller) {
-        return responder.view().element();
+        return Runtime.cast(responder, "Swill::Controller").view().element();
       }
       ;
-      if (responder instanceof Swill__View) return responder.element();
+      if (responder instanceof Swill__View) {
+        return Runtime.cast(responder, "Swill::View").element();
+      }
+      ;
       return null;
     }
   };
@@ -2869,7 +2998,7 @@
     // Activation edits the selected row instead of telling the owner.
     activateSelection() {
       let indexes = this.currentIndexes();
-      return indexes.length > 0 ? this.beginEditing(indexes[0]) : super.activateSelection();
+      return Runtime.isEmpty(indexes) ? super.activateSelection() : this.beginEditing(Runtime.must(indexes[0]));
     }
     isEditing() {
       return this._editor != null;
@@ -2883,12 +3012,12 @@
     // refused commit keeps that editor.
     beginEditing(index) {
       let original = this.objectAt(index);
-      if (!original) return false;
-      if (this.isEditing() && !this.endEditing(true)) return false;
-      let copy = Runtime.respondsTo(original, "draft") ? original.draft() : Runtime.read(
+      if (!Runtime.isTruthy(original)) return false;
+      if (Runtime.isTruthy(this.isEditing() && !this.endEditing(true))) return false;
+      let copy = Runtime.isTruthy(Runtime.respondsTo(original, "draft")) ? Runtime.read(
         original,
-        "dup"
-      );
+        "draft"
+      ) : Runtime.read(original, "dup");
       return this.openEditor(index, original, copy);
     }
     // False only when a commit was refused; the editor then stays open.
@@ -2896,13 +3025,13 @@
       let editor = this._editor;
       let index = this._editing_index;
       let original = this._editing_original;
-      if (!editor || index == null) return true;
+      if (!Runtime.isTruthy(editor && index != null)) return true;
       let copy = null;
       if (commit) {
         if (!editor.commitEditing()) return false;
         copy = this.editedObject;
         let error = this.validationError(copy);
-        if (error) {
+        if (Runtime.isTruthy(error)) {
           this.editingDidFailValidation(error);
           return false;
         }
@@ -2955,15 +3084,18 @@
     // A model takes its draft back and stays the row's object; a plain object
     // is replaced by the copy in a new collection. Returns the final object.
     applyEdit(copy, original, _index) {
-      if (Runtime.respondsTo(original, "apply_draft")) {
-        original.applyDraft(copy);
+      if (Runtime.isTruthy(Runtime.respondsTo(original, "apply_draft"))) {
+        Runtime.invoke(original, "apply_draft", copy);
         return original;
       }
       ;
-      let source = this.representedObject ?? [];
-      let source_index = Runtime.invoke(source, "index", original);
-      let values = Runtime.read(source, "dup");
-      if (source_index) values[source_index] = copy;
+      let source = Runtime.cast(
+        Runtime.logicalOr(this.representedObject, () => []),
+        "T::Array[T.untyped]"
+      );
+      let source_index = Runtime.indexOf(source, original);
+      let values = source.slice();
+      if (source_index != null) values[source_index] = copy;
       this.representedObject = values;
       return copy;
     }
@@ -2971,8 +3103,11 @@
     // ran when the draft was written; a model's own validate, when it has
     // one, is asked here.
     validationError(object) {
-      if (!object || !Runtime.respondsTo(object, "validate")) return null;
-      return object.validate();
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
+        object,
+        () => Runtime.respondsTo(object, "validate")
+      ))) return null;
+      return Runtime.read(object, "validate");
     }
     // Whether a focus-out commit should proceed. Override to confirm.
     confirmEdit(_copy, _original) {
@@ -2980,12 +3115,15 @@
     }
     // Dirty tracking decides for a model; a plain copy counts as changed.
     editedObjectHasChanges(copy, _original) {
-      if (!copy || !Runtime.respondsTo(copy, "dirty?")) return true;
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
+        copy,
+        () => Runtime.respondsTo(copy, "dirty?")
+      ))) return true;
       return Runtime.read(copy, "dirty?") === true;
     }
     // Override to show the error; the editor stays open.
     editingDidFailValidation(error) {
-      return Runtime.warn(`Edit refused: ${error.message}`);
+      return Runtime.warn(`Edit refused: ${Runtime.read(error, "message")}`);
     }
     // ---- rows and the editor ----
     // The editor sits among the rows while editing, but is not one.
@@ -2999,7 +3137,7 @@
         this._view.element(),
         'template[for="editor"]'
       );
-      return found.length > 0 ? found[0] : null;
+      return Runtime.isEmpty(found) ? null : found[0];
     }
     openEditor(index, original, copy) {
       let template = this.editorTemplate();
@@ -3010,17 +3148,19 @@
       let row = this.rowElements()[index];
       if (!row) return false;
       let node = this.containerView().cloneTemplate(template);
+      if (!node) throw new Error("The editor template is empty");
       this.editedObject = copy;
       this.containerView().mark(row, "being-edited", true);
       this.containerView().insertAfter(row, node);
       Swill__Awakening.wire(node);
-      let editor = Swill__View.controllerFor(node);
-      if (!(editor instanceof Swill__Controller__InlineEditor)) {
+      let found = Swill__View.controllerFor(node);
+      if (!(found instanceof Swill__Controller__InlineEditor)) {
         Swill__Awakening.detach(node);
         this.containerView().remove(node);
         throw new Error("The editor template root must be a Swill::Controller::InlineEditor");
       }
       ;
+      let editor = Runtime.cast(found, "Swill::Controller::InlineEditor");
       editor.bind(
         "represented_object",
         { to: this, key_path: "edited_object" }
@@ -3048,7 +3188,7 @@
     finishEdit(index, final) {
       let row = this.rowElements()[index];
       if (row) this.containerView().mark(row, "being-edited", false);
-      if (final) this.selectObject(final);
+      if (Runtime.isTruthy(final)) this.selectObject(final);
       let app = this.application();
       if (app) return app.makeFirstResponder(this);
     }
@@ -3465,6 +3605,9 @@
             "arity": 0,
             "js": "bindingRoot"
           },
+          "initialize": {
+            "arity": 0
+          },
           "attach": {
             "arity": 1
           },
@@ -3685,10 +3828,6 @@
           "nearest_view": {
             "arity": 1,
             "js": "nearestView"
-          },
-          "each_reversed": {
-            "arity": 2,
-            "js": "eachReversed"
           }
         }
       },
@@ -3785,6 +3924,9 @@
         mixins: [Swill__Ownership],
         properties: {},
         methods: {
+          "initialize": {
+            "arity": 0
+          },
           "launch": {
             "arity": 1
           },
@@ -3839,6 +3981,14 @@
           "make_first_responder": {
             "arity": 1,
             "js": "makeFirstResponder"
+          },
+          "focus_in": {
+            "arity": 1,
+            "js": "focusIn"
+          },
+          "focus_out": {
+            "arity": 1,
+            "js": "focusOut"
           },
           "sync_first_responder": {
             "arity": 2,
@@ -4010,9 +4160,9 @@
             attribute: false,
             compute: function compute_selectedIndexes() {
               let selection = this.currentSelection();
-              let found = [];
+              let found = Runtime.cast([], "T::Array[Integer]");
               this.arrangedObjects().forEach((object, index) => {
-                if (selection.includes(object)) found.push(index);
+                if (selection.includes(object)) Runtime.append(found, index);
               });
               return found;
             }

@@ -4,3 +4,4 @@
 /.DS_Store
 /sorbet/rbi/generated.rbi
 /sorbet/checks/
+/sorbet/rbi/dom.rbi
