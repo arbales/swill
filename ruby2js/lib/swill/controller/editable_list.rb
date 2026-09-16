@@ -12,6 +12,36 @@ module Swill
   # a discard drops it. Enter commits, Escape discards, and focus leaving the
   # editor asks editor_should_end_editing. The editor's commit_editing is
   # asked first; an editor that cannot push its pending edit keeps it open.
+  # One edit in progress: the editor loaned to a row, the row's index, and
+  # the object the row showed. The copy being edited lives on the list as
+  # edited_object.
+  class RowEdit < Swill::Object
+    extend T::Sig
+
+    sig { params(editor: Controller::InlineEditor, index: Integer, original: T.untyped).void }
+    def initialize(editor, index, original)
+      super()
+      @editor = editor
+      @index = index
+      @original = original
+    end
+
+    sig { returns(Controller::InlineEditor) }
+    def editor
+      @editor
+    end
+
+    sig { returns(Integer) }
+    def index
+      @index
+    end
+
+    sig { returns(T.untyped) }
+    def original
+      @original
+    end
+  end
+
   class Controller::EditableList < Controller::SortableList
     extend T::Sig
 
@@ -30,7 +60,7 @@ module Swill
 
     sig { returns(T::Boolean) }
     def editing?
-      @editor != nil
+      @edit != nil
     end
 
     # Teardown closes an open editor without committing.
@@ -54,27 +84,22 @@ module Swill
     # False only when a commit was refused; the editor then stays open.
     sig { params(commit: T::Boolean).returns(T::Boolean) }
     def end_editing(commit)
-      editor = @editor
-      index = @editing_index
-      original = @editing_original
-      return true unless editor && index != nil
-      copy = nil
+      edit = @edit
+      return true unless edit
       if commit
-        return false unless editor.commit_editing
+        return false unless edit.editor.commit_editing
         copy = self.edited_object
         error = validation_error(copy)
         if error
           editing_did_fail_validation(error)
           return false
         end
+        close_editor
+        commit_edit(copy, edit.original, edit.index)
       else
-        editor.discard_editing
-      end
-      close_editor
-      if commit
-        commit_edit(copy, original, index)
-      else
-        finish_edit(index, nil)
+        edit.editor.discard_editing
+        close_editor
+        finish_edit(edit.index, nil)
       end
       true
     end
@@ -91,12 +116,14 @@ module Swill
     # Return false to keep focus in the editor.
     sig { params(_editor: T.untyped).returns(T::Boolean) }
     def editor_should_end_editing(_editor)
+      edit = @edit
+      return true unless edit
       copy = self.edited_object
-      unless edited_object_has_changes?(copy, @editing_original)
+      unless edited_object_has_changes?(copy, edit.original)
         end_editing(false)
         return true
       end
-      return false unless confirm_edit?(copy, @editing_original)
+      return false unless confirm_edit?(copy, edit.original)
       end_editing(true)
     end
 
@@ -178,8 +205,8 @@ module Swill
     sig { override.params(element: Element).returns(T::Boolean) }
     def row_element?(element)
       return false unless super(element)
-      editor = @editor
-      editor == nil || editor.view.element != element
+      edit = @edit
+      edit == nil || edit.editor.view.element != element
     end
 
     sig { returns(T.nilable(HTMLTemplateElement)) }
@@ -188,43 +215,52 @@ module Swill
       found.empty? ? nil : T.cast(found[0], HTMLTemplateElement)
     end
 
+    # Mount an editor after the row, bind it to the copy, and give it the
+    # keyboard.
     sig { params(index: Integer, original: T.untyped, copy: T.untyped).returns(T::Boolean) }
     def open_editor(index, original, copy)
-      template = editor_template
-      raise 'EditableList has no <template for="editor">' unless template
       row = row_elements[index]
       return false unless row
-      node = container_view.clone_template(template)
-      raise 'The editor template is empty' unless node
+      node = instantiate_editor
       self.edited_object = copy
       container_view.mark(row, "being-edited", true)
       container_view.insert_after(row, node)
-      Awakening.wire(node)
-      found = View.controller_for(node)
-      unless found.is_a?(Controller::InlineEditor)
-        Awakening.detach(node)
-        container_view.remove(node)
-        raise 'The editor template root must be a Swill::Controller::InlineEditor'
-      end
-      editor = T.cast(found, Controller::InlineEditor)
+      editor = awaken_editor(node)
       editor.bind(:represented_object, to: self, key_path: "edited_object")
-      @editor = editor
-      @editing_index = index
-      @editing_original = original
-      app = application
-      app.make_first_responder(editor) if app
+      @edit = RowEdit.new(editor, index, original)
+      application.make_first_responder(editor)
       true
+    end
+
+    # A fresh element from the editor template.
+    sig { returns(Element) }
+    def instantiate_editor
+      template = editor_template
+      raise 'EditableList has no <template for="editor">' unless template
+      node = container_view.clone_template(template)
+      raise 'The editor template is empty' unless node
+      node
+    end
+
+    # The inline editor rooted at a mounted node; anything else is torn back
+    # down before the mistake is reported.
+    sig { params(node: Element).returns(Controller::InlineEditor) }
+    def awaken_editor(node)
+      Awakening.wire(node)
+      editor = View.controller_for(node)
+      return T.cast(editor, Controller::InlineEditor) if editor.is_a?(Controller::InlineEditor)
+      Awakening.detach(node)
+      container_view.remove(node)
+      raise 'The editor template root must be a Swill::Controller::InlineEditor'
     end
 
     sig { void }
     def close_editor
-      editor = @editor
-      @editor = nil
-      @editing_index = nil
-      @editing_original = nil
+      edit = @edit
+      @edit = nil
       self.edited_object = nil
-      return unless editor
-      element = editor.view.element
+      return unless edit
+      element = edit.editor.view.element
       Awakening.detach(element)
       container_view.remove(element)
     end
@@ -236,8 +272,7 @@ module Swill
       row = row_elements[index]
       container_view.mark(row, "being-edited", false) if row
       select_object(final) if final
-      app = application
-      app.make_first_responder(self) if app
+      application.make_first_responder(self)
     end
   end
 end

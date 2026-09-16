@@ -1016,6 +1016,7 @@
     Swill__Outlets: () => Swill__Outlets,
     Swill__Ownership: () => Swill__Ownership,
     Swill__Responder: () => Swill__Responder,
+    Swill__RowEdit: () => Swill__RowEdit,
     Swill__View: () => Swill__View,
     Swill__Window: () => Swill__Window
   });
@@ -1220,12 +1221,9 @@
     nextResponder() {
       return this._controller || this._superview;
     }
-    // ---- elements: the DOM work a controller leaves to its view ----
-    // The View on an element, or nil when it has none.
     static of(element) {
       return element.__swill_view__;
     }
-    // The controller rooted at an element, or nil.
     static controllerFor(element) {
       let view = _Swill__View.of(element);
       return view ? view.controllerValue() : null;
@@ -1346,10 +1344,9 @@
       this.collectChildControllers(this._view, found);
       return found;
     }
-    // The application whose root contains this controller, found through the
-    // DOM so fragments awakened later and multiple applications both work.
+    // The one application running on this page.
     application() {
-      return this.nearestApplication(this._view.element());
+      return Swill__Application.shared();
     }
     // A nested controller answers to its parent; a root controller answers to
     // the application, which is the top of the responder chain.
@@ -1380,11 +1377,7 @@
     teardown() {
       if (this._view.controllerValue() !== this) return;
       this.viewWillDisappear();
-      let current_application = this.application();
-      if (current_application) {
-        current_application.releaseFirstResponder(this._view.element());
-      }
-      ;
+      this.application().releaseFirstResponder(this._view.element());
       this._teardowns.forEach((dispose2) => dispose2());
       this._teardowns = [];
       this.unbindAll();
@@ -1426,11 +1419,6 @@
     }
     viewDidDisappear() {
       return null;
-    }
-    nearestApplication(element) {
-      if (!element) return null;
-      let found = element.__swill_application__;
-      return found ? found : this.nearestApplication(element.parentElement);
     }
     collectChildControllers(view, found) {
       return view.subviews().forEach((subview) => {
@@ -2005,7 +1993,28 @@
       return this._resolve_closed.call(null, null);
     }
   };
-  var Swill__Application = class extends Swill__Responder {
+  var Swill__Application = class _Swill__Application extends Swill__Responder {
+    static shared() {
+      let running = this._running;
+      if (!running) throw new Error("No application is running");
+      return running;
+    }
+    static isRunning() {
+      return this._running != null;
+    }
+    static launched(application) {
+      this._running = Runtime.cast(
+        application,
+        "T.nilable(Swill::Application)"
+      );
+      return this._running;
+    }
+    static terminated(application) {
+      if (this._running === application) {
+        this._running = null;
+        return this._running;
+      }
+    }
     constructor() {
       super();
       this._windows = Runtime.cast([], "T::Array[Window]");
@@ -2019,8 +2028,12 @@
       this._observer = null;
     }
     launch(root) {
+      if (_Swill__Application.isRunning()) {
+        throw new Error("An application is already running");
+      }
+      ;
+      _Swill__Application.launched(this);
       this._root = root;
-      root.__swill_application__ = this;
       this._on_focus = (event) => this.focusIn(event);
       this._on_focus_out = (event) => this.focusOut(event);
       this._on_key_down = (event) => this.firstResponder().keyDown(event);
@@ -2051,7 +2064,10 @@
     }
     // Idempotent: a page may see more than one pagehide before it is unloaded.
     terminate() {
-      if (this._root.__swill_application__ !== this) return;
+      if (!Runtime.isTruthy(_Swill__Application.isRunning() && _Swill__Application.shared() === this)) {
+        return;
+      }
+      ;
       this.applicationWillTerminate();
       this._fragments.release();
       let observer = this._observer;
@@ -2065,7 +2081,7 @@
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
       this._first_responder = null;
-      return this._root.__swill_application__ = null;
+      return _Swill__Application.terminated(this);
     }
     applicationDidLaunch() {
       return null;
@@ -2481,12 +2497,12 @@
       ) : this.launch(document2);
     }
     // A page without an [application] element is inert; a page naming an
-    // unregistered class fails closed through Runtime.resolve.
+    // unregistered class fails closed through Runtime.resolve. A running
+    // application is returned rather than launched again.
     launch(document2) {
       let element = document2.querySelector("[application]");
       if (!element) return null;
-      let running = element.__swill_application__;
-      if (running) return running;
+      if (Swill__Application.isRunning()) return Swill__Application.shared();
       let application = Runtime.cast(
         new (Runtime.resolve(Runtime.must(element.getAttribute("application"))))(),
         "Swill::Application"
@@ -2994,6 +3010,23 @@
       return null;
     }
   };
+  var Swill__RowEdit = class extends Swill__Object {
+    constructor(editor, index, original) {
+      super();
+      this._editor = editor;
+      this._index = index;
+      this._original = original;
+    }
+    editor() {
+      return this._editor;
+    }
+    index() {
+      return this._index;
+    }
+    original() {
+      return this._original;
+    }
+  };
   var Swill__Controller__EditableList = class extends Swill__Controller__SortableList {
     // Activation edits the selected row instead of telling the owner.
     activateSelection() {
@@ -3001,7 +3034,7 @@
       return Runtime.isEmpty(indexes) ? super.activateSelection() : this.beginEditing(Runtime.must(indexes[0]));
     }
     isEditing() {
-      return this._editor != null;
+      return this._edit != null;
     }
     // Teardown closes an open editor without committing.
     awakeFromDOM() {
@@ -3022,28 +3055,23 @@
     }
     // False only when a commit was refused; the editor then stays open.
     endEditing(commit) {
-      let editor = this._editor;
-      let index = this._editing_index;
-      let original = this._editing_original;
-      if (!Runtime.isTruthy(editor && index != null)) return true;
-      let copy = null;
+      let edit = this._edit;
+      if (!edit) return true;
       if (commit) {
-        if (!editor.commitEditing()) return false;
-        copy = this.editedObject;
+        if (!edit.editor().commitEditing()) return false;
+        let copy = this.editedObject;
         let error = this.validationError(copy);
         if (Runtime.isTruthy(error)) {
           this.editingDidFailValidation(error);
           return false;
         }
+        ;
+        this.closeEditor();
+        this.commitEdit(copy, edit.original(), edit.index());
       } else {
-        editor.discardEditing();
-      }
-      ;
-      this.closeEditor();
-      if (commit) {
-        this.commitEdit(copy, original, index);
-      } else {
-        this.finishEdit(index, null);
+        edit.editor().discardEditing();
+        this.closeEditor();
+        this.finishEdit(edit.index(), null);
       }
       ;
       return true;
@@ -3057,13 +3085,15 @@
     // is discarded; otherwise the edit commits when confirm_edit? agrees.
     // Return false to keep focus in the editor.
     editorShouldEndEditing(_editor) {
+      let edit = this._edit;
+      if (!edit) return true;
       let copy = this.editedObject;
-      if (!this.editedObjectHasChanges(copy, this._editing_original)) {
+      if (!this.editedObjectHasChanges(copy, edit.original())) {
         this.endEditing(false);
         return true;
       }
       ;
-      if (!this.confirmEdit(copy, this._editing_original)) return false;
+      if (!this.confirmEdit(copy, edit.original())) return false;
       return this.endEditing(true);
     }
     cancelOperation(event) {
@@ -3129,8 +3159,8 @@
     // The editor sits among the rows while editing, but is not one.
     isRowElement(element) {
       if (!super.isRowElement(element)) return false;
-      let editor = this._editor;
-      return editor == null || editor.view().element() !== element;
+      let edit = this._edit;
+      return edit == null || edit.editor().view().element() !== element;
     }
     editorTemplate() {
       let found = this.ownedMatching(
@@ -3139,47 +3169,56 @@
       );
       return Runtime.isEmpty(found) ? null : found[0];
     }
+    // Mount an editor after the row, bind it to the copy, and give it the
+    // keyboard.
     openEditor(index, original, copy) {
+      let row = this.rowElements()[index];
+      if (!row) return false;
+      let node = this.instantiateEditor();
+      this.editedObject = copy;
+      this.containerView().mark(row, "being-edited", true);
+      this.containerView().insertAfter(row, node);
+      let editor = this.awakenEditor(node);
+      editor.bind(
+        "represented_object",
+        { to: this, key_path: "edited_object" }
+      );
+      this._edit = new Swill__RowEdit(editor, index, original);
+      this.application().makeFirstResponder(editor);
+      return true;
+    }
+    // A fresh element from the editor template.
+    instantiateEditor() {
       let template = this.editorTemplate();
       if (!template) {
         throw new Error('EditableList has no <template for="editor">');
       }
       ;
-      let row = this.rowElements()[index];
-      if (!row) return false;
       let node = this.containerView().cloneTemplate(template);
       if (!node) throw new Error("The editor template is empty");
-      this.editedObject = copy;
-      this.containerView().mark(row, "being-edited", true);
-      this.containerView().insertAfter(row, node);
+      return node;
+    }
+    // The inline editor rooted at a mounted node; anything else is torn back
+    // down before the mistake is reported.
+    awakenEditor(node) {
       Swill__Awakening.wire(node);
-      let found = Swill__View.controllerFor(node);
-      if (!(found instanceof Swill__Controller__InlineEditor)) {
-        Swill__Awakening.detach(node);
-        this.containerView().remove(node);
-        throw new Error("The editor template root must be a Swill::Controller::InlineEditor");
+      let editor = Swill__View.controllerFor(node);
+      if (editor instanceof Swill__Controller__InlineEditor) {
+        return Runtime.cast(editor, "Swill::Controller::InlineEditor");
       }
       ;
-      let editor = Runtime.cast(found, "Swill::Controller::InlineEditor");
-      editor.bind(
-        "represented_object",
-        { to: this, key_path: "edited_object" }
-      );
-      this._editor = editor;
-      this._editing_index = index;
-      this._editing_original = original;
-      let app = this.application();
-      if (app) app.makeFirstResponder(editor);
-      return true;
+      Swill__Awakening.detach(node);
+      this.containerView().remove(node);
+      return (() => {
+        throw new Error("The editor template root must be a Swill::Controller::InlineEditor");
+      })();
     }
     closeEditor() {
-      let editor = this._editor;
-      this._editor = null;
-      this._editing_index = null;
-      this._editing_original = null;
+      let edit = this._edit;
+      this._edit = null;
       this.editedObject = null;
-      if (!editor) return;
-      let element = editor.view().element();
+      if (!edit) return;
+      let element = edit.editor().view().element();
       Swill__Awakening.detach(element);
       return this.containerView().remove(element);
     }
@@ -3189,8 +3228,7 @@
       let row = this.rowElements()[index];
       if (row) this.containerView().mark(row, "being-edited", false);
       if (Runtime.isTruthy(final)) this.selectObject(final);
-      let app = this.application();
-      if (app) return app.makeFirstResponder(this);
+      return this.application().makeFirstResponder(this);
     }
   };
   function Swill__Model__Attributes(Superclass) {
@@ -3682,10 +3720,6 @@
           "view_did_disappear": {
             "arity": 0,
             "js": "viewDidDisappear"
-          },
-          "nearest_application": {
-            "arity": 1,
-            "js": "nearestApplication"
           },
           "collect_child_controllers": {
             "arity": 2,
@@ -4471,6 +4505,24 @@
           }
         }
       },
+      "Swill::RowEdit": {
+        constructor: Swill__RowEdit,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 3
+          },
+          "editor": {
+            "arity": 0
+          },
+          "index": {
+            "arity": 0
+          },
+          "original": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::Controller::EditableList": {
         constructor: Swill__Controller__EditableList,
         properties: {
@@ -4559,6 +4611,14 @@
           "open_editor": {
             "arity": 3,
             "js": "openEditor"
+          },
+          "instantiate_editor": {
+            "arity": 0,
+            "js": "instantiateEditor"
+          },
+          "awaken_editor": {
+            "arity": 1,
+            "js": "awakenEditor"
           },
           "close_editor": {
             "arity": 0,
@@ -4727,7 +4787,7 @@
       const root = options.root ?? globalThis.document?.body;
       const ApplicationClass = options.application ?? Application;
       if (!root) throw new Error("Swill.start requires a root element");
-      if (root.__swill_application__) throw new Error("A Swill application is already running on this root");
+      if (Application.isRunning()) throw new Error("A Swill application is already running");
       if (typeof ApplicationClass !== "function" || ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application)) {
         throw new TypeError("application must extend Swill.Application");
       }

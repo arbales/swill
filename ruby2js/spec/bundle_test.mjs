@@ -172,7 +172,7 @@ test("Swill.start manually launches and terminates a JavaScript application", ()
   const application = Swill.start({root: body, application: ManualApplication});
   assert.ok(application instanceof Swill.Application);
   assert.ok(application instanceof ManualApplication);
-  assert.equal(body.__swill_application__, application);
+  assert.equal(Swill.Application.shared(), application);
   assert.deepEqual(lifecycle, ["viewDidLoad", "awakeFromDOM", "controllerDidLoad", "applicationDidLaunch"]);
   assert.equal(status.title, "Ready");
   assert.equal(output.textContent, "Hello Ada");
@@ -188,7 +188,7 @@ test("Swill.start manually launches and terminates a JavaScript application", ()
   assert.equal(Swill.Runtime.resolve("LateController"), LateController);
   assert.throws(() => Swill.start({root: body}), /already running/);
   application.terminate();
-  assert.equal(body.__swill_application__, null);
+  assert.equal(Swill.Application.isRunning(), false);
   assert.deepEqual(lifecycle.slice(-2), ["applicationWillTerminate", "viewDidDisappear"]);
 });
 

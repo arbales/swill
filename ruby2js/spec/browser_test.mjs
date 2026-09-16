@@ -106,7 +106,7 @@ try {
   // The name field is first responder from awake_from_dom; Escape travels
   // view, controller; focusing the badge's button moves the first responder.
   assert.deepEqual(await evaluate(`(() => {
-    const application = document.body.__swill_application__;
+    const application = Swill.Application.shared();
     const parent = application.controllers()[0];
     const badge = application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge"));
     const input = document.querySelector("input");
@@ -144,7 +144,7 @@ try {
     const badge = document.querySelector("section[controller='Demo::Badge']");
     badge.querySelector("[data-action=bump]").click();
     badge.querySelector("[data-action=reset]").click();
-    const application = document.body.__swill_application__;
+    const application = Swill.Application.shared();
     const [parent, child] = application.controllers();
     return [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent,
       application.constructor === Swill.Runtime.resolve("Demo::Application"), application.launched,
@@ -172,7 +172,7 @@ try {
   // swap_window replaces it through the application, and the palette is a
   // dialog that closes itself and restores focus.
   assert.deepEqual(await evaluate(`(() => {
-    const application = document.body.__swill_application__;
+    const application = Swill.Application.shared();
     const container = document.querySelector("[window=main]");
     const results = [container.getAttribute("name"), container.querySelector(".note").textContent,
       container.querySelector("p[bind]").textContent, application.controllers().length];
@@ -204,7 +204,7 @@ try {
   assert.deepEqual(await evaluate(`(() => {
     const list = document.querySelector("section[controller='Demo::PeopleList']");
     const controller = list.__swill_view__.controllerValue();
-    const application = document.body.__swill_application__;
+    const application = Swill.Application.shared();
     const rows = () => Array.from(list.querySelectorAll("tbody tr"));
     const names = () => rows().map(row => row.children[0].textContent);
     const selected = () => rows().map(row => row.classList.contains("selected"));
@@ -292,7 +292,7 @@ try {
     main.appendChild(late);
     await new Promise(resolve => setTimeout(resolve, 0));
     const controller = late.__swill_view__.controllerValue();
-    const awakened = [late.querySelector("p").textContent, controller.parent() === document.body.__swill_application__.controllers()[0]];
+    const awakened = [late.querySelector("p").textContent, controller.parent() === Swill.Application.shared().controllers()[0]];
     late.remove();
     await new Promise(resolve => setTimeout(resolve, 0));
     return [...awakened, controller.view().controllerValue() === null];
@@ -300,7 +300,7 @@ try {
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();
     const editor = document.querySelector("section[controller='Demo::PersonEditor']");
-    return [document.querySelector("p[bind]").textContent, document.body.__swill_application__ != null,
+    return [document.querySelector("p[bind]").textContent, Swill.Application.isRunning(),
       document.querySelector("input").disabled, editor.hidden, editor.querySelector("input").value];
   })()`), ["Hello ", true, false, false, ""]);
   await evaluate(`(() => {
@@ -313,8 +313,8 @@ try {
   assert.deepEqual(await evaluate(`[
     document.querySelector("p[bind]").textContent,
     document.querySelector("section[controller='Demo::Badge'] p[bind]").textContent,
-    document.body.__swill_application__
-  ]`), ["Hello ", "Badge 1", null]);
+    Swill.Application.isRunning()
+  ]`), ["Hello ", "Badge 1", false]);
 
   // A second page uses the same framework bundle directly from plain
   // JavaScript: registration is metadata-backed and startup is explicit.
@@ -348,7 +348,7 @@ try {
     return [changed, document.querySelector("h1").textContent, input.value];
   })()`), ["Hello Grace", "Hello ", ""]);
   await evaluate(`window.dispatchEvent(new Event("pagehide"))`);
-  assert.equal(await evaluate(`document.body.__swill_application__`), null);
+  assert.equal(await evaluate(`Swill.Application.isRunning()`), false);
   assert.deepEqual(exceptions, []);
   console.log("Chrome: compiled Ruby and no-build JavaScript applications passed.");
 } finally {

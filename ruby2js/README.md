@@ -104,8 +104,10 @@ table; their names already match, since compiled members are camelCase.
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
 Register a JavaScript parent before its subclasses. For another root or a
 custom registered application class, use
-`Swill.start({root: element, application: MyApplication})`. Separate roots may
-host separate applications, and `start` returns the launched application.
+`Swill.start({root: element, application: MyApplication})`. One application
+runs per page, as one `NSApp` runs per process: `start` returns it,
+`Swill.Application.shared()` is it from anywhere, `Swill.Application.isRunning()`
+says whether one is up, and a second `start` while it runs is an error.
 
 JavaScript methods use JavaScript semantics. Markup bindings retain Swill's one
 shared value rule: only `false`, `null`, and `undefined` are false for checkboxes

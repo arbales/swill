@@ -2,13 +2,38 @@
 # frozen_string_literal: true
 
 module Swill
-  # The top of the responder chain for one launched region of the page. The
-  # application records itself on its root element, so controllers find it by
-  # walking up from their own elements, the same way views are found. It owns
-  # the first responder, routes focus and key events, and presents windows.
+  # The top of the responder chain. One application runs per page, as one
+  # NSApp runs per process: it owns the first responder, routes focus and
+  # key events, presents windows, and keeps the URL fragment, none of which
+  # two applications could share. Controllers reach it through
+  # Application.shared.
   class Application < Responder
     extend T::Sig
     include Ownership
+
+    # NSApp: the application running on this page. Asking for it when none
+    # is running is a mistake, not a nil.
+    sig { returns(Application) }
+    def self.shared
+      running = @running
+      raise "No application is running" unless running
+      running
+    end
+
+    sig { returns(T::Boolean) }
+    def self.running?
+      @running != nil
+    end
+
+    sig { params(application: Application).void }
+    def self.launched(application)
+      @running = T.let(application, T.nilable(Application))
+    end
+
+    sig { params(application: Application).void }
+    def self.terminated(application)
+      @running = nil if @running == application
+    end
 
     sig { void }
     def initialize
@@ -23,8 +48,9 @@ module Swill
 
     sig { params(root: Element).returns(Application) }
     def launch(root)
+      raise "An application is already running" if Application.running?
+      Application.launched(self)
       @root = root
-      root.__swill_application__ = self
       @on_focus = ->(event) { focus_in(event) }
       @on_focus_out = ->(event) { focus_out(event) }
       @on_key_down = ->(event) { first_responder.key_down(event) }
@@ -61,7 +87,7 @@ module Swill
     # Idempotent: a page may see more than one pagehide before it is unloaded.
     sig { void }
     def terminate
-      return unless @root.__swill_application__ == self
+      return unless Application.running? && Application.shared == self
       application_will_terminate
       @fragments.release
       observer = @observer
@@ -75,7 +101,7 @@ module Swill
       @root.removeEventListener("keydown", @on_key_down)
       @root.removeEventListener("keyup", @on_key_up)
       @first_responder = nil
-      @root.__swill_application__ = nil
+      Application.terminated(self)
     end
 
     sig { void }
@@ -497,13 +523,13 @@ module Swill
     end
 
     # A page without an [application] element is inert; a page naming an
-    # unregistered class fails closed through Runtime.resolve.
+    # unregistered class fails closed through Runtime.resolve. A running
+    # application is returned rather than launched again.
     sig { params(document: Document).returns(T.nilable(Application)) }
     def launch(document)
       element = document.querySelector("[application]")
       return nil unless element
-      running = element.__swill_application__
-      return running if running
+      return Application.shared if Application.running?
       application = T.cast(Runtime.resolve(T.must(element.getAttribute("application"))).new, Application)
       application.launch(element)
       # A persisted pagehide means the page may return from the back-forward

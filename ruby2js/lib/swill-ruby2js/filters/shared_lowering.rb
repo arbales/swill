@@ -56,7 +56,10 @@ module Swill
           receiver, name, args, body = node.children
           previous = @in_class_method
           @in_class_method = true
-          super_defs(node.updated(:defs, [receiver, Knowledge.member(name).to_sym, args, body]))
+          # A location-less node is a method to the converter; with the
+          # source location a zero-argument def self.x would become a
+          # static getter.
+          super_defs(s(:defs, receiver, Knowledge.member(name).to_sym, args, body))
         ensure
           @in_class_method = previous
         end

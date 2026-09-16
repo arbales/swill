@@ -122,6 +122,10 @@ The initial kernel and DOM-boundary spike is complete and verified:
   against the type so a mistyped outlet fails by name. `decode_outlet_data`
   materializes models with `Model::Attributes.from_attributes`, so the demo
   controller no longer builds people itself.
+- one application per page (16 September 2026): `Swill::Application.shared`
+  is NSApp, `running?` says whether one is up, and a controller's
+  `application` is never nil. The DOM-walking lookup and its expando are
+  gone with the nil guards it required; launching twice is an error;
 - one compilation surface (16 September 2026): the JavaScript-only surface
   is gone. The browser is described once in `knowledge/dom.rb`, which
   generates `sorbet/rbi/dom.rbi` and drives native lowering, so framework

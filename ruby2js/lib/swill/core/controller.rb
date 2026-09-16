@@ -50,11 +50,10 @@ module Swill
       found
     end
 
-    # The application whose root contains this controller, found through the
-    # DOM so fragments awakened later and multiple applications both work.
-    sig { returns(T.nilable(Application)) }
+    # The one application running on this page.
+    sig { returns(Application) }
     def application
-      nearest_application(@view.element)
+      Application.shared
     end
 
     # A nested controller answers to its parent; a root controller answers to
@@ -97,8 +96,7 @@ module Swill
     def teardown
       return if @view.controller_value != self
       view_will_disappear
-      current_application = application
-      current_application.release_first_responder(@view.element) if current_application
+      application.release_first_responder(@view.element)
       @teardowns.each { |dispose| dispose.() }
       @teardowns = []
       unbind_all
@@ -144,13 +142,6 @@ module Swill
 
     sig { void }
     def view_did_disappear; end
-
-    sig { params(element: T.nilable(Element)).returns(T.nilable(Application)) }
-    def nearest_application(element)
-      return nil unless element
-      found = element.__swill_application__
-      found ? found : nearest_application(element.parentElement)
-    end
 
     sig { params(view: View, found: T::Array[Controller]).void }
     def collect_child_controllers(view, found)

@@ -44,9 +44,7 @@ module Demo
       bind(:badge_count, to: T.must(badge), key_path: "count")
       self.people = T.must(roster) if roster
       # Start with the name field focused; the field is a View, so it accepts.
-      # A controller awakened outside an application has none to ask.
-      app = application
-      app.make_first_responder(T.must(name_field)) if app
+      application.make_first_responder(T.must(name_field))
     end
 
     # A plain list hands its selection here on Enter or a double-click; the
@@ -131,8 +129,7 @@ module Demo
     # A badge presented as a dialog closes itself through the application.
     sig { void }
     def close
-      app = application
-      app.dismiss(self) if app
+      application.dismiss(self)
     end
   end
 end

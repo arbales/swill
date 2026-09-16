@@ -23,6 +23,7 @@
   var Swill__Controller__SortableList = framework.Swill__Controller__SortableList;
   var Swill__Controller__Editor = framework.Swill__Controller__Editor;
   var Swill__Controller__InlineEditor = framework.Swill__Controller__InlineEditor;
+  var Swill__RowEdit = framework.Swill__RowEdit;
   var Swill__Controller__EditableList = framework.Swill__Controller__EditableList;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
@@ -132,9 +133,9 @@
         { to: Runtime.must(this.badge), key_path: "count" }
       );
       if (this.roster) this.people = Runtime.must(this.roster);
-      let app = this.application();
-      if (app) return app.makeFirstResponder(Runtime.must(this.nameField));
+      return this.application().makeFirstResponder(Runtime.must(this.nameField));
     }
+    // Start with the name field focused; the field is a View, so it accepts.
     // A plain list hands its selection here on Enter or a double-click; the
     // people list edits in place instead and never sends this.
     activateSelection(sender) {
@@ -184,8 +185,7 @@
     }
     // A badge presented as a dialog closes itself through the application.
     close() {
-      let app = this.application();
-      if (app) return app.dismiss(this);
+      return this.application().dismiss(this);
     }
   };
   var Demo__Application = class extends Swill__Application {

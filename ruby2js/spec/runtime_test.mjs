@@ -1,4 +1,4 @@
-import {test} from "node:test";
+import {test, afterEach} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {loadBundles} from "./load_bundles.mjs";
@@ -9,6 +9,19 @@ const SwillObject = Runtime.resolve("Swill::Object");
 const Person = Runtime.resolve("Demo::Person");
 const SpecialPerson = Runtime.resolve("Demo::SpecialPerson");
 const Controller = Runtime.resolve("Demo::Controller");
+const Application = Runtime.resolve("Swill::Application");
+
+// One application runs per page; each test launches its own.
+afterEach(() => { if (Application.isRunning()) Application.shared().terminate(); });
+
+// Launch the demo application on a body and return its controllers, ending
+// whatever a previous call in the same test launched.
+function launched(body) {
+  if (Application.isRunning()) Application.shared().terminate();
+  const application = new DemoApplication();
+  application.launch(body);
+  return application.controllers();
+}
 const Bindings = Runtime.resolve("Swill::Bindings");
 const Actions = Runtime.resolve("Swill::Actions");
 
@@ -556,7 +569,7 @@ function nestedFixture() {
     seed, parentTitle, nameInput, parentClear, childRoot
   ]);
   const document = element("body", {}, [parentRoot]);
-  const controllers = new Awakening().wire(document);
+  const controllers = launched(document);
   const [parent, child, grandchild] = controllers;
   return {log, suffix, document, controllers, parent, child, grandchild, parentRoot, childRoot, grandchildRoot,
     parentTitle, nameInput, parentClear, childTitle, childClear, childBump, childShout, grandchildTitle};
@@ -574,7 +587,7 @@ test("awakening builds a sparse view tree that defines ownership", () => {
   assert.equal(f.grandchild.parent(), f.child);
   assert.equal(f.parent.parent(), null);
   assert.equal(f.child.nextResponder(), f.parent);
-  assert.equal(f.parent.nextResponder(), null);
+  assert.equal(f.parent.nextResponder(), Application.shared(), "a root controller answers to the application");
   assert.equal(f.child.view().superview(), f.parent.view());
   assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.nameField, f.child.view()]);
   assert.equal(f.grandchild.view().owner(), f.grandchild);
@@ -733,9 +746,9 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   Runtime.install({classes: {"Test::App": {constructor: App}}});
   f.body.setAttribute("application", "Test::App");
   new Launcher().install(f.document);
-  assert.equal(f.body.__swill_application__, undefined, "nothing happens while loading");
+  assert.equal(Application.isRunning(), false, "nothing happens while loading");
   f.document.dispatchEvent(new Event("DOMContentLoaded"));
-  const application = f.body.__swill_application__;
+  const application = Application.shared();
   assert.ok(application instanceof App);
   assert.equal(new Launcher().launch(f.document), application, "an attached root is not launched twice");
   assert.equal(application.launched, true);
@@ -758,11 +771,11 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   assert.deepEqual(log, ["launch"]);
   f.document.defaultView.dispatchEvent(new Event("pagehide"));
   assert.deepEqual(log, ["launch", "terminate"]);
-  assert.equal(f.body.__swill_application__, null);
+  assert.equal(Application.isRunning(), false);
   assert.equal(parent.view().controllerValue(), null);
   assert.equal(badge.view().controllerValue(), null);
-  assert.equal(parent.application(), null);
-  assert.equal(parent.nextResponder(), null);
+  assert.throws(() => parent.application(), /No application is running/);
+  assert.throws(() => parent.nextResponder(), /No application is running/);
   application.terminate();
   assert.deepEqual(log, ["launch", "terminate"], "terminate is idempotent");
 });
@@ -821,7 +834,7 @@ test("klass awakens View subclasses, alone or together with a controller", () =>
   ]);
   const proto = element("template", {outlet: "proto"});
   const root = element("main", {controller: name}, [panel, both, proto]);
-  const [host, badge] = new Awakening().wire(element("body", {}, [root]));
+  const [host, badge] = launched(element("body", {}, [root]));
   assert.ok(host.panel instanceof Highlight);
   assert.equal(host.panel.element(), panel);
   assert.equal(host.panel.owner(), host);
@@ -834,7 +847,7 @@ test("klass awakens View subclasses, alone or together with a controller", () =>
 });
 
 test("outlet mistakes fail at awakening with the outlet name", () => {
-  const awaken = children => new Awakening().wire(element("body", {}, [element("main", {controller: installHost({panel: false})}, children)]));
+  const awaken = children => launched(element("body", {}, [element("main", {controller: installHost({panel: false})}, children)]));
   assert.throws(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "panel"})]), /Duplicate outlet: panel/);
   assert.throws(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "nope"})]), /Undeclared outlet: nope/);
   assert.throws(() => awaken([]), /Unresolved outlet: panel/);
@@ -855,7 +868,7 @@ test("outlet mistakes fail at awakening with the outlet name", () => {
     people: outletDescriptor("T.nilable(Array)", true),
     badge: outletDescriptor("T.nilable(Demo::Badge)", true)
   }}}});
-  const awakenTyped = children => new Awakening().wire(element("body", {}, [
+  const awakenTyped = children => launched(element("body", {}, [
     element("main", {controller: "Test::TypedOutlets"}, children)
   ]));
   const jsonScript = (outlet, text) => {
@@ -881,7 +894,7 @@ test("decode_outlet_data shapes JSON before assignment", () => {
   Host.prototype.decodeOutletData = function (outlet, value) { return `${outlet}:${JSON.stringify(value)}`; };
   const payload = element("script", {type: "application/json", outlet: "payload"});
   payload.textContent = '[1, 2]';
-  const [host] = new Awakening().wire(element("body", {}, [element("main", {controller: name}, [payload])]));
+  const [host] = launched(element("body", {}, [element("main", {controller: name}, [payload])]));
   assert.equal(host.payload, "payload:[1,2]");
 });
 
@@ -908,7 +921,7 @@ function editorFixture() {
   const parentRoot = element("main", {controller: "Demo::Controller"}, [
     seed, parentTitle, parentInput, parentClear, badgeRoot, editorRoot
   ]);
-  const [parent, , editor] = new Awakening().wire(element("body", {}, [parentRoot]));
+  const [parent, , editor] = launched(element("body", {}, [parentRoot]));
   return {parent, editor, parentTitle, parentClear, editorRoot, nameInput, blank, local, clearButton};
 }
 

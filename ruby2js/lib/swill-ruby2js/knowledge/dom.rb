@@ -78,8 +78,7 @@ module Swill
           # Swill's own expandos on managed elements.
           "__swill_view__" => [:accessor, "T.nilable(Swill::View)"],
           "__swill_action__" => [:accessor, "T::Boolean"],
-          "__swill_row__" => [:accessor, "T.nilable(T.proc.void)"],
-          "__swill_application__" => [:accessor, "T.nilable(Swill::Application)"]
+          "__swill_row__" => [:accessor, "T.nilable(T.proc.void)"]
         }],
         "HTMLTemplateElement" => ["Element", {
           "content" => [:attr, "DocumentFragment"]

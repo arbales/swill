@@ -132,7 +132,7 @@ export function browserAPI(definitions, Runtime) {
     const root = options.root ?? globalThis.document?.body;
     const ApplicationClass = options.application ?? Application;
     if (!root) throw new Error("Swill.start requires a root element");
-    if (root.__swill_application__) throw new Error("A Swill application is already running on this root");
+    if (Application.isRunning()) throw new Error("A Swill application is already running");
     if (typeof ApplicationClass !== "function" ||
         (ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application))) {
       throw new TypeError("application must extend Swill.Application");
