@@ -467,6 +467,10 @@ test("one meta object installs parents before children, including mixin metadata
   assert.equal(child.describe(), "[Ada]");
   assert.equal(Runtime.read(child, "value"), "Ada");
   assert.equal(Runtime.invoke(child, "describe"), "[Ada]");
+  // dup of a framework object is a new instance with the stored properties.
+  const twin = Runtime.read(child, "dup");
+  assert.ok(twin instanceof child.constructor && twin !== child);
+  assert.equal(twin.name, child.name);
   assert.equal(Runtime.read(child, "origin"), "mixin");
 });
 
@@ -1324,7 +1328,8 @@ function peoplePage(hash = "", rowTemplate = null, listController = "Demo::Peopl
   ])]);
   const editorTemplate = element("template", {for: "editor"}, [
     element("tr", {controller: "Swill::Controller::InlineEditor"}, [
-      element("td", {}, [element("input", {bind: "name"})]), element("td", {}, [element("input", {bind: "role"})])
+      element("td", {}, [element("input", {klass: "Swill::Control::TextField", bind: "name"})]),
+      element("td", {}, [element("input", {klass: "Swill::Control::TextField", bind: "role"})])
     ])
   ]);
   const stale = element("tr", {}, [element("td", {})]);
@@ -1626,6 +1631,9 @@ test("a sortable list restores its sort from the fragment and writes changes bac
 // ---- editable lists ----
 
 const InlineEditor = Runtime.resolve("Swill::Controller::InlineEditor");
+const TextField = Runtime.resolve("Swill::Control::TextField");
+const Select = Runtime.resolve("Swill::Control::Select");
+const CustomSelect = Runtime.resolve("Swill::Control::CustomSelect");
 
 // The editor row after the row being edited, and its inputs.
 function editorOf(f) {
@@ -1655,7 +1663,7 @@ test("Enter edits the selected row through a draft: Enter commits it into the pe
   assert.ok(rowsOf()[1].classList.contains("being-edited"));
   assert.equal(rowsOf().length, 3, "the editor is not a row");
   assert.equal(f.rowsOf().length, 4, "though it is a tr among them");
-  assert.equal(f.application.firstResponder(), editor.controller, "the editor took the keyboard");
+  assert.ok(f.application.firstResponder() === editor.inputs[0].__swill_view__, "the editor's first field took the keyboard");
   assert.equal(f.document.activeElement, editor.inputs[0]);
   assert.ok(f.controller.editedObject instanceof SpecialPerson);
   assert.notEqual(f.controller.editedObject, grace, "the edit works on a draft");
@@ -1702,10 +1710,14 @@ test("focus leaving the editor asks the list: an untouched draft is dropped, cha
   editorOf(f).inputs[1].focus();
   assert.ok(f.controller.isEditing(), "focus moving within the editor is free");
   f.controller.confirmEdit = () => false;
+  const field = editorOf(f).inputs[1].__swill_view__;
+  assert.ok(field instanceof TextField, "the editor's inputs are text fields");
+  assert.equal(f.application.firstResponder(), field, "a focused control is the first responder");
+  assert.equal(field.delegate, editorOf(f).controller, "and the editor is its delegate");
   f.nameInput.focus();
   assert.ok(f.controller.isEditing(), "a refused confirmation keeps the edit");
-  assert.equal(f.document.activeElement, editorOf(f).inputs[1], "and focus goes back to the editor");
-  assert.equal(f.application.firstResponder(), editorOf(f).controller);
+  assert.equal(f.document.activeElement, editorOf(f).inputs[1], "and focus goes back to the control");
+  assert.equal(f.application.firstResponder(), field);
   f.controller.confirmEdit = () => true;
   f.nameInput.focus();
   assert.equal(f.controller.isEditing(), false);
@@ -1772,4 +1784,167 @@ test("an editable list needs an editor template whose root is an inline editor",
   assert.throws(() => f.controller.beginEditing(0), /editor template root must be a Swill::Controller::InlineEditor/);
   assert.equal(f.controller.isEditing(), false);
   assert.equal(f.rows.children.filter(child => child.tagName === "TR").length, 3, "the rejected clone was removed");
+});
+
+// ---- controls ----
+
+test("a text field mirrors its input both ways and a select renders its options", () => {
+  const nameInput = element("input", {klass: "Swill::Control::TextField", outlet: "field", value: "Ada"});
+  nameInput.value = "Ada";
+  const wrapped = element("label", {klass: "Swill::Control::TextField", outlet: "wrapped"}, [element("span"), element("input")]);
+  const select = element("select", {klass: "Swill::Control::Select", outlet: "choice"}, [element("option", {value: ""})]);
+  const host = installHost({field: false, wrapped: false, choice: false});
+  const [controller] = launched(element("body", {}, [element("main", {controller: host}, [nameInput, wrapped, select])]));
+  const field = controller.field;
+  assert.ok(field instanceof TextField);
+  assert.equal(field.value, "Ada", "the initial value comes from the input");
+  nameInput.value = "Grace";
+  nameInput.dispatchEvent(new Event("input"));
+  assert.equal(field.value, "Grace", "typing updates the control");
+  const seen = [];
+  field.observe("value", value => seen.push(value));
+  field.value = "Linus";
+  assert.equal(nameInput.value, "Linus", "assigning writes the input");
+  assert.deepEqual(seen, ["Linus"]);
+  assert.equal(controller.wrapped.inputElement(), wrapped.children[1], "a wrapping element finds its input");
+  const choice = controller.choice;
+  assert.ok(choice instanceof Select);
+  choice.options = ["a", "b"];
+  assert.deepEqual(select.children.map(option => option.value), ["", "a", "b"], "markup options stay as a prefix");
+  choice.value = "b";
+  assert.equal(select.value, "b");
+  choice.options = ["b", "c"];
+  assert.deepEqual(select.children.map(option => option.value), ["", "b", "c"], "assigning replaces only the suffix");
+  assert.equal(select.value, "b", "the value survives when still offered");
+  select.value = "c";
+  select.dispatchEvent(new Event("change"));
+  assert.equal(choice.value, "c", "a change updates the control");
+});
+
+test("a control's delegate can refuse to let it resign first responder", () => {
+  const input = element("input", {klass: "Swill::Control::TextField", outlet: "field"});
+  const other = element("input", {outlet: "other"});
+  const host = installHost({field: false, other: false});
+  const [controller] = launched(element("body", {}, [element("main", {controller: host}, [input, other])]));
+  const application = Application.shared();
+  const field = controller.field;
+  assert.equal(application.makeFirstResponder(field), true);
+  const asked = [];
+  // A delegate is asked through metadata, so it declares the hook.
+  class Gatekeeper { controlShouldResignFirstResponder(control, next) { asked.push([control, next]); return false; } }
+  Runtime.install({classes: {"Test::Gatekeeper": {constructor: Gatekeeper, methods: {
+    control_should_resign_first_responder: {arity: 2, js: "controlShouldResignFirstResponder"}
+  }}}});
+  field.delegate = new Gatekeeper();
+  assert.equal(application.makeFirstResponder(controller.other), false, "the delegate refused");
+  assert.deepEqual(asked, [[field, controller.other]]);
+  assert.equal(application.firstResponder(), field);
+  field.delegate = null;
+  assert.equal(application.makeFirstResponder(controller.other), true, "without a delegate the control resigns");
+});
+
+test("a custom select builds its chrome, follows the keyboard and pointer, and reports choices as events", () => {
+  const picker = element("div", {klass: "Swill::Control::CustomSelect", outlet: "picker"});
+  const host = installHost({picker: false});
+  const [controller] = launched(element("body", {}, [element("main", {controller: host}, [picker])]));
+  const control = controller.picker;
+  assert.ok(control instanceof CustomSelect);
+  const button = () => picker.children[0];
+  const popup = () => picker.children[1];
+  const rows = () => popup().children;
+  const labels = () => rows().map(row => row.querySelector("[class='custom-select-option-label']").textContent);
+  assert.deepEqual([picker.getAttribute("role"), picker.getAttribute("tabindex"), popup().hidden, rows().length], ["combobox", "0", true, 0]);
+  const events = [];
+  picker.addEventListener("change", () => events.push(["change", control.value]));
+  control.options = [{value: "a", label: "Alpha", icon: "globe"}, {value: "b", label: "Beta", description: "second"}];
+  assert.deepEqual(labels(), ["Alpha", "Beta"]);
+  assert.equal(rows()[1].querySelector("[class='custom-select-option-description']").textContent, "second");
+  assert.equal(button().children[1].textContent, "", "no value, no label");
+  control.value = "b";
+  assert.deepEqual([button().children[1].textContent, rows().map(row => row.getAttribute("aria-selected"))], ["Beta", ["false", "true"]]);
+  assert.equal(button().children[0].hidden, true, "Beta has no icon");
+  Application.shared().makeFirstResponder(control);
+  const key = name => picker.dispatchEvent(keyEvent("keydown", name));
+  key("Enter");
+  assert.deepEqual([popup().hidden, picker.getAttribute("aria-expanded"), picker.classList.contains("open")], [false, "true", true], "Enter opens");
+  key("ArrowDown");
+  assert.deepEqual([control.value, events], ["a", [["change", "a"]]], "arrows wrap around and a choice is a change");
+  assert.equal(button().children[0].getAttribute("class"), "custom-select-trigger-icon icon-globe");
+  assert.equal(popup().hidden, true, "a choice closes the listbox");
+  key("Enter");
+  key("Escape");
+  assert.equal(popup().hidden, true, "Escape closes");
+  key(" ");
+  rows()[1].click();
+  assert.deepEqual([control.value, popup().hidden, events.length], ["b", true, 2], "clicking an option chooses it");
+  key("Enter");
+  const outside = element("p");
+  picker.ownerDocument.append(outside);
+  outside.dispatchEvent(new Event("pointerdown", {bubbles: true}));
+  assert.equal(popup().hidden, true, "a pointer outside closes");
+  key("Enter");
+  control.options = [{value: "b", label: "Beta"}];
+  assert.deepEqual([labels(), control.value, button().children[1].textContent], [["Beta"], "b", "Beta"], "re-rendering keeps the value");
+});
+
+// ---- notifications and control bindings ----
+
+test("the notification center observes by name until the observation ends, and controllers observe until teardown", () => {
+  const NotificationCenter = Runtime.resolve("Swill::NotificationCenter");
+  const center = NotificationCenter.default();
+  assert.equal(NotificationCenter.default(), center, "one default center");
+  const seen = [];
+  const stop = center.observe("ping", notification => seen.push([notification.name(), notification.object(), notification.userInfo()]));
+  const posted = center.post("ping", "poster", {count: 1});
+  assert.deepEqual(seen, [["ping", "poster", {count: 1}]]);
+  assert.equal(posted.name(), "ping");
+  center.post("other", null, null);
+  stop();
+  center.post("ping", "poster", {count: 2});
+  assert.equal(seen.length, 1, "an ended observation hears nothing");
+  const f = peoplePage();
+  f.parent.observeNotification("ping", notification => seen.push(notification.userInfo()));
+  center.post("ping", null, "alive");
+  f.parent.teardown();
+  center.post("ping", null, "gone");
+  assert.deepEqual(seen.slice(1), ["alive"], "teardown ends a controller's observation");
+});
+
+test("first responder changes are posted as notifications", () => {
+  const f = peoplePage();
+  const changes = [];
+  const stop = Runtime.resolve("Swill::NotificationCenter").default().observe("first_responder_did_change", notification => {
+    changes.push([notification.object() === f.application, notification.userInfo()]);
+  });
+  f.application.makeFirstResponder(f.controller);
+  f.application.makeFirstResponder(f.controller);
+  f.application.makeFirstResponder(null);
+  stop();
+  assert.deepEqual(changes, [[true, f.controller], [true, null]], "once per change, not per call");
+});
+
+test("bind on a control keeps the control's value equal to the path both ways", () => {
+  const Host = class extends SwillController {};
+  Runtime.install({classes: {"Test::ChoiceHost": {constructor: Host, properties: {
+    choice: {defaultValue() { return "b"; }}
+  }}}});
+  const picker = element("div", {klass: "Swill::Control::CustomSelect", bind: "choice"});
+  const field = element("input", {klass: "Swill::Control::TextField", bind: "choice"});
+  const [host] = launched(element("body", {}, [element("main", {controller: "Test::ChoiceHost"}, [picker, field])]));
+  const control = picker.__swill_view__;
+  control.options = [{value: "a", label: "A"}, {value: "b", label: "B"}];
+  assert.equal(control.value, "b", "the control took the path's value");
+  assert.equal(field.value, "b", "and so did the text field's input");
+  host.choice = "a";
+  assert.deepEqual([control.value, picker.children[0].children[1].textContent, field.value], ["a", "A", "a"]);
+  Application.shared().makeFirstResponder(control);
+  picker.dispatchEvent(keyEvent("keydown", "Enter"));
+  picker.dispatchEvent(keyEvent("keydown", "ArrowDown"));
+  assert.equal(host.choice, "b", "a choice in the control writes the path");
+  field.value = "typed";
+  field.dispatchEvent(new Event("input"));
+  assert.deepEqual([host.choice, control.value], ["typed", "typed"], "typing in the text field writes the path too");
+  host.teardown();
+  host.choice = "c";
+  assert.equal(control.value, "typed", "teardown releases the binding");
 });

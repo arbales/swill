@@ -215,6 +215,10 @@ module Swill
           return s(:send, process(receiver), :==, s(:nil)) if method == :nil? && args.empty?
           return lower_native(node, receiver, method, args, type) if native_type?(type)
           if (klass = swill_class(type))
+            # Ruby's dup of a framework object is the runtime's copy.
+            if method == :dup && args.empty?
+              return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, "dup"))
+            end
             if args.empty? && @knowledge.property_entry(klass, name)
               return s(:attr, process(receiver), Knowledge.member(method).to_sym)
             end

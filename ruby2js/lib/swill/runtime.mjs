@@ -5,7 +5,8 @@ import {
   installClass,
   inheritableRegistry,
   classSetting,
-  resolve
+  resolve,
+  nameOf
 } from "./runtime/install.mjs";
 import {observe, dispose} from "./runtime/properties.mjs";
 import {
@@ -35,7 +36,7 @@ import {
 export const Runtime = {
   // Classes
   install, include, installClass,
-  inheritableRegistry, classSetting, resolve,
+  inheritableRegistry, classSetting, resolve, nameOf,
 
   // Values
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate,

@@ -3,6 +3,7 @@ import {declarations, hasMetadata, installMetadata} from "./metadata.mjs";
 import {record, computedValue, storedValue, writeProperty} from "./properties.mjs";
 
 const classes = new Map();
+const names = new Map();
 const mixinMetadata = new WeakMap();
 const mixinClassFactories = new WeakMap();
 const classConfiguration = new WeakMap();
@@ -238,12 +239,22 @@ export function installClass(klass, name, properties, methods, registries = {}, 
   }
 
   classes.set(name, klass);
+  names.set(klass, name);
 }
 
 // Markup resolves registered classes only.
 // The installed class for a name, or undefined.
 export function registered(name) {
   return classes.get(name);
+}
+
+// The installed name of an object's nearest installed class, or null.
+export function nameOf(object) {
+  for (let prototype = Object.getPrototypeOf(object); prototype; prototype = Object.getPrototypeOf(prototype)) {
+    const name = names.get(prototype.constructor);
+    if (name) return name;
+  }
+  return null;
 }
 
 export function resolve(name) {

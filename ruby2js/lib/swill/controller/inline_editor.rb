@@ -38,6 +38,13 @@ module Swill
       host ? host.editor_should_end_editing(self) : true
     end
 
+    # NSControlTextEditingDelegate analog: the controls inside the editor
+    # delegate resignation here, so leaving one of them asks the host.
+    sig { params(_control: Control, next_responder: T.nilable(Responder)).returns(T::Boolean) }
+    def control_should_resign_first_responder(_control, next_responder)
+      allow_resignation_to?(next_responder)
+    end
+
     # The parent, when it hosts inline editing.
     sig { returns(T.untyped) }
     def editing_host

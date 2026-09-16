@@ -726,7 +726,9 @@ class CompilerTest < Minitest::Test
     assert_includes js, "Runtime.isEqual(left, right)"
     assert_includes js, "Runtime.logicalOr(left, () => right)"
     assert_includes js, 'return current ? "yes" : "no"'
-    assert_includes js, "Runtime.isEqual(local, [])"
+    # A local first assigned in a branch is typed from it: reading it
+    # unassigned would be a bug in Ruby too, and a String compares by identity.
+    assert_includes js, "local === []"
     # Typed collections never get identity comparison; typed objects always do.
     assert_includes js, "Runtime.isEqual(items, [])"
     assert_includes js, "other === this.maybeObject"

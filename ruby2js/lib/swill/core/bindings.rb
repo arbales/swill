@@ -83,6 +83,7 @@ module Swill
       view = element.__swill_view__
       child = view ? view.controller_value : nil
       return wire_represented_object(object, child, path) if child
+      return wire_control(object, T.cast(view, Control), path) if view.is_a?(Control)
       form_control = element.matches("input, textarea, select")
       writable = form_control && !element.hasAttribute("readonly")
       checkbox = element.type == "checkbox"
@@ -111,6 +112,24 @@ module Swill
       ->() do
         dispose.()
         element.removeEventListener(event_name, handler) if writable
+      end
+    end
+
+    # A control's own value property is kept equal to the path, both ways;
+    # the control decides how that reaches its element.
+    sig { params(object: Swill::Object, control: Control, path: String).returns(T.proc.void) }
+    def wire_control(object, control, path)
+      Runtime.assertWritablePath(object, path)
+      render = ->(_value) do
+        value = Runtime.readPath(object, path)
+        Runtime.write(control, "value", value == nil ? "" : value)
+      end
+      render.(nil)
+      release_render = Runtime.observePath(object, path, render)
+      release_input = control.observe("value", ->(value) { Runtime.writePath(object, path, value) })
+      ->() do
+        release_render.()
+        release_input.()
       end
     end
 

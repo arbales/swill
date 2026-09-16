@@ -1,0 +1,105 @@
+[hidden] {
+  display: none !important;
+}
+
+.example-pane > section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.example-toolbar {
+  flex-wrap: wrap;
+}
+
+.example-toolbar .window-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.first-responder-debug {
+  color: var(--dim);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.custom-select {
+  max-width: 28rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table-scroll:focus-within {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.people-table {
+  width: 100%;
+  min-width: 28rem;
+  border-collapse: collapse;
+  outline: none;
+}
+
+.people-table th,
+.people-table td {
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  text-align: left;
+}
+
+.people-table th {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.people-table tbody tr {
+  cursor: default;
+}
+
+.people-table tbody tr.selected {
+  background: var(--selected);
+}
+
+.people-table [data-column] {
+  cursor: pointer;
+}
+
+.people-table [aria-sort="asc"]::after {
+  content: " \2191";
+}
+
+.people-table [aria-sort="desc"]::after {
+  content: " \2193";
+}
+
+.search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.error {
+  color: #f66;
+}
+
+.workspace-window {
+  padding-bottom: 32px;
+}
+
+.workspace-pane {
+  padding: 16px;
+  border: 1px solid var(--rule);
+}
+
+.palette-window {
+  width: min(420px, calc(100vw - 32px));
+}

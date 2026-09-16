@@ -23,8 +23,13 @@ module Swill
       lib/swill/core/object.rb
       lib/swill/core/ownership.rb
       lib/swill/core/object_bindings.rb
+      lib/swill/core/notification_center.rb
       lib/swill/core/responder.rb
       lib/swill/core/view.rb
+      lib/swill/control/base.rb
+      lib/swill/control/text_field.rb
+      lib/swill/control/select.rb
+      lib/swill/control/custom_select.rb
       lib/swill/core/controller.rb
       lib/swill/core/bindings.rb
       lib/swill/core/actions.rb
@@ -191,6 +196,7 @@ module Swill
               restoration["type"] = restoration_type(entry, restoration["path"].split("."))
             end
             resolve_outlet_types(entry)
+            canonicalize_signatures(entry)
             members = entry["properties"].map { |p| [p["js"], p["name"]] } +
               entry["methods"].map { |m| [m["js"], m["name"]] }
             raise CompileError, "colliding members in #{entry['name']}" unless members.map(&:first).uniq.length == members.length
@@ -199,6 +205,28 @@ module Swill
               raise CompileError, "method/property overlap requires explicit lowering"
             end
             available << entry["name"]
+          end
+        end
+
+        # Signature types are written in the entry's own scope (View inside
+        # module Swill). An importing build resolves them from elsewhere, so
+        # every class name that resolves here is spelled out in full.
+        def canonicalize_signatures(entry)
+          scope = entry["name"].split("::")
+          (entry["methods"] + entry.fetch("static_methods", [])).each do |method|
+            method["returns"] = canonical_type(method["returns"], scope) if method["returns"]
+            method["parameters"] = method["parameters"].transform_values { |type| canonical_type(type, scope) }
+          end
+        end
+
+        def canonical_type(type, scope)
+          type.gsub(/\b[A-Z]\w*(?:::\w+)*\b/) do |name|
+            next name if name.start_with?("T") && (name == "T" || name.start_with?("T::"))
+            begin
+              knowledge.resolve(name, scope)
+            rescue CompileError
+              name
+            end
           end
         end
 

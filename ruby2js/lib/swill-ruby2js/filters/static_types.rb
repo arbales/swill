@@ -54,17 +54,18 @@ module Swill
         def infer_local_types(node)
           all_assignments = Hash.new { |hash, name| hash[name] = [] }
           collect_local_assignments(node, all_assignments)
-          direct_assignments = @knowledge.statements(node).select { |statement| statement.type == :lvasgn }
-            .group_by { |statement| statement.children.first.to_s }
+          statement_assignments = Hash.new { |hash, name| hash[name] = [] }
+          collect_statement_assignments(node, statement_assignments, true)
           # Parameter signatures describe entry values, not later assignments.
           # Without full flow analysis, an assigned parameter is no longer static.
           all_assignments.each_key { |name| @local_types.delete(name) }
-          # A local is typed when its first assignment is a plain statement
-          # that precedes every read, so it is never read unassigned; later
-          # assignments may sit in loops or branches as long as their types
-          # merge.
+          # A local is typed when its first assignment is a statement (in the
+          # body, a branch, a loop, or a block, never a subexpression) that
+          # precedes every read; later assignments may sit anywhere as long
+          # as their types merge. Reading a local before any assignment is a
+          # bug in Ruby as well, so a branch-only first assignment is fine.
           assignments = all_assignments.select do |name, values|
-            first = direct_assignments.fetch(name, []).first
+            first = statement_assignments.fetch(name, []).min_by { |assignment| assignment.loc.expression.begin_pos }
             first && first_local_reference(node, name) >= first.loc.expression.begin_pos &&
               values.map(&:loc).map { |location| location.expression.begin_pos }.min >= first.loc.expression.begin_pos
           end
@@ -200,6 +201,21 @@ module Swill
           node.children.each { |child| collect_local_references(child, name, positions) }
         end
 
+        # Assignments in statement position: a direct child of a statement
+        # list, a branch, a loop body, or a block body.
+        STATEMENT_PARENTS = %i[begin kwbegin if while until block ensure rescue resbody case when].freeze
+
+        def collect_statement_assignments(node, assignments, statement)
+          return unless node.respond_to?(:type)
+          if node.type == :lvasgn && statement
+            name, value = node.children
+            assignments[name.to_s] << node if value
+          end
+          node.children.each do |child|
+            collect_statement_assignments(child, assignments, STATEMENT_PARENTS.include?(node.type))
+          end
+        end
+
         def collect_local_assignments(node, assignments)
           return unless node.respond_to?(:type)
           if node.type == :lvasgn
@@ -323,9 +339,13 @@ module Swill
           parts.map(&:strip)
         end
 
-        # A framework class by its full name, so View and Swill::View agree.
+        # Every framework class in a type by its full name, so View and
+        # Swill::View agree, inside generics as well.
         def canonical(type)
-          swill_class(type) || type
+          type.gsub(/\b[A-Z]\w*(?:::\w+)*\b/) do |name|
+            next name if name == "T" || name.start_with?("T::")
+            swill_class(name) || name
+          end
         end
 
         # T.must strips nilability, T.unsafe forgets the type, and the checked

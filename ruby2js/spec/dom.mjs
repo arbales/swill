@@ -82,6 +82,8 @@ export class Element {
     return node;
   }
 
+  createElement(tagName) { return new Element(tagName); }
+
   getAttribute(name) { return this.attributes[name] ?? null; }
   hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
   setAttribute(name, value) { this.attributes[name] = String(value); }

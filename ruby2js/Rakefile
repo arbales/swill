@@ -39,7 +39,7 @@ def compile_spike
   File.write("build/framework.external.mjs", Swill::Ruby2JS::Compiler.format_javascript(shim))
 
   application = Swill::Ruby2JS::Compiler.new(imports: interface)
-  %w[examples/models.rb examples/concerns.rb examples/application.rb].each do |path|
+  %w[examples/models.rb examples/concerns.rb examples/application.rb examples/static.rb].each do |path|
     application.add(File.read(path), file: path)
   end
   application.modules(name: "application", runtime: "./framework.external.mjs",

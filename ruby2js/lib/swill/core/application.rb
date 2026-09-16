@@ -43,6 +43,7 @@ module Swill
       @templates = T.let({}, T::Hash[String, Element])
       @captured = T.let({}, T::Hash[String, Element])
       @first_responder = T.let(nil, T.nilable(Responder))
+      @posted_first_responder = T.let(nil, T.nilable(Responder))
       @observer = T.let(nil, T.nilable(MutationObserver))
     end
 
@@ -100,7 +101,7 @@ module Swill
       @root.removeEventListener("focusout", @on_focus_out)
       @root.removeEventListener("keydown", @on_key_down)
       @root.removeEventListener("keyup", @on_key_up)
-      @first_responder = nil
+      assign_first_responder(nil)
       Application.terminated(self)
     end
 
@@ -218,9 +219,34 @@ module Swill
       current = first_responder
       return true if responder == current
       return false unless current.resign_first_responder(responder)
+      # Nobody holds it while the newcomer becomes it, so focus moving
+      # during become reconciles against the application. When that focus
+      # lands in a nested responder, the keyboard is there, and that
+      # responder stays first.
       @first_responder = nil
-      @first_responder = responder if responder && responder.become_first_responder
+      if responder && responder.become_first_responder
+        @first_responder = responder if @first_responder == nil
+      end
+      post_first_responder_change
       true
+    end
+
+    sig { params(responder: T.nilable(Responder)).void }
+    def assign_first_responder(responder)
+      @first_responder = responder
+      post_first_responder_change
+    end
+
+    # Every change of first responder is posted once as
+    # first_responder_did_change, with the application as the object and the
+    # responder as user info, so a debugging view or a toolbar can follow it
+    # without polling. Focus moving during become may already have posted
+    # the same responder; the last one posted is remembered for that.
+    sig { void }
+    def post_first_responder_change
+      return if @first_responder == @posted_first_responder
+      @posted_first_responder = @first_responder
+      NotificationCenter.default.post("first_responder_did_change", self, @first_responder)
     end
 
     sig { params(event: Event).void }
@@ -244,7 +270,7 @@ module Swill
         restore_focus(current, previous)
         return
       end
-      @first_responder = responder
+      assign_first_responder(responder)
     end
 
     # Focus moved to another part of the page: the first responder falls
@@ -253,14 +279,14 @@ module Swill
     # when focus returns.
     sig { params(destination: T.nilable(Element)).void }
     def focus_left(destination)
-      @first_responder = nil if destination && !@root.contains(destination)
+      assign_first_responder(nil) if destination && !@root.contains(destination)
     end
 
     # A first responder inside a region being torn down falls back here.
     sig { params(element: Element).void }
     def release_first_responder(element)
       owner = responder_element(first_responder)
-      @first_responder = nil if owner && (owner == element || element.contains(owner))
+      assign_first_responder(nil) if owner && (owner == element || element.contains(owner))
     end
 
     # The responder for a DOM location: the first managed view above it,

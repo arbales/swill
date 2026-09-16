@@ -122,6 +122,20 @@ The initial kernel and DOM-boundary spike is complete and verified:
   against the type so a mistyped outlet fails by name. `decode_outlet_data`
   materializes models with `Model::Attributes.from_attributes`, so the demo
   controller no longer builds people itself.
+- native controls: `Swill::Control` with the delegate resignation query
+  (`control_should_resign_first_responder`), `Control::TextField` and
+  `Control::Select` as observable wrappers reached with `klass`,
+  `Control::CustomSelect` as a stylable listbox control, and the inline
+  editor as delegate of its controls, so a refused commit keeps focus in
+  the control;
+- the static example (16 September 2026, item 7.1): `examples/static` ports
+  the Opal static example in full but for its backend search, on top of
+  `Swill::NotificationCenter` (post, observe, a controller's
+  `observe_notification`), the application's `first_responder_did_change`
+  notification, `bind` on a control's `value`, `Runtime.nameOf`, and `dup`
+  of framework objects; the browser check drives all three panes, the
+  palette, and the restored workspace pane. Focus reconciled into a nested
+  responder during `become` now stays there;
 - one application per page (16 September 2026): `Swill::Application.shared`
   is NSApp, `running?` says whether one is up, and a controller's
   `application` is never nil. The DOM-walking lookup and its expando are
@@ -148,13 +162,14 @@ The initial kernel and DOM-boundary spike is complete and verified:
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: Native Controls
+## Immediate Next Slice: One Giraffic Flow
 
-Model work beyond step 1 is deferred (decided September 2026) until the UI
-surface is complete. Lists, sortable lists, editors, and inline editing are
-done, and the compiler has one surface; item 6 continues with native text and
-select controls, including the control-to-editor resignation delegate
-(`control_should_resign_first_responder`) the inline editor is prepared for.
+The static example is ported (item 7.1). Item 7.2 begins: one backend-backed
+Giraffic flow covering dataset loading, selection, detached editing,
+persistence, restoration, and a relationship, pulling in the deferred model
+steps (codecs, datasets and the wire boundary, create/update/reload/delete,
+relationships) as it actually requires them. The static example's brewery
+search comes back with the dataset step.
 
 ## Ordered Roadmap
 
@@ -215,7 +230,8 @@ authorization, and transactions do not move into the browser.
 - Port list selection and row ownership first (done).
 - Then add sortable lists, editors, inline editing, and detached drafts
   (done).
-- Add native text/select controls before custom wrappers.
+- Add native text/select controls before custom wrappers (done, including
+  the custom select).
 - Prefer application-shaped APIs over broad compiler support added only for a
   single implementation technique.
 
@@ -224,7 +240,7 @@ authorization, and transactions do not move into the browser.
 Use two increasingly demanding proofs:
 
 1. Port the static example to exercise nested controllers, outlets, bindings,
-   actions, focus, templates, controls, and teardown.
+   actions, focus, templates, controls, and teardown (done).
 2. Port one backend-backed Giraffic flow covering dataset loading, selection,
    detached editing, persistence, restoration, and a relationship.
 

@@ -346,7 +346,7 @@ the runtime is reached only where a fact is genuinely unavailable.
 | Interpolated string | `String` |
 | `==`, `!=`, `!` | `T::Boolean` |
 | Parameter | Its `sig` parameter type |
-| Local variable | Inferred when every assignment has one static type and the first read follows the first assignment; an assigned parameter loses its signature type |
+| Local variable | Inferred when its assignments' types merge (the same class or core type, nilable when any is nil, an empty `[]` or `{}` fitting a typed collection) and its first assignment is a statement, in the body or in a branch, loop, or block, that precedes every read; an assignment may refer to the variable itself; an assigned parameter loses its signature type |
 | Instance variable | `T.nilable(Class)` when every assignment anywhere in the class has a static type and the non-nil ones name one framework class; otherwise none |
 | `left \|\| right` | The right's type when both sides name the same class, nilable or not on the left: a nil left yields the right |
 | `Const.static_method(...)` | The static method's `sig` return type |
@@ -552,7 +552,8 @@ registered from JavaScript, which the compiler never sees.
 | `isAttribute(object, name)` | Whether `name` is a declared `attribute` on the object's class |
 | `validateAttribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. The MRI adapter implements the same convention with `respond_to?` |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
-| `valueRead(value, name)` / `valueInvoke(value, name, args)` | Ruby's core methods on plain values, reached by `read` and `invoke` when the receiver has no declared member of that name: the predicates, `size`, `length`, `strip`, `upcase`, `downcase`, `capitalize`, `dup`, `first`, `last`, `compact`, `uniq`, `reverse`, `sum`, `min`, `max`, `to_s`, `to_sym`, `to_i`, `to_f`, and with arguments `index`, `take`, `drop`, `include?`. `dup` copies an array or hash and refuses a framework object; array methods refuse other values. Errors: `Unknown value reader`, `Unknown value method` |
+| `nameOf(object)` | The installed name of the object's nearest installed class, or `null` |
+| `valueRead(value, name)` / `valueInvoke(value, name, args)` | Ruby's core methods on plain values, reached by `read` and `invoke` when the receiver has no declared member of that name: the predicates, `size`, `length`, `strip`, `upcase`, `downcase`, `capitalize`, `dup`, `first`, `last`, `compact`, `uniq`, `reverse`, `sum`, `min`, `max`, `to_s`, `to_sym`, `to_i`, `to_f`, and with arguments `index`, `take`, `drop`, `include?`. `dup` copies an array or hash; on an object with declared properties, `read` answers `dup` with a new instance carrying the stored properties, written through the property protocol; array methods refuse other values. Errors: `Unknown value reader`, `Unknown value method` |
 
 ### Values
 

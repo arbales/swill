@@ -104,7 +104,13 @@ export function browserAPI(definitions, Runtime) {
   const Editor = definitions.Swill__Controller__Editor;
   const InlineEditor = definitions.Swill__Controller__InlineEditor;
   const EditableList = definitions.Swill__Controller__EditableList;
-  const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList]);
+  const Control = definitions.Swill__Control;
+  const TextField = definitions.Swill__Control__TextField;
+  const Select = definitions.Swill__Control__Select;
+  const CustomSelect = definitions.Swill__Control__CustomSelect;
+  const NotificationCenter = definitions.Swill__NotificationCenter;
+  const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList,
+    Control, TextField, Select, CustomSelect]);
 
   function register(name, klass) {
     if (arguments.length === 1) {
@@ -160,6 +166,11 @@ export function browserAPI(definitions, Runtime) {
     Editor,
     InlineEditor,
     EditableList,
+    Control,
+    TextField,
+    Select,
+    CustomSelect,
+    NotificationCenter,
     register,
     start
   });

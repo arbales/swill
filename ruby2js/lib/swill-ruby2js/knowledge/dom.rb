@@ -129,7 +129,8 @@ module Swill
           "shiftKey" => [:attr, "T::Boolean"]
         }],
         "MouseEvent" => ["Event", {
-          "shiftKey" => [:attr, "T::Boolean"]
+          "shiftKey" => [:attr, "T::Boolean"],
+          "detail" => [:attr, "Integer"]
         }],
         "PageTransitionEvent" => ["Event", {
           "persisted" => [:attr, "T::Boolean"]
@@ -173,6 +174,7 @@ module Swill
 
       # Classes constructed with new(...), and their constructor parameters.
       CONSTRUCTORS = {
+        "Event" => "type: String, init?: T.untyped",
         "MutationObserver" => "callback: T.proc.params(records: T::Array[MutationRecord], observer: MutationObserver).void",
         "Promise" => "executor: T.proc.params(resolve: T.untyped, reject: T.untyped).void",
         "URLSearchParams" => "init?: String"

@@ -16,7 +16,8 @@ const server = createServer(async (request, response) => {
     const file = resolve(root, "." + new URL(request.url, "http://localhost").pathname);
     if (!file.startsWith(root.endsWith(sep) ? root : root + sep)) throw new Error("outside root");
     const content = await readFile(file);
-    response.setHeader("Content-Type", extname(file) === ".html" ? "text/html" : "text/javascript");
+    const types = {".html": "text/html", ".css": "text/css"};
+    response.setHeader("Content-Type", types[extname(file)] ?? "text/javascript");
     response.end(content);
   } catch {
     response.writeHead(404).end();
@@ -315,6 +316,92 @@ try {
     document.querySelector("section[controller='Demo::Badge'] p[bind]").textContent,
     Swill.Application.isRunning()
   ]`), ["Hello ", "Badge 1", false]);
+
+  // The static example: every facility on one page. The fragment picks the
+  // main pane and restores the workspace pane's fields.
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/static/index.html#main=bindings&workspace=intro-pane&workspace.q=Hi&workspace.page=3`}, sessionId);
+  await evaluate(`new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const poll = () => {
+      if (document.querySelector("h1[bind=greeting]")?.textContent === "Hello, world!") resolve(true);
+      else if (Date.now() > deadline) reject(new Error("The static example did not awaken"));
+      else setTimeout(poll, 20);
+    };
+    poll();
+  })`);
+  // Bindings pane: key paths, the draft editor, the notification center,
+  // the first responder, and the workspace restoration.
+  assert.deepEqual(await evaluate(`(() => {
+    const type = (input, value) => { input.value = value; input.dispatchEvent(new Event("input", {bubbles: true})); };
+    const key = (target, name) => target.dispatchEvent(new KeyboardEvent("keydown", {key: name, bubbles: true}));
+    const pane = document.querySelector("[controller='Static::BindingsPane']");
+    const results = [document.querySelector("[data-example=bindings]").getAttribute("aria-pressed"),
+      document.activeElement === pane.querySelector("[outlet=name_field]"),
+      pane.querySelector("[bind=first_responder_debug]").textContent];
+    type(pane.querySelector("[outlet=name_field]"), "Ada");
+    results.push(pane.querySelector("h1").textContent, pane.querySelector("[bind='user.dirty?']").textContent);
+    pane.querySelector("[data-action=increment]").click();
+    results.push(pane.querySelector("[bind=last_notification]").textContent);
+    const draftName = pane.querySelector("[outlet=draft_editor] input");
+    draftName.focus();
+    type(draftName, "Grace");
+    results.push(pane.querySelector("h1").textContent, pane.querySelector("[data-action=apply_draft]").disabled);
+    key(draftName, "Enter");
+    results.push(pane.querySelector("h1").textContent, pane.querySelector("[data-action=apply_draft]").disabled);
+    const intro = document.querySelector("[controller='Static::IntroPane']");
+    results.push(intro.querySelector("[outlet=field]").value, intro.querySelector("output").textContent, location.hash);
+    return results;
+  })()`), [
+    "true", true, "Swill::View input[outlet=name_field]",
+    "Hello, Ada!", "true",
+    "Counter changed to 1",
+    "Hello, Ada!", false,
+    "Hello, Grace!", true,
+    "Hi", "3", "#main=bindings&workspace=intro-pane&workspace.q=Hi&workspace.page=3"
+  ]);
+  // Controls pane through the toolbar, then the data pane's editable list,
+  // then the palette dialog.
+  assert.deepEqual(await evaluate(`(() => {
+    const key = (target, name) => target.dispatchEvent(new KeyboardEvent("keydown", {key: name, bubbles: true}));
+    document.querySelector("[data-example=controls]").click();
+    const controls = document.querySelector("[controller='Static::ControlsPane']");
+    const picker = controls.querySelector("[outlet=custom_select]");
+    const results = [document.querySelector("[window=main]").getAttribute("name"),
+      document.querySelector("[data-example=controls]").getAttribute("aria-pressed"),
+      controls.querySelector("[bind='standalone_text_field.value']").textContent,
+      controls.querySelector("[bind='standalone_select.value']").textContent,
+      picker.querySelector("[class='custom-select-label']").textContent,
+      controls.querySelector("output[bind=selected_person]").textContent];
+    picker.focus();
+    key(picker, "Enter");
+    key(picker, "ArrowDown");
+    results.push(controls.querySelector("output[bind=selected_person]").textContent, location.hash.includes("main=controls"));
+    document.querySelector("[data-example=data]").click();
+    const data = document.querySelector("[controller='Static::DataPane']");
+    const rows = () => Array.from(data.querySelectorAll("tbody tr"));
+    rows()[1].children[0].click();
+    results.push(rows().length, data.querySelector("[bind=selected_people]").textContent);
+    data.querySelector("table").focus();
+    key(data.querySelector("table"), "Enter");
+    results.push(rows().length, rows()[2].querySelector("input") !== null, document.activeElement === rows()[2].querySelector("input"));
+    key(rows()[2].querySelector("input"), "Escape");
+    results.push(rows().length);
+    document.querySelector("[data-action=show_palette]").click();
+    const dialog = document.querySelector("dialog[controller='Static::Palette']");
+    results.push(dialog !== null && dialog.open, document.activeElement === dialog.querySelector("input"));
+    dialog.querySelector("[data-action=close]").click();
+    results.push(document.querySelector("dialog[controller='Static::Palette']") === null);
+    return results;
+  })()`), [
+    "controls", "true", "Observable control", "Grace", "Ada Lovelace", "ada",
+    "grace", true,
+    3, "Grace",
+    4, true, true,
+    3,
+    true, true,
+    true
+  ]);
+  assert.deepEqual(exceptions, []);
 
   // A second page uses the same framework bundle directly from plain
   // JavaScript: registration is metadata-backed and startup is explicit.

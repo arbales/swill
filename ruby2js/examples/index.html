@@ -43,7 +43,7 @@
             <tr><td bind="name"></td><td bind="role"></td><td><button data-action="remove_person">Remove</button></td></tr>
           </template>
           <template for="editor">
-            <tr controller="Swill::Controller::InlineEditor"><td><input bind="name"></td><td><input bind="role"></td><td>Enter saves, Escape cancels</td></tr>
+            <tr controller="Swill::Controller::InlineEditor"><td><input klass="Swill::Control::TextField" bind="name"></td><td><input klass="Swill::Control::TextField" bind="role"></td><td>Enter saves, Escape cancels</td></tr>
           </template>
         </tbody>
       </table>

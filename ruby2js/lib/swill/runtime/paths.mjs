@@ -1,5 +1,5 @@
 // Metadata-backed path and dynamic dispatch.
-import {declarations} from "./metadata.mjs";
+import {declarations, hasInstalledMetadata} from "./metadata.mjs";
 import {subscribe, writeProperty} from "./properties.mjs";
 import {valueRead, valueInvoke, isPlainObject, NIL_READERS, VALUE_READERS, VALUE_METHODS} from "./values.mjs";
 
@@ -24,9 +24,23 @@ export function read(object, name) {
 
   const method = declarations(object.constructor, "methods").get(name);
   if (method?.arity === 0) return object[method.js]();
+  if (name === "dup" && hasInstalledMetadata(object.constructor)) return duplicateObject(object);
   if (VALUE_READERS.includes(name)) return valueRead(object, name);
 
   throw new Error(`Unknown reader: ${name}`);
+}
+
+// Ruby dup for a framework object: a new instance of its class with the
+// stored properties written through the property protocol, so validators
+// run and nothing of the original's observation or computed state carries
+// over. Outlets are connections, not values, and stay unset.
+function duplicateObject(object) {
+  const copy = new object.constructor();
+  for (const descriptor of declarations(object.constructor, "properties").values()) {
+    if (descriptor.computed || descriptor.outlet) continue;
+    copy[descriptor.js] = object[descriptor.js];
+  }
+  return copy;
 }
 
 export function segments(path) {

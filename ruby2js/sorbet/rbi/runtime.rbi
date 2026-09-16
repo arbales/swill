@@ -72,6 +72,9 @@ module Swill
     sig { params(value: T.untyped).returns(T.untyped) }
     def self.duplicate(value); end
 
+    sig { params(object: T.untyped).returns(T.nilable(String)) }
+    def self.nameOf(object); end
+
     sig { params(left: T.untyped, right: T.untyped).returns(Integer) }
     def self.compareValues(left, right); end
 

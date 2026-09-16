@@ -1,6 +1,11 @@
 --dir=examples
+lib/swill/core/notification_center.rb
 lib/swill/core/responder.rb
 lib/swill/core/view.rb
+lib/swill/control/base.rb
+lib/swill/control/text_field.rb
+lib/swill/control/select.rb
+lib/swill/control/custom_select.rb
 lib/swill/core/controller.rb
 lib/swill/core/bindings.rb
 lib/swill/core/actions.rb

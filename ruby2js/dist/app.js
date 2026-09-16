@@ -8,8 +8,14 @@
   var Swill__Object = framework.Swill__Object;
   var Swill__Ownership = framework.Swill__Ownership;
   var Swill__ObjectBindings = framework.Swill__ObjectBindings;
+  var Swill__Notification = framework.Swill__Notification;
+  var Swill__NotificationCenter = framework.Swill__NotificationCenter;
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
+  var Swill__Control = framework.Swill__Control;
+  var Swill__Control__TextField = framework.Swill__Control__TextField;
+  var Swill__Control__Select = framework.Swill__Control__Select;
+  var Swill__Control__CustomSelect = framework.Swill__Control__CustomSelect;
   var Swill__Controller = framework.Swill__Controller;
   var Swill__Bindings = framework.Swill__Bindings;
   var Swill__Actions = framework.Swill__Actions;
@@ -221,6 +227,234 @@
     // Controller-local state, reached from markup with bind="@note".
     bindingRoot() {
       return "represented_object";
+    }
+  };
+  var Static__User = class extends Swill__Model__Base {
+    validateEmail(value, _previous) {
+      return Runtime.downcase(Runtime.strip(value));
+    }
+  };
+  var Static__Contact = class extends Swill__Object {
+    constructor(name, role) {
+      super();
+      this.name = name;
+      this.role = role;
+    }
+  };
+  var Static__Application = class extends Swill__Application {
+  };
+  var Static__Menubar = class extends Swill__Controller {
+    controllerDidLoad() {
+      this.observeNotification(
+        "example_did_change",
+        (notification) => this.syncSelectedExample(notification.userInfo())
+      );
+      let main = this.application().windowNamed("main");
+      let name = main ? main.contentName() : null;
+      if (name != null) return this.syncSelectedExample(name);
+    }
+    showExample(sender) {
+      return this.application().loadWindowContent(
+        "main",
+        Runtime.must(sender.getAttribute("data-example"))
+      );
+    }
+    showPalette() {
+      return this.application().showWindow("palette");
+    }
+    showIntro() {
+      return this.application().loadWindowContent(
+        "workspace",
+        "intro-pane"
+      );
+    }
+    showDetails() {
+      return this.application().loadWindowContent(
+        "workspace",
+        "details-pane"
+      );
+    }
+    syncSelectedExample(name) {
+      return this.view().element().querySelectorAll("[data-example]").forEach((button) => button.setAttribute(
+        "aria-pressed",
+        button.getAttribute("data-example") === name ? "true" : "false"
+      ));
+    }
+  };
+  var Static__Pane = class extends Swill__Controller {
+    exampleName() {
+      return "";
+    }
+    controllerDidLoad() {
+      return Swill__NotificationCenter.default().post(
+        "example_did_change",
+        this,
+        this.exampleName()
+      );
+    }
+  };
+  var Static__BindingsPane = class extends Static__Pane {
+    // Recomputed whenever user.name changes through the binding on the field.
+    exampleName() {
+      return "bindings";
+    }
+    viewDidLoad() {
+      this.user = Static__User.fromAttributes({
+        id: "demo",
+        name: "world",
+        email_address: ""
+      });
+      return this.draft = Runtime.must(this.user).draft();
+    }
+    controllerDidLoad() {
+      super.controllerDidLoad();
+      this.observeNotification("counter_changed", (notification) => this.lastNotification = `Counter changed to ${notification.userInfo()}`);
+      this.observeNotification(
+        "first_responder_did_change",
+        (notification) => this.updateFirstResponderDebug(notification.userInfo())
+      );
+      Runtime.must(this.draftEditor).representedObject = this.draft;
+      this.application().makeFirstResponder(Runtime.must(this.nameField));
+      return this.updateFirstResponderDebug(this.application().firstResponder());
+    }
+    // The field focuses itself as it becomes first responder.
+    updateFirstResponderDebug(responder) {
+      return this.firstResponderDebug = this.describeResponder(responder);
+    }
+    describeResponder(responder) {
+      if (!responder) return "None";
+      let name = Runtime.logicalOr(
+        Runtime.nameOf(responder),
+        () => "Object"
+      );
+      if (!(responder instanceof Swill__View)) return name;
+      let element = Runtime.cast(responder, "Swill::View").element();
+      let tag = Runtime.downcase(element.tagName);
+      let id = element.getAttribute("id");
+      let outlet = element.getAttribute("outlet");
+      let identity = id != null ? `#${id}` : (() => {
+        return outlet != null ? `${tag}[outlet=${outlet}]` : tag;
+      })();
+      return `${name} ${identity}`;
+    }
+    clear() {
+      let current = Runtime.must(this.user);
+      current.name = "";
+      return current.email = "";
+    }
+    fakeSave() {
+      this.saving = true;
+      return Runtime.must(this.user).markClean();
+    }
+    // The draft is a detached buffer: nothing reaches the user until applied.
+    applyDraft() {
+      let current = Runtime.must(this.user);
+      current.applyDraft(this.draft);
+      current.markClean();
+      return this.resetDraft();
+    }
+    resetDraft() {
+      this.draft = Runtime.must(this.user).draft();
+      return Runtime.must(this.draftEditor).representedObject = this.draft;
+    }
+  };
+  var Static__DraftEditor = class extends Swill__Controller__Editor {
+    commitEditing() {
+      this.pane().applyDraft();
+      return true;
+    }
+    discardEditing() {
+      return this.pane().resetDraft();
+    }
+    pane() {
+      return Runtime.cast(
+        Runtime.must(this.parent()),
+        "Static::BindingsPane"
+      );
+    }
+  };
+  var Static__Card = class extends Swill__Controller {
+    bindingRoot() {
+      return "represented_object";
+    }
+    viewDidLoad() {
+      return this.representedObject = Static__User.fromAttributes({ name: "Ada" });
+    }
+  };
+  var Static__Counter = class extends Swill__Controller {
+    increment() {
+      this.count = this.count + 1;
+      return Swill__NotificationCenter.default().post(
+        "counter_changed",
+        this,
+        this.count
+      );
+    }
+  };
+  var Static__ControlsPane = class extends Static__Pane {
+    exampleName() {
+      return "controls";
+    }
+    controllerDidLoad() {
+      super.controllerDidLoad();
+      let select = Runtime.must(this.standaloneSelect);
+      select.options = ["Ada", "Grace", "Katherine"];
+      select.value = "Grace";
+      return Runtime.must(this.customSelect).options = [
+        { value: "ada", label: "Ada Lovelace", description: "Mathematician" },
+        {
+          value: "grace",
+          label: "Grace Hopper",
+          description: "Computer scientist"
+        },
+        {
+          value: "katherine",
+          label: "Katherine Johnson",
+          description: "Engineer"
+        }
+      ];
+    }
+  };
+  var Static__DataPane = class extends Static__Pane {
+    exampleName() {
+      return "data";
+    }
+    controllerDidLoad() {
+      super.controllerDidLoad();
+      return Runtime.must(this.peopleList).representedObject = [
+        new Static__Contact("Ada", "Mathematician"),
+        new Static__Contact("Grace", "Computer scientist"),
+        new Static__Contact("Katherine", "Engineer")
+      ];
+    }
+    activateSelection(sender) {
+      let selected = sender.selectedObject;
+      return this.activatedPerson = Runtime.isTruthy(selected) ? Runtime.read(
+        selected,
+        "name"
+      ) : "None";
+    }
+  };
+  var Static__Palette = class extends Swill__Controller {
+    controllerDidLoad() {
+      return this.application().makeFirstResponder(Runtime.must(this.field));
+    }
+    close() {
+      return this.application().dismiss(this);
+    }
+  };
+  var Static__IntroPane = class extends Swill__Controller {
+    // The number input writes text; the property holds a number.
+    coercePropertyValue(name, value, previous) {
+      return name === "page" ? Runtime.read(value, "to_i") : value;
+    }
+    controllerDidLoad() {
+      return this.application().makeFirstResponder(Runtime.must(this.field));
+    }
+  };
+  var Static__DetailsPane = class extends Swill__Controller {
+    controllerDidLoad() {
+      return this.application().makeFirstResponder(Runtime.must(this.field));
     }
   };
 
@@ -663,6 +897,503 @@
           "binding_root": {
             "arity": 0,
             "js": "bindingRoot"
+          }
+        }
+      },
+      "Static::User": {
+        constructor: Static__User,
+        properties: {
+          "name": {
+            type: "String",
+            attribute: true,
+            key: "name",
+            defaultValue: function defaultName5() {
+              return "world";
+            }
+          },
+          "email": {
+            type: "String",
+            attribute: true,
+            key: "email_address",
+            defaultValue: function defaultEmail() {
+              return "";
+            }
+          },
+          "blank_email?": {
+            js: "isBlankEmail",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_isBlankEmail() {
+              return Runtime.isEmpty(Runtime.strip(this.email));
+            }
+          },
+          "present_email?": {
+            js: "isPresentEmail",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_isPresentEmail() {
+              return !this.isBlankEmail;
+            }
+          },
+          "clean?": {
+            js: "isClean",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_isClean() {
+              return !this.isDirty;
+            }
+          }
+        },
+        registries: { modelAttributes: {
+          "name": { property: "name", key: "name" },
+          "email": { property: "email", key: "email_address" }
+        } },
+        methods: {
+          "validate_email": {
+            "arity": 2,
+            "js": "validateEmail"
+          }
+        }
+      },
+      "Static::Contact": {
+        constructor: Static__Contact,
+        properties: {
+          "name": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultName6() {
+              return "";
+            }
+          },
+          "role": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultRole2() {
+              return "";
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 2
+          }
+        }
+      },
+      "Static::Application": {
+        constructor: Static__Application,
+        properties: {},
+        methods: {}
+      },
+      "Static::Menubar": {
+        constructor: Static__Menubar,
+        properties: {},
+        methods: {
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          },
+          "show_example": {
+            "arity": 1,
+            "js": "showExample"
+          },
+          "show_palette": {
+            "arity": 0,
+            "js": "showPalette"
+          },
+          "show_intro": {
+            "arity": 0,
+            "js": "showIntro"
+          },
+          "show_details": {
+            "arity": 0,
+            "js": "showDetails"
+          },
+          "sync_selected_example": {
+            "arity": 1,
+            "js": "syncSelectedExample"
+          }
+        }
+      },
+      "Static::Pane": {
+        constructor: Static__Pane,
+        properties: {},
+        methods: {
+          "example_name": {
+            "arity": 0,
+            "js": "exampleName"
+          },
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          }
+        }
+      },
+      "Static::BindingsPane": {
+        constructor: Static__BindingsPane,
+        properties: {
+          "user": {
+            type: "T.nilable(Static::User)",
+            attribute: false,
+            defaultValue: function defaultUser() {
+              return null;
+            }
+          },
+          "draft": {
+            type: "T.nilable(Static::User)",
+            attribute: false,
+            defaultValue: function defaultDraft() {
+              return null;
+            }
+          },
+          "saving": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function defaultSaving() {
+              return false;
+            }
+          },
+          "first_responder_debug": {
+            js: "firstResponderDebug",
+            type: "String",
+            attribute: false,
+            defaultValue: function default_firstResponderDebug() {
+              return "None";
+            }
+          },
+          "last_notification": {
+            js: "lastNotification",
+            type: "String",
+            attribute: false,
+            defaultValue: function default_lastNotification() {
+              return "None";
+            }
+          },
+          "name_field": {
+            js: "nameField",
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_nameField2() {
+              return null;
+            }
+          },
+          "draft_editor": {
+            js: "draftEditor",
+            type: "T.nilable(Static::DraftEditor)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_draftEditor() {
+              return null;
+            }
+          },
+          "greeting": {
+            type: "String",
+            attribute: false,
+            compute: function computeGreeting() {
+              let current = this.user;
+              return current ? `Hello, ${current.name}!` : "";
+            }
+          },
+          "summary": {
+            type: "String",
+            attribute: false,
+            compute: function computeSummary() {
+              let current = this.user;
+              let email = current ? Runtime.strip(current.email) : "";
+              return Runtime.isEmpty(email) ? "No email." : `Email: ${email}`;
+            }
+          }
+        },
+        methods: {
+          "example_name": {
+            "arity": 0,
+            "js": "exampleName"
+          },
+          "view_did_load": {
+            "arity": 0,
+            "js": "viewDidLoad"
+          },
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          },
+          "update_first_responder_debug": {
+            "arity": 1,
+            "js": "updateFirstResponderDebug"
+          },
+          "describe_responder": {
+            "arity": 1,
+            "js": "describeResponder"
+          },
+          "clear": {
+            "arity": 0
+          },
+          "fake_save": {
+            "arity": 0,
+            "js": "fakeSave"
+          },
+          "apply_draft": {
+            "arity": 0,
+            "js": "applyDraft"
+          },
+          "reset_draft": {
+            "arity": 0,
+            "js": "resetDraft"
+          }
+        }
+      },
+      "Static::DraftEditor": {
+        constructor: Static__DraftEditor,
+        properties: {},
+        methods: {
+          "commit_editing": {
+            "arity": 0,
+            "js": "commitEditing"
+          },
+          "discard_editing": {
+            "arity": 0,
+            "js": "discardEditing"
+          },
+          "pane": {
+            "arity": 0
+          }
+        }
+      },
+      "Static::Card": {
+        constructor: Static__Card,
+        properties: {
+          "note": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultNote2() {
+              return "";
+            }
+          },
+          "note_blank?": {
+            js: "isNoteBlank",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_isNoteBlank() {
+              return Runtime.isEmpty(Runtime.strip(this.note));
+            }
+          }
+        },
+        methods: {
+          "binding_root": {
+            "arity": 0,
+            "js": "bindingRoot"
+          },
+          "view_did_load": {
+            "arity": 0,
+            "js": "viewDidLoad"
+          }
+        }
+      },
+      "Static::Counter": {
+        constructor: Static__Counter,
+        properties: {
+          "count": {
+            type: "Integer",
+            attribute: false,
+            defaultValue: function defaultCount2() {
+              return 0;
+            }
+          }
+        },
+        methods: {
+          "increment": {
+            "arity": 0
+          }
+        }
+      },
+      "Static::ControlsPane": {
+        constructor: Static__ControlsPane,
+        properties: {
+          "selected_person": {
+            js: "selectedPerson",
+            type: "String",
+            attribute: false,
+            defaultValue: function default_selectedPerson() {
+              return "ada";
+            }
+          },
+          "standalone_text_field": {
+            js: "standaloneTextField",
+            type: "T.nilable(Swill::Control::TextField)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_standaloneTextField() {
+              return null;
+            }
+          },
+          "standalone_select": {
+            js: "standaloneSelect",
+            type: "T.nilable(Swill::Control::Select)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_standaloneSelect() {
+              return null;
+            }
+          },
+          "custom_select": {
+            js: "customSelect",
+            type: "T.nilable(Swill::Control::CustomSelect)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_customSelect() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "example_name": {
+            "arity": 0,
+            "js": "exampleName"
+          },
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          }
+        }
+      },
+      "Static::DataPane": {
+        constructor: Static__DataPane,
+        properties: {
+          "activated_person": {
+            js: "activatedPerson",
+            type: "String",
+            attribute: false,
+            defaultValue: function default_activatedPerson() {
+              return "None";
+            }
+          },
+          "people_list": {
+            js: "peopleList",
+            type: "T.nilable(Swill::Controller::EditableList)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function default_peopleList2() {
+              return null;
+            }
+          },
+          "selected_people": {
+            js: "selectedPeople",
+            type: "String",
+            attribute: false,
+            compute: function compute_selectedPeople() {
+              let list = this.peopleList;
+              return list ? list.selectedObjects.map((contact) => Runtime.read(contact, "name")).join(", ") : "";
+            }
+          }
+        },
+        methods: {
+          "example_name": {
+            "arity": 0,
+            "js": "exampleName"
+          },
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          },
+          "activate_selection": {
+            "arity": 1,
+            "js": "activateSelection"
+          }
+        }
+      },
+      "Static::Palette": {
+        constructor: Static__Palette,
+        properties: {
+          "field": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function defaultField() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          },
+          "close": {
+            "arity": 0
+          }
+        }
+      },
+      "Static::IntroPane": {
+        constructor: Static__IntroPane,
+        properties: {
+          "query": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultQuery() {
+              return "Ruby";
+            }
+          },
+          "page": {
+            type: "Integer",
+            attribute: false,
+            defaultValue: function defaultPage() {
+              return 1;
+            }
+          },
+          "field": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function defaultField2() {
+              return null;
+            }
+          }
+        },
+        restorations: [{ path: "query", key: "q", type: "String" }, { path: "page", key: "page", type: "Integer" }],
+        methods: {
+          "coerce_property_value": {
+            "arity": 3,
+            "js": "coercePropertyValue"
+          },
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
+          }
+        }
+      },
+      "Static::DetailsPane": {
+        constructor: Static__DetailsPane,
+        properties: {
+          "query": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultQuery2() {
+              return "Details";
+            }
+          },
+          "field": {
+            type: "T.nilable(Swill::View)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue: function defaultField3() {
+              return null;
+            }
+          }
+        },
+        restorations: [{ path: "query", key: "q", type: "String" }],
+        methods: {
+          "controller_did_load": {
+            "arity": 0,
+            "js": "controllerDidLoad"
           }
         }
       }

@@ -68,6 +68,12 @@ module Swill
       @teardowns << dispose
     end
 
+    # Observe a notification for as long as this controller is loaded.
+    sig { params(name: String, callback: T.proc.params(notification: Notification).void).void }
+    def observe_notification(name, callback)
+      register_teardown(NotificationCenter.default.observe(name, callback))
+    end
+
     # Releases this controller's listeners and observers, then its descendants,
     # exactly once. The element keeps its View, so the region can be awakened
     # again later.

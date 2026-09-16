@@ -18,6 +18,12 @@
   function hasMetadata(klass) {
     return metadata.has(klass);
   }
+  function hasInstalledMetadata(klass) {
+    for (let current = klass; current; current = Object.getPrototypeOf(current)) {
+      if (metadata.has(current)) return true;
+    }
+    return false;
+  }
   function installMetadata(klass, properties, methods, restorations2 = []) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
@@ -426,8 +432,8 @@
       captures.pop();
       slot.running = false;
     }
-    for (const [dependency, names] of frame) {
-      for (const name of names) {
+    for (const [dependency, names2] of frame) {
+      for (const name of names2) {
         slot.disposers.push(
           subscribe(
             dependency,
@@ -488,6 +494,7 @@
 
   // lib/swill/runtime/install.mjs
   var classes = /* @__PURE__ */ new Map();
+  var names = /* @__PURE__ */ new Map();
   var mixinMetadata = /* @__PURE__ */ new WeakMap();
   var mixinClassFactories = /* @__PURE__ */ new WeakMap();
   var classConfiguration = /* @__PURE__ */ new WeakMap();
@@ -670,9 +677,17 @@
       });
     }
     classes.set(name, klass);
+    names.set(klass, name);
   }
   function registered(name) {
     return classes.get(name);
+  }
+  function nameOf(object) {
+    for (let prototype = Object.getPrototypeOf(object); prototype; prototype = Object.getPrototypeOf(prototype)) {
+      const name = names.get(prototype.constructor);
+      if (name) return name;
+    }
+    return null;
   }
   function resolve(name) {
     if (!classes.has(name)) {
@@ -697,8 +712,17 @@
     if (property) return object[property.js];
     const method = declarations(object.constructor, "methods").get(name);
     if (method?.arity === 0) return object[method.js]();
+    if (name === "dup" && hasInstalledMetadata(object.constructor)) return duplicateObject(object);
     if (VALUE_READERS.includes(name)) return valueRead(object, name);
     throw new Error(`Unknown reader: ${name}`);
+  }
+  function duplicateObject(object) {
+    const copy = new object.constructor();
+    for (const descriptor of declarations(object.constructor, "properties").values()) {
+      if (descriptor.computed || descriptor.outlet) continue;
+      copy[descriptor.js] = object[descriptor.js];
+    }
+    return copy;
   }
   function segments(path) {
     return path === "" ? [] : path.split(".");
@@ -730,12 +754,12 @@
     throw new Error(`Unknown writer: ${name}`);
   }
   function pathWriter(object, path) {
-    const names = segments(path);
-    if (names.length === 0) {
+    const names2 = segments(path);
+    if (names2.length === 0) {
       throw new Error(`Read-only binding: ${path}`);
     }
-    const name = names.pop();
-    const owner = names.reduce((target, segment) => read(target, segment), object);
+    const name = names2.pop();
+    const owner = names2.reduce((target, segment) => read(target, segment), object);
     if (owner == null) return null;
     if (isPlainObject(owner)) {
       if (!Object.hasOwn(owner, name)) throw new Error(`Unknown key: ${name}`);
@@ -910,6 +934,7 @@
     inheritableRegistry,
     classSetting,
     resolve,
+    nameOf,
     // Values
     isTruthy,
     logicalAnd,
@@ -997,6 +1022,10 @@
     Swill__Application: () => Swill__Application,
     Swill__Awakening: () => Swill__Awakening,
     Swill__Bindings: () => Swill__Bindings,
+    Swill__Control: () => Swill__Control,
+    Swill__Control__CustomSelect: () => Swill__Control__CustomSelect,
+    Swill__Control__Select: () => Swill__Control__Select,
+    Swill__Control__TextField: () => Swill__Control__TextField,
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__EditableList: () => Swill__Controller__EditableList,
     Swill__Controller__Editor: () => Swill__Controller__Editor,
@@ -1010,6 +1039,8 @@
     Swill__Model__Base: () => Swill__Model__Base,
     Swill__Model__DirtyTracking: () => Swill__Model__DirtyTracking,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
+    Swill__Notification: () => Swill__Notification,
+    Swill__NotificationCenter: () => Swill__NotificationCenter,
     Swill__Object: () => Swill__Object,
     Swill__ObjectBindings: () => Swill__ObjectBindings,
     Swill__Observable: () => Swill__Observable,
@@ -1107,6 +1138,64 @@
     }
     return Swill__ObjectBindings_Layer;
   }
+  var Swill__Notification = class extends Swill__Object {
+    constructor(name, object, user_info) {
+      super();
+      this._name = name;
+      this._object = object;
+      this._user_info = user_info;
+    }
+    name() {
+      return this._name;
+    }
+    object() {
+      return this._object;
+    }
+    userInfo() {
+      return this._user_info;
+    }
+  };
+  var Swill__NotificationCenter = class _Swill__NotificationCenter extends Swill__Object {
+    static default() {
+      let center = this._default;
+      if (center) return center;
+      this._default = Runtime.cast(
+        new _Swill__NotificationCenter(),
+        "T.nilable(Swill::NotificationCenter)"
+      );
+      return Runtime.must(this._default);
+    }
+    constructor() {
+      super();
+      this._observers = Runtime.cast(
+        {},
+        "T::Hash[String, T::Array[T.proc.params(notification:Notification).void]]"
+      );
+    }
+    observe(name, callback) {
+      let list = this._observers[name];
+      if (!list) {
+        list = [];
+        this._observers[name] = list;
+      }
+      ;
+      Runtime.append(list, callback);
+      return () => {
+        let current = this._observers[name];
+        if (current) {
+          return this._observers[name] = current.filter((candidate) => !Runtime.isEqual(candidate, callback));
+        }
+      };
+    }
+    // Observers are called in the order they subscribed, on a copy of the
+    // list, so one may unsubscribe as it runs.
+    post(name, object, user_info) {
+      let notification = new Swill__Notification(name, object, user_info);
+      let list = this._observers[name];
+      if (list) list.slice().forEach((callback) => callback(notification));
+      return notification;
+    }
+  };
   var Swill__Responder = class extends Swill__Object {
     nextResponder() {
       return null;
@@ -1144,7 +1233,7 @@
           return this.complete(event);
         default:
           target = this.nextResponder();
-          if (Runtime.isTruthy(target)) return Runtime.invoke(target, "key_down", event);
+          if (target) return target.keyDown(event);
       }
     }
     keyUp(event) {
@@ -1313,6 +1402,302 @@
       return true;
     }
   };
+  var Swill__Control = class extends Swill__View {
+    resignFirstResponder(next_responder) {
+      let current = this.delegate;
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        current,
+        () => Runtime.respondsTo(current, "control_should_resign_first_responder")
+      ))) {
+        if (!Runtime.isTruthy(Runtime.invoke(
+          current,
+          "control_should_resign_first_responder",
+          this,
+          next_responder
+        ))) return false;
+      }
+      ;
+      return super.resignFirstResponder(next_responder);
+    }
+  };
+  var Swill__Control__TextField = class extends Swill__Control {
+    constructor(element) {
+      super(element);
+      let input = this.inputElement();
+      if (!input) return;
+      let initial = input.value;
+      if (Runtime.isTruthy(Runtime.isEmpty(initial) && input.hasAttribute("value"))) {
+        initial = Runtime.stringify(input.getAttribute("value"));
+      }
+      ;
+      this.value = initial;
+      input.addEventListener("input", (event) => this.inputDidChange(event));
+    }
+    valueDidChange(_previous, value) {
+      let input = this.inputElement();
+      if (Runtime.isTruthy(input && input.value !== value)) {
+        return input.value = value;
+      }
+    }
+    inputDidChange(event) {
+      let input = this.inputElement();
+      if (Runtime.isTruthy(input && event.target === input)) {
+        return this.value = input.value;
+      }
+    }
+    inputElement() {
+      return this._element.tagName === "INPUT" ? this._element : this._element.querySelector("input");
+    }
+  };
+  var Swill__Control__Select = class extends Swill__Control {
+    constructor(element) {
+      super(element);
+      this._template_option_count = element.children.length;
+      let initial = element.value;
+      if (Runtime.isTruthy(Runtime.isEmpty(initial) && element.hasAttribute("value"))) {
+        initial = Runtime.stringify(element.getAttribute("value"));
+      }
+      ;
+      this.value = initial;
+      element.addEventListener(
+        "change",
+        (_event) => this.value = element.value
+      );
+    }
+    optionsDidChange(_previous, values) {
+      let children = this._element.children;
+      while (children.length > this._template_option_count) {
+        children[this._template_option_count].remove();
+      }
+      ;
+      values.forEach((value) => {
+        let option = this._element.ownerDocument.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        this._element.appendChild(option);
+      });
+      return this.syncValue();
+    }
+    valueDidChange(_previous, _value) {
+      return this.syncValue();
+    }
+    syncValue() {
+      if (this._element.value !== this.value) {
+        return this._element.value = this.value;
+      }
+    }
+  };
+  var Swill__Control__CustomSelect = class extends Swill__Control {
+    constructor(element) {
+      super(element);
+      this._open = Runtime.cast(false, "T::Boolean");
+      this._document_pointer_down = (event) => this.documentPointerDown(event);
+      this.installChrome();
+      this.renderOptions();
+      this.applyOpen(false);
+    }
+    optionsDidChange(_previous, _options) {
+      return this.renderOptions();
+    }
+    valueDidChange(_previous, _value) {
+      this.syncButton();
+      return this.syncSelectedOption();
+    }
+    cancelOperation(event) {
+      if (!this._open) return super.cancelOperation(event);
+      event.preventDefault();
+      return this.close();
+    }
+    keyDown(event) {
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          if (this._open) return this.moveSelection(1);
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          if (this._open) return this.moveSelection(-1);
+          break;
+        case "Enter":
+        case " ":
+          event.preventDefault();
+          return this.toggle();
+          break;
+        default:
+          return super.keyDown(event);
+      }
+    }
+    // ---- chrome ----
+    installChrome() {
+      let root = this._element;
+      root.classList.add("custom-select");
+      root.setAttribute("tabindex", "0");
+      root.setAttribute("role", "combobox");
+      root.setAttribute("aria-haspopup", "listbox");
+      root.replaceChildren();
+      this._icon = this.createElement(
+        "span",
+        { class: "custom-select-trigger-icon", "aria-hidden": "true" }
+      );
+      this._label = this.createElement(
+        "span",
+        { class: "custom-select-label" }
+      );
+      let button = this.createElement(
+        "button",
+        { type: "button", class: "custom-select-button", tabindex: "-1" }
+      );
+      button.appendChild(this._icon);
+      button.appendChild(this._label);
+      button.addEventListener("click", (event) => this.buttonClicked(event));
+      this._button = button;
+      this._popup = this.createElement(
+        "div",
+        { class: "custom-select-popup", role: "listbox" }
+      );
+      root.appendChild(button);
+      root.appendChild(this._popup);
+      return root.addEventListener(
+        "focusout",
+        (event) => this.focusOut(event)
+      );
+    }
+    // A keyboard "click" on the button is Enter or Space, which key_down
+    // already handles.
+    buttonClicked(event) {
+      if (event.detail !== 0) return this.toggle();
+    }
+    focusOut(event) {
+      let next_element = event.relatedTarget;
+      if (next_element == null || !this._element.contains(next_element)) {
+        return this.close();
+      }
+    }
+    documentPointerDown(event) {
+      if (!this._element.contains(event.target)) return this.close();
+    }
+    renderOptions() {
+      this._popup.replaceChildren();
+      this.options.forEach((option) => {
+        let row = this.createElement("button", {
+          type: "button",
+          class: "custom-select-option",
+          role: "option",
+          tabindex: "-1"
+        });
+        row.setAttribute("data-value", this.optionValue(option));
+        let icon = option.icon;
+        if (Runtime.isTruthy(icon)) {
+          row.classList.add("has-icon");
+          row.appendChild(this.createElement(
+            "span",
+            { class: `custom-select-icon icon-${icon}`, "aria-hidden": "true" }
+          ));
+        }
+        ;
+        let text = this.createElement(
+          "span",
+          { class: "custom-select-option-text" }
+        );
+        let label = this.createElement(
+          "span",
+          { class: "custom-select-option-label" }
+        );
+        label.textContent = Runtime.read(option.label, "to_s");
+        text.appendChild(label);
+        let description = option.description;
+        if (Runtime.isTruthy(description)) {
+          let detail = this.createElement(
+            "span",
+            { class: "custom-select-option-description" }
+          );
+          detail.textContent = Runtime.read(description, "to_s");
+          text.appendChild(detail);
+        }
+        ;
+        row.appendChild(text);
+        row.addEventListener(
+          "click",
+          (_event) => this.choose(this.optionValue(option))
+        );
+        this._popup.appendChild(row);
+      });
+      this.syncButton();
+      return this.syncSelectedOption();
+    }
+    selectedOption() {
+      return this.options.find((option) => this.optionValue(option) === this.value);
+    }
+    syncButton() {
+      let option = this.selectedOption();
+      let icon = option ? option.icon : null;
+      this._icon.setAttribute(
+        "class",
+        Runtime.isTruthy(icon) ? `custom-select-trigger-icon icon-${icon}` : "custom-select-trigger-icon"
+      );
+      this._icon.hidden = icon == null;
+      return this._label.textContent = option ? Runtime.read(
+        option.label,
+        "to_s"
+      ) : "";
+    }
+    syncSelectedOption() {
+      return this._popup.querySelectorAll("[role='option']").forEach((row) => row.setAttribute(
+        "aria-selected",
+        row.getAttribute("data-value") === this.value ? "true" : "false"
+      ));
+    }
+    // ---- open and closed ----
+    toggle() {
+      return this._open ? this.close() : this.open();
+    }
+    open() {
+      if (!this._open) return this.applyOpen(true);
+    }
+    close() {
+      if (this._open) return this.applyOpen(false);
+    }
+    applyOpen(open) {
+      this._open = open;
+      this._element.classList.toggle("open", open);
+      this._element.setAttribute("aria-expanded", open ? "true" : "false");
+      this._button.setAttribute("aria-expanded", open ? "true" : "false");
+      this._popup.hidden = !open;
+      let document2 = this._element.ownerDocument;
+      return open ? document2.addEventListener(
+        "pointerdown",
+        this._document_pointer_down
+      ) : document2.removeEventListener(
+        "pointerdown",
+        this._document_pointer_down
+      );
+    }
+    moveSelection(delta) {
+      if (Runtime.isEmpty(this.options)) return;
+      let current = -1;
+      this.options.forEach((option, index2) => {
+        if (this.optionValue(option) === this.value) current = index2;
+      });
+      let index = current < 0 ? 0 : (current + delta) % this.options.length;
+      return this.choose(this.optionValue(Runtime.must(this.options[index])));
+    }
+    // A user's choice: the value, then the events a native select sends.
+    choose(next_value) {
+      this.close();
+      if (this.value === next_value) return;
+      this.value = next_value;
+      this._element.dispatchEvent(new Event("input", { bubbles: true }));
+      return this._element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    createElement(tag, attributes) {
+      let node = this._element.ownerDocument.createElement(tag);
+      Object.entries(attributes).forEach(([name, attribute]) => node.setAttribute(name, attribute));
+      return node;
+    }
+    optionValue(option) {
+      return Runtime.read(option.value, "to_s");
+    }
+  };
   var Swill__Controller = class extends Swill__Responder {
     // The object a parent binding assigns through bind="path" on this
     // controller root. Editors resolve their own bindings under it.
@@ -1355,6 +1740,13 @@
     }
     registerTeardown(dispose2) {
       return Runtime.append(this._teardowns, dispose2);
+    }
+    // Observe a notification for as long as this controller is loaded.
+    observeNotification(name, callback) {
+      return this.registerTeardown(Swill__NotificationCenter.default().observe(
+        name,
+        callback
+      ));
     }
     // Releases this controller's listeners and observers, then its descendants,
     // exactly once. The element keeps its View, so the region can be awakened
@@ -1508,6 +1900,14 @@
       let view = element.__swill_view__;
       let child = view ? view.controllerValue() : null;
       if (child) return this.wireRepresentedObject(object, child, path);
+      if (view instanceof Swill__Control) {
+        return this.wireControl(
+          object,
+          Runtime.cast(view, "Swill::Control"),
+          path
+        );
+      }
+      ;
       let form_control = element.matches("input, textarea, select");
       let writable = form_control && !element.hasAttribute("readonly");
       let checkbox = element.type === "checkbox";
@@ -1535,6 +1935,25 @@
         if (Runtime.isTruthy(writable)) {
           return element.removeEventListener(event_name, handler);
         }
+      };
+    }
+    // A control's own value property is kept equal to the path, both ways;
+    // the control decides how that reaches its element.
+    wireControl(object, control, path) {
+      Runtime.assertWritablePath(object, path);
+      let render = (_value) => {
+        let value = Runtime.readPath(object, path);
+        return Runtime.write(control, "value", value == null ? "" : value);
+      };
+      render(null);
+      let release_render = Runtime.observePath(object, path, render);
+      let release_input = control.observe(
+        "value",
+        (value) => Runtime.writePath(object, path, value)
+      );
+      return () => {
+        release_render();
+        return release_input();
       };
     }
     wireRepresentedObject(object, child, path) {
@@ -1766,7 +2185,7 @@
             new (Runtime.resolve(Runtime.must(element.getAttribute("controller"))))(),
             "Swill::Controller"
           );
-          Runtime.invoke(controller, "attach", element);
+          controller.attach(element);
           Runtime.append(controllers, controller);
         }
       }
@@ -2025,6 +2444,10 @@
         null,
         "T.nilable(Swill::Responder)"
       );
+      this._posted_first_responder = Runtime.cast(
+        null,
+        "T.nilable(Swill::Responder)"
+      );
       this._observer = null;
     }
     launch(root) {
@@ -2080,7 +2503,7 @@
       this._root.removeEventListener("focusout", this._on_focus_out);
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
-      this._first_responder = null;
+      this.assignFirstResponder(null);
       return _Swill__Application.terminated(this);
     }
     applicationDidLaunch() {
@@ -2191,10 +2614,29 @@
       if (!current.resignFirstResponder(responder)) return false;
       this._first_responder = null;
       if (Runtime.isTruthy(responder && responder.becomeFirstResponder())) {
-        this._first_responder = responder;
+        if (this._first_responder == null) this._first_responder = responder;
       }
       ;
+      this.postFirstResponderChange();
       return true;
+    }
+    assignFirstResponder(responder) {
+      this._first_responder = responder;
+      return this.postFirstResponderChange();
+    }
+    // Every change of first responder is posted once as
+    // first_responder_did_change, with the application as the object and the
+    // responder as user info, so a debugging view or a toolbar can follow it
+    // without polling. Focus moving during become may already have posted
+    // the same responder; the last one posted is remembered for that.
+    postFirstResponderChange() {
+      if (this._first_responder === this._posted_first_responder) return;
+      this._posted_first_responder = this._first_responder;
+      return Swill__NotificationCenter.default().post(
+        "first_responder_did_change",
+        this,
+        this._first_responder
+      );
     }
     focusIn(event) {
       return this.syncFirstResponder(event.target, event.relatedTarget);
@@ -2213,8 +2655,7 @@
         return;
       }
       ;
-      this._first_responder = responder;
-      return this._first_responder;
+      return this.assignFirstResponder(responder);
     }
     // Focus moved to another part of the page: the first responder falls
     // back here. A null destination (the browser's own chrome, or dead space
@@ -2222,16 +2663,14 @@
     // when focus returns.
     focusLeft(destination) {
       if (Runtime.isTruthy(destination && !this._root.contains(destination))) {
-        this._first_responder = null;
-        return this._first_responder;
+        return this.assignFirstResponder(null);
       }
     }
     // A first responder inside a region being torn down falls back here.
     releaseFirstResponder(element) {
       let owner = this.responderElement(this.firstResponder());
       if (Runtime.isTruthy(owner && (owner === element || element.contains(owner)))) {
-        this._first_responder = null;
-        return this._first_responder;
+        return this.assignFirstResponder(null);
       }
     }
     // The responder for a DOM location: the first managed view above it,
@@ -2624,7 +3063,7 @@
       if (Runtime.isTruthy(total > 0 && (key === "ArrowDown" || key === "ArrowUp"))) {
         event.preventDefault();
         indexes = this.currentIndexes();
-        current = Runtime.read(indexes, "empty?") ? -1 : Runtime.must(indexes[0]);
+        current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
         index = key === "ArrowDown" ? current + 1 : current - 1;
         if (index < 0) index = 0;
         if (index > total - 1) index = total - 1;
@@ -2990,6 +3429,11 @@
         this
       ) : true;
     }
+    // NSControlTextEditingDelegate analog: the controls inside the editor
+    // delegate resignation here, so leaving one of them asks the host.
+    controlShouldResignFirstResponder(_control, next_responder) {
+      return this.allowResignationTo(next_responder);
+    }
     // The parent, when it hosts inline editing.
     editingHost() {
       let owner = this.parent();
@@ -3183,6 +3627,11 @@
         "represented_object",
         { to: this, key_path: "edited_object" }
       );
+      editor.view().subviews().forEach((subview) => {
+        if (subview instanceof Swill__Control) {
+          Runtime.cast(subview, "Swill::Control").delegate = editor;
+        }
+      });
       this._edit = new Swill__RowEdit(editor, index, original);
       this.application().makeFirstResponder(editor);
       return true;
@@ -3300,14 +3749,14 @@
       }
       markAttributeDirty(name, previous, value) {
         let baseline = this._dirty_baseline ||= {};
-        let names = this.dirtyAttributes;
-        if (names.includes(name)) {
+        let names2 = this.dirtyAttributes;
+        if (names2.includes(name)) {
           if (Runtime.isEqual(baseline[name], value)) {
-            return this.dirtyAttributes = names.filter((candidate) => !Runtime.isEqual(candidate, name));
+            return this.dirtyAttributes = names2.filter((candidate) => !Runtime.isEqual(candidate, name));
           }
         } else {
           baseline[name] = previous;
-          return this.dirtyAttributes = [...names, name];
+          return this.dirtyAttributes = [...names2, name];
         }
       }
     }
@@ -3456,6 +3905,40 @@
         mixins: [Swill__Observable],
         properties: {},
         methods: {}
+      },
+      "Swill::Notification": {
+        constructor: Swill__Notification,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 3
+          },
+          "name": {
+            "arity": 0
+          },
+          "object": {
+            "arity": 0
+          },
+          "user_info": {
+            "arity": 0,
+            "js": "userInfo"
+          }
+        }
+      },
+      "Swill::NotificationCenter": {
+        constructor: Swill__NotificationCenter,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "observe": {
+            "arity": 2
+          },
+          "post": {
+            "arity": 3
+          }
+        }
       },
       "Swill::Responder": {
         constructor: Swill__Responder,
@@ -3625,6 +4108,189 @@
           }
         }
       },
+      "Swill::Control": {
+        constructor: Swill__Control,
+        properties: {
+          "delegate": {
+            type: "T.untyped",
+            attribute: false,
+            defaultValue: function defaultDelegate() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "resign_first_responder": {
+            "arity": 1,
+            "js": "resignFirstResponder"
+          }
+        }
+      },
+      "Swill::Control::TextField": {
+        constructor: Swill__Control__TextField,
+        properties: {
+          "value": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultValue() {
+              return "";
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "value_did_change": {
+            "arity": 2,
+            "js": "valueDidChange"
+          },
+          "input_did_change": {
+            "arity": 1,
+            "js": "inputDidChange"
+          },
+          "input_element": {
+            "arity": 0,
+            "js": "inputElement"
+          }
+        }
+      },
+      "Swill::Control::Select": {
+        constructor: Swill__Control__Select,
+        properties: {
+          "options": {
+            type: "T::Array[String]",
+            attribute: false,
+            defaultValue: function defaultOptions() {
+              return [];
+            }
+          },
+          "value": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultValue2() {
+              return "";
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "options_did_change": {
+            "arity": 2,
+            "js": "optionsDidChange"
+          },
+          "value_did_change": {
+            "arity": 2,
+            "js": "valueDidChange"
+          },
+          "sync_value": {
+            "arity": 0,
+            "js": "syncValue"
+          }
+        }
+      },
+      "Swill::Control::CustomSelect": {
+        constructor: Swill__Control__CustomSelect,
+        properties: {
+          "options": {
+            type: "T::Array[T::Hash[String, T.untyped]]",
+            attribute: false,
+            defaultValue: function defaultOptions2() {
+              return [];
+            }
+          },
+          "value": {
+            type: "String",
+            attribute: false,
+            defaultValue: function defaultValue3() {
+              return "";
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "options_did_change": {
+            "arity": 2,
+            "js": "optionsDidChange"
+          },
+          "value_did_change": {
+            "arity": 2,
+            "js": "valueDidChange"
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          },
+          "key_down": {
+            "arity": 1,
+            "js": "keyDown"
+          },
+          "install_chrome": {
+            "arity": 0,
+            "js": "installChrome"
+          },
+          "button_clicked": {
+            "arity": 1,
+            "js": "buttonClicked"
+          },
+          "focus_out": {
+            "arity": 1,
+            "js": "focusOut"
+          },
+          "document_pointer_down": {
+            "arity": 1,
+            "js": "documentPointerDown"
+          },
+          "render_options": {
+            "arity": 0,
+            "js": "renderOptions"
+          },
+          "selected_option": {
+            "arity": 0,
+            "js": "selectedOption"
+          },
+          "sync_button": {
+            "arity": 0,
+            "js": "syncButton"
+          },
+          "sync_selected_option": {
+            "arity": 0,
+            "js": "syncSelectedOption"
+          },
+          "toggle": {
+            "arity": 0
+          },
+          "open": {
+            "arity": 0
+          },
+          "close": {
+            "arity": 0
+          },
+          "apply_open": {
+            "arity": 1,
+            "js": "applyOpen"
+          },
+          "move_selection": {
+            "arity": 1,
+            "js": "moveSelection"
+          },
+          "choose": {
+            "arity": 1
+          },
+          "create_element": {
+            "arity": 2,
+            "js": "createElement"
+          },
+          "option_value": {
+            "arity": 1,
+            "js": "optionValue"
+          }
+        }
+      },
       "Swill::Controller": {
         constructor: Swill__Controller,
         mixins: [Swill__ObjectBindings],
@@ -3669,6 +4335,10 @@
           "register_teardown": {
             "arity": 1,
             "js": "registerTeardown"
+          },
+          "observe_notification": {
+            "arity": 2,
+            "js": "observeNotification"
           },
           "accepts_first_responder?": {
             "arity": 0,
@@ -3757,6 +4427,10 @@
           "wire_element": {
             "arity": 3,
             "js": "wireElement"
+          },
+          "wire_control": {
+            "arity": 3,
+            "js": "wireControl"
           },
           "wire_represented_object": {
             "arity": 3,
@@ -4015,6 +4689,14 @@
           "make_first_responder": {
             "arity": 1,
             "js": "makeFirstResponder"
+          },
+          "assign_first_responder": {
+            "arity": 1,
+            "js": "assignFirstResponder"
+          },
+          "post_first_responder_change": {
+            "arity": 0,
+            "js": "postFirstResponderChange"
           },
           "focus_in": {
             "arity": 1,
@@ -4495,6 +5177,10 @@
             "arity": 1,
             "js": "allowResignationTo"
           },
+          "control_should_resign_first_responder": {
+            "arity": 2,
+            "js": "controlShouldResignFirstResponder"
+          },
           "editing_host": {
             "arity": 0,
             "js": "editingHost"
@@ -4682,7 +5368,7 @@
     const unknown = Object.keys(descriptor).filter((key) => !allowed.includes(key));
     if (unknown.length) throw new TypeError(`Unknown ${declaration} option: ${unknown[0]}`);
   }
-  function defaultValue(name, descriptor) {
+  function defaultValue4(name, descriptor) {
     if (!isObject(descriptor) || Array.isArray(descriptor)) {
       throw new TypeError(`Property ${name} must use a descriptor with default`);
     }
@@ -4704,19 +5390,19 @@
   function declarationsFor(klass) {
     const properties = /* @__PURE__ */ Object.create(null);
     const methods = /* @__PURE__ */ Object.create(null);
-    const names = /* @__PURE__ */ new Set();
+    const names2 = /* @__PURE__ */ new Set();
     const declared = ownDeclaration(klass, "properties", {});
     assertDescriptorMap(declared, "properties");
     for (const [name, descriptor] of Object.entries(declared)) {
       if (name.length === 0) throw new TypeError("Property names must not be empty");
-      properties[name] = { defaultValue: defaultValue(name, descriptor) };
-      names.add(name);
+      properties[name] = { defaultValue: defaultValue4(name, descriptor) };
+      names2.add(name);
     }
     const outlets2 = ownDeclaration(klass, "outlets", {});
     assertDescriptorMap(outlets2, "outlets");
     for (const [name, descriptor] of Object.entries(outlets2)) {
       if (name.length === 0) throw new TypeError("Outlet names must not be empty");
-      if (names.has(name)) throw new TypeError(`Duplicate declaration: ${name}`);
+      if (names2.has(name)) throw new TypeError(`Duplicate declaration: ${name}`);
       if (!isObject(descriptor) || Array.isArray(descriptor)) {
         throw new TypeError(`Outlet ${name} must use a descriptor`);
       }
@@ -4725,15 +5411,15 @@
         throw new TypeError(`Outlet ${name} optional must be boolean`);
       }
       properties[name] = { defaultValue: () => null, outlet: true, optional: descriptor.optional === true };
-      names.add(name);
+      names2.add(name);
     }
     const prototypeDescriptors = Object.getOwnPropertyDescriptors(klass.prototype);
     for (const [name, descriptor] of Object.entries(prototypeDescriptors)) {
       if (name === "constructor" || descriptor.get === void 0) continue;
       if (descriptor.set !== void 0) throw new TypeError(`Computed property ${name} cannot have a setter`);
-      if (names.has(name)) throw new TypeError(`Duplicate declaration: ${name}`);
+      if (names2.has(name)) throw new TypeError(`Duplicate declaration: ${name}`);
       properties[name] = { compute: descriptor.get };
-      names.add(name);
+      names2.add(name);
     }
     const actions = ownDeclaration(klass, "actions", []);
     if (!Array.isArray(actions)) throw new TypeError("static actions must be an array");
@@ -4741,7 +5427,7 @@
     for (const name of actions) {
       if (typeof name !== "string" || name.length === 0) throw new TypeError("Action names must be non-empty strings");
       if (actionNames.has(name)) throw new TypeError(`Duplicate action: ${name}`);
-      if (names.has(name)) throw new TypeError(`Action conflicts with property: ${name}`);
+      if (names2.has(name)) throw new TypeError(`Action conflicts with property: ${name}`);
       const descriptor = prototypeDescriptors[name];
       if (!descriptor || typeof descriptor.value !== "function") {
         throw new TypeError(`Missing action method: ${name}`);
@@ -4761,7 +5447,25 @@
     const Editor = definitions.Swill__Controller__Editor;
     const InlineEditor = definitions.Swill__Controller__InlineEditor;
     const EditableList = definitions.Swill__Controller__EditableList;
-    const roots = /* @__PURE__ */ new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList]);
+    const Control = definitions.Swill__Control;
+    const TextField = definitions.Swill__Control__TextField;
+    const Select = definitions.Swill__Control__Select;
+    const CustomSelect = definitions.Swill__Control__CustomSelect;
+    const NotificationCenter = definitions.Swill__NotificationCenter;
+    const roots = /* @__PURE__ */ new Set([
+      Controller,
+      Application,
+      View,
+      List,
+      SortableList,
+      Editor,
+      InlineEditor,
+      EditableList,
+      Control,
+      TextField,
+      Select,
+      CustomSelect
+    ]);
     function register(name, klass) {
       if (arguments.length === 1) {
         klass = name;
@@ -4813,6 +5517,11 @@
       Editor,
       InlineEditor,
       EditableList,
+      Control,
+      TextField,
+      Select,
+      CustomSelect,
+      NotificationCenter,
       register,
       start
     });

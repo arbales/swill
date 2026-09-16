@@ -227,6 +227,10 @@ module Swill
       container_view.insert_after(row, node)
       editor = awaken_editor(node)
       editor.bind(:represented_object, to: self, key_path: "edited_object")
+      # Controls in the editor ask it before letting focus go.
+      editor.view.subviews.each do |subview|
+        T.cast(subview, Control).delegate = editor if subview.is_a?(Control)
+      end
       @edit = RowEdit.new(editor, index, original)
       application.make_first_responder(editor)
       true

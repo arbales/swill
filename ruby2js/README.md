@@ -345,6 +345,32 @@ discards an unchanged copy and otherwise commits when `confirm_edit?` agrees,
 or refuses and keeps focus. `validation_error`, `editing_did_fail_validation`,
 and `edited_object_has_changes?` are the other hooks; sorting commits an edit
 in progress first, and a new collection discards it.
+`Swill::Control` is the NSControl analog: a view over a form element whose
+`delegate` may refuse `control_should_resign_first_responder(control, next)`,
+so an inline editor holds focus in a control until the edit is accepted; the
+editable list makes its editor the delegate of every control inside it.
+`Swill::Control::TextField` (`klass="Swill::Control::TextField"` on an input
+or an element containing one) keeps a `value` property equal to the input
+both ways, and `Swill::Control::Select` keeps `options` and `value` for a
+native select, leaving markup options in place as a prefix.
+`Swill::Control::CustomSelect` is a stylable select built inside a plain
+element: a button showing the chosen option and a listbox of hashes with
+`"value"`, `"label"`, and optional `"description"` and `"icon"`. Enter and
+Space toggle it, arrows move, Escape and outside pointers close it, and a
+choice dispatches `input` and `change` on the element as a native select
+would.
+
+A `bind` on an element whose `klass` is a control keeps the control's `value`
+property equal to the path both ways, so `<div klass="Swill::Control::CustomSelect"
+bind="choice">` edits `choice` and follows it.
+
+`Swill::NotificationCenter.default` is the NSNotificationCenter analog:
+`post(name, object, user_info)` and `observe(name, callback)`, which returns
+the callable that ends the observation; a controller's `observe_notification`
+ends with its teardown. The application posts `first_responder_did_change`
+with the new responder as user info. `Swill::Runtime.nameOf(object)` gives an
+object's installed class name.
+
 `Swill::Controller::Editor` is the base: `binding_root` is `represented_object`,
 with NSEditor's `commit_editing`, which returns whether pending edits could be
 pushed into the object, and `discard_editing`, on Enter and Escape. The host
@@ -371,6 +397,18 @@ on a nilable property lowers to a direct call on the class, and `T.unsafe`
 makes the sends on its result dynamic. No other `T` construct is allowed in a
 body, and no browser `sorbet-runtime` is bundled. The build generates RBIs for
 declared accessors and type-check-only probes for declaration expressions.
+
+### The static example
+
+`examples/static/index.html` with `examples/static.rb` is the full proof of
+the UI surface, ported from the Opal static example: a toolbar that switches
+the main window between a bindings pane (key-path bindings, computed model
+predicates, a draft editor, a nested card with a binding root, a nested
+counter posting notifications, and a first-responder readout), a controls
+pane (text field, select, custom select), and a data pane (an editable,
+sortable list of plain observable objects); a palette dialog; and a
+workspace window whose panes keep their fields in the URL fragment. The
+brewery search from the original waits for the backend model slice.
 
 ## Current scope
 

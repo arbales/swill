@@ -13,6 +13,14 @@ export function hasMetadata(klass) {
   return metadata.has(klass);
 }
 
+// Whether the class or an ancestor was installed.
+export function hasInstalledMetadata(klass) {
+  for (let current = klass; current; current = Object.getPrototypeOf(current)) {
+    if (metadata.has(current)) return true;
+  }
+  return false;
+}
+
 export function installMetadata(klass, properties, methods, restorations = []) {
   const parent = Object.getPrototypeOf(klass);
   metadata.set(klass, {

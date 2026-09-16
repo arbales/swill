@@ -75,7 +75,8 @@ module Swill
         # Hash are not checked, as in sorbet-runtime, and stay as written.
         def checkable_type(type, method)
           inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
-          return type unless inner.match?(/\A[A-Z]\w*(?:::\w+)*\z/) && !%w[String Integer Float Symbol NilClass].include?(inner)
+          return type if inner.start_with?("T::") || %w[String Integer Float Symbol NilClass].include?(inner)
+          return type unless inner.match?(/\A[A-Z]\w*(?:::\w+)*\z/)
           resolved = begin
             @knowledge.resolve(inner, @scope)
           rescue CompileError
