@@ -82,10 +82,13 @@ export class EditableList<T> extends SortableList<T> {
     const idx = this.editingIndex;
     if (!editor || idx == null) return true;
 
-    // Validate BEFORE teardown so a rejection can keep the editor open.
+    // Ask the editor first, then validate, both BEFORE teardown so a
+    // rejection can keep the editor open. The draft is ours: the editor's
+    // representedObject is bound to editedObject.
     let editedObject: T | null;
     if (commit) {
-      editedObject = editor.commit();
+      if (!editor.commitEditing()) return false;
+      editedObject = this.editedObject;
       if (editedObject instanceof Model) {
         const error = editedObject.validate();
         if (error) {
@@ -94,7 +97,7 @@ export class EditableList<T> extends SortableList<T> {
         }
       }
     } else {
-      editor.discard();
+      editor.discardEditing();
       editedObject = null;
     }
 
@@ -150,8 +153,8 @@ export class EditableList<T> extends SortableList<T> {
 
   /** Default: prompt, validate, commit. Return false to refuse the focus
    *  transition (DOM focus snaps back to the editor). */
-  protected editorShouldEndEditing(editor: InlineEditor<T>): boolean {
-    const obj = editor.commit();
+  protected editorShouldEndEditing(_editor: InlineEditor<T>): boolean {
+    const obj = this.editedObject;
     if (!this.editedObjectHasChanges(obj)) {
       void this.endEditing(false);
       return true;

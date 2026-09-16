@@ -19,7 +19,7 @@ module Swill
 
     sig { params(element: T.untyped).returns(Controller) }
     def attach(element)
-      @view = element.__swill_view__ || View.new(element)
+      @view = View.of(element) || View.new(element)
       @view.controller = self
       @teardowns = []
       self

@@ -11,6 +11,9 @@ lib/swill/core/window.rb
 lib/swill/core/application.rb
 lib/swill/controller/list.rb
 lib/swill/controller/sortable_list.rb
+lib/swill/controller/editor.rb
+lib/swill/controller/inline_editor.rb
+lib/swill/controller/editable_list.rb
 lib/swill/core/observable.rb
 lib/swill/core/object.rb
 lib/swill/core/ownership.rb

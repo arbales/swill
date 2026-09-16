@@ -36,6 +36,19 @@ export function isPlainObject(value) {
   return prototype === null || Object.getPrototypeOf(prototype) === null;
 }
 
+// Ruby dup for plain values: a new array or hash with the same members, a
+// primitive itself. A framework object has observers and metadata state
+// that a shallow copy would not carry; a model offers draft instead.
+export function duplicate(value) {
+  if (Array.isArray(value)) return value.slice();
+  if (isPlainObject(value)) return {...value};
+  if (value !== null && typeof value === "object") {
+    throw new TypeError("dup of a framework object is not supported; use draft");
+  }
+
+  return value;
+}
+
 export function isBlank(value) {
   if (value == null || value === false) return true;
   if (typeof value === "string") return stripString(value).length === 0;
@@ -266,6 +279,29 @@ export function clamp(value, low, high) {
   return Math.min(Math.max(value, low), high);
 }
 
+function arrayOnly(value, name) {
+  if (!Array.isArray(value)) throw new TypeError(`${name} requires an array`);
+  return value;
+}
+
+// Core methods with arguments, for a value without metadata.
+export function valueInvoke(value, name, args) {
+  switch (name) {
+    case "index":
+      return indexOf(arrayOnly(value, name), args[0]);
+    case "take":
+      return arrayOnly(value, name).slice(0, args[0]);
+    case "drop":
+      return arrayOnly(value, name).slice(args[0]);
+    case "include?":
+      return typeof value === "string"
+        ? value.includes(args[0])
+        : arrayOnly(value, name).some(other => isEqual(other, args[0]));
+    default:
+      throw new Error(`Unknown value method: ${name}`);
+  }
+}
+
 export function valueRead(value, name) {
   switch (name) {
     case "nil?":
@@ -285,6 +321,34 @@ export function valueRead(value, name) {
       return upcase(value);
     case "downcase":
       return downcase(value);
+    case "dup":
+      return duplicate(value);
+    case "first":
+      return arrayOnly(value, name).length > 0 ? value[0] : null;
+    case "last":
+      return arrayOnly(value, name).length > 0 ? value.at(-1) : null;
+    case "compact":
+      return compact(arrayOnly(value, name));
+    case "uniq":
+      return uniq(arrayOnly(value, name));
+    case "reverse":
+      return typeof value === "string" ? [...value].reverse().join("") : reverse(arrayOnly(value, name));
+    case "sum":
+      return sum(arrayOnly(value, name));
+    case "min":
+      return min(arrayOnly(value, name));
+    case "max":
+      return max(arrayOnly(value, name));
+    case "to_s":
+      return stringify(value);
+    case "to_sym":
+      return String(value);
+    case "to_i":
+      return toInteger(value);
+    case "to_f":
+      return toFloat(value);
+    case "capitalize":
+      return capitalize(value);
     default:
       throw new Error(`Unknown value reader: ${name}`);
   }
@@ -312,8 +376,9 @@ export function encodeFragment(value) {
   return value == null || value === "" ? null : String(value);
 }
 
-// Other readers on nil yield nil through path dispatch.
-export const NIL_READERS = ["nil?", "blank?", "present?"];
+// Readers with an answer for nil itself (nil.to_s is "", nil.to_i is 0);
+// other readers on nil yield nil through path dispatch.
+export const NIL_READERS = ["nil?", "blank?", "present?", "to_s", "to_i", "to_f"];
 export const VALUE_READERS = [
   "nil?",
   "blank?",
@@ -323,5 +388,20 @@ export const VALUE_READERS = [
   "length",
   "strip",
   "upcase",
-  "downcase"
+  "downcase",
+  "dup",
+  "first",
+  "last",
+  "compact",
+  "uniq",
+  "reverse",
+  "sum",
+  "min",
+  "max",
+  "to_s",
+  "to_sym",
+  "to_i",
+  "to_f",
+  "capitalize"
 ];
+export const VALUE_METHODS = ["index", "take", "drop", "include?"];

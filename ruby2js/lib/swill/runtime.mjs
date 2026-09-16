@@ -9,7 +9,7 @@ import {
 } from "./runtime/install.mjs";
 import {observe, dispose} from "./runtime/properties.mjs";
 import {
-  isTruthy, logicalAnd, logicalOr, isEqual,
+  isTruthy, logicalAnd, logicalOr, isEqual, duplicate,
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase,
   valueRead, NIL_READERS, VALUE_READERS,
@@ -27,9 +27,9 @@ import {
 } from "./runtime/paths.mjs";
 import {must, cast, absurd, conforms} from "./runtime/types.mjs";
 import {
-  isAttribute, validate_attribute,
+  isAttribute, validateAttribute,
   restorations, outlets,
-  collect_attributes, apply_attributes
+  collectAttributes, applyAttributes
 } from "./runtime/attributes.mjs";
 
 export const Runtime = {
@@ -38,7 +38,7 @@ export const Runtime = {
   inheritableRegistry, classSetting, resolve,
 
   // Values
-  isTruthy, logicalAnd, logicalOr, isEqual,
+  isTruthy, logicalAnd, logicalOr, isEqual, duplicate,
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase, valueRead,
   decodeFragment, encodeFragment, NIL_READERS, VALUE_READERS,
@@ -62,7 +62,7 @@ export const Runtime = {
   observe, observePath, dispose,
 
   // Declarations
-  isAttribute, validate_attribute, restorations, outlets, collect_attributes, apply_attributes,
+  isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
 
   // Invalid URL input is reported, not raised.
   warn(message) {

@@ -57,6 +57,73 @@ module Swill
           inferred
         end
 
+        # Local types for a method or static method body: its signature's
+        # parameters, then inferred assignments.
+        def local_types_for(entry_method, body)
+          @local_types = entry_method ? entry_method["parameters"].dup : {}
+          infer_local_types(body).each { |local, type| @local_types[local] = type }
+        end
+
+        # An instance variable assigned, anywhere in the class or its
+        # ancestors and mixins, only values of one static class (or nil) has
+        # that class, nilable since it starts unset. Anything else has no
+        # type. Each assignment is typed in its own method's context.
+        def infer_ivar_types(_class_node)
+          @ivar_types = {}
+          found = Hash.new { |hash, name| hash[name] = [] }
+          entries_with_ivars(@entry).each do |entry|
+            # An imported entry describes an interface, not source.
+            next unless entry["node"]
+            previous_entry = @entry
+            @entry = entry
+            @knowledge.statements(entry["node"].children.last).each do |statement|
+              next unless %i[def defs].include?(statement.type)
+              static = statement.type == :defs
+              name = static ? statement.children[1] : statement.children[0]
+              entry_method = entry.fetch(static ? "static_methods" : "methods", []).find { |candidate| candidate["name"] == name.to_s }
+              body = statement.children.last
+              previous = @local_types
+              local_types_for(entry_method, body)
+              assignments = Hash.new { |hash, key| hash[key] = [] }
+              collect_ivar_assignments(body, assignments)
+              assignments.each { |ivar, values| found[ivar].concat(values.map { |value| static_type(value) }) }
+              @local_types = previous
+            end
+            @entry = previous_entry
+          end
+          @ivar_types = found.each_with_object({}) do |(name, kinds), types|
+            next if kinds.any?(&:nil?)
+            classes = kinds.map { |kind| canonical(kind[/\AT\.nilable\((.+)\)\z/, 1] || kind) }.uniq - ["NilClass"]
+            next unless classes.length == 1 && swill_class(classes.first)
+            types[name] = "T.nilable(#{classes.first})"
+          end
+        end
+
+        # The entry, its mixins, and its superclass chain, as collected.
+        def entries_with_ivars(entry)
+          related = [entry]
+          entry["includes"].each do |name|
+            mixin = @knowledge.entries.find { |candidate| candidate["name"] == @knowledge.resolve(name, entry["scope"]) }
+            related << mixin if mixin
+          end
+          if entry["parent"]
+            parent = @knowledge.entries.find { |candidate| candidate["name"] == @knowledge.resolve(entry["parent"], entry["scope"]) }
+            related.concat(entries_with_ivars(parent)) if parent
+          end
+          related
+        rescue CompileError
+          related
+        end
+
+        def collect_ivar_assignments(node, assignments)
+          return unless node.respond_to?(:type)
+          if node.type == :ivasgn
+            name, value = node.children
+            assignments[name.to_s] << value if value
+          end
+          node.children.each { |child| collect_ivar_assignments(child, assignments) }
+        end
+
         def first_local_reference(node, name)
           positions = []
           collect_local_references(node, name, positions)
@@ -94,7 +161,9 @@ module Swill
           case node.type
           when :dstr then "String"
           when :begin then node.children.length == 1 ? static_type(node.children.first) : nil
+          when :or then or_type(*node.children)
           when :lvar then @local_types[node.children.first.to_s]
+          when :ivar then @ivar_types[node.children.first.to_s]
           when :super, :zsuper then return_type(@current_method)
           when :block
             call = node.children.first
@@ -105,8 +174,13 @@ module Swill
           when :send
             return sorbet_operation_type(node) if SorbetOperations.operation?(node)
             receiver, method, *args = node.children
-            # Constructing a collected class yields that class.
-            return swill_class(@knowledge.constant(receiver)) if receiver&.type == :const && method == :new
+            # Constructing a collected class yields that class; its static
+            # methods yield their signature's return type.
+            if receiver&.type == :const
+              klass = swill_class(@knowledge.constant(receiver))
+              return klass if klass && method == :new
+              return klass ? return_type(@knowledge.static_method_entry(klass, method)) : nil
+            end
             return "T::Boolean" if %i[== != ! < > <= >=].include?(method)
             return "T::Boolean" if BOOLEAN_READERS.include?(method) && args.empty? && receiver
             if receiver.nil? || receiver.type == :self
@@ -122,6 +196,23 @@ module Swill
             return property["type"] if property && args.empty?
             return_type(@knowledge.method_entry(klass, method))
           end
+        end
+
+        # left || right: a nil left yields the right, so a nilable class on the
+        # left with the same class on the right is that class; the same class
+        # on both sides, nilable or not, keeps the right's nilability.
+        def or_type(left, right)
+          left_type = static_type(left)
+          right_type = static_type(right)
+          return nil unless left_type && right_type
+          inner = left_type[/\AT\.nilable\((.+)\)\z/, 1] || left_type
+          right_inner = right_type[/\AT\.nilable\((.+)\)\z/, 1] || right_type
+          canonical(inner) == canonical(right_inner) ? right_type : nil
+        end
+
+        # A framework class by its full name, so View and Swill::View agree.
+        def canonical(type)
+          swill_class(type) || type
         end
 
         # T.must strips nilability, T.unsafe forgets the type, and the checked

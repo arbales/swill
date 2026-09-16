@@ -22,7 +22,7 @@ test("script loading installs both artifacts using a single runtime", () => {
   assert.ok(person instanceof Base);
   assert.ok(person instanceof Runtime.resolve("Swill::Object"));
   assert.equal(Runtime.invoke(person, "rename", " Ada "), "[<Ada>]");
-  const materialized = Runtime.resolve("Demo::SpecialPerson").from_attributes({name: "Grace", job: " lead "});
+  const materialized = Runtime.resolve("Demo::SpecialPerson").fromAttributes({name: "Grace", job: " lead "});
   assert.ok(materialized instanceof Base);
   assert.deepEqual([materialized.name, materialized.role], ["Grace", "lead"], "from_attributes applies through validation");
   controller.person = person;
@@ -213,12 +213,12 @@ test("JavaScript lists extend Swill.List and override row hooks in camel case", 
   const application = Swill.start({root: body});
   const [controller] = application.controllers();
   assert.ok(controller instanceof Swill.List);
-  controller.represented_object = [{name: "Ada"}, {name: "Grace"}];
+  controller.representedObject = [{name: "Ada"}, {name: "Grace"}];
   assert.deepEqual(list.children.map(row => [row.textContent, row.getAttribute("data-name")]), [["Ada", "Ada"], ["Grace", "Grace"]]);
   list.children[1].click();
   assert.deepEqual(seen, ["Grace"]);
-  assert.equal(controller.selected_object.name, "Grace");
-  assert.equal(controller.selected_object_id, null, "plain objects carry no id");
+  assert.equal(controller.selectedObject.name, "Grace");
+  assert.equal(controller.selectedObjectId, null, "plain objects carry no id");
   application.terminate();
   assert.equal(list.children.length, 0);
 });

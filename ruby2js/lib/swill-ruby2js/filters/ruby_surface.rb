@@ -25,6 +25,7 @@ module Swill
           @compiled_parent = options[:compiled_parent]
           @entry = options.fetch(:entry)
           @local_types = {}
+          @ivar_types = {}
         end
 
         def on_class(node)
@@ -32,8 +33,9 @@ module Swill
           # resolve in Ruby's source scope, not against implementation-local names.
           # Declarations have already been collected. Keep the original source and
           # locations so Pragma sees comments, including those on the final line.
+          infer_ivar_types(node)
           body = @knowledge.statements(node.children.last).select do |statement|
-            statement.type == :def
+            class_body_statement?(statement)
           end.map { |statement| process(statement) }
           body.reject! { |statement| statement.type == :begin && statement.children.empty? }
           s(:class, s(:const, nil, @compiled_class.to_sym),
@@ -50,10 +52,7 @@ module Swill
           previous = @local_types
           previous_method = @current_method
           @current_method = method
-          @local_types = method ? method["parameters"].dup : {}
-          infer_local_types(body).each do |local, type|
-            @local_types[local] = type
-          end
+          local_types_for(method, body)
           # Ruby2JS's explicit method node preserves source locations for filters.
           super(node.updated(:defm, [Knowledge.member(name).to_sym, args, body]))
         ensure
@@ -123,8 +122,27 @@ module Swill
           node.updated(nil, [name, process(value)])
         end
 
+        def on_defs(node)
+          _, name, _, body = node.children
+          method = @entry["static_methods"].find { |candidate| candidate["name"] == name.to_s }
+          previous = @local_types
+          previous_method = @current_method
+          @current_method = method
+          local_types_for(method, body)
+          lower_defs(node)
+        ensure
+          @local_types = previous
+          @current_method = previous_method
+        end
+
+        # The converter's own defs handling, reached from lower_defs.
+        def super_defs(node)
+          method(:on_defs).super_method.call(node)
+        end
+
         def on_send(node)
           receiver, method, *args = node.children
+          return s(:send, s(:self), :new, *process_all(args)) if bare_new?(receiver, method)
           # The lowerings below would keep the call and drop the nil guard, and
           # JavaScript's ?. yields undefined where Ruby yields nil.
           if node.type == :csend
@@ -133,6 +151,7 @@ module Swill
           return lower_sorbet(node) if SorbetOperations.operation?(node)
           return lower_raise(args) if receiver.nil? && method == :raise
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
+          return lower_warn(args) if warn_call?(receiver, method)
           return lower_respond_to(receiver, args) if method == :respond_to?
           if receiver&.type == :self && method == :class && args.empty?
             return s(:attr, s(:self), :constructor)
@@ -219,16 +238,6 @@ module Swill
           return false if %i[const self].include?(receiver.type)
           type = static_type(receiver)
           type.nil? || type == "T.untyped"
-        end
-
-        # respond_to? asks the installed metadata, never the JavaScript object
-        # shape; the name must be a literal so the question stays static.
-        def lower_respond_to(receiver, args)
-          unless args.length == 1 && %i[sym str].include?(args.first.type)
-            raise CompileError, "respond_to? requires a literal method name"
-          end
-          s(:call, s(:const, nil, :Runtime), :respondsTo,
-            receiver ? process(receiver) : s(:self), s(:str, args.first.children.first.to_s))
         end
 
         def ruby_truthy(node)

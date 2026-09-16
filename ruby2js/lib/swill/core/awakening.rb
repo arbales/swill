@@ -10,6 +10,16 @@ module Swill
     extend T::Sig
     include Ownership
 
+    sig { params(root: T.untyped).returns(T.untyped) }
+    def self.wire(root)
+      new.wire(root)
+    end
+
+    sig { params(node: T.untyped).void }
+    def self.detach(node)
+      new.detach(node)
+    end
+
     # Returns the new controllers in document order. Awakening a fragment that
     # already sits under a live view adopts it into that view's tree.
     sig { params(root: T.untyped).returns(T.untyped) }

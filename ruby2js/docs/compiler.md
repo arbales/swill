@@ -32,7 +32,7 @@ document and the code disagree, fix one of them in the same change.
 | `swill/runtime/paths.mjs` | Key paths, dynamic read and write, `respond_to?`, and action dispatch |
 | `swill/runtime/install.mjs` | Installation, mixin linking, registries, and the class registry |
 | `swill/runtime/attributes.mjs` | Outlet and attribute views of an object |
-| `swill/browser_api.mjs` | Plain JavaScript registration, camel-case hooks, and manual application startup |
+| `swill/browser_api.mjs` | Plain JavaScript registration and manual application startup |
 
 ## Contents
 
@@ -107,6 +107,7 @@ A class or mixin body may contain only:
 | `include A, B` / `include A` | Recorded; targets must be previously defined mixins |
 | `property` / `attribute` / `outlet` | Collected as declarations (below) |
 | `restorable :path, key: :k` | Controllers only. A literal dotted path whose first segment is a declared property; the leaf's declared type is recorded when every segment is statically typed. Emitted as `restorations` metadata |
+| `def self.name(positional, args)` | Classes only: a static method under the same name rules. Inside it `self` is the class and a bare `new` constructs it; `self.new` is rejected as a name |
 | `def self.included(base)` | Mixins only; see [Included hooks](#included-hooks) |
 | `module ClassMethods` | Mixins only; see [Class methods](#class-methods) |
 | nested `class` / `module` | Mixins only; collected as namespaced entries |
@@ -182,8 +183,11 @@ such as `skip` or `extend` would desynchronize collected metadata.
 | `Demo::Person` | `Demo__Person` | `::` becomes `__` |
 | `Demo_Thing` | `Demo_uThing` | Source `_` becomes `_u` first, so `A::B` and `A__B` stay distinct |
 | `Runtime`, `Superclass`, `Object`, `Array`, `String`, `Number`, `Math`, `JSON`, `Error`, `Promise`, `MutationObserver`, `URLSearchParams` | `Ruby_Runtime` and so on | Reserved plumbing and JavaScript intrinsics |
-| `blank?` | `blank_predicate` | Member names replace `?` |
-| `save!` | `save_bang` | Member names replace `!` |
+| `row_elements`, `awake_from_dom` | `rowElements`, `awakeFromDOM` | Members are camelCase; `DOM`, `URL`, `JSON`, and `HTML` stay upper-case |
+| `row_element?`, `dirty?` | `isRowElement`, `isDirty` | A predicate gains `is` |
+| `accepts_first_responder?`, `rows_are_views?`, `confirm_edit?` | `acceptsFirstResponder`, `rowsAreViews`, `confirmEdit` | A predicate phrased as a verb (first word in the compiler's verb list, or `are`, `is`, `has` inside) keeps its phrasing |
+| `mark_clean!` | `markClean` | The bang is dropped; a class defining both `x` and `x!` is rejected as a member collision |
+| `__swill_view__` | `__swill_view__` | A leading underscore marks a JavaScript expando, left as written |
 
 `Swill::Runtime` in source always refers to the handwritten runtime.
 
@@ -233,16 +237,16 @@ export const meta = {
       mixins: [NormalizeName, StripName, DecorateName],
       properties: {
         "name": {type: "String", attribute: true, key: "name",
-                 defaultValue: function default_name() { return ""; }},
+                 defaultValue: function defaultName() { return ""; }},
         "label": {type: "String", attribute: false,
-                  compute: function compute_label() { return this.loud ? Runtime.upcase(this.name) : this.name; }},
-        "blank?": {js: "blank_predicate", type: "T::Boolean", attribute: false, compute: ...},
+                  compute: function computeLabel() { return this.loud ? Runtime.upcase(this.name) : this.name; }},
+        "blank?": {js: "isBlank", type: "T::Boolean", attribute: false, compute: ...},
         "badge": {type: "T.nilable(Demo::Badge)", attribute: false, outlet: true, optional: false,
-                  defaultValue: function default_badge() { return null; }},
+                  defaultValue: function defaultBadge() { return null; }},
         "seed": {type: "T.nilable(T::Hash[String, String])", attribute: false, outlet: true, optional: false,
-                 defaultValue: function default_seed() { return null; }}
+                 defaultValue: function defaultSeed() { return null; }}
       },
-      registries: {model_attributes: {"name": {property: "name", key: "name"}}},
+      registries: {modelAttributes: {"name": {property: "name", key: "name"}}},
       methods: {"greeting": {"arity": 0}, "rename": {"arity": 1}}
     }
   }
@@ -303,9 +307,13 @@ Each entry is compiled with one of two filter chains, chosen by the
 | Used for | Models, concerns, controllers, application code that also runs on MRI | `Swill::Bindings`, `Actions`, `Awakening`, `View`, `Controller`, `Controller::List`: code that touches the DOM |
 | Truthiness, equality, `\|\|` | Lowered from static types (below) | Ruby2JS defaults; Ruby is used as JavaScript syntax |
 | Unqualified call `foo(x)` | Always a method call | A method call when `foo` is a collected method on the entry, its mixins, or its ancestors; otherwise native |
-| `param.foo` where `param` has a signature type | Resolved through the receiver rules | A method call when the type names a collected entry; otherwise native property access |
+| `receiver.foo` where the receiver's class is known | Resolved through the receiver rules | The same knowledge decides: a declared property reads or writes, a collected method calls with or without parentheses, a class constant's static method calls. The class is known for `self`, a signature parameter, a local inferred from its assignments (including `T.cast` and `T.let`), an instance variable assigned values of one class anywhere in the class, and a static method's signature return type. A member the class does not declare falls through to the rules for unknown receivers |
 | `initialize` | Rejected | Compiles to `constructor` |
 | `raise "message"` | `throw new Error("message")` | Same |
+| `warn(message)` | `Runtime.warn(message)` unless the entry defines `warn` | Same |
+| `receiver.respond_to?(:name)` | `Runtime.respondsTo(receiver, "name")`; a dynamic name is rejected | Same |
+| `receiver.some_member`, `some_property`, `self.some_property = v` (snake_case, so not a DOM name) | Per the receiver rules below | The member's JavaScript spelling (`receiver.someMember()` with parentheses or arguments, `receiver.someMember` without, `this.someProperty = v`); `?.` is kept |
+| `receiver.nil?`, `receiver.name?`, and the core value methods JavaScript lacks (`index`, `first`, `last`, `dup`, `compact`, `uniq`, `reverse`, `sum`, `min`, `max`, `take`, `drop`, `to_s`, `to_i`, `to_f`, `to_sym`, `strip`, `upcase`, `downcase`, `capitalize`) on a receiver whose class is not known | Per the receiver rules below | `receiver == null`; `Runtime.read(receiver, "name?")` (`Runtime.invoke` with arguments); `Runtime.read(receiver, "dup")`. JavaScript has no such names, so these keep their Ruby meaning; `is_a?` stays `instanceof` |
 | `callback.call(x)` / `callback.(x)` | `callback(x)` for a local; `receiver.call(null, x)` otherwise | Same |
 | `T.must(x)`, `T.cast(x, Type)`, `T.let`, `T.assert_type!`, `T.unsafe`, `T.absurd` | Runtime checks with sorbet-runtime's behavior; the result is typed | Same, without static typing |
 | `receiver&.name(args)` | Rejected: the lowerings would keep the call and drop the guard, and `?.` yields `undefined` where Ruby yields `nil` | Native `?.` |
@@ -318,10 +326,11 @@ surface and converts any remaining send into an explicit call, so
 `person.greeting` and `person.greeting()` compile identically. It leaves
 `new`, `raise`, `lambda`, `proc`, operators, and indexing to the converter.
 
-On the JavaScript-only surface a call on a receiver other than `self` or a
-typed parameter is native JavaScript: `view.superview` is property access and
-`view.superview()` is a call. Framework code on that surface writes explicit
-parentheses for every Ruby method call on a local.
+On the JavaScript-only surface a call on a receiver whose class is not
+known is native JavaScript: `node.superview` is property access and
+`node.superview()` is a call, except for the snake_case and Ruby-core forms
+above. Framework code on that surface writes explicit parentheses for a Ruby
+method call on such a receiver; on a known class the compiler decides.
 
 ## Lowering rules
 
@@ -337,6 +346,9 @@ the runtime is reached only where a fact is genuinely unavailable.
 | `==`, `!=`, `!` | `T::Boolean` |
 | Parameter | Its `sig` parameter type |
 | Local variable | Inferred when every assignment has one static type and the first read follows the first assignment; an assigned parameter loses its signature type |
+| Instance variable | `T.nilable(Class)` when every assignment anywhere in the class has a static type and the non-nil ones name one framework class; otherwise none |
+| `left \|\| right` | The right's type when both sides name the same class, nilable or not on the left: a nil left yields the right |
+| `Const.static_method(...)` | The static method's `sig` return type |
 | `name` or `self.name` for a declared property | The declared type, including inherited and included declarations |
 | `name(...)` or `self.name(...)` for a collected method | Its `sig` return type; `void` yields no type |
 | `super(...)` / `super` | The enclosing method's return type |
@@ -524,10 +536,10 @@ registered from JavaScript, which the compiler never sees.
 
 | Function | Behavior |
 | --- | --- |
-| `read(object, name)` | On a null receiver, `nil?`, `blank?`, and `present?` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. A plain object is a Hash: its entry by key, `null` when absent, then the value readers, as key-value coding treats a dictionary; entries are not observable. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the value reader names. Error: `Unknown reader` |
-| `write(object, name, value)` | A declared stored property through the property protocol, or a collected `name=` accessor. Errors: `Cannot write ... on nil`, `Read-only property`, `Unknown writer` |
+| `read(object, name)` | On a null receiver, `nil?`, `blank?`, `present?`, `to_s`, `to_i`, and `to_f` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. A plain object is a Hash: its entry by key, `null` when absent, then the value readers, as key-value coding treats a dictionary; entries are not observable. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the value reader names. Error: `Unknown reader` |
+| `write(object, name, value)` | A declared stored property through the property protocol, or a collected `name=` accessor. A plain object is a Hash: an entry it already has is set, as key-value coding does for a dictionary. Errors: `Cannot write ... on nil`, `Read-only property`, `Unknown writer`, `Unknown key` |
 | `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null`; the empty path is the object itself |
-| `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Error: `Read-only binding` when the leaf is computed, not a property, or the path is empty |
+| `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property, or an existing key of a Hash owner, at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Errors: `Read-only binding` when the leaf is computed, not a property, or the path is empty; `Unknown key` for a Hash owner without the key |
 | `invoke(object, name, ...args)` | Calls a collected method with an exact arity match; the dynamic call compiled for an untyped receiver. Errors: `Cannot call ... on nil`, `Unknown method or wrong arity` |
 | `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted. The responder chain uses it to decide which responder handles an action |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
@@ -535,9 +547,9 @@ registered from JavaScript, which the compiler never sees.
 | `decodeFragment(type, text)` / `encodeFragment(value)` | Fragment values are strings; a declared `Integer` or `T::Boolean` leaf decodes, anything else stays text, and an undecodable value is `undefined`. Encoding maps nil and `""` to removal |
 | `warn(message)` | The one console boundary, for wrong untrusted URL input |
 | `isAttribute(object, name)` | Whether `name` is a declared `attribute` on the object's class |
-| `validate_attribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. The MRI adapter implements the same convention with `respond_to?` |
+| `validateAttribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. The MRI adapter implements the same convention with `respond_to?` |
 | `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
-| `valueRead(value, name)` | `nil?`, `blank?`, `present?`, `empty?`, `size`, `length`, `strip`, `upcase`, `downcase` on plain values. Error: `Unknown value reader` |
+| `valueRead(value, name)` / `valueInvoke(value, name, args)` | Ruby's core methods on plain values, reached by `read` and `invoke` when the receiver has no declared member of that name: the predicates, `size`, `length`, `strip`, `upcase`, `downcase`, `capitalize`, `dup`, `first`, `last`, `compact`, `uniq`, `reverse`, `sum`, `min`, `max`, `to_s`, `to_sym`, `to_i`, `to_f`, and with arguments `index`, `take`, `drop`, `include?`. `dup` copies an array or hash and refuses a framework object; array methods refuse other values. Errors: `Unknown value reader`, `Unknown value method` |
 
 ### Values
 
@@ -574,8 +586,8 @@ registered from JavaScript, which the compiler never sees.
 
 | Function | Behavior |
 | --- | --- |
-| `collect_attributes(object)` | `{key: value}` for every stored `attribute` declaration, including inherited ones |
-| `apply_attributes(object, source)` | Assigns each attribute from `source[key]`, else `source[name]`, through the property protocol |
+| `collectAttributes(object)` | `{key: value}` for every stored `attribute` declaration, including inherited ones |
+| `applyAttributes(object, source)` | Assigns each attribute from `source[key]`, else `source[name]`, through the property protocol |
 | `Model::Attributes.from_attributes(source)` | Class method from the shared mixin: `new` plus `apply_attributes`, so `decode_outlet_data` can hand an outlet typed `T::Array[Person]` real people |
 | `inheritableRegistry(klass, name, "hash" \| "array")` | Returns the class's own registry, created on first access as a copy of the parent's |
 | `classSetting(klass, name, values)` | With one value, stores it; with none, returns the class's own value or the parent's; more than one value throws |

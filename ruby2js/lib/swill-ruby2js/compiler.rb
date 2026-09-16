@@ -38,6 +38,9 @@ module Swill
         lib/swill/core/application.rb
         lib/swill/controller/list.rb
         lib/swill/controller/sortable_list.rb
+        lib/swill/controller/editor.rb
+        lib/swill/controller/inline_editor.rb
+        lib/swill/controller/editable_list.rb
       ].freeze,
       shared: %w[
         lib/swill/model/attributes.rb

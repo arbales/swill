@@ -40,7 +40,7 @@ module Swill
             "name" => name, "identifier" => self.class.identifier(name),
             "kind" => kind, "scope" => scope, "node" => node, "javascript_only" => javascript_only,
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
-            "includes" => [], "properties" => [], "methods" => [], "included_properties" => [],
+            "includes" => [], "properties" => [], "methods" => [], "static_methods" => [], "included_properties" => [],
             "class_methods" => [], "registries" => [], "settings" => [], "restorations" => []
           }
           pending_signature = nil
@@ -81,6 +81,9 @@ module Swill
                 # application Ruby. Each receiver owns its declaration descriptors.
                 entry["properties"].concat(mixin.fetch("included_properties", []).map(&:dup))
               end
+            elsif child.type == :defs && kind == "class"
+              collect_static_method(entry, child, pending_signature)
+              pending_signature = nil
             elsif child.type == :defs && kind == "mixin"
               collect_included_hook(entry, child)
             elsif child.type == :module && kind == "mixin" &&
@@ -103,6 +106,24 @@ module Swill
             raise CompileError, "ClassMethods module is missing or empty"
           end
           entries << entry
+        end
+
+        # def self.name(args) on a class: a static method. Inside it, self is
+        # the class and a bare new constructs it.
+        def collect_static_method(entry, node, signature)
+          receiver, method, args, body = node.children
+          raise CompileError, "class methods are defined on self" unless receiver.type == :self
+          unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :new
+            raise CompileError, "unsupported method definition self.#{method}"
+          end
+          unless args.children.all? { |arg| arg.type == :arg }
+            raise CompileError, "only positional required method arguments are supported"
+          end
+          validate_expression!(body)
+          entry["static_methods"] << {
+            "name" => method.to_s, "js" => self.class.member(method), "arity" => args.children.length,
+            "parameters" => signature_parameters(signature), "returns" => signature_return(signature)
+          }
         end
 
         def collect_included_hook(entry, node)

@@ -18,8 +18,8 @@ The initial kernel and DOM-boundary spike is complete and verified:
   `swill.js` and `app.js` bundles that share one runtime;
 - `swill.js` also exposes a no-build JavaScript API: friendly framework class
   names, metadata-backed static properties and outlets, native computed
-  getters, explicit actions, camel-case lifecycle hooks, and manual
-  `Swill.start()` application launch;
+  getters, explicit actions, lifecycle hooks under the same camelCase names
+  the compiled framework uses, and manual `Swill.start()` application launch;
 - static classes, inheritance, namespaced constants, mixins, native `super`,
   included declaration hooks, class settings, and inheritable registries work;
 - typed properties, attributes, computed dependencies, nested key paths,
@@ -122,15 +122,41 @@ The initial kernel and DOM-boundary spike is complete and verified:
   against the type so a mistyped outlet fails by name. `decode_outlet_data`
   materializes models with `Model::Attributes.from_attributes`, so the demo
   controller no longer builds people itself.
+- editors: `Swill::Controller::Editor` (represented_object as binding root,
+  NSEditor's boolean `commit_editing` and `discard_editing` on Enter and
+  Escape, also adopted by the TypeScript original), `Controller::InlineEditor` (ends
+  the edit through its host and asks it before letting focus leave), and
+  `Controller::EditableList` (one editor cloned from `<template for="editor">`
+  after the row, a model draft or duplicated plain object as the copy,
+  commit through `apply_draft` or replacement, focus-out policy through
+  `editor_should_end_editing` and `confirm_edit?`, sorting commits first, a
+  new collection discards). The demo's people table edits in place.
 
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: Editors and Inline Editing
+## Immediate Next Slice: One Compilation Surface
 
-Model work beyond step 1 is deferred (decided September 2026) until the UI
-surface is complete. List selection, row ownership, and sortable lists are
-done; item 6 continues with editors, inline editing, and detached drafts,
-then native text and select controls.
+Decided 16 September 2026: retire the JavaScript-only surface. It exists so
+DOM-heavy framework files can leave DOM values untyped, and it answers one
+question per file ("is an untyped receiver a JavaScript object or a Ruby
+one?") that is really a question per receiver. The receiver typing added on
+that surface already overrides the file default wherever a type is known.
+
+The slice: declare the DOM and the JavaScript intrinsics the framework uses
+(`Element`, `Node`, `Event`, `KeyboardEvent`, `Document`, `Window`,
+`HTMLTemplateElement`, `JSON`, `MutationObserver`, ...) in a Sorbet RBI;
+replace `T.untyped` with those types in framework signatures where a DOM
+value is meant; lower a DOM-typed receiver natively (property access, calls,
+JavaScript truthiness and identity); keep Ruby semantics for framework
+classes, core value types, and `T.untyped` (dynamic dispatch); allow
+`initialize` by class rather than by file. Then remove `javascript_only`, the
+second filter chain, the two source lists, and the parentheses convention.
+Portability to MRI becomes a property Sorbet can see: a file naming no DOM
+type is shareable.
+
+After that, item 6 continues with native text and select controls, including
+the control-to-editor resignation delegate
+(`control_should_resign_first_responder`) the inline editor is prepared for.
 
 ## Ordered Roadmap
 
@@ -189,8 +215,8 @@ authorization, and transactions do not move into the browser.
 ### 6. Higher-Level Controllers and Controls
 
 - Port list selection and row ownership first (done).
-- Then add sortable lists (done), editors, inline editing, and detached
-  drafts.
+- Then add sortable lists, editors, inline editing, and detached drafts
+  (done).
 - Add native text/select controls before custom wrappers.
 - Prefer application-shaped APIs over broad compiler support added only for a
   single implementation technique.
@@ -264,8 +290,8 @@ Recorded so they are fixed deliberately rather than rediscovered:
 - JavaScript classes registered with `Swill.register` cannot use
   `name_did_change` hooks: the runtime dispatches hooks from the installed
   method table, which registration fills only from `static actions`. Fix by
-  registering hook methods and bridging their camel-case names like the
-  lifecycle hooks (September 2026).
+  registering hook methods; compiled members are camelCase, so the names
+  already match (September 2026).
 - Safe navigation (`&.`) is rejected on the shared surface (September 2026):
   the send lowerings would keep the call and drop the guard, and JavaScript's
   `?.` yields `undefined` where Ruby yields `nil`. Lower it to a guarded form

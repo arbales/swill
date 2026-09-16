@@ -20,8 +20,27 @@ module Swill
         name.split("::").map { |part| part.gsub("_", "_u") }.join("__")
       end
 
+      # Ruby members in JavaScript spelling: snake_case becomes camelCase
+      # with these acronyms upper-cased; a predicate gains an is prefix unless
+      # it is phrased as a verb (acceptsFirstResponder, rowsAreViews), and a
+      # bang is dropped. A name starting with an underscore is JavaScript's
+      # own (an expando such as __swill_view__) and is left alone.
+      ACRONYMS = %w[dom url json html].freeze
+      PREDICATE_VERBS = %w[accepts allow allows can confirm contains has holds includes matches needs requires should supports].freeze
+      PREDICATE_LINKS = %w[are is has].freeze
+
       def member(name)
-        name.to_s.gsub("?", "_predicate").gsub("!", "_bang")
+        text = name.to_s
+        # Only a Ruby-shaped name is respelled; anything else (a leading
+        # underscore, a double underscore) is left as written.
+        return text unless text.match?(/\A[a-z][a-z0-9]*(?:_[a-z0-9]+)*[?!=]?\z/)
+        suffix = text[/[?!=]\z/]
+        words = text.delete_suffix(suffix.to_s).split("_")
+        camel = words.first + words.drop(1).map { |word| ACRONYMS.include?(word) ? word.upcase : "#{word[0].upcase}#{word[1..]}" }.join
+        if suffix == "?" && !PREDICATE_VERBS.include?(words.first) && (words.drop(1) & PREDICATE_LINKS).empty?
+          camel = "is#{camel[0].upcase}#{camel[1..]}"
+        end
+        suffix == "=" ? "#{camel}=" : camel
       end
     end
   end

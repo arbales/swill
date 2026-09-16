@@ -152,10 +152,10 @@ function notify(object, name, previous, value) {
 // Mutations always follow: coerce, compare, will-change, store, notify.
 export function writeProperty(object, descriptor, value) {
   const previous = storedValue(object, descriptor);
-  value = object.coerce_property_value(descriptor.name, value, previous);
+  value = object.coercePropertyValue(descriptor.name, value, previous);
   if (isEqual(previous, value)) return value;
 
-  object.property_will_change(descriptor.name, previous, value);
+  object.propertyWillChange(descriptor.name, previous, value);
   state(object).values.set(descriptor.name, value);
   notify(object, descriptor.name, previous, value);
 

@@ -86,6 +86,19 @@ module Swill
           method_entry(resolve(entry["parent"], entry["scope"]), method)
         end
 
+        # A static method on a class or, as JavaScript inherits statics, on
+        # an ancestor class.
+        def static_method_entry(type, method)
+          entry = entries.find { |candidate| candidate["name"] == type }
+          return nil unless entry
+          found = entry.fetch("static_methods", []).find { |candidate| candidate["name"] == method.to_s }
+          return found if found
+          return nil unless entry["parent"]
+          static_method_entry(resolve(entry["parent"], entry["scope"]), method)
+        rescue CompileError
+          nil
+        end
+
         def property_entry(type, name)
           entry = entries.find { |candidate| candidate["name"] == type }
           return nil unless entry

@@ -1,7 +1,7 @@
 // Metadata-backed path and dynamic dispatch.
 import {declarations} from "./metadata.mjs";
 import {subscribe, writeProperty} from "./properties.mjs";
-import {valueRead, isPlainObject, NIL_READERS, VALUE_READERS} from "./values.mjs";
+import {valueRead, valueInvoke, isPlainObject, NIL_READERS, VALUE_READERS, VALUE_METHODS} from "./values.mjs";
 
 export function read(object, name) {
   if (object == null) {
@@ -43,6 +43,14 @@ export function write(object, name, value) {
     throw new Error(`Cannot write ${name} on nil`);
   }
 
+  // A plain object is a Hash: key-value coding sets an entry it already
+  // has; a key it lacks is a mistake in the path, not a new entry.
+  if (isPlainObject(object)) {
+    if (!Object.hasOwn(object, name)) throw new Error(`Unknown key: ${name}`);
+    object[name] = value;
+    return value;
+  }
+
   const property = declarations(object.constructor, "properties").get(name);
   if (property) {
     if (property.computed) {
@@ -72,6 +80,11 @@ function pathWriter(object, path) {
   const owner = names.reduce((target, segment) => read(target, segment), object);
   if (owner == null) return null;
 
+  if (isPlainObject(owner)) {
+    if (!Object.hasOwn(owner, name)) throw new Error(`Unknown key: ${name}`);
+    return {owner, key: name};
+  }
+
   const descriptor = declarations(owner.constructor, "properties").get(name);
   if (!descriptor || descriptor.computed) {
     throw new Error(`Read-only binding: ${path}`);
@@ -88,6 +101,7 @@ export function assertWritablePath(object, path) {
 export function writePath(object, path, value) {
   const writer = pathWriter(object, path);
   if (!writer) return undefined;
+  if (writer.key !== undefined) return write(writer.owner, writer.key, value);
   return writeProperty(writer.owner, writer.descriptor, value);
 }
 
@@ -154,6 +168,7 @@ export function invoke(object, name, ...args) {
   }
 
   const method = declarations(object.constructor, "methods").get(name);
+  if (!method && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
   if (!method || method.arity !== args.length) {
     throw new Error(`Unknown method or wrong arity: ${name}`);
   }

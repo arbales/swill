@@ -21,7 +21,7 @@ module Demo
     # The roster JSON becomes people; the list shows them through bind="people".
     property :people, type: T::Array[Demo::Person], default: []
     outlet :roster, type: T::Array[Demo::Person], optional: true
-    outlet :people_list, type: Demo::PeopleList, optional: true
+    outlet :people_list, type: Swill::Controller::List, optional: true
 
     property :title, type: String do
       current = person
@@ -49,9 +49,9 @@ module Demo
       app.make_first_responder(T.must(name_field)) if app
     end
 
-    # Enter, a double-click, or the list's own button hand its selection here:
-    # the selected person becomes the one being edited.
-    sig { params(sender: Demo::PeopleList).void }
+    # A plain list hands its selection here on Enter or a double-click; the
+    # people list edits in place instead and never sends this.
+    sig { params(sender: Swill::Controller::List).void }
     def activate_selection(sender)
       self.person = sender.selected_object
     end
@@ -178,7 +178,9 @@ module Demo
   # The roster table. Rows are cloned from its <template for="row"> and bind
   # to each person; the selection and sort order are kept in the URL under
   # the people window, so a reload or Back/Forward shows the same view.
-  class PeopleList < Swill::Controller::SortableList
+  # Rows edit in place from <template for="editor">; Enter or a double-click
+  # opens the editor, Enter commits, and Escape discards.
+  class PeopleList < Swill::Controller::EditableList
     extend T::Sig
 
     restorable :selected_object_id, key: :selected

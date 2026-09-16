@@ -8,3 +8,4 @@ handoff/
 __pycache__/
 .zed/
 tmp/
+custom_template_idea.swib

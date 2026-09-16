@@ -99,7 +99,7 @@ method table, and `Swill.register` fills that table only from `static
 actions`, so a `nameDidChange` method on a registered class is never called.
 Observe the property instead: `this.observe("name", (value, previous) => ...)`
 in `viewDidLoad`. Closing the gap means registering hook methods in the
-table and bridging their camel-case names, as the lifecycle hooks are.
+table; their names already match, since compiled members are camelCase.
 
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
 Register a JavaScript parent before its subclasses. For another root or a
@@ -246,9 +246,10 @@ of the root. Reader chains may end in `strip`, `upcase`,
 `downcase`, `blank?`, `present?`, `empty?`, or `nil?`; the first three
 predicates answer for a nil intermediate, and any other reader on nil yields
 nil. A segment that reaches a Hash reads its key, nil when absent, as
-key-value coding does for a dictionary; hash entries are not observable, so
-replace the hash to notify. A write through a missing owner is dropped; a
-read-only leaf on a writable control fails at wiring.
+key-value coding does for a dictionary, and a writable control sets an
+existing key; hash entries are not observable, so replace the hash to notify.
+A write through a missing owner is dropped; a read-only leaf on a writable
+control fails at wiring.
 
 A `bind` on a child controller's root belongs to the parent and assigns the
 child's `represented_object`, nil included; it is wired when the parent loads,
@@ -328,6 +329,25 @@ data-action="sort_by"` toggles that column, and `sort_states` maps the sorted
 column to its direction for `bind-aria-sort="sort_states.name"`. Values
 compare with nil last, numbers and booleans by value, and everything else as
 text, and the selection follows its objects through a reorder.
+
+`Swill::Controller::EditableList` edits rows in place. Enter or a double-click
+on a row, or `begin_editing(index)`, clones the list's own
+`<template for="editor">`, whose root is a `controller="Swill::Controller::InlineEditor"`,
+after the row and gives it the keyboard. The edit works on a copy, a model's
+`draft` or a duplicate of a plain object, held as the list's `edited_object`
+and the editor's `represented_object`, so the editor's bindings write into
+the copy. Enter commits: a model takes the draft back with `apply_draft` and
+stays the row's object, a plain object is replaced in the collection; Escape
+discards. Focus leaving the editor asks `editor_should_end_editing`, which
+discards an unchanged copy and otherwise commits when `confirm_edit?` agrees,
+or refuses and keeps focus. `validation_error`, `editing_did_fail_validation`,
+and `edited_object_has_changes?` are the other hooks; sorting commits an edit
+in progress first, and a new collection discards it.
+`Swill::Controller::Editor` is the base: `binding_root` is `represented_object`,
+with NSEditor's `commit_editing`, which returns whether pending edits could be
+pushed into the object, and `discard_editing`, on Enter and Escape. The host
+holds the object already, so nothing is returned; an editor that answers
+false keeps the edit open.
 
 ### Sorbet
 

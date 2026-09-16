@@ -21,6 +21,9 @@
   var Swill__Launcher = framework.Swill__Launcher;
   var Swill__Controller__List = framework.Swill__Controller__List;
   var Swill__Controller__SortableList = framework.Swill__Controller__SortableList;
+  var Swill__Controller__Editor = framework.Swill__Controller__Editor;
+  var Swill__Controller__InlineEditor = framework.Swill__Controller__InlineEditor;
+  var Swill__Controller__EditableList = framework.Swill__Controller__EditableList;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
   var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;
@@ -62,17 +65,17 @@
     rename(value) {
       return this.name = this.normalize(value);
     }
-    ruby_truth(value) {
+    rubyTruth(value) {
       return value != null ? 1 : 2;
     }
-    ruby_or(value) {
+    rubyOr(value) {
       return value != null ? value : "fallback";
     }
   };
   var Demo__SpecialPerson = class extends Demo__Person {
     // The validate_<attribute>(value, previous) convention: return the value
     // to store, or raise to reject and keep the previous one.
-    validate_role(value, previous) {
+    validateRole(value, previous) {
       let cleaned = Runtime.strip(value);
       if (Runtime.isEmpty(cleaned)) throw new Error("role must not be blank");
       return cleaned;
@@ -80,8 +83,8 @@
   };
   function NameTracking(Superclass) {
     class NameTracking_Layer extends Superclass {
-      property_will_change(name, previous, value) {
-        super.property_will_change(name, previous, value);
+      propertyWillChange(name, previous, value) {
+        super.propertyWillChange(name, previous, value);
         if (name === "name") {
           if (this.baseline == null) this.baseline = previous;
           return this.dirty = value !== this.baseline;
@@ -92,8 +95,8 @@
   }
   function NameValidation(Superclass) {
     class NameValidation_Layer extends Superclass {
-      coerce_property_value(name, value, previous) {
-        value = super.coerce_property_value(name, value, previous);
+      coercePropertyValue(name, value, previous) {
+        value = super.coercePropertyValue(name, value, previous);
         if (name === "name") {
           value = Runtime.read(value, "strip");
           if (value === "") throw new Error("name must not be blank");
@@ -116,10 +119,10 @@
     // is decoded, and an optional outlet may be absent.
     // Kept equal to the badge outlet's count by an object binding.
     // The roster JSON becomes people; the list shows them through bind="people".
-    view_did_load() {
-      return this.reset_person();
+    viewDidLoad() {
+      return this.resetPerson();
     }
-    awake_from_dom() {
+    awakeFromDOM() {
       Runtime.must(this.person).name = Runtime.fetch(
         Runtime.must(this.seed),
         "name"
@@ -130,36 +133,36 @@
       );
       if (this.roster) this.people = Runtime.must(this.roster);
       let app = this.application();
-      if (app) return app.make_first_responder(Runtime.must(this.name_field));
+      if (app) return app.makeFirstResponder(Runtime.must(this.nameField));
     }
-    // Enter, a double-click, or the list's own button hand its selection here:
-    // the selected person becomes the one being edited.
-    activate_selection(sender) {
-      return this.person = sender.selected_object;
+    // A plain list hands its selection here on Enter or a double-click; the
+    // people list edits in place instead and never sends this.
+    activateSelection(sender) {
+      return this.person = sender.selectedObject;
     }
     // A row's remove button. The sender is the button, so the list says which
     // row it sits in; the list re-renders from the new array.
-    remove_person(sender) {
-      let list = this.people_list;
+    removePerson(sender) {
+      let list = this.peopleList;
       if (!list) return;
-      let removed = list.object_at(list.row_for(sender));
+      let removed = list.objectAt(list.rowFor(sender));
       return this.people = this.people.filter((candidate) => candidate !== removed);
     }
     // The roster script holds rows; the outlet holds people. The awakening
     // checks the result against the outlet's type.
-    decode_outlet_data(name, value) {
+    decodeOutletData(name, value) {
       if (name !== "roster") return value;
-      return Runtime.cast(value, "T::Array[Hash]").map((row) => Demo__SpecialPerson.from_attributes(row));
+      return Runtime.cast(value, "T::Array[Hash]").map((row) => Demo__SpecialPerson.fromAttributes(row));
     }
     // Escape in any owned field bubbles here through the responder chain.
-    cancel_operation(event) {
+    cancelOperation(event) {
       return this.clear();
     }
     clear() {
-      this.reset_person();
+      this.resetPerson();
       return this.title;
     }
-    reset_person() {
+    resetPerson() {
       return this.person = new Demo__Person();
     }
     // Reached through the responder chain from a nested controller's button.
@@ -170,7 +173,7 @@
   var Demo__Badge = class extends Swill__Controller {
     // When this badge is window content, its count lives in the URL fragment
     // under the window's name (main.n=3) and comes back on Back/Forward.
-    controller_did_restore(restored) {
+    controllerDidRestore(restored) {
       return this.restored = restored;
     }
     bump() {
@@ -186,17 +189,17 @@
     }
   };
   var Demo__Application = class extends Swill__Application {
-    application_did_launch() {
+    applicationDidLaunch() {
       return this.launched = true;
     }
     // Alternate the main window between two templates.
-    swap_window() {
-      let current = this.window_named("main");
-      let name = Runtime.isTruthy(current && current.content_name() === "welcome") ? "farewell" : "welcome";
-      return this.load_window_content("main", name);
+    swapWindow() {
+      let current = this.windowNamed("main");
+      let name = Runtime.isTruthy(current && current.contentName() === "welcome") ? "farewell" : "welcome";
+      return this.loadWindowContent("main", name);
     }
-    open_palette() {
-      return this.show_window("palette");
+    openPalette() {
+      return this.showWindow("palette");
     }
     // Clears every awakened controller that handles clear; the metadata
     // query is the explicit stand-in for respond_to?.
@@ -208,15 +211,15 @@
       });
     }
   };
-  var Demo__PeopleList = class extends Swill__Controller__SortableList {
+  var Demo__PeopleList = class extends Swill__Controller__EditableList {
     // How many times a different person became the selected one.
-    selected_object_did_change(previous, object) {
-      return this.selection_changes = this.selection_changes + 1;
+    selectedObjectDidChange(previous, object) {
+      return this.selectionChanges = this.selectionChanges + 1;
     }
   };
   var Demo__PersonEditor = class extends Swill__Controller {
     // Controller-local state, reached from markup with bind="@note".
-    binding_root() {
+    bindingRoot() {
       return "represented_object";
     }
   };
@@ -252,7 +255,8 @@
         factory: NameTracking,
         methods: {
           "property_will_change": {
-            "arity": 3
+            "arity": 3,
+            "js": "propertyWillChange"
           }
         }
       },
@@ -260,7 +264,8 @@
         factory: NameValidation,
         methods: {
           "coerce_property_value": {
-            "arity": 3
+            "arity": 3,
+            "js": "coercePropertyValue"
           }
         }
       }
@@ -274,34 +279,34 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function default_name() {
+            defaultValue: function defaultName() {
               return "";
             }
           },
           "loud": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_loud() {
+            defaultValue: function defaultLoud() {
               return false;
             }
           },
           "label": {
             type: "String",
             attribute: false,
-            compute: function compute_label() {
+            compute: function computeLabel() {
               return this.loud ? Runtime.upcase(this.name) : this.name;
             }
           },
           "blank?": {
-            js: "blank_predicate",
+            js: "isBlank",
             type: "T::Boolean",
             attribute: false,
-            compute: function compute_blank_predicate() {
+            compute: function compute_isBlank() {
               return Runtime.isBlank(this.name);
             }
           }
         },
-        registries: { model_attributes: {
+        registries: { modelAttributes: {
           "name": { property: "name", key: "name" }
         } },
         methods: {
@@ -315,10 +320,12 @@
             "arity": 1
           },
           "ruby_truth": {
-            "arity": 1
+            "arity": 1,
+            "js": "rubyTruth"
           },
           "ruby_or": {
-            "arity": 1
+            "arity": 1,
+            "js": "rubyOr"
           }
         }
       },
@@ -329,17 +336,18 @@
             type: "String",
             attribute: true,
             key: "job",
-            defaultValue: function default_role() {
+            defaultValue: function defaultRole() {
               return "editor";
             }
           }
         },
-        registries: { model_attributes: {
+        registries: { modelAttributes: {
           "role": { property: "role", key: "job" }
         } },
         methods: {
           "validate_role": {
-            "arity": 2
+            "arity": 2,
+            "js": "validateRole"
           }
         }
       },
@@ -351,21 +359,21 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function default_name2() {
+            defaultValue: function defaultName2() {
               return "Ada";
             }
           },
           "baseline": {
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function default_baseline() {
+            defaultValue: function defaultBaseline() {
               return null;
             }
           },
           "dirty": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_dirty() {
+            defaultValue: function defaultDirty() {
               return false;
             }
           }
@@ -379,7 +387,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function default_name3() {
+            defaultValue: function defaultName3() {
               return "Grace";
             }
           }
@@ -394,21 +402,21 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function default_name4() {
+            defaultValue: function defaultName4() {
               return "Ada";
             }
           },
           "baseline": {
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function default_baseline2() {
+            defaultValue: function defaultBaseline2() {
               return null;
             }
           },
           "dirty": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_dirty2() {
+            defaultValue: function defaultDirty2() {
               return false;
             }
           }
@@ -421,23 +429,24 @@
           "person": {
             type: "T.nilable(Demo::Person)",
             attribute: false,
-            defaultValue: function default_person() {
+            defaultValue: function defaultPerson() {
               return null;
             }
           },
           "fallback": {
             type: "String",
             attribute: false,
-            defaultValue: function default_fallback() {
+            defaultValue: function defaultFallback() {
               return "Nobody";
             }
           },
           "name_field": {
+            js: "nameField",
             type: "T.nilable(Swill::View)",
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_name_field() {
+            defaultValue: function default_nameField() {
               return null;
             }
           },
@@ -446,7 +455,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_badge() {
+            defaultValue: function defaultBadge() {
               return null;
             }
           },
@@ -455,7 +464,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_seed() {
+            defaultValue: function defaultSeed() {
               return null;
             }
           },
@@ -464,21 +473,22 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_missing() {
+            defaultValue: function defaultMissing() {
               return null;
             }
           },
           "badge_count": {
+            js: "badgeCount",
             type: "Integer",
             attribute: false,
-            defaultValue: function default_badge_count() {
+            defaultValue: function default_badgeCount() {
               return 0;
             }
           },
           "people": {
             type: "T::Array[Demo::Person]",
             attribute: false,
-            defaultValue: function default_people() {
+            defaultValue: function defaultPeople() {
               return [];
             }
           },
@@ -487,23 +497,24 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_roster() {
+            defaultValue: function defaultRoster() {
               return null;
             }
           },
           "people_list": {
-            type: "T.nilable(Demo::PeopleList)",
+            js: "peopleList",
+            type: "T.nilable(Swill::Controller::List)",
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_people_list() {
+            defaultValue: function default_peopleList() {
               return null;
             }
           },
           "title": {
             type: "String",
             attribute: false,
-            compute: function compute_title() {
+            compute: function computeTitle() {
               let current = this.person;
               return current ? current.greeting() : this.fallback;
             }
@@ -511,28 +522,35 @@
         },
         methods: {
           "view_did_load": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewDidLoad"
           },
           "awake_from_dom": {
-            "arity": 0
+            "arity": 0,
+            "js": "awakeFromDOM"
           },
           "activate_selection": {
-            "arity": 1
+            "arity": 1,
+            "js": "activateSelection"
           },
           "remove_person": {
-            "arity": 1
+            "arity": 1,
+            "js": "removePerson"
           },
           "decode_outlet_data": {
-            "arity": 2
+            "arity": 2,
+            "js": "decodeOutletData"
           },
           "cancel_operation": {
-            "arity": 1
+            "arity": 1,
+            "js": "cancelOperation"
           },
           "clear": {
             "arity": 0
           },
           "reset_person": {
-            "arity": 0
+            "arity": 0,
+            "js": "resetPerson"
           },
           "shout": {
             "arity": 0
@@ -545,21 +563,21 @@
           "count": {
             type: "Integer",
             attribute: false,
-            defaultValue: function default_count() {
+            defaultValue: function defaultCount() {
               return 0;
             }
           },
           "restored": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_restored() {
+            defaultValue: function defaultRestored() {
               return false;
             }
           },
           "title": {
             type: "String",
             attribute: false,
-            compute: function compute_title2() {
+            compute: function computeTitle2() {
               return `Badge ${this.count}`;
             }
           }
@@ -567,7 +585,8 @@
         restorations: [{ path: "count", key: "n", type: "Integer" }],
         methods: {
           "controller_did_restore": {
-            "arity": 1
+            "arity": 1,
+            "js": "controllerDidRestore"
           },
           "bump": {
             "arity": 0
@@ -586,20 +605,23 @@
           "launched": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_launched() {
+            defaultValue: function defaultLaunched() {
               return false;
             }
           }
         },
         methods: {
           "application_did_launch": {
-            "arity": 0
+            "arity": 0,
+            "js": "applicationDidLaunch"
           },
           "swap_window": {
-            "arity": 0
+            "arity": 0,
+            "js": "swapWindow"
           },
           "open_palette": {
-            "arity": 0
+            "arity": 0,
+            "js": "openPalette"
           },
           "reset": {
             "arity": 0
@@ -610,9 +632,10 @@
         constructor: Demo__PeopleList,
         properties: {
           "selection_changes": {
+            js: "selectionChanges",
             type: "Integer",
             attribute: false,
-            defaultValue: function default_selection_changes() {
+            defaultValue: function default_selectionChanges() {
               return 0;
             }
           }
@@ -620,7 +643,8 @@
         restorations: [{ path: "selected_object_id", key: "selected", type: "T.nilable(String)" }, { path: "sort_key", key: "sort", type: "T.nilable(String)" }, { path: "sort_direction", key: "dir", type: "String" }],
         methods: {
           "selected_object_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "selectedObjectDidChange"
           }
         }
       },
@@ -630,14 +654,15 @@
           "note": {
             type: "String",
             attribute: false,
-            defaultValue: function default_note() {
+            defaultValue: function defaultNote() {
               return "";
             }
           }
         },
         methods: {
           "binding_root": {
-            "arity": 0
+            "arity": 0,
+            "js": "bindingRoot"
           }
         }
       }

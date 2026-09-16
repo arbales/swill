@@ -2641,7 +2641,8 @@ var EditableList = class extends (_a3 = SortableList, _editedObject_dec = [obser
     if (!editor || idx == null) return true;
     let editedObject;
     if (commit) {
-      editedObject = editor.commit();
+      if (!editor.commitEditing()) return false;
+      editedObject = this.editedObject;
       if (editedObject instanceof Model) {
         const error = editedObject.validate();
         if (error) {
@@ -2650,7 +2651,7 @@ var EditableList = class extends (_a3 = SortableList, _editedObject_dec = [obser
         }
       }
     } else {
-      editor.discard();
+      editor.discardEditing();
       editedObject = null;
     }
     this.editor = null;
@@ -2695,8 +2696,8 @@ var EditableList = class extends (_a3 = SortableList, _editedObject_dec = [obser
   }
   /** Default: prompt, validate, commit. Return false to refuse the focus
    *  transition (DOM focus snaps back to the editor). */
-  editorShouldEndEditing(editor) {
-    const obj = editor.commit();
+  editorShouldEndEditing(_editor) {
+    const obj = this.editedObject;
     if (!this.editedObjectHasChanges(obj)) {
       void this.endEditing(false);
       return true;
@@ -2753,18 +2754,22 @@ var Editor = class extends (_a4 = Controller, _representedObject_dec2 = [observa
   bindingRoot() {
     return "representedObject";
   }
-  /** Default returns `representedObject` as-is — two-way bindings have
-   *  already mutated it. Override for coercion. */
-  commit() {
-    return this.representedObject;
+  /** NSEditor `commitEditing`: push pending edits into `representedObject`
+   *  and report whether that succeeded. Two-way bindings have already
+   *  written, so nothing is pending by default; override to refuse when a
+   *  control holds a value it cannot push back. The host already holds the
+   *  object (it bound `representedObject`), so nothing is returned. */
+  commitEditing() {
+    return true;
   }
-  discard() {
+  /** NSEditor `discardEditing`. */
+  discardEditing() {
   }
   insertNewline(_event) {
-    this.commit();
+    this.commitEditing();
   }
   cancelOperation(_event) {
-    this.discard();
+    this.discardEditing();
   }
 };
 _init4 = __decoratorStart(_a4);

@@ -80,13 +80,13 @@ class CompilerTest < Minitest::Test
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes js, "class Swill__Bindings extends Swill__Object"
     assert_includes js, "class Swill__Controller__List extends Swill__Controller", "a class nested under a class compiles"
-    assert_match(/new Swill__Bindings\(\)\.wire_object\(\s*item,\s*element\s*\)/, js)
-    assert_match(/new Swill__Actions\(\)\.wire_into\(\s*this,\s*element\s*\)/, js)
+    assert_match(/new Swill__Bindings\(\)\.wireObject\(\s*item,\s*element\s*\)/, js)
+    assert_match(/new Swill__Actions\(\)\.wireInto\(\s*this,\s*element\s*\)/, js)
     assert_includes js, "Runtime.observePath(object, path, render)"
     assert_includes js, "Runtime.isTruthy(value)"
     assert_includes js, "element.addEventListener(event_name, handler)"
     assert_includes js, "class Swill__Actions extends Swill__Object"
-    assert_includes js, "controller.perform_action(action_name, element, event)"
+    assert_includes js, "controller.performAction(action_name, element, event)"
     assert_includes js, "new Swill__Bindings().wire(controller)"
     assert_includes js, "new Swill__Actions().wire(controller)"
     assert_match(/document\.addEventListener\(\s*"DOMContentLoaded"/, js)
@@ -160,14 +160,14 @@ class CompilerTest < Minitest::Test
       person.name = "Ada";
       holder.person = person;
       const failures = [];
-      for (const attempt of [() => { holder.person = null; holder.must_greeting(); },
-                             () => holder.cast_name("Ada"), () => holder.let_count("Ada"),
-                             () => holder.nilable_cast(3)]) {
+      for (const attempt of [() => { holder.person = null; holder.mustGreeting(); },
+                             () => holder.castName("Ada"), () => holder.letCount("Ada"),
+                             () => holder.nilableCast(3)]) {
         try { attempt(); failures.push(null); } catch (error) { failures.push(error.constructor.name); }
       }
       holder.person = person;
-      console.log(JSON.stringify([holder.must_greeting(), holder.cast_name(person), holder.let_count(["a"]),
-        holder.nilable_cast(null), holder.unsafe_length("abc"), holder.either(false), failures]));
+      console.log(JSON.stringify([holder.mustGreeting(), holder.castName(person), holder.letCount(["a"]),
+        holder.nilableCast(null), holder.unsafeLength("abc"), holder.either(false), failures]));
     JS
     ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
       class TestObject < Swill::Object; end
@@ -189,6 +189,121 @@ class CompilerTest < Minitest::Test
     RUBY
     assert status.success?, ruby
     assert_equal JSON.parse(ruby), javascript_result
+  end
+
+  # Ruby forms with no JavaScript spelling keep their Ruby meaning on the
+  # JavaScript surface instead of being mangled into property reads.
+  def test_ruby_queries_dup_and_warn_are_lowered_on_the_javascript_surface
+    compiler = Swill::Ruby2JS::Compiler.new
+    compiler.add(<<~'RUBY', javascript_only: true)
+      class Probe
+        def go(x)
+          warn("oops #{x}")
+          [x.dirty?, x.nil?, x.empty?, x.respond_to?(:draft), x.dup, x.is_a?(Probe), x.between?(1, 2),
+           x.index(1), x.first, x.to_s, x.some_member(), x.some_property, x.other_property = 1]
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "Runtime.warn(`oops ${x}`)"
+    assert_includes js, 'Runtime.read(x, "dirty?")'
+    assert_includes js, "x == null"
+    assert_includes js, 'Runtime.read(x, "empty?")'
+    assert_includes js, 'Runtime.respondsTo(x, "draft")'
+    assert_includes js, 'Runtime.read(x, "dup")'
+    assert_includes js, "x instanceof Probe"
+    assert_includes js, 'Runtime.invoke(x, "between?", 1, 2)'
+    assert_includes js, 'Runtime.invoke(x, "index", 1)', "a Ruby core method JavaScript lacks keeps Ruby's meaning"
+    assert_includes js, 'Runtime.read(x, "first")'
+    assert_includes js, 'Runtime.read(x, "to_s")'
+    assert_includes js, "x.someMember()", "a snake_case call is a Ruby member in its JavaScript spelling"
+    assert_includes js, "x.someProperty,", "without parentheses it is a property read"
+    assert_includes js, "x.otherProperty = 1"
+    refute_match(/x\.(dirty|nil|empty|dup|respond_to)\b/, js)
+    shared = javascript("def go; warn(\"shared\"); end")
+    assert_includes shared, 'Runtime.warn("shared")'
+    own = javascript("def warn(message); message; end\ndef go; warn(\"mine\"); end")
+    assert_includes own, 'this.warn("mine")', "an entry's own warn is a method call"
+  end
+
+  def test_class_methods_compile_to_statics_where_new_is_the_class
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Registry < TestObject
+        extend T::Sig
+        property :tag, type: String, default: ""
+        sig { params(value: String).returns(Registry) }
+        def self.make_one(value)
+          one = new
+          one.tag = value
+          one
+        end
+        sig { params(items: T::Array[String]).returns(T.nilable(String)) }
+        def self.first_of(items)
+          items.first
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "static makeOne(value) {"
+    assert_includes js, "let one = new this();"
+    assert_includes js, "static firstOf(items) {"
+    assert_equal ["x", "a", nil], execute(js + <<~JS)
+      const registry = Runtime.resolve("Registry");
+      console.log(JSON.stringify([registry.makeOne("x").tag, registry.firstOf(["a", "b"]), registry.firstOf([])]));
+    JS
+    surface = Swill::Ruby2JS::Compiler.new
+    surface.add("class Node\ndef self.of(element); element.__swill_view__; end\ndef self.find_root(node); Node.of(node); end\nend", javascript_only: true)
+    js = surface.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "static of(element) {"
+    assert_includes js, "static findRoot(node) {"
+    assert_includes js, "return Node.of(node);"
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def self.new; end") }
+    assert_includes error.message, "unsupported method definition self.new"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add("module Helper\ndef self.go; end\nend").javascript(runtime: "../lib/swill/runtime.mjs")
+    end
+    assert_includes error.message, "included"
+  end
+
+  # On the JavaScript surface a receiver whose class is known gets Ruby
+  # calls and property access from the compiler's knowledge, not from the
+  # parentheses; unknown receivers keep the parentheses convention.
+  def test_javascript_surface_resolves_typed_receivers_from_knowledge
+    compiler = Swill::Ruby2JS::Compiler.new
+    compiler.add(<<~RUBY, javascript_only: true)
+      class Widget
+        extend T::Sig
+        property :count, type: Integer, default: 0
+        sig { returns(Integer) }
+        def tally; count; end
+        sig { params(element: T.untyped).returns(T.nilable(Widget)) }
+        def self.of(element); element.__widget__; end
+      end
+      class Holder
+        extend T::Sig
+        def initialize(element)
+          super()
+          @widget = Widget.new
+          @element = element
+        end
+        sig { params(other: Widget, node: T.untyped).returns(T.untyped) }
+        def go(other, node)
+          found = Widget.of(node)
+          other.count = other.tally
+          @widget.count = @widget.tally + found.tally
+          @element.tally()
+          [other.count, found.count, node.count, node.tally(), node.tally, other.next_widget, other&.tally]
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "other.count = other.tally();", "a typed parameter: property write and a call without parentheses"
+    assert_includes js, "this._widget.count = this._widget.tally() + found.tally();", "an ivar assigned one class, and a local typed by a static method's signature"
+    assert_includes js, "this._element.tally();", "an untyped ivar stays native"
+    assert_includes js, "found.count,", "a declared property reads"
+    assert_includes js, "      node.count,\n      node.tally(),\n      node.tally,\n", "an unknown receiver keeps the parentheses convention"
+    assert_includes js, "other.nextWidget", "a member the class does not declare falls back to the snake_case rule"
+    assert_includes js, "other?.tally()", "safe navigation keeps its guard"
   end
 
   def test_sorbet_runtime_operations_work_on_the_javascript_surface
@@ -325,9 +440,9 @@ class CompilerTest < Minitest::Test
     assert_equal [[], false, ["Ada"], true, true, {}], execute(js + <<~JS)
       const first = new (Runtime.resolve("Example"))();
       const second = new (Runtime.resolve("Example"))();
-      const before = [[...first.names], first.any_predicate];
+      const before = [[...first.names], first.isAny];
       first.add("Ada");
-      console.log(JSON.stringify([...before, first.names, first.any_predicate, second.names.length === 0, second.lookup]));
+      console.log(JSON.stringify([...before, first.names, first.isAny, second.names.length === 0, second.lookup]));
     JS
   end
 
@@ -438,7 +553,7 @@ class CompilerTest < Minitest::Test
 
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS
       const object = new (Runtime.resolve("Example"))();
-      console.log(JSON.stringify([object.label(), object.helper_label(), object.record_label()]));
+      console.log(JSON.stringify([object.label(), object.helperLabel(), object.recordLabel()]));
     JS
     assert_equal ["feature", "helper", "record"], execute(js)
   end
@@ -538,7 +653,7 @@ class CompilerTest < Minitest::Test
     refute_includes js, "Runtime.valueRead("
     assert_equal [[true, false, true, true, true, false], [false, true, false], [false, nil, true]], execute(js + <<~JS)
       const example = new (Runtime.resolve("Example"))();
-      console.log(JSON.stringify([example.readers("Ada", [], null), example.dynamic_readers(""), example.dynamic_readers(null)]));
+      console.log(JSON.stringify([example.readers("Ada", [], null), example.dynamicReaders(""), example.dynamicReaders(null)]));
     JS
     js += <<~JS
       const object = new (Runtime.resolve("Example"))();
@@ -600,16 +715,16 @@ class CompilerTest < Minitest::Test
     assert_includes js, "Runtime.isEqual(local, [])"
     # Typed collections never get identity comparison; typed objects always do.
     assert_includes js, "Runtime.isEqual(items, [])"
-    assert_includes js, "other === this.maybe_object"
+    assert_includes js, "other === this.maybeObject"
     assert_includes js, 'items || "never"'
     # Signature return types and interpolation make later reads static.
-    assert_includes js, "Runtime.upcase(this.base_label())"
+    assert_includes js, "Runtime.upcase(this.baseLabel())"
     assert_includes js, "Runtime.downcase(interpolated)"
     # Boolean operands need logical ||; nullish ?? would keep Ruby's false.
     assert_includes js, 'flag || "yes"'
     assert_equal ["yes", true, ["ADA", "ada!"]], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
-      console.log(JSON.stringify([object.either(false), object.either(true), object.derived_label()]));
+      console.log(JSON.stringify([object.either(false), object.either(true), object.derivedLabel()]));
     JS
   end
 
@@ -777,11 +892,11 @@ class CompilerTest < Minitest::Test
     assert_equal ["Ada", "Grace", "Hello Grace", "G", "Hi Ada", 3, "Unknown method or wrong arity: greet", "plain"], execute(js + <<~JS)
       const caller = new (Runtime.resolve("Caller"))();
       const person = new (Runtime.resolve("Person"))();
-      const results = [caller.read_name(person)];
-      caller.write_name(person);
-      results.push(person.name, caller.greet(person), caller.plain_call(person), caller.constructed(), caller.native([1, 2]));
+      const results = [caller.readName(person)];
+      caller.writeName(person);
+      results.push(person.name, caller.greet(person), caller.plainCall(person), caller.constructed(), caller.native([1, 2]));
       try { caller.greet({}); } catch (error) { results.push(error.message); }
-      results.push(caller.read_name({name: "plain"}), "a plain object is a Hash: reads are key-value coding");
+      results.push(caller.readName({name: "plain"}), "a plain object is a Hash: reads are key-value coding");
       results.pop();
       console.log(JSON.stringify(results));
     JS
@@ -940,8 +1055,8 @@ class CompilerTest < Minitest::Test
     assert_equal [1, [["total", 0, 2], ["count", 0, 1]]], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
       const seen = [];
-      object.count_did_change = (previous, value) => seen.push(["count", previous, value]);
-      object.total_did_change = (previous, value) => seen.push(["total", previous, value]);
+      object.countDidChange = (previous, value) => seen.push(["count", previous, value]);
+      object.totalDidChange = (previous, value) => seen.push(["total", previous, value]);
       object.count = 1;
       console.log(JSON.stringify([object.count, seen]));
     JS
@@ -1051,9 +1166,9 @@ class CompilerTest < Minitest::Test
     assert_equal [[1, 2], {"name" => "Ada"}, ["name"], [1, 2], 5, "Ada", true, true], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
       const array = [1, 2], hash = {name: "Ada"};
-      console.log(JSON.stringify([object.copy_array(array), object.copy_hash(hash),
+      console.log(JSON.stringify([object.copyArray(array), object.copyHash(hash),
         object.keys(hash), object.inferred(), object.arithmetic([3]), object.copy,
-        object.copy_array(array) !== array, object.copy_hash(hash) !== hash]));
+        object.copyArray(array) !== array, object.copyHash(hash) !== hash]));
     JS
     ruby, status = Open3.capture2e("ruby", "-rjson", "-e", <<~RUBY)
       class Example
@@ -1143,20 +1258,20 @@ class CompilerTest < Minitest::Test
     RUBY
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
     # A typed receiver compiles to direct access; an untyped one stays dynamic.
-    assert_match(/typed_name\(other\) \{\s*return other\.name;/, js)
-    assert_match(/typed_rename\(other, value\) \{\s*return other\.name = value;/, js)
-    assert_match(/nilable_name\(other\) \{\s*return other\.name;/, js)
+    assert_match(/typedName\(other\) \{\s*return other\.name;/, js)
+    assert_match(/typedRename\(other, value\) \{\s*return other\.name = value;/, js)
+    assert_match(/nilableName\(other\) \{\s*return other\.name;/, js)
     assert_includes js, 'Runtime.write(other, "name", value)'
     js += <<~JS
       const method = new (Runtime.resolve("MethodOwner"))();
       const property = new (Runtime.resolve("PropertyOwner"))();
-      method.typed_rename(property, "typed");
+      method.typedRename(property, "typed");
       const typed = property.name;
-      method.untyped_rename(property, "untyped");
+      method.untypedRename(property, "untyped");
       let rejected;
-      try { method.untyped_rename(method, "x"); } catch (error) { rejected = error.message; }
-      console.log(JSON.stringify([method.own_name(), method.other_name(method), method.other_name(property),
-        method.typed_name(property), typed, property.name, rejected]));
+      try { method.untypedRename(method, "x"); } catch (error) { rejected = error.message; }
+      console.log(JSON.stringify([method.ownName(), method.otherName(method), method.otherName(property),
+        method.typedName(property), typed, property.name, rejected]));
     JS
     assert_equal ["method", "method", "untyped", "untyped", "typed", "untyped", "Unknown writer: name"], execute(js)
   end
@@ -1187,7 +1302,7 @@ class CompilerTest < Minitest::Test
     refute_includes js, "Runtime.include("
     refute_match(/class Generated|extends .*?\(|^\s*;\s*$/, js)
     assert_includes js, '"name": {'
-    assert_includes js, "function compute_label()"
+    assert_includes js, "function computeLabel()"
     assert_includes js, "Runtime.strip(super.normalize(value))"
     framework_js = framework.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes framework_js, "let copy = new this.constructor"
@@ -1213,7 +1328,7 @@ class CompilerTest < Minitest::Test
     RUBY
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs") + <<~JS
       const object = new (Runtime.resolve("Example"))();
-      console.log(JSON.stringify([object.make().label(), object.make_runtime().label()]));
+      console.log(JSON.stringify([object.make().label(), object.makeRuntime().label()]));
     JS
     assert_equal ["source superclass", "source runtime"], execute(js)
   end

@@ -94,7 +94,7 @@ try {
   // before controller_did_load.
   assert.deepEqual(await evaluate(`(() => {
     const container = document.querySelector("[window=main]");
-    const badge = container.children[0].__swill_view__.controller_value();
+    const badge = container.children[0].__swill_view__.controllerValue();
     return [container.getAttribute("name"), container.querySelector("p[bind]").textContent, badge.count, badge.restored];
   })()`), ["farewell", "Badge 2", 2, true]);
   assert.equal(await evaluate(`(() => {
@@ -110,13 +110,13 @@ try {
     const parent = application.controllers()[0];
     const badge = application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge"));
     const input = document.querySelector("input");
-    const results = [document.activeElement === input, application.first_responder() === parent.name_field];
+    const results = [document.activeElement === input, application.firstResponder() === parent.nameField];
     input.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
     results.push(document.querySelector("p[bind]").textContent, input.value);
     document.querySelector("section[controller='Demo::Badge'] button").focus();
-    results.push(application.first_responder() === badge);
+    results.push(application.firstResponder() === badge);
     input.focus();
-    results.push(application.first_responder() === parent.name_field);
+    results.push(application.firstResponder() === parent.nameField);
     input.value = "Grace";
     input.dispatchEvent(new Event("input", {bubbles: true}));
     return results;
@@ -149,7 +149,7 @@ try {
     return [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent,
       application.constructor === Swill.Runtime.resolve("Demo::Application"), application.launched,
       application.controllers().length,
-      parent.name_field.element() === document.querySelector("input"),
+      parent.nameField.element() === document.querySelector("input"),
       parent.badge === application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge")),
       parent.seed.name, parent.missing];
   })()`), ["Hello ", "Badge 0", true, true, 5, true, true, "Ada", null]);
@@ -181,9 +181,9 @@ try {
       location.hash);
     document.querySelector("[data-action=open_palette]").click();
     const dialog = document.querySelector("dialog");
-    results.push(dialog.open, application.first_responder() === dialog.__swill_view__.controller_value());
+    results.push(dialog.open, application.firstResponder() === dialog.__swill_view__.controllerValue());
     dialog.querySelector("[data-action=close]").click();
-    results.push(document.querySelector("dialog") === null, application.first_responder() === application.controllers()[0].name_field);
+    results.push(document.querySelector("dialog") === null, application.firstResponder() === application.controllers()[0].nameField);
     return results;
   })()`), ["farewell", "Farewell", "Badge 0", 5, "welcome", "Welcome", 1, "#main=welcome&main.n=0&people.selected=2", true, true, true, true]);
   // Back returns to the previous window content and its restored state.
@@ -194,7 +194,7 @@ try {
     history.back();
     await popped;
     await new Promise(resolve => setTimeout(resolve, 0));
-    const badge = container.children[0].__swill_view__.controller_value();
+    const badge = container.children[0].__swill_view__.controllerValue();
     return [...before, location.hash, container.getAttribute("name"), badge.count, badge.restored];
   })()`), ["#main=welcome&main.n=0&people.selected=2", "welcome", "#main=farewell&main.n=0&people.selected=2", "farewell", 0, true]);
   // The people list rendered rows from its template inside the people
@@ -203,7 +203,7 @@ try {
   // the parent, and a row's button reaches the parent knowing its row.
   assert.deepEqual(await evaluate(`(() => {
     const list = document.querySelector("section[controller='Demo::PeopleList']");
-    const controller = list.__swill_view__.controller_value();
+    const controller = list.__swill_view__.controllerValue();
     const application = document.body.__swill_application__;
     const rows = () => Array.from(list.querySelectorAll("tbody tr"));
     const names = () => rows().map(row => row.children[0].textContent);
@@ -211,23 +211,26 @@ try {
     const results = [names(), selected(), list.querySelector("output").textContent,
       list.querySelector("[data-action=activate_selection]").disabled];
     rows()[0].children[0].click();
-    results.push(selected(), controller.selected_object_id, list.querySelector("output").textContent, location.hash);
+    results.push(selected(), controller.selectedObjectId, list.querySelector("output").textContent, location.hash);
     list.focus();
-    results.push(application.first_responder() === controller);
+    results.push(application.firstResponder() === controller);
     list.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowDown", bubbles: true}));
     results.push(selected(), location.hash);
     list.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
-    results.push(document.querySelector("p[bind]").textContent);
+    results.push(rows().length, rows()[1].classList.contains("being-edited"), controller.isEditing());
+    list.querySelector("tbody tr[controller] input").dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    results.push(rows().length, controller.isEditing(), application.firstResponder() === controller);
     rows()[2].querySelector("button").click();
-    results.push(names(), controller.selected_object_id, selected(), document.querySelector("p[bind]").textContent);
+    results.push(names(), controller.selectedObjectId, selected(), document.querySelector("p[bind]").textContent);
     return results;
   })()`), [
     ["Ada", "Grace", "Linus"], [false, true, false], "Grace", false,
     [true, false, false], "1", "Ada", "#main=farewell&main.n=0&people.selected=1&people.dir=ascending",
     true,
     [false, true, false], "#main=farewell&main.n=0&people.selected=2&people.dir=ascending",
-    "Hello Grace",
-    ["Ada", "Grace"], "3", [false, false], "Hello Grace"
+    4, true, true,
+    3, false, true,
+    ["Ada", "Grace"], "3", [false, false], "Hello Hopper"
   ]);
   // Header cells sort the list through the sort_by action; the sort is
   // written to the fragment, aria-sort follows the sorted column, and the
@@ -249,6 +252,36 @@ try {
     ["Grace", "Ada"], [null, "ascending"], [false, true], "#main=farewell&main.n=0&people.selected=1&people.dir=ascending&people.sort=role",
     ["Ada", "Grace"], [null, "descending"], "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
   ]);
+  // Enter on the selected row opens the inline editor after it; typing
+  // edits a draft, Enter commits it into the person and the row, and Escape
+  // discards.
+  assert.deepEqual(await evaluate(`(() => {
+    const list = document.querySelector("section[controller='Demo::PeopleList']");
+    const controller = list.__swill_view__.controllerValue();
+    const rows = () => Array.from(list.querySelectorAll("tbody tr"));
+    const names = () => rows().filter(row => !row.hasAttribute("controller")).map(row => row.children[0].textContent);
+    const editor = () => list.querySelector("tbody tr[controller]");
+    const key = (target, name) => target.dispatchEvent(new KeyboardEvent("keydown", {key: name, bubbles: true}));
+    const type = (input, value) => { input.value = value; input.dispatchEvent(new Event("input", {bubbles: true})); };
+    rows()[0].children[0].click();
+    list.focus();
+    key(list, "Enter");
+    const results = [rows().length, rows()[0].classList.contains("being-edited"), document.activeElement === editor().querySelector("input")];
+    type(editor().querySelector("input"), "Edited");
+    results.push(names()[0], controller.editedObject.name);
+    key(editor().querySelector("input"), "Enter");
+    results.push(rows().length, names()[0], controller.selectedObject.name, document.activeElement === list);
+    key(list, "Enter");
+    type(editor().querySelector("input"), "Discarded");
+    key(editor().querySelector("input"), "Escape");
+    results.push(editor() === null, names()[0], location.hash);
+    return results;
+  })()`), [
+    3, true, true,
+    "Ada", "Edited",
+    2, "Edited", "Edited", true,
+    true, "Edited", "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
+  ]);
   // Code-created content awakens through the MutationObserver, and removed
   // content is torn down, without any explicit call.
   assert.deepEqual(await evaluate(`(async () => {
@@ -258,11 +291,11 @@ try {
     late.innerHTML = '<p bind="title"></p>';
     main.appendChild(late);
     await new Promise(resolve => setTimeout(resolve, 0));
-    const controller = late.__swill_view__.controller_value();
+    const controller = late.__swill_view__.controllerValue();
     const awakened = [late.querySelector("p").textContent, controller.parent() === document.body.__swill_application__.controllers()[0]];
     late.remove();
     await new Promise(resolve => setTimeout(resolve, 0));
-    return [...awakened, controller.view().controller_value() === null];
+    return [...awakened, controller.view().controllerValue() === null];
   })()`), ["Badge 0", true, true]);
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();

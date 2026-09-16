@@ -64,6 +64,13 @@ export class Element {
     this.parentElement = null;
   }
 
+  after(node) {
+    const parent = this.parentElement;
+    node.remove();
+    node.parentElement = parent;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+  }
+
   contains(other) {
     for (let node = other; node; node = node.parentElement) if (node === this) return true;
     return false;

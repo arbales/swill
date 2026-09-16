@@ -15,8 +15,8 @@ export interface EditorHost<T> {
   editorShouldEndEditing(editor: InlineEditor<T>): boolean;
 }
 
-/** Base editor: owns `representedObject`, exposes commit/discard, routes
- *  Enter→commit and Esc→discard. */
+/** Base editor: owns `representedObject`, exposes NSEditor's
+ *  commitEditing/discardEditing, routes Enter→commit and Esc→discard. */
 @register
 export class Editor<T> extends Controller {
   @observable accessor representedObject: T | null = null;
@@ -25,19 +25,23 @@ export class Editor<T> extends Controller {
     return "representedObject";
   }
 
-  /** Default returns `representedObject` as-is — two-way bindings have
-   *  already mutated it. Override for coercion. */
-  commit(): T | null {
-    return this.representedObject;
+  /** NSEditor `commitEditing`: push pending edits into `representedObject`
+   *  and report whether that succeeded. Two-way bindings have already
+   *  written, so nothing is pending by default; override to refuse when a
+   *  control holds a value it cannot push back. The host already holds the
+   *  object (it bound `representedObject`), so nothing is returned. */
+  commitEditing(): boolean {
+    return true;
   }
 
-  discard(): void {}
+  /** NSEditor `discardEditing`. */
+  discardEditing(): void {}
 
   override insertNewline(_event: KeyboardEvent): void {
-    this.commit();
+    this.commitEditing();
   }
   override cancelOperation(_event: KeyboardEvent): void {
-    this.discard();
+    this.discardEditing();
   }
 }
 

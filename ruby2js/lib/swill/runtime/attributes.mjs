@@ -6,7 +6,7 @@ export function isAttribute(object, name) {
 }
 
 // Resolve validate_<name> through installed metadata.
-export function validate_attribute(object, name, value, previous) {
+export function validateAttribute(object, name, value, previous) {
   if (!isAttribute(object, name)) return value;
   const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
   return validator && validator.arity === 2
@@ -23,7 +23,7 @@ export function outlets(object) {
     .filter(descriptor => descriptor.outlet);
 }
 
-export function collect_attributes(object) {
+export function collectAttributes(object) {
   const result = {};
   for (const descriptor of declarations(object.constructor, "properties").values()) {
     if (descriptor.attribute && !descriptor.computed) {
@@ -33,7 +33,7 @@ export function collect_attributes(object) {
   return result;
 }
 
-export function apply_attributes(object, source) {
+export function applyAttributes(object, source) {
   for (const descriptor of declarations(object.constructor, "properties").values()) {
     if (!descriptor.attribute || descriptor.computed) continue;
     if (Object.hasOwn(source, descriptor.key)) {

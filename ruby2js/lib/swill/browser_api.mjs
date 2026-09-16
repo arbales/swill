@@ -1,6 +1,8 @@
 // JavaScript authoring over the Ruby2JS-generated framework. This module only
 // describes JavaScript classes to the existing runtime; framework behavior
-// remains in the compiled Ruby classes.
+// remains in the compiled Ruby classes, whose members already carry their
+// JavaScript spelling (viewDidLoad, makeRowElement, isRowElement), so a
+// subclass overrides them directly.
 
 const registered = new WeakSet();
 
@@ -93,52 +95,16 @@ function declarationsFor(klass) {
   return {properties, methods};
 }
 
-function bridge(prototype, internalName, publicName) {
-  const descriptor = Object.getOwnPropertyDescriptor(prototype, internalName);
-  if (!descriptor || typeof descriptor.value !== "function") {
-    throw new Error(`Missing framework method: ${internalName}`);
-  }
-  const original = descriptor.value;
-  Object.defineProperty(prototype, publicName, {
-    configurable: true, writable: true, value: original
-  });
-  Object.defineProperty(prototype, internalName, {
-    ...descriptor,
-    value(...args) { return this[publicName](...args); }
-  });
-}
-
 export function browserAPI(definitions, Runtime) {
   const Controller = definitions.Swill__Controller;
   const Application = definitions.Swill__Application;
   const View = definitions.Swill__View;
   const List = definitions.Swill__Controller__List;
   const SortableList = definitions.Swill__Controller__SortableList;
-  const roots = new Set([Controller, Application, View, List, SortableList]);
-
-  [
-    ["binding_root", "bindingRoot"],
-    ["decode_outlet_data", "decodeOutletData"],
-    ["view_did_load", "viewDidLoad"],
-    ["awake_from_dom", "awakeFromDOM"],
-    ["controller_did_restore", "controllerDidRestore"],
-    ["controller_did_load", "controllerDidLoad"],
-    ["view_will_appear", "viewWillAppear"],
-    ["view_did_appear", "viewDidAppear"],
-    ["view_will_disappear", "viewWillDisappear"],
-    ["view_did_disappear", "viewDidDisappear"]
-  ].forEach(([internalName, publicName]) => bridge(Controller.prototype, internalName, publicName));
-  bridge(Application.prototype, "application_did_launch", "applicationDidLaunch");
-  bridge(Application.prototype, "application_will_terminate", "applicationWillTerminate");
-  [
-    ["make_row_element", "makeRowElement"],
-    ["configure_row", "configureRow"],
-    ["rows_are_views_predicate", "rowsAreViews"],
-    ["row_element_predicate", "isRowElement"],
-    ["selected_object_did_change", "selectedObjectDidChange"],
-    ["activate_selection", "activateSelection"]
-  ].forEach(([internalName, publicName]) => bridge(List.prototype, internalName, publicName));
-  bridge(SortableList.prototype, "sort_key_for", "sortKeyFor");
+  const Editor = definitions.Swill__Controller__Editor;
+  const InlineEditor = definitions.Swill__Controller__InlineEditor;
+  const EditableList = definitions.Swill__Controller__EditableList;
+  const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList]);
 
   function register(name, klass) {
     if (arguments.length === 1) {
@@ -191,6 +157,9 @@ export function browserAPI(definitions, Runtime) {
     View,
     List,
     SortableList,
+    Editor,
+    InlineEditor,
+    EditableList,
     register,
     start
   });

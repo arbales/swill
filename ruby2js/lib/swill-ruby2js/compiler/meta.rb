@@ -27,7 +27,7 @@ module Swill
                 seeds = attributes.map do |property|
                   "#{object_key(property['name'])}: {property: #{property['name'].to_json}, key: #{property['key'].to_json}}"
                 end
-                seeded = registries.map { |registry| "#{registry['name']}: {\n#{seeds.join(",\n")}\n}" }
+                seeded = registries.map { |registry| "#{Knowledge.member(registry['name'])}: {\n#{seeds.join(",\n")}\n}" }
                 fields << "registries: {#{seeded.join(",\n")}}"
               end
             end
@@ -92,10 +92,10 @@ module Swill
           declarations = entry["registries"].map do |registry|
             name = registry["name"]
             "#{Knowledge.member(name)}() { return Runtime.inheritableRegistry(this, " \
-              "#{name.to_json}, #{registry['initial'].to_json}); }"
+              "#{Knowledge.member(name).to_json}, #{registry['initial'].to_json}); }"
           end
           declarations.concat(entry["settings"].map do |name|
-            "#{Knowledge.member(name)}(...values) { return Runtime.classSetting(this, #{name.to_json}, values); }"
+            "#{Knowledge.member(name)}(...values) { return Runtime.classSetting(this, #{Knowledge.member(name).to_json}, values); }"
           end)
           unless declarations.empty?
             insertion = declarations.join("\n")

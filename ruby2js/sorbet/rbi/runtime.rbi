@@ -69,6 +69,9 @@ module Swill
     sig { params(message: String).void }
     def self.warn(message); end
 
+    sig { params(value: T.untyped).returns(T.untyped) }
+    def self.duplicate(value); end
+
     sig { params(left: T.untyped, right: T.untyped).returns(Integer) }
     def self.compareValues(left, right); end
 

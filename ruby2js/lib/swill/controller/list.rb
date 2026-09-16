@@ -98,10 +98,9 @@ module Swill
     # way an action handler learns which row its sender sits in.
     sig { params(element: T.untyped).returns(Integer) }
     def row_for(element)
-      mount = container
-      node = element
-      node = node.parentElement while node && node.parentElement != mount
-      node ? row_elements.indexOf(node) : -1
+      row = container_view.child_containing(element)
+      index = row ? row_elements.index(row) : nil
+      index == nil ? -1 : index
     end
 
     # ---- lifecycle ----
@@ -109,9 +108,8 @@ module Swill
     sig { override.void }
     def view_did_load
       super
-      root = @view.element()
-      root.setAttribute("tabindex", "0") unless root.hasAttribute("tabindex")
-      self.allows_multiple_selection = true if root.hasAttribute("multiple")
+      @view.ensure_focusable
+      self.allows_multiple_selection = true if @view.has_attribute?("multiple")
     end
 
     # After outlets connect, so rows and header_view are known.
@@ -240,9 +238,9 @@ module Swill
     sig { params(_item: T.untyped).returns(T.untyped) }
     def make_row_element(_item)
       template = row_template
-      node = template ? template.content.firstElementChild : nil
+      node = template ? container_view.clone_template(template) : nil
       raise 'List has no <template for="row"> and no make_row_element override' unless node
-      node.cloneNode(true)
+      node
     end
 
     # NSTableView willDisplayCell analog.
@@ -259,9 +257,9 @@ module Swill
     sig { params(item: T.untyped).void }
     def attach_row(item)
       element = make_row_element(item)
-      container.appendChild(element)
+      container_view.append(element)
       if rows_are_views?
-        row_view = element.__swill_view__ || View.new(element)
+        row_view = View.of(element) || View.new(element)
         container_view.adopt_subview(row_view)
       end
       # Managed elements inside the row awaken under it before its bindings
@@ -286,15 +284,15 @@ module Swill
 
     sig { params(element: T.untyped).void }
     def release_row(element)
-      Awakening.new.detach(element)
+      Awakening.detach(element)
       release = element.__swill_row__
       if release
         release.()
         element.__swill_row__ = nil
       end
-      row_view = element.__swill_view__
+      row_view = View.of(element)
       row_view.remove_from_superview() if row_view
-      element.remove()
+      container_view.remove(element)
     end
 
     # Reflect the selection onto the rendered rows and keep the leading
@@ -305,30 +303,24 @@ module Swill
       indexes = current_indexes
       elements = row_elements
       elements.forEach do |element, index|
-        selected = indexes.includes(index)
-        element.classList.toggle("selected", selected)
-        element.setAttribute("aria-selected", selected ? "true" : "false")
+        container_view.mark_selected(element, indexes.includes(index))
       end
       first = indexes.length > 0 ? elements[indexes[0]] : nil
-      first.scrollIntoView({block: "nearest"}) if first && first.scrollIntoView
+      container_view.reveal(first) if first
     end
 
     # ---- mouse: click selects, shift-click extends, double-click activates ----
 
     sig { void }
     def install_selection
-      root = @view.element()
-      @on_mouse_down = ->(event) { row_mouse_down(event) }
-      @on_click = ->(event) { row_clicked(event) }
-      @on_double_click = ->(event) { row_double_clicked(event) }
-      root.addEventListener("mousedown", @on_mouse_down)
+      stop_mouse_down = @view.listen("mousedown", ->(event) { row_mouse_down(event) }, false)
       # Capture, so the selection is current before a row's own action runs.
-      root.addEventListener("click", @on_click, true)
-      root.addEventListener("dblclick", @on_double_click)
+      stop_click = @view.listen("click", ->(event) { row_clicked(event) }, true)
+      stop_double_click = @view.listen("dblclick", ->(event) { row_double_clicked(event) }, false)
       register_teardown(->() do
-        root.removeEventListener("mousedown", @on_mouse_down)
-        root.removeEventListener("click", @on_click, true)
-        root.removeEventListener("dblclick", @on_double_click)
+        stop_mouse_down.()
+        stop_click.()
+        stop_double_click.()
         clear_rows
         @awakened = false
       end)
@@ -341,9 +333,7 @@ module Swill
       return unless self.allows_multiple_selection && event.shiftKey
       return if row_for(event.target) < 0
       event.preventDefault()
-      owner_document = @view.element().ownerDocument
-      selection = owner_document.getSelection ? owner_document.getSelection() : nil
-      selection.removeAllRanges() if selection
+      @view.clear_text_selection
     end
 
     sig { params(event: T.untyped).void }
@@ -386,8 +376,8 @@ module Swill
     # The model id of object as a string, or nil when it has none.
     sig { params(object: T.untyped).returns(T.nilable(String)) }
     def identifier_for(object)
-      return nil unless object && Runtime.respondsTo(object, "id")
-      value = Runtime.read(object, "id")
+      return nil unless object && object.respond_to?(:id)
+      value = object.id
       value == nil ? nil : "#{value}"
     end
 

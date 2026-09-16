@@ -310,7 +310,7 @@ module Swill
     def requested_content(window_name, default_name, requested)
       return default_name if requested == nil || requested == default_name
       return requested if window_content?(requested)
-      Runtime.warn("window \"#{window_name}\" requested unknown content \"#{requested}\"")
+      warn("window \"#{window_name}\" requested unknown content \"#{requested}\"")
       default_name
     end
 
@@ -439,7 +439,7 @@ module Swill
         if window_content?(requested)
           load_window_content_with(window.name, requested, :none)
         else
-          Runtime.warn("window \"#{window.name}\" requested unknown content \"#{requested}\"")
+          warn("window \"#{window.name}\" requested unknown content \"#{requested}\"")
         end
       else
         restore_window_state(window, false, false)

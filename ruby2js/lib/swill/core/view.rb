@@ -86,6 +86,102 @@ module Swill
       @controller || @superview
     end
 
+    # ---- elements: the DOM work a controller leaves to its view ----
+
+    # The View on an element, or nil when it has none.
+    sig { params(element: T.untyped).returns(T.nilable(View)) }
+    def self.of(element)
+      element.__swill_view__ || nil
+    end
+
+    # The controller rooted at an element, or nil.
+    sig { params(element: T.untyped).returns(T.nilable(Controller)) }
+    def self.controller_for(element)
+      view = View.of(element)
+      view ? view.controller_value() : nil
+    end
+
+    sig { params(name: String).returns(T::Boolean) }
+    def has_attribute?(name)
+      @element.hasAttribute(name)
+    end
+
+    sig { params(element: T.untyped).returns(T::Boolean) }
+    def contains?(element)
+      @element.contains(element)
+    end
+
+    # A fresh element from an inert template's content, or nil when the
+    # template has none.
+    sig { params(template: T.untyped).returns(T.untyped) }
+    def clone_template(template)
+      node = template.content.firstElementChild
+      node ? node.cloneNode(true) : nil
+    end
+
+    sig { params(element: T.untyped).void }
+    def append(element)
+      @element.appendChild(element)
+    end
+
+    sig { params(anchor: T.untyped, element: T.untyped).void }
+    def insert_after(anchor, element)
+      anchor.after(element)
+    end
+
+    sig { params(element: T.untyped).void }
+    def remove(element)
+      element.remove()
+    end
+
+    # The direct child of this view's element that contains element, or nil.
+    sig { params(element: T.untyped).returns(T.untyped) }
+    def child_containing(element)
+      node = element
+      node = node.parentElement while node && node.parentElement != @element
+      node
+    end
+
+    # A state class on a child element.
+    sig { params(element: T.untyped, name: String, on: T::Boolean).void }
+    def mark(element, name, on)
+      element.classList.toggle(name, on)
+    end
+
+    # The selected state, as a class and for assistive technology.
+    sig { params(element: T.untyped, on: T::Boolean).void }
+    def mark_selected(element, on)
+      mark(element, "selected", on)
+      element.setAttribute("aria-selected", on ? "true" : "false")
+    end
+
+    sig { params(element: T.untyped).void }
+    def reveal(element)
+      element.scrollIntoView({block: "nearest"}) if element.scrollIntoView
+    end
+
+    # Keyboard focus needs a tab stop.
+    sig { void }
+    def ensure_focusable
+      @element.setAttribute("tabindex", "0") unless @element.hasAttribute("tabindex")
+    end
+
+    # Drop the browser's text selection, as before a shift-click sweep.
+    sig { void }
+    def clear_text_selection
+      owner_document = @element.ownerDocument
+      selection = owner_document.getSelection ? owner_document.getSelection() : nil
+      selection.removeAllRanges() if selection
+    end
+
+    # An event listener on this view's element; the returned callable
+    # removes it.
+    sig { params(type: String, handler: T.untyped, capture: T::Boolean).returns(T.proc.void) }
+    def listen(type, handler, capture)
+      @element.addEventListener(type, handler, capture)
+      ->() { @element.removeEventListener(type, handler, capture) }
+    end
+
     # ---- focus ----
 
     sig { returns(String) }

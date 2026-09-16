@@ -15,16 +15,16 @@ const Actions = Runtime.resolve("Swill::Actions");
 test("real Attributes concern builds isolated inherited registries", () => {
   const Base = Runtime.resolve("Swill::Model::Base");
   const result = {
-    record: Object.keys(Base.model_attributes()),
-    person: Object.keys(Person.model_attributes()),
-    special: Object.keys(SpecialPerson.model_attributes())
+    record: Object.keys(Base.modelAttributes()),
+    person: Object.keys(Person.modelAttributes()),
+    special: Object.keys(SpecialPerson.modelAttributes())
   };
   assert.deepEqual(result, JSON.parse(readFileSync("build/mri-attributes.json")));
-  assert.notEqual(Person.model_attributes(), Base.model_attributes());
-  assert.notEqual(SpecialPerson.model_attributes(), Person.model_attributes());
-  assert.equal(Person.model_attributes().name.type, "String");
-  assert.equal(SpecialPerson.model_attributes().role.key, "job");
-  assert.equal(SpecialPerson.model_attributes().role.defaultValue(), "editor");
+  assert.notEqual(Person.modelAttributes(), Base.modelAttributes());
+  assert.notEqual(SpecialPerson.modelAttributes(), Person.modelAttributes());
+  assert.equal(Person.modelAttributes().name.type, "String");
+  assert.equal(SpecialPerson.modelAttributes().role.key, "job");
+  assert.equal(SpecialPerson.modelAttributes().role.defaultValue(), "editor");
 });
 
 test("included declarations and super-based mutation hooks agree with MRI", () => {
@@ -61,8 +61,8 @@ test("shared Ruby model has the same result on MRI and compiled JavaScript", () 
   person.loud = true;
   const result = {
     renamed, greeting: person.greeting(), id: person.id, role: person.role, changes,
-    truth: [person.ruby_truth(0), person.ruby_truth(null)],
-    or: [person.ruby_or(""), person.ruby_or(null)]
+    truth: [person.rubyTruth(0), person.rubyTruth(null)],
+    or: [person.rubyOr(""), person.rubyOr(null)]
   };
   assert.deepEqual(result, JSON.parse(readFileSync(new URL("../build/mri-result.json", import.meta.url))));
 });
@@ -73,27 +73,27 @@ test("dirty tracking and validation agree with MRI", () => {
   person.observe("dirty?", value => changes.push(["dirty?", value]));
   person.observe("dirty_attributes", value => changes.push(["dirty_attributes", [...value]]));
   const steps = [];
-  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  steps.push([person.isDirty, [...person.dirty()]]);
   person.name = "Ada";
-  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  steps.push([person.isDirty, [...person.dirty()]]);
   person.role = " writer ";
   steps.push([person.role, [...person.dirty()]]);
   person.name = "";
-  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  steps.push([person.isDirty, [...person.dirty()]]);
   let message;
   assert.throws(() => { person.role = "  "; }, error => { message = error.message; return true; });
   steps.push([message, person.role, [...person.dirty()]]);
-  person.apply_attributes({name: "Grace"});
-  steps.push([person.name, person.dirty_predicate, [...person.dirty()]]);
+  person.applyAttributes({name: "Grace"});
+  steps.push([person.name, person.isDirty, [...person.dirty()]]);
   const draft = person.draft();
-  steps.push([draft.name, draft.role, draft.dirty_predicate]);
-  person.mark_clean_bang();
-  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  steps.push([draft.name, draft.role, draft.isDirty]);
+  person.markClean();
+  steps.push([person.isDirty, [...person.dirty()]]);
   person.role = "editor";
-  steps.push([person.dirty_predicate, [...person.dirty()]]);
+  steps.push([person.isDirty, [...person.dirty()]]);
   assert.deepEqual({steps, changes}, JSON.parse(readFileSync("build/mri-dirty.json")));
   assert.equal(Runtime.readPath(person, "dirty?"), true);
-  assert.notEqual(person.dirty(), person.dirty_attributes, "dirty returns a copy");
+  assert.notEqual(person.dirty(), person.dirtyAttributes, "dirty returns a copy");
 });
 
 test("generated registry crosses artifact boundaries without exposing globals", () => {
@@ -218,7 +218,7 @@ test("dynamic writers mirror dynamic readers and primitives skip metadata", () =
   const view = new (Runtime.resolve("Swill::View"))({});
   const controller = new Controller();
   Runtime.write(view, "controller", controller);
-  assert.equal(view.controller_value(), controller);
+  assert.equal(view.controllerValue(), controller);
   assert.equal(Runtime.read(" Ada ", "strip"), "Ada");
   assert.equal(Runtime.read(null, "strip"), null);
   assert.throws(() => Runtime.read(42, "strip"), /requires a string/);
@@ -251,6 +251,10 @@ test("action dispatch uses generated method names and validates arity", () => {
   assert.notEqual(controller.person, before, "clear resets to a fresh person");
   assert.throws(() => Runtime.invoke(controller, "clear", 1), /wrong arity/);
   assert.throws(() => Runtime.invoke(controller, "toString"), /Unknown method/);
+  // Dynamic dispatch on a plain value carries Ruby's core methods.
+  assert.deepEqual([Runtime.invoke([3, 1], "index", 1), Runtime.invoke([3], "index", 9), Runtime.invoke([1, 2, 3], "take", 2)], [1, null, [1, 2]]);
+  assert.deepEqual([Runtime.read([3, 1], "first"), Runtime.read([], "last"), Runtime.read([1, null, 1], "compact"), Runtime.read(null, "to_s")], [3, null, [1, 1], ""]);
+  assert.throws(() => Runtime.read("text", "first"), /requires an array/);
   assert.throws(() => Runtime.performAction(controller, "toString", {}, {}), /Unknown action/);
 });
 
@@ -276,8 +280,8 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   const input = new Element({bind: "name"}, "INPUT");
   const output = new Element({bind: "label"});
   const bindings = new Bindings();
-  const unbindInput = bindings.wire_element(person, input, null);
-  const unbindOutput = bindings.wire_element(person, output, null);
+  const unbindInput = bindings.wireElement(person, input, null);
+  const unbindOutput = bindings.wireElement(person, output, null);
   input.value = "Ada";
   input.dispatchEvent(new Event("input"));
   assert.equal(person.name, "Ada");
@@ -292,11 +296,11 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   assert.equal(output.textContent, "ADA");
   assert.equal(input.value, "Ignored");
   assert.throws(
-    () => bindings.wire_element(person, new Element({bind: "label"}, "INPUT"), null),
+    () => bindings.wireElement(person, new Element({bind: "label"}, "INPUT"), null),
     /Read-only/
   );
   const readonly = new Element({bind: "label", readonly: ""}, "INPUT");
-  const unbindReadonly = bindings.wire_element(person, readonly, null);
+  const unbindReadonly = bindings.wireElement(person, readonly, null);
   assert.equal(readonly.value, "GRACE");
   readonly.value = "Ignored";
   readonly.dispatchEvent(new Event("input"));
@@ -304,7 +308,7 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   unbindReadonly();
 
   const checkbox = new Element({bind: "loud"}, "INPUT", "checkbox");
-  const unbindCheckbox = bindings.wire_element(person, checkbox, null);
+  const unbindCheckbox = bindings.wireElement(person, checkbox, null);
   assert.equal(checkbox.checked, true);
   checkbox.checked = false;
   checkbox.dispatchEvent(new Event("change"));
@@ -314,7 +318,7 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   // A path whose owner is not there yet wires, ignores writes, and catches up.
   const controller = new Controller();
   const pending = new Element({bind: "person.name"}, "INPUT");
-  const unbindPending = bindings.wire_element(controller, pending, null);
+  const unbindPending = bindings.wireElement(controller, pending, null);
   assert.equal(pending.value, "");
   pending.value = "Early";
   pending.dispatchEvent(new Event("input"));
@@ -344,7 +348,7 @@ test("compiled actions parse event prefixes and release listeners", () => {
   const actions = new Actions();
   const first = new Person();
   controller.person = first;
-  const dispose = actions.wire_element(controller, element);
+  const dispose = actions.wireElement(controller, element);
   element.dispatchEvent(new Event("click"));
   assert.equal(controller.person, first, "click is not the selected event");
   element.dispatchEvent(new Event("change"));
@@ -356,21 +360,21 @@ test("compiled actions parse event prefixes and release listeners", () => {
   assert.equal(controller.person, second, "a disposed action no longer fires");
   assert.equal(element.__swill_action__, false);
   const blank = new Element(" ");
-  actions.wire_element(controller, blank)();
+  actions.wireElement(controller, blank)();
   assert.equal(blank.__swill_action__, undefined);
 });
 
 test("the shared setter coerces before equality and invalidates before hooks", () => {
   const events = [];
   class Hooks extends SwillObject {
-    coerce_property_value(_name, value) { return value.trim(); }
-    property_will_change(name, previous, value) { events.push(["will", previous, value]); }
-    name_did_change(previous, value) { events.push(["did", this.label]); }
+    coercePropertyValue(_name, value) { return value.trim(); }
+    propertyWillChange(name, previous, value) { events.push(["will", previous, value]); }
+    nameDidChange(previous, value) { events.push(["did", this.label]); }
   }
   Runtime.installClass(Hooks, "Test::Hooks", [
     {name: "name", js: "name", defaultValue() { return ""; }},
     {name: "label", js: "label", computed: true, compute() { return this.name.toUpperCase(); }}
-  ], [{name: "name_did_change", js: "name_did_change", arity: 2}]);
+  ], [{name: "name_did_change", js: "nameDidChange", arity: 2}]);
   const object = new Hooks();
   assert.equal(object.label, "");
   object.observe("name", value => events.push(["observe", value]));
@@ -480,13 +484,13 @@ test("installation rejects a setter for a declared property, before registering 
 test("a did_change hook runs for stored properties and keeps a computed property current", () => {
   class Tally extends SwillObject {
     constructor() { super(); this.seen = []; }
-    count_did_change(previous, value) { this.seen.push(["count", previous, value]); }
-    total_did_change(previous, value) { this.seen.push(["total", previous, value]); }
+    countDidChange(previous, value) { this.seen.push(["count", previous, value]); }
+    totalDidChange(previous, value) { this.seen.push(["total", previous, value]); }
   }
   Runtime.install({classes: {"Test::Tally": {
     constructor: Tally,
     properties: {count: {defaultValue() { return 1; }}, total: {compute() { return this.count * 2; }}},
-    methods: {count_did_change: {arity: 2}, total_did_change: {arity: 2}}
+    methods: {count_did_change: {arity: 2, js: "countDidChange"}, total_did_change: {arity: 2, js: "totalDidChange"}}
   }}});
   const tally = new Tally();
   tally.count = 2;
@@ -513,8 +517,8 @@ let fixtureSequence = 0;
 // under fresh names exactly like generated metadata would.
 function nestedFixture() {
   const log = [];
-  const hooks = ["view_did_load", "awake_from_dom", "controller_did_load", "view_will_appear",
-    "view_did_appear", "view_will_disappear", "view_did_disappear"];
+  const hooks = ["viewDidLoad", "awakeFromDOM", "controllerDidLoad", "viewWillAppear",
+    "viewDidAppear", "viewWillDisappear", "viewDidDisappear"];
   const recording = (Base, label) => {
     const klass = class extends Base {};
     for (const hook of hooks) {
@@ -563,31 +567,31 @@ test("awakening builds a sparse view tree that defines ownership", () => {
   assert.equal(f.controllers.length, 3);
   assert.ok(f.parent instanceof Controller);
   assert.ok(f.child instanceof Badge);
-  assert.deepEqual(Array.from(f.parent.child_controllers()), [f.child]);
-  assert.deepEqual(Array.from(f.child.child_controllers()), [f.grandchild]);
-  assert.deepEqual(Array.from(f.grandchild.child_controllers()), []);
+  assert.deepEqual(Array.from(f.parent.childControllers()), [f.child]);
+  assert.deepEqual(Array.from(f.child.childControllers()), [f.grandchild]);
+  assert.deepEqual(Array.from(f.grandchild.childControllers()), []);
   assert.equal(f.child.parent(), f.parent);
   assert.equal(f.grandchild.parent(), f.child);
   assert.equal(f.parent.parent(), null);
-  assert.equal(f.child.next_responder(), f.parent);
-  assert.equal(f.parent.next_responder(), null);
+  assert.equal(f.child.nextResponder(), f.parent);
+  assert.equal(f.parent.nextResponder(), null);
   assert.equal(f.child.view().superview(), f.parent.view());
-  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.name_field, f.child.view()]);
+  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.nameField, f.child.view()]);
   assert.equal(f.grandchild.view().owner(), f.grandchild);
   assert.equal(f.grandchildRoot.parentElement.__swill_view__, undefined, "plain elements never become views");
   assert.equal(f.parentTitle.__swill_view__, undefined, "bind-only elements never become views");
   assert.equal(f.parentClear.__swill_view__, undefined, "action-only elements never become views");
-  assert.equal(f.childRoot.__swill_view__.next_responder(), f.child);
+  assert.equal(f.childRoot.__swill_view__.nextResponder(), f.child);
 });
 
 test("lifecycle runs children first per phase and preserves the flat order", () => {
   const f = nestedFixture();
   const phase = hook => ["grandchild", "child", "parent"].map(label => `${label}:${hook}`);
   assert.deepEqual(f.log, [
-    "grandchild:view_did_load", "grandchild:awake_from_dom",
-    "child:view_did_load", "child:awake_from_dom",
-    "parent:view_did_load", "parent:awake_from_dom",
-    ...phase("controller_did_load"), ...phase("view_will_appear"), ...phase("view_did_appear")
+    "grandchild:viewDidLoad", "grandchild:awakeFromDOM",
+    "child:viewDidLoad", "child:awakeFromDOM",
+    "parent:viewDidLoad", "parent:awakeFromDOM",
+    ...phase("controllerDidLoad"), ...phase("viewWillAppear"), ...phase("viewDidAppear")
   ]);
   assert.ok(f.parent.person instanceof Person, "the parent's inherited view_did_load ran");
   assert.equal(f.parentTitle.textContent, "Hello Ada", "awake_from_dom saw the decoded JSON outlet");
@@ -595,11 +599,11 @@ test("lifecycle runs children first per phase and preserves the flat order", () 
 
 test("outlets connect to their direct owner as views, controllers, and data", () => {
   const f = nestedFixture();
-  assert.ok(f.parent.name_field instanceof View);
-  assert.equal(f.parent.name_field.element(), f.nameInput);
-  assert.equal(f.parent.name_field.owner(), f.parent);
-  assert.equal(f.parent.name_field.superview(), f.parent.view());
-  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.name_field, f.child.view()]);
+  assert.ok(f.parent.nameField instanceof View);
+  assert.equal(f.parent.nameField.element(), f.nameInput);
+  assert.equal(f.parent.nameField.owner(), f.parent);
+  assert.equal(f.parent.nameField.superview(), f.parent.view());
+  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.nameField, f.child.view()]);
   assert.equal(f.parent.badge, f.child);
   assert.deepEqual({...f.parent.seed}, {name: "Ada"});
   assert.equal(f.parent.missing, null);
@@ -641,16 +645,16 @@ test("unhandled child actions continue through the responder chain", () => {
   assert.deepEqual(f.log.filter(entry => entry.endsWith(":shout")), ["parent:shout"]);
   assert.equal(f.parent.person.name, "ADA");
   assert.equal(f.parentTitle.textContent, "Hello ADA");
-  assert.throws(() => f.grandchild.perform_action("vanish", null, null), /Unhandled action: vanish/);
-  assert.throws(() => f.parent.perform_action("toString", null, null), /Unhandled action/);
+  assert.throws(() => f.grandchild.performAction("vanish", null, null), /Unhandled action: vanish/);
+  assert.throws(() => f.parent.performAction("toString", null, null), /Unhandled action/);
   assert.equal(Runtime.respondsTo(f.parent, "shout"), true);
   assert.equal(Runtime.respondsTo(f.child, "shout"), false);
   // A responder that responds to the name but cannot take the action is an
   // error there, as a wrong-arity send would be in Ruby; it never bubbles.
-  assert.throws(() => f.child.perform_action("title", null, null), /Unknown action or wrong arity: title/);
+  assert.throws(() => f.child.performAction("title", null, null), /Unknown action or wrong arity: title/);
   class Wide extends Badge { wide(a, b, c) { return [a, b, c]; } }
   Runtime.install({classes: {"Test::Wide": {constructor: Wide, methods: {wide: {arity: 3}}}}});
-  assert.throws(() => new Wide().perform_action("wide", null, null), /Unknown action or wrong arity: wide/);
+  assert.throws(() => new Wide().performAction("wide", null, null), /Unknown action or wrong arity: wide/);
 });
 
 test("awakening a later fragment adopts it into the nearest live owner", () => {
@@ -660,9 +664,9 @@ test("awakening a later fragment adopts it into the nearest live owner", () => {
   f.childRoot.append(element("div", {}, [lateRoot]));
   const [late] = new Awakening().wire(lateRoot);
   assert.equal(late.parent(), f.child);
-  assert.deepEqual(Array.from(f.child.child_controllers()), [f.grandchild, late]);
+  assert.deepEqual(Array.from(f.child.childControllers()), [f.grandchild, late]);
   assert.equal(lateTitle.textContent, "Badge 0");
-  assert.equal(f.log.filter(entry => entry.endsWith(":view_did_load")).length, 3, "existing controllers are not re-awakened");
+  assert.equal(f.log.filter(entry => entry.endsWith(":viewDidLoad")).length, 3, "existing controllers are not re-awakened");
   assert.deepEqual(Array.from(new Awakening().wire(f.document)), [], "an awakened tree yields no new controllers");
 });
 
@@ -672,13 +676,13 @@ test("tearing down the parent releases every descendant exactly once", () => {
   f.log.length = 0;
   f.parent.teardown();
   assert.deepEqual(f.log, [
-    "parent:view_will_disappear", "child:view_will_disappear",
-    "grandchild:view_will_disappear", "grandchild:view_did_disappear",
-    "child:view_did_disappear", "parent:view_did_disappear"
+    "parent:viewWillDisappear", "child:viewWillDisappear",
+    "grandchild:viewWillDisappear", "grandchild:viewDidDisappear",
+    "child:viewDidDisappear", "parent:viewDidDisappear"
   ]);
-  assert.equal(f.child.view().controller_value(), null);
+  assert.equal(f.child.view().controllerValue(), null);
   assert.equal(f.child.parent(), null);
-  assert.deepEqual(Array.from(f.parent.child_controllers()), []);
+  assert.deepEqual(Array.from(f.parent.childControllers()), []);
   assert.deepEqual(Array.from(f.parent.view().subviews()), []);
   f.childBump.click();
   assert.equal(f.child.count, 0, "child listeners are gone");
@@ -692,7 +696,7 @@ test("tearing down the parent releases every descendant exactly once", () => {
   assert.equal(f.log.length, 6, "a second teardown is a no-op");
   const [again] = new Awakening().wire(f.parentRoot);
   assert.notEqual(again, f.parent);
-  assert.equal(again.child_controllers().length, 1);
+  assert.equal(again.childControllers().length, 1);
   assert.equal(f.childTitle.textContent, "Badge 0");
 });
 
@@ -723,8 +727,8 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   const f = pageFixture();
   const log = [];
   class App extends DemoApplication {
-    application_did_launch() { log.push("launch"); return super.application_did_launch(); }
-    application_will_terminate() { log.push("terminate"); }
+    applicationDidLaunch() { log.push("launch"); return super.applicationDidLaunch(); }
+    applicationWillTerminate() { log.push("terminate"); }
   }
   Runtime.install({classes: {"Test::App": {constructor: App}}});
   f.body.setAttribute("application", "Test::App");
@@ -743,9 +747,9 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   assert.equal(f.parentTitle.textContent, "Hello Ada", "the example sets its own initial state");
   assert.equal(parent.application(), application);
   assert.equal(badge.application(), application);
-  assert.equal(parent.next_responder(), application);
-  assert.equal(badge.next_responder(), parent);
-  assert.equal(application.next_responder(), null);
+  assert.equal(parent.nextResponder(), application);
+  assert.equal(badge.nextResponder(), parent);
+  assert.equal(application.nextResponder(), null);
 
   // A bfcache pagehide keeps the page alive; a real unload terminates it.
   const persisted = new Event("pagehide");
@@ -755,10 +759,10 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   f.document.defaultView.dispatchEvent(new Event("pagehide"));
   assert.deepEqual(log, ["launch", "terminate"]);
   assert.equal(f.body.__swill_application__, null);
-  assert.equal(parent.view().controller_value(), null);
-  assert.equal(badge.view().controller_value(), null);
+  assert.equal(parent.view().controllerValue(), null);
+  assert.equal(badge.view().controllerValue(), null);
   assert.equal(parent.application(), null);
-  assert.equal(parent.next_responder(), null);
+  assert.equal(parent.nextResponder(), null);
   application.terminate();
   assert.deepEqual(log, ["launch", "terminate"], "terminate is idempotent");
 });
@@ -773,8 +777,8 @@ test("unhandled root actions reach the application; a ready document launches at
   assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello Grace", "Badge 3"]);
   f.resetButton.click();
   assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello ", "Badge 0"]);
-  assert.throws(() => badge.perform_action("vanish", null, null), /Unhandled action: vanish/);
-  assert.throws(() => application.perform_action("vanish", null, null), /Unhandled action: vanish/);
+  assert.throws(() => badge.performAction("vanish", null, null), /Unhandled action: vanish/);
+  assert.throws(() => application.performAction("vanish", null, null), /Unhandled action: vanish/);
 });
 
 test("pages without an application stay inert and unknown applications fail closed", () => {
@@ -874,7 +878,7 @@ test("outlet mistakes fail at awakening with the outlet name", () => {
 test("decode_outlet_data shapes JSON before assignment", () => {
   const name = installHost({payload: false});
   const Host = Runtime.resolve(name);
-  Host.prototype.decode_outlet_data = function (outlet, value) { return `${outlet}:${JSON.stringify(value)}`; };
+  Host.prototype.decodeOutletData = function (outlet, value) { return `${outlet}:${JSON.stringify(value)}`; };
   const payload = element("script", {type: "application/json", outlet: "payload"});
   payload.textContent = '[1, 2]';
   const [host] = new Awakening().wire(element("body", {}, [element("main", {controller: name}, [payload])]));
@@ -925,19 +929,19 @@ test("respond_to? answers from metadata for objects, nil, and plain values", () 
 
 test("binding roots and @ resolve paths against the right object", () => {
   const bindings = new Bindings();
-  assert.equal(bindings.resolve_path(null, "name"), "name");
-  assert.equal(bindings.resolve_path(null, "@name"), "name");
-  assert.equal(bindings.resolve_path("represented_object", "name"), "represented_object.name");
-  assert.equal(bindings.resolve_path("represented_object", "@note"), "note");
-  assert.equal(bindings.resolve_path("represented_object", ""), "represented_object");
-  assert.equal(new PersonEditor().binding_root(), "represented_object", "a Ruby symbol is a string here");
-  assert.equal(bindings.resolve_path("represented_object", "@"), "");
+  assert.equal(bindings.resolvePath(null, "name"), "name");
+  assert.equal(bindings.resolvePath(null, "@name"), "name");
+  assert.equal(bindings.resolvePath("represented_object", "name"), "represented_object.name");
+  assert.equal(bindings.resolvePath("represented_object", "@note"), "note");
+  assert.equal(bindings.resolvePath("represented_object", ""), "represented_object");
+  assert.equal(new PersonEditor().bindingRoot(), "represented_object", "a Ruby symbol is a string here");
+  assert.equal(bindings.resolvePath("represented_object", "@"), "");
 });
 
 test("a parent binds a child controller's represented object, nil included", () => {
   const f = editorFixture();
   assert.equal(f.editor.parent(), f.parent);
-  assert.equal(f.editor.represented_object, f.parent.person, "the parent's path feeds the child's represented object");
+  assert.equal(f.editor.representedObject, f.parent.person, "the parent's path feeds the child's represented object");
   assert.equal(f.nameInput.value, "Ada", "child bindings resolve under binding_root");
   assert.equal(f.blank.textContent, "false");
   assert.equal(f.editorRoot.hidden, false, "bind-* on the child's root belongs to the child");
@@ -956,13 +960,13 @@ test("a parent binds a child controller's represented object, nil included", () 
   const replacement = new Person();
   replacement.name = "Grace";
   f.parent.person = replacement;
-  assert.equal(f.editor.represented_object, replacement);
+  assert.equal(f.editor.representedObject, replacement);
   assert.equal(f.nameInput.value, "Grace", "child bindings rehook when the represented object changes");
   f.parentClear.click();
-  assert.equal(f.editor.represented_object, f.parent.person, "clear hands the editor the fresh person");
+  assert.equal(f.editor.representedObject, f.parent.person, "clear hands the editor the fresh person");
   assert.deepEqual([f.editorRoot.hidden, f.nameInput.value, f.blank.textContent], [false, "", "true"]);
   f.parent.person = null;
-  assert.equal(f.editor.represented_object, null, "nil propagates");
+  assert.equal(f.editor.representedObject, null, "nil propagates");
   assert.deepEqual([f.editorRoot.hidden, f.nameInput.value, f.blank.textContent], [true, "", "true"]);
   f.nameInput.value = "Ignored";
   f.nameInput.dispatchEvent(new Event("input"));
@@ -980,7 +984,7 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   const disposers = [];
   for (const el of [link, field]) {
     for (const name of el.getAttributeNames()) {
-      disposers.push(bindings.wire_property(f.parent, null, el, name.slice(5), el.getAttribute(name)));
+      disposers.push(bindings.wireProperty(f.parent, null, el, name.slice(5), el.getAttribute(name)));
     }
   }
   assert.equal(link.href, "Ada");
@@ -1004,25 +1008,25 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
 
 test("object bindings keep a target equal to a source path and release on teardown", () => {
   const f = nestedFixture();
-  assert.equal(f.parent.badge_count, 0);
+  assert.equal(f.parent.badgeCount, 0);
   f.childBump.click();
-  assert.equal(f.parent.badge_count, 1, "awake_from_dom bound badge_count to the badge outlet");
+  assert.equal(f.parent.badgeCount, 1, "awake_from_dom bound badge_count to the badge outlet");
   const other = new Badge();
   other.count = 7;
   f.parent.bind("badge_count", {to: other, key_path: "count"});
-  assert.equal(f.parent.badge_count, 7, "rebinding replaces the previous source");
+  assert.equal(f.parent.badgeCount, 7, "rebinding replaces the previous source");
   f.childBump.click();
-  assert.equal(f.parent.badge_count, 7);
+  assert.equal(f.parent.badgeCount, 7);
   other.count = 8;
-  assert.equal(f.parent.badge_count, 8);
+  assert.equal(f.parent.badgeCount, 8);
   assert.throws(() => f.parent.bind("nonexistent", {to: other, key_path: "count"}), /Unknown writer: nonexistent/);
   f.parent.unbind("badge_count");
   other.count = 9;
-  assert.equal(f.parent.badge_count, 8);
+  assert.equal(f.parent.badgeCount, 8);
   f.parent.bind("badge_count", {to: other, key_path: "count"});
   f.parent.teardown();
   other.count = 10;
-  assert.equal(f.parent.badge_count, 9, "teardown unbinds object bindings");
+  assert.equal(f.parent.badgeCount, 9, "teardown unbinds object bindings");
 });
 
 // ---- first responder and key routing ----
@@ -1031,46 +1035,46 @@ test("the application owns the first responder and moves focus with it", () => {
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
   const [parent, badge] = application.controllers();
-  assert.equal(application.first_responder(), parent.name_field, "awake_from_dom made the field first responder");
+  assert.equal(application.firstResponder(), parent.nameField, "awake_from_dom made the field first responder");
   assert.equal(f.document.activeElement, f.nameInput);
-  assert.equal(application.make_first_responder(parent.name_field), true, "already first responder");
-  assert.equal(application.make_first_responder(badge), true, "a controller with a focusable element accepts");
-  assert.equal(application.first_responder(), badge);
+  assert.equal(application.makeFirstResponder(parent.nameField), true, "already first responder");
+  assert.equal(application.makeFirstResponder(badge), true, "a controller with a focusable element accepts");
+  assert.equal(application.firstResponder(), badge);
   assert.equal(f.document.activeElement, f.resetButton);
   const bare = new (Runtime.resolve("Swill::Responder"))();
-  assert.equal(application.make_first_responder(bare), false, "a bare responder does not accept");
-  assert.equal(application.first_responder(), badge);
-  assert.equal(application.make_first_responder(null), true);
-  assert.equal(application.first_responder(), application, "nothing specific falls back to the application");
+  assert.equal(application.makeFirstResponder(bare), false, "a bare responder does not accept");
+  assert.equal(application.firstResponder(), badge);
+  assert.equal(application.makeFirstResponder(null), true);
+  assert.equal(application.firstResponder(), application, "nothing specific falls back to the application");
   f.nameInput.focus();
-  assert.equal(application.first_responder(), parent.name_field, "browser focus reconciles the first responder");
+  assert.equal(application.firstResponder(), parent.nameField, "browser focus reconciles the first responder");
   f.resetButton.focus();
-  assert.equal(application.first_responder(), badge);
+  assert.equal(application.firstResponder(), badge);
   // Leaving for the browser's own chrome keeps the first responder, as Cocoa
   // does; when focus comes back to the page, keys still reach it.
   f.resetButton.blur();
-  assert.equal(application.first_responder(), badge, "a null focusout destination keeps the first responder");
+  assert.equal(application.firstResponder(), badge, "a null focusout destination keeps the first responder");
   f.resetButton.dispatchEvent(keyEvent("keydown", "x"));
   // Leaving for another part of the page outside the application releases it.
   const outside = element("input", {});
   f.document.append(outside);
   f.resetButton.focus();
   outside.focus();
-  assert.equal(application.first_responder(), application, "focus elsewhere in the page releases the first responder");
+  assert.equal(application.firstResponder(), application, "focus elsewhere in the page releases the first responder");
   f.nameInput.focus();
-  assert.equal(application.first_responder(), parent.name_field);
+  assert.equal(application.firstResponder(), parent.nameField);
 });
 
 test("a refusing first responder keeps focus", () => {
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
   const [parent, badge] = application.controllers();
-  badge.resign_first_responder = () => false;
-  application.make_first_responder(badge);
-  assert.equal(application.make_first_responder(parent.name_field), false);
-  assert.equal(application.first_responder(), badge);
+  badge.resignFirstResponder = () => false;
+  application.makeFirstResponder(badge);
+  assert.equal(application.makeFirstResponder(parent.nameField), false);
+  assert.equal(application.firstResponder(), badge);
   f.nameInput.focus();
-  assert.equal(application.first_responder(), badge, "focusin cannot take it either");
+  assert.equal(application.firstResponder(), badge, "focusin cannot take it either");
   assert.equal(f.document.activeElement, f.resetButton, "focus was restored to the refuser");
 });
 
@@ -1085,18 +1089,18 @@ test("key events route from the first responder up the chain", () => {
   f.nameInput.dispatchEvent(keyEvent("keydown", "Escape"));
   assert.equal(f.parentTitle.textContent, "Hello ", "Escape reached the controller's cancel_operation through the view chain");
   const seen = [];
-  application.insert_newline = event => seen.push(`enter:${event.key}`);
+  application.insertNewline = event => seen.push(`enter:${event.key}`);
   application.complete = () => seen.push("tab");
-  application.key_up = event => seen.push(`up:${event.key}`);
+  application.keyUp = event => seen.push(`up:${event.key}`);
   f.nameInput.dispatchEvent(keyEvent("keydown", "Enter"));
   f.nameInput.dispatchEvent(keyEvent("keydown", "Tab"));
   f.nameInput.dispatchEvent(keyEvent("keyup", "Tab"));
   assert.deepEqual(seen, ["enter:Enter", "tab", "up:Tab"]);
   parent.teardown();
-  assert.equal(application.first_responder(), application, "tearing down the region releases its first responder");
+  assert.equal(application.firstResponder(), application, "tearing down the region releases its first responder");
   application.terminate();
   f.resetButton.focus();
-  assert.equal(application.first_responder(), application, "terminate removed the listeners");
+  assert.equal(application.firstResponder(), application, "terminate removed the listeners");
 });
 
 // ---- windows: templates, containers, dialogs, detach ----
@@ -1138,55 +1142,55 @@ test("window containers fill from templates at launch and keep pre-rendered cont
   assert.equal(f.mainWindow.children[0].children[0].textContent, "Badge 0", "cloned content awakened in the launch pass");
   assert.ok(windowBadge instanceof Badge);
   assert.equal(windowBadge.parent(), parent, "window content nests under the containing controller");
-  assert.equal(f.application.window_named("main").controller(), windowBadge);
-  assert.equal(f.application.window_named("main").content_name(), "welcome");
+  assert.equal(f.application.windowNamed("main").controller(), windowBadge);
+  assert.equal(f.application.windowNamed("main").contentName(), "welcome");
   assert.equal(f.sideWindow.children[0], f.prerendered, "pre-rendered content stays in place");
-  assert.equal(f.application.window_named("side").controller(), sideBadge);
-  assert.equal(f.application.window_content_predicate("side"), true, "pre-rendered content is captured under the window name");
-  assert.equal(f.application.window_content_predicate("farewell"), true, "a root-level template counts");
-  assert.equal(f.application.window_content_predicate("ignored"), false, "a nested template without for=window does not");
+  assert.equal(f.application.windowNamed("side").controller(), sideBadge);
+  assert.equal(f.application.isWindowContent("side"), true, "pre-rendered content is captured under the window name");
+  assert.equal(f.application.isWindowContent("farewell"), true, "a root-level template counts");
+  assert.equal(f.application.isWindowContent("ignored"), false, "a nested template without for=window does not");
   assert.equal(f.welcome.__swill_view__, undefined, "templates are inert");
   assert.equal(f.welcome.content.firstElementChild.__swill_view__, undefined, "template content is never awakened");
-  assert.equal(f.application.first_responder(), parent.name_field);
+  assert.equal(f.application.firstResponder(), parent.nameField);
 });
 
 test("load_window_content replaces, tears down, awakens, and moves focus", () => {
   const f = windowedPage();
   const [parent, , welcomeBadge] = f.application.controllers();
   const teardown = [];
-  welcomeBadge.view_did_disappear = () => teardown.push("welcome");
-  const farewellBadge = f.application.load_window_content("main", "farewell");
+  welcomeBadge.viewDidDisappear = () => teardown.push("welcome");
+  const farewellBadge = f.application.loadWindowContent("main", "farewell");
   assert.deepEqual(teardown, ["welcome"]);
-  assert.equal(welcomeBadge.view().controller_value(), null);
+  assert.equal(welcomeBadge.view().controllerValue(), null);
   assert.ok(farewellBadge instanceof Badge);
   assert.notEqual(farewellBadge, welcomeBadge);
   assert.equal(f.mainWindow.getAttribute("name"), "farewell");
   assert.equal(f.mainWindow.children.length, 1);
   assert.equal(f.mainWindow.children[0].children[0].textContent, "Badge 0");
   assert.equal(farewellBadge.parent(), parent);
-  assert.equal(f.application.window_named("main").controller(), farewellBadge);
-  assert.equal(f.application.first_responder(), parent.name_field, "content without a focusable element leaves focus alone");
-  const back = f.application.load_window_content("main", "welcome");
-  assert.equal(f.application.first_responder(), back, "focusable content takes the first responder");
+  assert.equal(f.application.windowNamed("main").controller(), farewellBadge);
+  assert.equal(f.application.firstResponder(), parent.nameField, "content without a focusable element leaves focus alone");
+  const back = f.application.loadWindowContent("main", "welcome");
+  assert.equal(f.application.firstResponder(), back, "focusable content takes the first responder");
   assert.equal(f.document.activeElement, f.mainWindow.children[0].children[1]);
-  const again = f.application.load_window_content("side", "side");
+  const again = f.application.loadWindowContent("side", "side");
   assert.ok(again instanceof Badge, "captured pre-rendered content can be reloaded");
   assert.notEqual(f.sideWindow.children[0], f.prerendered, "reloaded content is a clone");
-  assert.throws(() => f.application.load_window_content("main", "nope"), /No window content template: nope/);
-  assert.throws(() => f.application.load_window_content("nope", "welcome"), /No window container: nope/);
+  assert.throws(() => f.application.loadWindowContent("main", "nope"), /No window content template: nope/);
+  assert.throws(() => f.application.loadWindowContent("nope", "welcome"), /No window container: nope/);
 });
 
 test("show_window presents a dialog whose dismissal restores the first responder", async () => {
   const f = windowedPage();
   const [parent] = f.application.controllers();
-  const window = f.application.show_window("palette");
+  const window = f.application.showWindow("palette");
   const dialog = window.root();
   assert.equal(dialog.parentElement, f.body);
   assert.equal(dialog.open, true, "a dialog root is shown");
   assert.ok(window.controller() instanceof Badge);
-  assert.equal(window.container_predicate(), false);
-  assert.equal(f.application.first_responder(), window.controller());
-  assert.equal(window.saved_first_responder(), parent.name_field);
+  assert.equal(window.isContainer(), false);
+  assert.equal(f.application.firstResponder(), window.controller());
+  assert.equal(window.savedFirstResponder(), parent.nameField);
   let resolved = false;
   window.closed().then(() => { resolved = true; });
   dialog.querySelector("[data-action=close]").click();
@@ -1194,21 +1198,21 @@ test("show_window presents a dialog whose dismissal restores the first responder
   assert.equal(resolved, true);
   assert.equal(dialog.parentElement, null, "dismiss removes the root");
   assert.equal(dialog.open, false);
-  assert.equal(window.controller().view().controller_value(), null, "dismiss tears down the controller");
-  assert.equal(f.application.first_responder(), parent.name_field, "the saved first responder returns");
+  assert.equal(window.controller().view().controllerValue(), null, "dismiss tears down the controller");
+  assert.equal(f.application.firstResponder(), parent.nameField, "the saved first responder returns");
   assert.equal(f.application.dismiss(window.controller()), false, "a dismissed window is gone");
-  assert.throws(() => f.application.show_window("ignored"), /No window content template: ignored/);
+  assert.throws(() => f.application.showWindow("ignored"), /No window content template: ignored/);
   const plain = element("template", {for: "window", name: "plain"}, [
     element("div", {}, [element("section", {controller: "Demo::Badge"})])
   ]);
   f.body.append(plain);
   const before = f.body.children.length;
-  assert.throws(() => f.application.show_window("plain"), /Window root has no controller: plain/,
+  assert.throws(() => f.application.showWindow("plain"), /Window root has no controller: plain/,
     "templates inserted later are found and still validated");
   assert.equal(f.body.children.length, before, "a rejected window leaves nothing in the page");
   const host = element("div", {});
   f.body.append(host);
-  const hosted = f.application.show_window_in("palette", host);
+  const hosted = f.application.showWindowIn("palette", host);
   assert.equal(hosted.root().parentElement, host, "show_window_in presents into a chosen element");
   f.application.dismiss(hosted.controller());
   assert.equal(host.children.length, 0);
@@ -1218,16 +1222,16 @@ test("detach tears down a removed subtree and terminate releases windows", () =>
   const f = windowedPage();
   const [parent, badge, welcomeBadge, sideBadge] = f.application.controllers();
   const awakening = new Awakening();
-  assert.deepEqual(Array.from(awakening.controllers_within(f.main)), [parent, badge, welcomeBadge, sideBadge]);
+  assert.deepEqual(Array.from(awakening.controllersWithin(f.main)), [parent, badge, welcomeBadge, sideBadge]);
   f.badge.remove();
   awakening.detach(f.badge);
-  assert.equal(badge.view().controller_value(), null);
-  assert.deepEqual(Array.from(parent.child_controllers()), [welcomeBadge, sideBadge]);
-  const window = f.application.show_window("palette");
+  assert.equal(badge.view().controllerValue(), null);
+  assert.deepEqual(Array.from(parent.childControllers()), [welcomeBadge, sideBadge]);
+  const window = f.application.showWindow("palette");
   f.application.terminate();
   assert.equal(window.root().parentElement, null, "terminate dismisses dialogs");
-  assert.equal(welcomeBadge.view().controller_value(), null, "terminate tears down window content");
-  assert.equal(parent.view().controller_value(), null);
+  assert.equal(welcomeBadge.view().controllerValue(), null, "terminate tears down window content");
+  assert.equal(parent.view().controllerValue(), null);
 });
 
 // ---- URL restoration ----
@@ -1242,7 +1246,7 @@ test("window content and restorable state round-trip through the fragment", () =
   badge.count = 4;
   assert.equal(f.browser.location.hash, "#main=farewell&main.n=4&main.junk=x", "state changes replace the fragment value");
   assert.equal(f.browser.entries.length, 1, "state changes add no history entries");
-  const welcomeBadge = f.application.load_window_content("main", "welcome");
+  const welcomeBadge = f.application.loadWindowContent("main", "welcome");
   assert.equal(f.browser.location.hash, "#main=welcome&main.n=4&main.junk=x", "navigation pushes the content; a key the new controller shares carries over");
   assert.equal(f.browser.entries.length, 2);
   assert.equal(welcomeBadge.count, 4, "the carried value was applied to the new controller");
@@ -1253,28 +1257,28 @@ test("window content and restorable state round-trip through the fragment", () =
   assert.equal(f.browser.location.hash, "#main=welcome&main.n=9&main.junk=x", "the replaced controller no longer writes");
   f.browser.back();
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "Back restores the content");
-  const restoredBadge = f.application.window_named("main").controller();
+  const restoredBadge = f.application.windowNamed("main").controller();
   assert.equal(restoredBadge.count, 4, "Back restores the state that was in that entry");
   assert.equal(f.browser.entries.length, 1, "Back/Forward routing writes no history");
   f.browser.navigate("#main=farewell&main.n=oops");
-  assert.equal(f.application.window_named("main").controller().count, 4, "a value that is not an Integer is ignored");
+  assert.equal(f.application.windowNamed("main").controller().count, 4, "a value that is not an Integer is ignored");
   f.browser.navigate("#main=missing");
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "unknown content is reported and ignored");
 });
 
 test("restoration state is scoped per window and pruned when content changes", () => {
   const f = windowedPage("#side=side&side.n=2");
-  const sideBadge = f.application.window_named("side").controller();
+  const sideBadge = f.application.windowNamed("side").controller();
   assert.equal(sideBadge.count, 2);
-  const mainBadge = f.application.window_named("main").controller();
+  const mainBadge = f.application.windowNamed("main").controller();
   assert.equal(mainBadge.count, 0, "another window's key does not apply");
-  const dialog = f.application.show_window("palette");
+  const dialog = f.application.showWindow("palette");
   dialog.controller().count = 7;
   assert.match(f.browser.location.hash, /palette\.n=7/, "a dialog's state is scoped under its name");
   f.application.dismiss(dialog.controller());
   dialog.controller().count = 8;
   assert.doesNotMatch(f.browser.location.hash, /palette\.n=8/, "a dismissed window stops writing");
-  assert.equal(f.application.window_content_predicate("side"), true);
+  assert.equal(f.application.isWindowContent("side"), true);
 });
 
 test("fragment routing is inert without a browser window", () => {
@@ -1292,7 +1296,7 @@ const PeopleList = Runtime.resolve("Demo::PeopleList");
 // The example's roster table: the parent decodes the roster JSON into people
 // and the list shows them through bind="people". The list sits in the people
 // window so its selection is kept in the fragment by id.
-function peoplePage(hash = "", rowTemplate = null) {
+function peoplePage(hash = "", rowTemplate = null, listController = "Demo::PeopleList") {
   const seed = element("script", {type: "application/json", outlet: "seed"});
   seed.textContent = '{"name": "Ada"}';
   const nameInput = element("input", {bind: "person.name", outlet: "name_field"});
@@ -1305,15 +1309,20 @@ function peoplePage(hash = "", rowTemplate = null) {
     element("td", {bind: "name"}), element("td", {bind: "role"}),
     element("td", {}, [element("button", {"data-action": "remove_person"})])
   ])]);
+  const editorTemplate = element("template", {for: "editor"}, [
+    element("tr", {controller: "Swill::Controller::InlineEditor"}, [
+      element("td", {}, [element("input", {bind: "name"})]), element("td", {}, [element("input", {bind: "role"})])
+    ])
+  ]);
   const stale = element("tr", {}, [element("td", {})]);
   stale.children[0].textContent = "pre-rendered";
-  const rows = element("tbody", {outlet: "rows"}, [template, stale]);
+  const rows = element("tbody", {outlet: "rows"}, [template, editorTemplate, stale]);
   const nameHeader = element("th", {"data-column": "name", "data-action": "sort_by", "bind-aria-sort": "sort_states.name"});
   const roleHeader = element("th", {"data-column": "role", "data-action": "sort_by", "bind-aria-sort": "sort_states.role"});
   const header = element("thead", {outlet: "header_view"}, [element("tr", {}, [nameHeader, roleHeader, element("th", {})])]);
   const selected = element("output", {bind: "@selected_object.name"});
   const edit = element("button", {"data-action": "activate_selection", "bind-disabled": "@selected_indexes.empty?"});
-  const list = element("section", {controller: "Demo::PeopleList", outlet: "people_list", bind: "people"}, [
+  const list = element("section", {controller: listController, outlet: "people_list", bind: "people"}, [
     element("table", {}, [header, rows]), selected, edit
   ]);
   const peopleWindow = element("section", {window: "people"}, [list]);
@@ -1327,14 +1336,17 @@ function peoplePage(hash = "", rowTemplate = null) {
   const [parent, , controller] = application.controllers();
   const rowsOf = () => rows.children.filter(child => child.tagName === "TR");
   return {application, document, browser: document.defaultView, parent, controller, list, rows, header, template,
-    stale, selected, edit, title, rowsOf, nameHeader, roleHeader};
+    editorTemplate, stale, selected, edit, title, rowsOf, nameHeader, roleHeader, nameInput};
 }
 
 // A list with no rows outlet and no bind, hosted by a controller that does
 // not handle activate_selection.
-function bareList() {
+function bareList(listController = "Demo::PeopleList") {
   const template = element("template", {for: "row"}, [element("li", {bind: "name"})]);
-  const list = element("ul", {controller: "Demo::PeopleList"}, [template]);
+  const editorTemplate = element("template", {for: "editor"}, [
+    element("li", {controller: "Swill::Controller::InlineEditor"}, [element("input", {bind: "name"})])
+  ]);
+  const list = element("ul", {controller: listController}, [template, editorTemplate]);
   const host = element("section", {controller: "Demo::Badge"}, [list]);
   const body = element("body", {application: "Demo::Application"}, [host]);
   const document = element("#document", {}, [body]);
@@ -1351,22 +1363,22 @@ test("a list renders a row per object from its template, binds cells to the obje
   const [ada, grace, linus] = f.parent.people;
   assert.ok(f.controller instanceof PeopleList);
   assert.equal(f.controller.parent(), f.parent);
-  assert.equal(f.controller.represented_object, f.parent.people, 'bind="people" feeds the list');
+  assert.equal(f.controller.representedObject, f.parent.people, 'bind="people" feeds the list');
   assert.deepEqual(f.rowsOf().map(row => row.children.map(cell => cell.textContent)),
     [["Ada", "engineer", ""], ["Grace", "admiral", ""], ["Linus", "kernel", ""]]);
   assert.equal(f.stale.parentElement, null, "pre-rendered rows are replaced");
   assert.equal(f.template.parentElement, f.rows, "the template stays inert in place");
   assert.equal(f.list.getAttribute("tabindex"), "0", "the list is focusable");
   assert.equal(f.controller.rows.element(), f.rows);
-  assert.equal(f.controller.header_view.element(), f.header);
+  assert.equal(f.controller.headerView.element(), f.header);
   const rowViews = Array.from(f.controller.rows.subviews());
   assert.deepEqual(rowViews.map(view => view.element()), f.rowsOf(), "rows are views under the rows outlet");
   assert.equal(rowViews[0].owner(), f.controller);
-  assert.equal(f.controller.row_for(f.rowsOf()[1].children[0]), 1, "an element inside a row knows its row");
-  assert.equal(f.controller.row_for(f.list), -1);
-  assert.equal(f.controller.row_for(f.template), -1);
-  assert.equal(f.controller.object_at(2), linus);
-  assert.equal(f.controller.object_at(3), null);
+  assert.equal(f.controller.rowFor(f.rowsOf()[1].children[0]), 1, "an element inside a row knows its row");
+  assert.equal(f.controller.rowFor(f.list), -1);
+  assert.equal(f.controller.rowFor(f.template), -1);
+  assert.equal(f.controller.objectAt(2), linus);
+  assert.equal(f.controller.objectAt(3), null);
   ada.name = "Ada Lovelace";
   assert.equal(f.rowsOf()[0].children[0].textContent, "Ada Lovelace", "cells observe their object");
   const oldRow = f.rowsOf()[0];
@@ -1385,66 +1397,66 @@ test("a list renders a row per object from its template, binds cells to the obje
 test("clicks select by identity, shift-click extends, and the selection shows on rows and paths", () => {
   const f = peoplePage();
   const [ada, grace, linus] = f.parent.people;
-  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object, f.controller.selected_object_id,
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObject, f.controller.selectedObjectId,
     f.edit.disabled, f.selected.textContent], [[], null, null, true, ""]);
   f.rowsOf()[1].children[0].click();
-  assert.deepEqual(Array.from(f.controller.selected_objects), [grace]);
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [1]);
-  assert.equal(f.controller.selected_object, grace);
-  assert.equal(f.controller.selected_object_id, "2", "the selection names its object by id");
+  assert.deepEqual(Array.from(f.controller.selectedObjects), [grace]);
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [1]);
+  assert.equal(f.controller.selectedObject, grace);
+  assert.equal(f.controller.selectedObjectId, "2", "the selection names its object by id");
   assert.deepEqual(f.rowsOf().map(row => [row.classList.contains("selected"), row.getAttribute("aria-selected")]),
     [[false, "false"], [true, "true"], [false, "false"]]);
   assert.equal(f.document.scrolledTo, f.rowsOf()[1], "the leading selected row is scrolled into view");
   assert.equal(f.selected.textContent, "Grace", "@ paths read through the computed selected_object");
   assert.equal(f.edit.disabled, false, "bind-* observes the computed indexes");
-  assert.equal(f.controller.selection_changes, 1, "selected_object_did_change ran once");
+  assert.equal(f.controller.selectionChanges, 1, "selected_object_did_change ran once");
   f.rowsOf()[2].children[0].click({shiftKey: true});
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [2], "shift-click is a plain click without allows_multiple_selection");
-  f.controller.allows_multiple_selection = true;
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [2], "shift-click is a plain click without allows_multiple_selection");
+  f.controller.allowsMultipleSelection = true;
   f.rowsOf()[0].children[0].click({shiftKey: true});
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [0, 1, 2], "shift-click extends from the anchor");
-  assert.equal(f.controller.selected_object, ada, "the lowest row leads a range");
-  assert.equal(f.controller.selected_object_id, "1");
-  assert.equal(f.controller.selection_changes, 3);
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [0, 1, 2], "shift-click extends from the anchor");
+  assert.equal(f.controller.selectedObject, ada, "the lowest row leads a range");
+  assert.equal(f.controller.selectedObjectId, "1");
+  assert.equal(f.controller.selectionChanges, 3);
   f.parent.people = [linus, grace, ada];
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [0, 1, 2]);
-  assert.equal(f.controller.selection_changes, 3, "reordering changes no object");
-  f.controller.select_object(grace);
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [0, 1, 2]);
+  assert.equal(f.controller.selectionChanges, 3, "reordering changes no object");
+  f.controller.selectObject(grace);
   f.parent.people = [ada, grace];
-  assert.deepEqual([Array.from(f.controller.selected_indexes), f.controller.selected_object_id], [[1], "2"],
+  assert.deepEqual([Array.from(f.controller.selectedIndexes), f.controller.selectedObjectId], [[1], "2"],
     "the selection follows its object through a new collection");
   f.parent.people = [ada, linus];
-  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id], [[], "2"],
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId], [[], "2"],
     "an object that left is no longer selected, but its id stays wanted");
   assert.deepEqual([f.selected.textContent, f.edit.disabled], ["", true]);
   f.parent.people = [grace, ada];
-  assert.deepEqual([f.controller.selected_object, Array.from(f.controller.selected_indexes)], [grace, [0]],
+  assert.deepEqual([f.controller.selectedObject, Array.from(f.controller.selectedIndexes)], [grace, [0]],
     "the wanted id resolves when its object returns");
-  f.controller.deselect_all();
-  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id, f.edit.disabled], [[], null, true]);
+  f.controller.deselectAll();
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId, f.edit.disabled], [[], null, true]);
   assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, false]);
-  f.controller.select_indexes([1, 5]);
-  assert.deepEqual(Array.from(f.controller.selected_objects), [ada], "out-of-range indexes are ignored");
+  f.controller.selectIndexes([1, 5]);
+  assert.deepEqual(Array.from(f.controller.selectedObjects), [ada], "out-of-range indexes are ignored");
 });
 
 test("row actions dispatch from the list knowing their row, and activation reaches the owner", () => {
-  const f = peoplePage();
+  const f = peoplePage("", null, "Swill::Controller::SortableList");
   const [ada, grace, linus] = f.parent.people;
   f.rowsOf()[0].children[2].children[0].click();
   assert.deepEqual(Array.from(f.parent.people), [grace, linus], "the row's button reached the parent's remove_person");
   assert.deepEqual(f.rowsOf().map(row => row.children[0].textContent), ["Grace", "Linus"]);
-  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id], [[], "1"],
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId], [[], "1"],
     "the click selected the row before its action removed it");
   f.rowsOf()[1].children[0].doubleClick();
-  assert.equal(f.controller.selected_object, linus);
+  assert.equal(f.controller.selectedObject, linus);
   assert.equal(f.parent.person, linus, "double-click activates: the parent received the list as sender");
   assert.equal(f.title.textContent, "Hello Linus");
-  f.parent.reset_person();
+  f.parent.resetPerson();
   f.edit.click();
   assert.equal(f.parent.person, linus, "the list's own activate_selection button is handled by the list first");
-  assert.equal(f.controller.action_target("activate_selection"), f.controller);
-  assert.equal(f.parent.action_target("activate_selection"), f.parent);
-  assert.equal(f.controller.action_target("vanish"), null);
+  assert.equal(f.controller.actionTarget("activate_selection"), f.controller);
+  assert.equal(f.parent.actionTarget("activate_selection"), f.parent);
+  assert.equal(f.controller.actionTarget("vanish"), null);
   f.controller.teardown();
   assert.equal(f.rowsOf().length, 0, "teardown removes the rows");
   assert.equal(f.controller.rows.subviews().length, 0);
@@ -1453,51 +1465,51 @@ test("row actions dispatch from the list knowing their row, and activation reach
 });
 
 test("the keyboard moves a single selection from the first responder and Enter activates it", () => {
-  const f = peoplePage();
+  const f = peoplePage("", null, "Swill::Controller::SortableList");
   const [, grace] = f.parent.people;
-  assert.equal(f.application.make_first_responder(f.controller), true);
+  assert.equal(f.application.makeFirstResponder(f.controller), true);
   assert.equal(f.document.activeElement, f.list, "the list root took focus through its tabindex");
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [0], "becoming first responder selects the first row");
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [0], "becoming first responder selects the first row");
   const key = name => f.list.dispatchEvent(keyEvent("keydown", name));
   key("ArrowDown");
   key("ArrowDown");
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [2]);
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [2]);
   key("ArrowDown");
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [2], "the end clamps");
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [2], "the end clamps");
   key("ArrowUp");
   key("ArrowUp");
   key("ArrowUp");
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [0], "the start clamps");
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [0], "the start clamps");
   key("ArrowDown");
   key("Enter");
   assert.equal(f.parent.person, grace, "Enter activates the selection");
   key("Escape");
   assert.notEqual(f.parent.person, grace, "Escape continues up to the parent's cancel_operation");
-  f.controller.deselect_all();
+  f.controller.deselectAll();
   const seen = [];
-  f.application.insert_newline = () => seen.push("application");
+  f.application.insertNewline = () => seen.push("application");
   key("Enter");
   assert.deepEqual(seen, ["application"], "Enter without a selection continues up the chain");
   f.parent.people = [];
   key("ArrowDown");
-  assert.deepEqual(Array.from(f.controller.selected_indexes), [], "arrows do nothing in an empty list");
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [], "arrows do nothing in an empty list");
 });
 
 test("without a rows outlet rows mount in the list itself, and an unhandled activation is quiet", () => {
-  const f = bareList();
+  const f = bareList("Swill::Controller::List");
   const people = ["Ada", "Grace"].map(name => { const person = new Person(); person.name = name; return person; });
-  f.controller.represented_object = people;
+  f.controller.representedObject = people;
   assert.deepEqual(f.items().map(item => item.textContent), ["Ada", "Grace"], "bind on the row root binds to the object");
   assert.deepEqual(Array.from(f.controller.view().subviews()).map(view => view.element()), f.items());
   f.items()[0].click();
-  assert.equal(f.controller.selected_object, people[0]);
-  assert.equal(f.controller.selected_object_id, null, "an object without an id gives the selection none");
+  assert.equal(f.controller.selectedObject, people[0]);
+  assert.equal(f.controller.selectedObjectId, null, "an object without an id gives the selection none");
   f.items()[1].click();
-  assert.equal(f.controller.selected_object, people[1], "id-less selection still moves");
-  assert.equal(f.badge.action_target("activate_selection"), null);
+  assert.equal(f.controller.selectedObject, people[1], "id-less selection still moves");
+  assert.equal(f.badge.actionTarget("activate_selection"), null);
   f.items()[1].doubleClick();
-  assert.equal(f.controller.selected_object, people[1], "nobody handling activate_selection is not an error");
-  assert.throws(() => f.controller.perform_action("activate_selection_now", null, null), /Unhandled action/);
+  assert.equal(f.controller.selectedObject, people[1], "nobody handling activate_selection is not an error");
+  assert.throws(() => f.controller.performAction("activate_selection_now", null, null), /Unhandled action/);
 });
 
 test("a controller inside a row belongs to the list and is fed the row's object", () => {
@@ -1506,10 +1518,10 @@ test("a controller inside a row belongs to the list and is fed the row's object"
   ]);
   const f = peoplePage("", rowTemplate);
   const [ada] = f.parent.people;
-  const editors = Array.from(f.controller.child_controllers());
+  const editors = Array.from(f.controller.childControllers());
   assert.equal(editors.length, 3);
   assert.ok(editors[0] instanceof PersonEditor);
-  assert.equal(editors[0].represented_object, ada, 'bind="@" hands the row controller its object');
+  assert.equal(editors[0].representedObject, ada, 'bind="@" hands the row controller its object');
   assert.equal(editors[0].parent(), f.controller);
   assert.equal(editors[0].view().element(), f.rowsOf()[0], "the row view is the row controller's root");
   const input = f.rowsOf()[0].children[0].children[0];
@@ -1518,38 +1530,38 @@ test("a controller inside a row belongs to the list and is fed the row's object"
   input.dispatchEvent(new Event("input"));
   assert.equal(ada.name, "Ada L", "row controller bindings resolve under its represented object");
   const gone = [];
-  editors.forEach((editor, index) => { editor.view_did_disappear = () => gone.push(index); });
+  editors.forEach((editor, index) => { editor.viewDidDisappear = () => gone.push(index); });
   f.parent.people = [ada];
   assert.deepEqual(gone, [0, 1, 2], "re-rendering tears down row controllers");
-  assert.equal(f.controller.child_controllers().length, 1);
-  assert.equal(f.controller.child_controllers()[0].represented_object, ada);
+  assert.equal(f.controller.childControllers().length, 1);
+  assert.equal(f.controller.childControllers()[0].representedObject, ada);
   assert.deepEqual(Array.from(new Awakening().wire(f.rowsOf()[0])), [], "the observer finds nothing new in a rendered row");
   f.controller.teardown();
-  assert.deepEqual([f.rowsOf().length, f.controller.child_controllers().length], [0, 0]);
+  assert.deepEqual([f.rowsOf().length, f.controller.childControllers().length], [0, 0]);
 });
 
 test("a list's selection restores by id from the fragment and follows it afterwards", () => {
   const f = peoplePage("#people.selected=2");
   const [ada, grace, linus] = f.parent.people;
-  assert.equal(f.controller.selected_object, grace, "the fragment selected by id once the roster was in place");
+  assert.equal(f.controller.selectedObject, grace, "the fragment selected by id once the roster was in place");
   assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, true, false]);
   assert.equal(f.browser.location.hash, "#people.selected=2");
   f.rowsOf()[0].children[0].click();
   assert.equal(f.browser.location.hash, "#people.selected=1&people.dir=ascending",
     "a new selection replaces the fragment value; every restorable value is written, defaults included");
-  f.controller.selected_object_id = "3";
-  assert.equal(f.controller.selected_object, linus, "writing the id selects");
-  f.controller.selected_object_id = "9";
-  assert.deepEqual([Array.from(f.controller.selected_objects), f.controller.selected_object_id, f.browser.location.hash],
+  f.controller.selectedObjectId = "3";
+  assert.equal(f.controller.selectedObject, linus, "writing the id selects");
+  f.controller.selectedObjectId = "9";
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId, f.browser.location.hash],
     [[], "9", "#people.selected=9&people.dir=ascending"], "an unknown id clears the selection and stays wanted");
   const late = new SpecialPerson();
   late.id = "9";
   late.name = "Nine";
   f.parent.people = [ada, late];
-  assert.equal(f.controller.selected_object, late, "the wanted id resolves when its object arrives");
+  assert.equal(f.controller.selectedObject, late, "the wanted id resolves when its object arrives");
   f.browser.navigate("#people.selected=1");
-  assert.equal(f.controller.selected_object, ada, "the fragment reapplies on navigation");
-  f.controller.deselect_all();
+  assert.equal(f.controller.selectedObject, ada, "the fragment reapplies on navigation");
+  f.controller.deselectAll();
   assert.equal(f.browser.location.hash, "#people.dir=ascending", "no selection leaves the fragment");
   assert.equal(f.browser.entries.length, 2, "selection changes add no history entries");
 });
@@ -1560,14 +1572,14 @@ test("a sortable list orders rows by a column, flips on repeat, and keeps the se
   const names = () => f.rowsOf().map(row => row.children[0].textContent);
   const sorts = () => [f.nameHeader.getAttribute("aria-sort"), f.roleHeader.getAttribute("aria-sort")];
   assert.deepEqual(names(), ["Ada", "Grace", "Linus"]);
-  assert.deepEqual([f.controller.sort_key, f.controller.sort_direction, {...f.controller.sort_states}], [null, "ascending", {}]);
+  assert.deepEqual([f.controller.sortKey, f.controller.sortDirection, {...f.controller.sortStates}], [null, "ascending", {}]);
   assert.deepEqual(sorts(), [null, null]);
-  f.controller.select_object(grace);
+  f.controller.selectObject(grace);
   f.roleHeader.click();
   assert.deepEqual(names(), ["Grace", "Ada", "Linus"], "the header's sort_by action sorts by its column");
-  assert.deepEqual([f.controller.sort_key, f.controller.sort_direction], ["role", "ascending"]);
+  assert.deepEqual([f.controller.sortKey, f.controller.sortDirection], ["role", "ascending"]);
   assert.deepEqual(sorts(), [null, "ascending"], "bind-aria-sort reads the column's state from the sort_states hash");
-  assert.deepEqual([f.controller.selected_object, Array.from(f.controller.selected_indexes)], [grace, [0]], "the selection follows its object");
+  assert.deepEqual([f.controller.selectedObject, Array.from(f.controller.selectedIndexes)], [grace, [0]], "the selection follows its object");
   assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [true, false, false]);
   f.roleHeader.click();
   assert.deepEqual(names(), ["Linus", "Ada", "Grace"], "the same column flips the direction");
@@ -1576,12 +1588,12 @@ test("a sortable list orders rows by a column, flips on repeat, and keeps the se
   assert.deepEqual(names(), ["Ada", "Grace", "Linus"], "a new column sorts ascending");
   assert.deepEqual(sorts(), ["ascending", null]);
   f.controller.sort(null, "ascending");
-  assert.deepEqual([names(), sorts(), {...f.controller.sort_states}], [["Ada", "Grace", "Linus"], [null, null], {}], "no key restores the represented order");
-  f.controller.sort_direction = "descending";
+  assert.deepEqual([names(), sorts(), {...f.controller.sortStates}], [["Ada", "Grace", "Linus"], [null, null], {}], "no key restores the represented order");
+  f.controller.sortDirection = "descending";
   assert.deepEqual(names(), ["Ada", "Grace", "Linus"], "a direction without a key changes nothing");
-  f.controller.sort_key = "name";
+  f.controller.sortKey = "name";
   assert.deepEqual(names(), ["Linus", "Grace", "Ada"], "setting the key alone sorts with the current direction");
-  assert.equal(f.controller.selected_object, grace);
+  assert.equal(f.controller.selectedObject, grace);
   const [ada] = f.parent.people;
   f.parent.people = [grace, ada];
   assert.deepEqual(names(), ["Grace", "Ada"], "a new collection is sorted too");
@@ -1596,4 +1608,155 @@ test("a sortable list restores its sort from the fragment and writes changes bac
   f.nameHeader.click();
   assert.equal(f.browser.location.hash, "#people.sort=name&people.dir=ascending", "the sort replaces the fragment values");
   assert.equal(f.browser.entries.length, 1, "sorting adds no history entries");
+});
+
+// ---- editable lists ----
+
+const InlineEditor = Runtime.resolve("Swill::Controller::InlineEditor");
+
+// The editor row after the row being edited, and its inputs.
+function editorOf(f) {
+  const row = f.rows.children.find(child => child.getAttribute("controller") === "Swill::Controller::InlineEditor");
+  return row ? {row, controller: row.__swill_view__.controllerValue(), inputs: row.querySelectorAll("input")} : null;
+}
+
+function typeInto(input, value) {
+  input.value = value;
+  input.dispatchEvent(new Event("input"));
+}
+
+test("Enter edits the selected row through a draft: Enter commits it into the person, Escape discards", () => {
+  const f = peoplePage();
+  const [ada, grace] = f.parent.people;
+  const rowsOf = () => Array.from(f.controller.rowElements());
+  const names = () => rowsOf().map(row => row.children[0].textContent);
+  const key = (target, name) => target.dispatchEvent(keyEvent("keydown", name));
+  f.application.makeFirstResponder(f.controller);
+  key(f.list, "ArrowDown");
+  key(f.list, "Enter");
+  const editor = editorOf(f);
+  assert.ok(f.controller.isEditing(), "Enter on a selected row begins editing");
+  assert.ok(editor.controller instanceof InlineEditor);
+  assert.equal(editor.controller.parent(), f.controller, "the editor is the list's child");
+  assert.equal(f.rows.children.indexOf(editor.row), f.rows.children.indexOf(rowsOf()[1]) + 1, "it sits after its row");
+  assert.ok(rowsOf()[1].classList.contains("being-edited"));
+  assert.equal(rowsOf().length, 3, "the editor is not a row");
+  assert.equal(f.rowsOf().length, 4, "though it is a tr among them");
+  assert.equal(f.application.firstResponder(), editor.controller, "the editor took the keyboard");
+  assert.equal(f.document.activeElement, editor.inputs[0]);
+  assert.ok(f.controller.editedObject instanceof SpecialPerson);
+  assert.notEqual(f.controller.editedObject, grace, "the edit works on a draft");
+  assert.equal(editor.controller.representedObject, f.controller.editedObject);
+  assert.equal(editor.inputs[0].value, "Grace");
+  typeInto(editor.inputs[0], "Grace Hopper");
+  assert.equal(f.controller.editedObject.name, "Grace Hopper");
+  assert.equal(grace.name, "Grace", "the person is untouched until the commit");
+  assert.notEqual(f.parent.person, grace, "editing did not hand the selection to the owner");
+  key(editor.inputs[0], "Enter");
+  assert.equal(f.controller.isEditing(), false);
+  assert.equal(editorOf(f), null, "the editor was removed");
+  assert.equal(grace.name, "Grace Hopper", "the draft was applied to the person");
+  assert.deepEqual(names(), ["Ada", "Grace Hopper", "Linus"], "the row shows the change");
+  assert.equal(rowsOf()[1].classList.contains("being-edited"), false);
+  assert.equal(f.controller.selectedObject, grace);
+  assert.equal(f.controller.editedObject, null);
+  assert.equal(f.application.firstResponder(), f.controller, "the list took the keyboard back");
+  assert.equal(f.controller.childControllers().length, 0, "the editor was released");
+  f.controller.beginEditing(0);
+  typeInto(editorOf(f).inputs[0], "Augusta");
+  key(editorOf(f).inputs[0], "Escape");
+  assert.deepEqual([f.controller.isEditing(), ada.name, names()[0]], [false, "Ada", "Ada"], "Escape discards");
+  assert.ok(f.controller.beginEditing(1));
+  assert.equal(f.controller.beginEditing(7), false, "no object, no editor");
+  assert.ok(f.controller.isEditing(), "a failed begin leaves the current edit alone");
+  typeInto(editorOf(f).inputs[0], "G");
+  f.controller.beginEditing(0);
+  assert.equal(grace.name, "G", "beginning another edit commits the current one");
+  assert.equal(f.controller.editedObject.name, "Ada");
+  f.controller.teardown();
+  assert.equal(f.controller.isEditing(), false);
+});
+
+test("focus leaving the editor asks the list: an untouched draft is dropped, changes commit, a refusal keeps focus", () => {
+  const f = peoplePage();
+  const [, grace] = f.parent.people;
+  f.controller.beginEditing(1);
+  f.nameInput.focus();
+  assert.equal(f.controller.isEditing(), false, "leaving an unchanged editor discards it");
+  assert.equal(f.application.firstResponder(), f.parent.nameField);
+  f.controller.beginEditing(1);
+  typeInto(editorOf(f).inputs[0], "Grace H");
+  editorOf(f).inputs[1].focus();
+  assert.ok(f.controller.isEditing(), "focus moving within the editor is free");
+  f.controller.confirmEdit = () => false;
+  f.nameInput.focus();
+  assert.ok(f.controller.isEditing(), "a refused confirmation keeps the edit");
+  assert.equal(f.document.activeElement, editorOf(f).inputs[1], "and focus goes back to the editor");
+  assert.equal(f.application.firstResponder(), editorOf(f).controller);
+  f.controller.confirmEdit = () => true;
+  f.nameInput.focus();
+  assert.equal(f.controller.isEditing(), false);
+  assert.equal(grace.name, "Grace H", "leaving a changed editor commits when confirmed");
+  assert.equal(f.application.firstResponder(), f.parent.nameField, "focus went where the user put it");
+  f.controller.beginEditing(0);
+  const failures = [];
+  f.controller.validationError = object => object.name === "" ? new Error("name is required") : null;
+  f.controller.editingDidFailValidation = error => failures.push(error.message);
+  typeInto(editorOf(f).inputs[0], "");
+  assert.equal(f.controller.endEditing(true), false, "a validation error refuses the commit");
+  assert.deepEqual([failures, f.controller.isEditing()], [["name is required"], true]);
+  typeInto(editorOf(f).inputs[0], "Ada L");
+  assert.equal(f.controller.commitEditingIfNeeded(), true);
+  assert.equal(f.parent.people[0].name, "Ada L");
+});
+
+test("sorting commits an edit in progress and a new collection discards one", () => {
+  const f = peoplePage();
+  const [ada, grace] = f.parent.people;
+  const names = () => Array.from(f.controller.rowElements()).map(row => row.children[0].textContent);
+  f.controller.beginEditing(0);
+  typeInto(editorOf(f).inputs[0], "Zed");
+  f.roleHeader.click();
+  assert.equal(f.controller.isEditing(), false, "the sort ended the edit first");
+  assert.equal(ada.name, "Zed");
+  assert.deepEqual(names(), ["Grace", "Zed", "Linus"], "sorted by role with the committed name");
+  assert.equal(f.controller.selectedObject, ada, "the edited object stays selected through the reorder");
+  f.controller.beginEditing(0);
+  typeInto(editorOf(f).inputs[0], "Grace Hopper");
+  f.parent.people = [grace, ada];
+  assert.equal(f.controller.isEditing(), false);
+  assert.equal(grace.name, "Grace", "a replaced collection drops the edit");
+  assert.equal(editorOf(f), null);
+  assert.equal(f.controller.rowElements().length, 2);
+});
+
+test("plain objects are edited through a duplicate that replaces the original on commit", () => {
+  const f = bareList();
+  const people = [{id: "1", name: "Ada"}, {id: "2", name: "Grace"}];
+  f.controller.representedObject = people;
+  assert.ok(f.controller.beginEditing(1));
+  const copy = f.controller.editedObject;
+  assert.notEqual(copy, people[1]);
+  assert.deepEqual({...copy}, {id: "2", name: "Grace"});
+  const input = f.list.querySelector("input");
+  typeInto(input, "Grace Hopper");
+  assert.equal(people[1].name, "Grace", "the original is untouched while editing");
+  assert.ok(f.controller.endEditing(true));
+  assert.notEqual(f.controller.representedObject, people, "a commit replaces the collection");
+  assert.deepEqual(f.controller.representedObject.map(person => person.name), ["Ada", "Grace Hopper"]);
+  assert.deepEqual(f.items().map(item => item.textContent), ["Ada", "Grace Hopper"]);
+  assert.equal(f.controller.selectedObject, f.controller.representedObject[1], "the copy is selected");
+  assert.equal(f.controller.selectedObjectId, "2");
+});
+
+test("an editable list needs an editor template whose root is an inline editor", () => {
+  const plain = element("template", {for: "editor"}, [element("tr", {}, [element("td", {}, [element("input", {bind: "name"})])])]);
+  const f = peoplePage();
+  f.editorTemplate.remove();
+  f.controller.selectIndexes([0]);
+  assert.throws(() => f.controller.activateSelection(), /EditableList has no <template for="editor">/);
+  f.rows.append(plain);
+  assert.throws(() => f.controller.beginEditing(0), /editor template root must be a Swill::Controller::InlineEditor/);
+  assert.equal(f.controller.isEditing(), false);
+  assert.equal(f.rows.children.filter(child => child.tagName === "TR").length, 3, "the rejected clone was removed");
 });

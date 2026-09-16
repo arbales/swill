@@ -58,6 +58,14 @@
     const prototype = Object.getPrototypeOf(value);
     return prototype === null || Object.getPrototypeOf(prototype) === null;
   }
+  function duplicate(value) {
+    if (Array.isArray(value)) return value.slice();
+    if (isPlainObject(value)) return { ...value };
+    if (value !== null && typeof value === "object") {
+      throw new TypeError("dup of a framework object is not supported; use draft");
+    }
+    return value;
+  }
   function isBlank(value) {
     if (value == null || value === false) return true;
     if (typeof value === "string") return stripString(value).length === 0;
@@ -221,6 +229,24 @@
   function clamp(value, low, high) {
     return Math.min(Math.max(value, low), high);
   }
+  function arrayOnly(value, name) {
+    if (!Array.isArray(value)) throw new TypeError(`${name} requires an array`);
+    return value;
+  }
+  function valueInvoke(value, name, args) {
+    switch (name) {
+      case "index":
+        return indexOf(arrayOnly(value, name), args[0]);
+      case "take":
+        return arrayOnly(value, name).slice(0, args[0]);
+      case "drop":
+        return arrayOnly(value, name).slice(args[0]);
+      case "include?":
+        return typeof value === "string" ? value.includes(args[0]) : arrayOnly(value, name).some((other) => isEqual(other, args[0]));
+      default:
+        throw new Error(`Unknown value method: ${name}`);
+    }
+  }
   function valueRead(value, name) {
     switch (name) {
       case "nil?":
@@ -240,6 +266,34 @@
         return upcase(value);
       case "downcase":
         return downcase(value);
+      case "dup":
+        return duplicate(value);
+      case "first":
+        return arrayOnly(value, name).length > 0 ? value[0] : null;
+      case "last":
+        return arrayOnly(value, name).length > 0 ? value.at(-1) : null;
+      case "compact":
+        return compact(arrayOnly(value, name));
+      case "uniq":
+        return uniq(arrayOnly(value, name));
+      case "reverse":
+        return typeof value === "string" ? [...value].reverse().join("") : reverse(arrayOnly(value, name));
+      case "sum":
+        return sum(arrayOnly(value, name));
+      case "min":
+        return min(arrayOnly(value, name));
+      case "max":
+        return max(arrayOnly(value, name));
+      case "to_s":
+        return stringify(value);
+      case "to_sym":
+        return String(value);
+      case "to_i":
+        return toInteger(value);
+      case "to_f":
+        return toFloat(value);
+      case "capitalize":
+        return capitalize(value);
       default:
         throw new Error(`Unknown value reader: ${name}`);
     }
@@ -262,7 +316,7 @@
   function encodeFragment(value) {
     return value == null || value === "" ? null : String(value);
   }
-  var NIL_READERS = ["nil?", "blank?", "present?"];
+  var NIL_READERS = ["nil?", "blank?", "present?", "to_s", "to_i", "to_f"];
   var VALUE_READERS = [
     "nil?",
     "blank?",
@@ -272,8 +326,23 @@
     "length",
     "strip",
     "upcase",
-    "downcase"
+    "downcase",
+    "dup",
+    "first",
+    "last",
+    "compact",
+    "uniq",
+    "reverse",
+    "sum",
+    "min",
+    "max",
+    "to_s",
+    "to_sym",
+    "to_i",
+    "to_f",
+    "capitalize"
   ];
+  var VALUE_METHODS = ["index", "take", "drop", "include?"];
 
   // lib/swill/runtime/properties.mjs
   var states = /* @__PURE__ */ new WeakMap();
@@ -393,9 +462,9 @@
   }
   function writeProperty(object, descriptor, value) {
     const previous = storedValue(object, descriptor);
-    value = object.coerce_property_value(descriptor.name, value, previous);
+    value = object.coercePropertyValue(descriptor.name, value, previous);
     if (isEqual(previous, value)) return value;
-    object.property_will_change(descriptor.name, previous, value);
+    object.propertyWillChange(descriptor.name, previous, value);
     state(object).values.set(descriptor.name, value);
     notify(object, descriptor.name, previous, value);
     return value;
@@ -638,6 +707,11 @@
     if (object == null) {
       throw new Error(`Cannot write ${name} on nil`);
     }
+    if (isPlainObject(object)) {
+      if (!Object.hasOwn(object, name)) throw new Error(`Unknown key: ${name}`);
+      object[name] = value;
+      return value;
+    }
     const property = declarations(object.constructor, "properties").get(name);
     if (property) {
       if (property.computed) {
@@ -660,6 +734,10 @@
     const name = names.pop();
     const owner = names.reduce((target, segment) => read(target, segment), object);
     if (owner == null) return null;
+    if (isPlainObject(owner)) {
+      if (!Object.hasOwn(owner, name)) throw new Error(`Unknown key: ${name}`);
+      return { owner, key: name };
+    }
     const descriptor = declarations(owner.constructor, "properties").get(name);
     if (!descriptor || descriptor.computed) {
       throw new Error(`Read-only binding: ${path}`);
@@ -672,6 +750,7 @@
   function writePath(object, path, value) {
     const writer = pathWriter(object, path);
     if (!writer) return void 0;
+    if (writer.key !== void 0) return write(writer.owner, writer.key, value);
     return writeProperty(writer.owner, writer.descriptor, value);
   }
   function observePath(object, path, callback) {
@@ -721,6 +800,7 @@
       throw new Error(`Cannot call ${name} on nil`);
     }
     const method = declarations(object.constructor, "methods").get(name);
+    if (!method && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
     if (!method || method.arity !== args.length) {
       throw new Error(`Unknown method or wrong arity: ${name}`);
     }
@@ -785,7 +865,7 @@
   function isAttribute(object, name) {
     return !!declarations(object.constructor, "properties").get(name)?.attribute;
   }
-  function validate_attribute(object, name, value, previous) {
+  function validateAttribute(object, name, value, previous) {
     if (!isAttribute(object, name)) return value;
     const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
     return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
@@ -796,7 +876,7 @@
   function outlets(object) {
     return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
   }
-  function collect_attributes(object) {
+  function collectAttributes(object) {
     const result = {};
     for (const descriptor of declarations(object.constructor, "properties").values()) {
       if (descriptor.attribute && !descriptor.computed) {
@@ -805,7 +885,7 @@
     }
     return result;
   }
-  function apply_attributes(object, source) {
+  function applyAttributes(object, source) {
     for (const descriptor of declarations(object.constructor, "properties").values()) {
       if (!descriptor.attribute || descriptor.computed) continue;
       if (Object.hasOwn(source, descriptor.key)) {
@@ -831,6 +911,7 @@
     logicalAnd,
     logicalOr,
     isEqual,
+    duplicate,
     isBlank,
     isPresent,
     isEmpty,
@@ -893,11 +974,11 @@
     dispose,
     // Declarations
     isAttribute,
-    validate_attribute,
+    validateAttribute,
     restorations,
     outlets,
-    collect_attributes,
-    apply_attributes,
+    collectAttributes,
+    applyAttributes,
     // Invalid URL input is reported, not raised.
     warn(message) {
       console.warn(`[Swill] ${message}`);
@@ -912,6 +993,9 @@
     Swill__Awakening: () => Swill__Awakening,
     Swill__Bindings: () => Swill__Bindings,
     Swill__Controller: () => Swill__Controller,
+    Swill__Controller__EditableList: () => Swill__Controller__EditableList,
+    Swill__Controller__Editor: () => Swill__Controller__Editor,
+    Swill__Controller__InlineEditor: () => Swill__Controller__InlineEditor,
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__Controller__SortableList: () => Swill__Controller__SortableList,
     Swill__Fragments: () => Swill__Fragments,
@@ -940,10 +1024,10 @@
       dispose() {
         return Runtime.dispose(this);
       }
-      coerce_property_value(name, value, previous) {
+      coercePropertyValue(name, value, previous) {
         return value;
       }
-      property_will_change(name, previous, value) {
+      propertyWillChange(name, previous, value) {
         return null;
       }
     }
@@ -953,7 +1037,7 @@
   };
   function Swill__Ownership(Superclass) {
     class Swill__Ownership_Layer extends Superclass {
-      each_child(element, callback) {
+      eachChild(element, callback) {
         let children = element.children;
         let index = 0;
         while (index < children.length) {
@@ -963,15 +1047,15 @@
       }
       // Visit root and its owned descendants. A nested controller root is a
       // boundary: neither it nor anything inside it belongs to this owner.
-      each_owned(root, callback) {
+      eachOwned(root, callback) {
         callback(root);
-        return this.each_child(root, (child) => {
-          if (!child.hasAttribute("controller")) return this.each_owned(child, callback);
+        return this.eachChild(root, (child) => {
+          if (!child.hasAttribute("controller")) return this.eachOwned(child, callback);
         });
       }
-      owned_matching(root, selector) {
+      ownedMatching(root, selector) {
         let found = [];
-        this.each_owned(root, (element) => {
+        this.eachOwned(root, (element) => {
           if (element.matches(selector)) return found.push(element);
         });
         return found;
@@ -987,7 +1071,7 @@
         let path = options.key_path;
         let sync = (value) => Runtime.write(this, target, value);
         sync(Runtime.readPath(source, path));
-        this.object_bindings().push({
+        this.objectBindings().push({
           target,
           dispose: Runtime.observePath(source, path, sync)
         });
@@ -995,16 +1079,16 @@
       }
       unbind(target) {
         let remaining = [];
-        this.object_bindings().forEach((binding) => binding.target === target ? binding.dispose.call(null) : remaining.push(binding));
+        this.objectBindings().forEach((binding) => binding.target === target ? binding.dispose.call(null) : remaining.push(binding));
         this._object_bindings = remaining;
         return this;
       }
-      unbind_all() {
-        this.object_bindings().forEach((binding) => binding.dispose.call(null));
+      unbindAll() {
+        this.objectBindings().forEach((binding) => binding.dispose.call(null));
         this._object_bindings = [];
         return this;
       }
-      object_bindings() {
+      objectBindings() {
         if (!this._object_bindings) this._object_bindings = [];
         return this._object_bindings;
       }
@@ -1012,72 +1096,72 @@
     return Swill__ObjectBindings_Layer;
   }
   var Swill__Responder = class extends Swill__Object {
-    next_responder() {
+    nextResponder() {
       return null;
     }
     // Target/action: the first responder in the chain that responds to the
     // name handles it, as respond_to? would decide in Ruby. A same-named
     // property or a method of the wrong arity is an error there, not a reason
     // to keep walking. An action nobody handles is also an error.
-    perform_action(name, sender, event) {
-      let target = this.action_target(name);
+    performAction(name, sender, event) {
+      let target = this.actionTarget(name);
       if (!target) throw new Error(`Unhandled action: ${name}`);
       return Runtime.performAction(target, name, sender, event);
     }
     // The first responder from here up the chain that responds to name, or
     // nil when none does; for actions that are optional to handle.
-    action_target(name) {
+    actionTarget(name) {
       if (Runtime.respondsTo(this, name)) return this;
-      let target = this.next_responder();
-      return target ? target.action_target(name) : null;
+      let target = this.nextResponder();
+      return target ? target.actionTarget(name) : null;
     }
     // ---- first responder ----
     //
     // The policy gate for being made first responder by focus or the key loop.
     // Views accept; a bare responder refuses.
-    accepts_first_responder_predicate() {
+    acceptsFirstResponder() {
       return false;
     }
     // Return false to refuse; set up state such as focus otherwise. Never
     // call directly; ask the application.
-    become_first_responder() {
+    becomeFirstResponder() {
       return true;
     }
     // Return false to keep first responder status; the incoming responder is
     // passed so a refusal can be selective.
-    resign_first_responder(next_responder) {
+    resignFirstResponder(next_responder) {
       return true;
     }
     // ---- key events ----
     //
     // Well-known keys route to named methods; everything else, and the named
     // methods themselves, continue up the chain.
-    key_down(event) {
+    keyDown(event) {
       switch (event.key) {
         case "Escape":
-          return this.cancel_operation(event);
+          return this.cancelOperation(event);
         case "Enter":
-          return this.insert_newline(event);
+          return this.insertNewline(event);
         case "Tab":
           return this.complete(event);
         default:
-          return this.next_responder()?.key_down(event);
+          return this.nextResponder()?.keyDown(event);
       }
     }
-    key_up(event) {
-      return this.next_responder()?.key_up(event);
+    keyUp(event) {
+      return this.nextResponder()?.keyUp(event);
     }
-    cancel_operation(event) {
-      return this.next_responder()?.cancel_operation(event);
+    cancelOperation(event) {
+      return this.nextResponder()?.cancelOperation(event);
     }
-    insert_newline(event) {
-      return this.next_responder()?.insert_newline(event);
+    insertNewline(event) {
+      return this.nextResponder()?.insertNewline(event);
     }
     complete(event) {
-      return this.next_responder()?.complete(event);
+      return this.nextResponder()?.complete(event);
     }
   };
-  var Swill__View = class extends Swill__Responder {
+  var Swill__View = class _Swill__View extends Swill__Responder {
     constructor(element) {
       super();
       this._element = element;
@@ -1089,7 +1173,7 @@
     element() {
       return this._element;
     }
-    controller_value() {
+    controllerValue() {
       return this._controller;
     }
     set controller(controller) {
@@ -1111,52 +1195,122 @@
       let superview = this._superview;
       return superview ? superview.owner() : null;
     }
-    adopt_subview(child) {
+    adoptSubview(child) {
       let previous = child.superview();
-      if (previous) previous.release_subview(child);
-      child.assign_superview(this);
+      if (previous) previous.releaseSubview(child);
+      child.assignSuperview(this);
       this._subviews.push(child);
       return child;
     }
-    release_subview(child) {
+    releaseSubview(child) {
       this._subviews = this._subviews.filter((candidate) => candidate !== child);
-      return child.assign_superview(null);
+      return child.assignSuperview(null);
     }
-    remove_from_superview() {
+    removeFromSuperview() {
       let superview = this._superview;
-      if (superview) return superview.release_subview(this);
+      if (superview) return superview.releaseSubview(this);
     }
     // Tree-internal; adopt_subview and release_subview keep both sides consistent.
-    assign_superview(superview) {
+    assignSuperview(superview) {
       this._superview = superview;
       return this._superview;
     }
-    next_responder() {
+    nextResponder() {
       return this._controller ?? this._superview;
     }
+    // ---- elements: the DOM work a controller leaves to its view ----
+    // The View on an element, or nil when it has none.
+    static of(element) {
+      return element.__swill_view__ ?? null;
+    }
+    // The controller rooted at an element, or nil.
+    static controllerFor(element) {
+      let view = _Swill__View.of(element);
+      return view ? view.controllerValue() : null;
+    }
+    hasAttribute(name) {
+      return this._element.hasAttribute(name);
+    }
+    contains(element) {
+      return this._element.contains(element);
+    }
+    // A fresh element from an inert template's content, or nil when the
+    // template has none.
+    cloneTemplate(template) {
+      let node = template.content.firstElementChild;
+      return node ? node.cloneNode(true) : null;
+    }
+    append(element) {
+      return this._element.appendChild(element);
+    }
+    insertAfter(anchor, element) {
+      return anchor.after(element);
+    }
+    remove(element) {
+      return element.remove();
+    }
+    // The direct child of this view's element that contains element, or nil.
+    childContaining(element) {
+      let node = element;
+      while (node && node.parentElement !== this._element) {
+        node = node.parentElement;
+      }
+      ;
+      return node;
+    }
+    // A state class on a child element.
+    mark(element, name, on) {
+      return element.classList.toggle(name, on);
+    }
+    // The selected state, as a class and for assistive technology.
+    markSelected(element, on) {
+      this.mark(element, "selected", on);
+      return element.setAttribute("aria-selected", on ? "true" : "false");
+    }
+    reveal(element) {
+      if (element.scrollIntoView) return element.scrollIntoView({ block: "nearest" });
+    }
+    // Keyboard focus needs a tab stop.
+    ensureFocusable() {
+      if (!this._element.hasAttribute("tabindex")) {
+        return this._element.setAttribute("tabindex", "0");
+      }
+    }
+    // Drop the browser's text selection, as before a shift-click sweep.
+    clearTextSelection() {
+      let owner_document = this._element.ownerDocument;
+      let selection = owner_document.getSelection ? owner_document.getSelection() : null;
+      if (selection) return selection.removeAllRanges();
+    }
+    // An event listener on this view's element; the returned callable
+    // removes it.
+    listen(type, handler, capture) {
+      this._element.addEventListener(type, handler, capture);
+      return () => this._element.removeEventListener(type, handler, capture);
+    }
     // ---- focus ----
-    focusable_selector() {
+    focusableSelector() {
       return "input, select, textarea, button, [tabindex]";
     }
     // This element when it is focusable, else its first focusable descendant.
-    first_focusable_element() {
-      return this._element.matches(this.focusable_selector()) ? this._element : this._element.querySelector(this.focusable_selector());
+    firstFocusableElement() {
+      return this._element.matches(this.focusableSelector()) ? this._element : this._element.querySelector(this.focusableSelector());
     }
-    focus_element() {
-      let target = this.first_focusable_element();
+    focusElement() {
+      let target = this.firstFocusableElement();
       if (target) return target.focus();
     }
-    blur_element() {
-      let target = this.first_focusable_element();
+    blurElement() {
+      let target = this.firstFocusableElement();
       if (target) return target.blur();
     }
     // A view wraps a focusable element, so it accepts by default; becoming
     // first responder focuses it.
-    accepts_first_responder_predicate() {
+    acceptsFirstResponder() {
       return true;
     }
-    become_first_responder() {
-      this.focus_element();
+    becomeFirstResponder() {
+      this.focusElement();
       return true;
     }
   };
@@ -1165,11 +1319,11 @@
     // controller root. Editors resolve their own bindings under it.
     // Property under which bind paths in this region resolve; nil binds
     // against the controller itself. A leading @ in markup always ignores it.
-    binding_root() {
+    bindingRoot() {
       return null;
     }
     attach(element) {
-      this._view = element.__swill_view__ ?? new Swill__View(element);
+      this._view = Swill__View.of(element) ?? new Swill__View(element);
       this._view.controller = this;
       this._teardowns = [];
       return this;
@@ -1183,22 +1337,22 @@
       return superview ? superview.owner() : null;
     }
     // Direct child controllers in tree order, as a JavaScript array.
-    child_controllers() {
+    childControllers() {
       let found = [];
-      this.collect_child_controllers(this._view, found);
+      this.collectChildControllers(this._view, found);
       return found;
     }
     // The application whose root contains this controller, found through the
     // DOM so fragments awakened later and multiple applications both work.
     application() {
-      return this.nearest_application(this._view.element());
+      return this.nearestApplication(this._view.element());
     }
     // A nested controller answers to its parent; a root controller answers to
     // the application, which is the top of the responder chain.
-    next_responder() {
+    nextResponder() {
       return this.parent() ?? this.application();
     }
-    register_teardown(dispose2) {
+    registerTeardown(dispose2) {
       return this._teardowns.push(dispose2);
     }
     // Releases this controller's listeners and observers, then its descendants,
@@ -1206,81 +1360,81 @@
     // again later.
     // A controller can be first responder when its view has something to
     // focus; becoming and resigning move DOM focus accordingly.
-    accepts_first_responder_predicate() {
-      return this._view.first_focusable_element() != null;
+    acceptsFirstResponder() {
+      return this._view.firstFocusableElement() != null;
     }
-    become_first_responder() {
-      if (!super.become_first_responder()) return false;
-      this._view.focus_element();
+    becomeFirstResponder() {
+      if (!super.becomeFirstResponder()) return false;
+      this._view.focusElement();
       return true;
     }
-    resign_first_responder(next_responder) {
-      if (!super.resign_first_responder(next_responder)) return false;
-      this._view.blur_element();
+    resignFirstResponder(next_responder) {
+      if (!super.resignFirstResponder(next_responder)) return false;
+      this._view.blurElement();
       return true;
     }
     teardown() {
-      if (this._view.controller_value() !== this) return;
-      this.view_will_disappear();
+      if (this._view.controllerValue() !== this) return;
+      this.viewWillDisappear();
       let current_application = this.application();
       if (current_application) {
-        current_application.release_first_responder(this._view.element());
+        current_application.releaseFirstResponder(this._view.element());
       }
       ;
       this._teardowns.forEach((dispose2) => dispose2());
       this._teardowns = [];
-      this.unbind_all();
+      this.unbindAll();
       this.dispose();
-      this.child_controllers().forEach((child) => child.teardown());
-      this._view.subviews().forEach((subview) => this._view.release_subview(subview));
-      this._view.remove_from_superview();
+      this.childControllers().forEach((child) => child.teardown());
+      this._view.subviews().forEach((subview) => this._view.releaseSubview(subview));
+      this._view.removeFromSuperview();
       this._view.controller = null;
-      return this.view_did_disappear();
+      return this.viewDidDisappear();
     }
     // Coercion hook for JSON outlets: turn parsed data into value objects
     // before the outlet is assigned. nil means the script was empty.
-    decode_outlet_data(name, value) {
+    decodeOutletData(name, value) {
       return value;
     }
-    view_did_load() {
+    viewDidLoad() {
       return null;
     }
-    awake_from_dom() {
+    awakeFromDOM() {
       return null;
     }
     // Runs on a window controller after fragment values were applied to its
     // restorable paths and before controller_did_load. restored is true
     // when at least one value was applied.
-    controller_did_restore(restored) {
+    controllerDidRestore(restored) {
       return null;
     }
-    controller_did_load() {
+    controllerDidLoad() {
       return null;
     }
-    view_will_appear() {
+    viewWillAppear() {
       return null;
     }
-    view_did_appear() {
+    viewDidAppear() {
       return null;
     }
-    view_will_disappear() {
+    viewWillDisappear() {
       return null;
     }
-    view_did_disappear() {
+    viewDidDisappear() {
       return null;
     }
-    nearest_application(element) {
+    nearestApplication(element) {
       if (!element) return null;
       let found = element.__swill_application__;
-      return found ? found : this.nearest_application(element.parentElement);
+      return found ? found : this.nearestApplication(element.parentElement);
     }
-    collect_child_controllers(view, found) {
+    collectChildControllers(view, found) {
       return view.subviews().forEach((subview) => {
-        let controller = subview.controller_value();
+        let controller = subview.controllerValue();
         if (controller) {
           found.push(controller);
         } else {
-          this.collect_child_controllers(subview, found);
+          this.collectChildControllers(subview, found);
         }
       });
     }
@@ -1288,11 +1442,11 @@
   var Swill__Bindings = class extends Swill__Object {
     wire(controller) {
       let root = controller.view().element();
-      let prefix = controller.binding_root();
+      let prefix = controller.bindingRoot();
       let disposers = [];
-      this.wire_properties(controller, prefix, root, disposers);
-      this.wire_region(controller, prefix, root, disposers);
-      controller.register_teardown(this.release(disposers));
+      this.wireProperties(controller, prefix, root, disposers);
+      this.wireRegion(controller, prefix, root, disposers);
+      controller.registerTeardown(this.release(disposers));
       return controller;
     }
     // A region owned by an object rather than a controller: paths resolve
@@ -1300,36 +1454,36 @@
     // itself (bind="@" is the object). When that root is a controller's,
     // only its represented object comes from here; the controller wires the
     // rest as its own region. Returns the disposer.
-    wire_object(object, element) {
+    wireObject(object, element) {
       let disposers = [];
       if (element.hasAttribute("bind")) {
-        disposers.push(this.wire_element(object, element, null));
+        disposers.push(this.wireElement(object, element, null));
       }
       ;
       if (!element.hasAttribute("controller")) {
-        this.wire_properties(object, null, element, disposers);
-        this.wire_region(object, null, element, disposers);
+        this.wireProperties(object, null, element, disposers);
+        this.wireRegion(object, null, element, disposers);
       }
       ;
       return this.release(disposers);
     }
-    wire_region(object, prefix, element, disposers) {
-      return this.each_child(element, (child) => {
+    wireRegion(object, prefix, element, disposers) {
+      return this.eachChild(element, (child) => {
         if (child.hasAttribute("bind")) {
-          disposers.push(this.wire_element(object, child, prefix));
+          disposers.push(this.wireElement(object, child, prefix));
         }
         ;
         if (!child.hasAttribute("controller")) {
-          this.wire_properties(object, prefix, child, disposers);
-          return this.wire_region(object, prefix, child, disposers);
+          this.wireProperties(object, prefix, child, disposers);
+          return this.wireRegion(object, prefix, child, disposers);
         }
       });
     }
-    wire_properties(object, prefix, element, disposers) {
+    wireProperties(object, prefix, element, disposers) {
       return element.getAttributeNames().forEach((name) => {
         if (name.slice(0, 5) === "bind-") {
           let property = name.slice(5, name.length);
-          disposers.push(this.wire_property(
+          disposers.push(this.wireProperty(
             object,
             prefix,
             element,
@@ -1342,18 +1496,18 @@
     release(disposers) {
       return () => disposers.forEach((dispose2) => dispose2());
     }
-    resolve_path(prefix, path) {
+    resolvePath(prefix, path) {
       if (path[0] === "@") return path.slice(1, path.length) ?? "";
       if (prefix == null) return path;
       return path.length === 0 ? `${prefix}` : `${prefix}.${path}`;
     }
     // A value binding. On a child controller's root the value becomes the
     // child's represented object; otherwise it renders into the element.
-    wire_element(object, element, prefix) {
-      let path = this.resolve_path(prefix, element.getAttribute("bind"));
+    wireElement(object, element, prefix) {
+      let path = this.resolvePath(prefix, element.getAttribute("bind"));
       let view = element.__swill_view__;
-      let child = view ? view.controller_value() : null;
-      if (child) return this.wire_represented_object(object, child, path);
+      let child = view ? view.controllerValue() : null;
+      if (child) return this.wireRepresentedObject(object, child, path);
       let form_control = element.matches("input, textarea, select");
       let writable = form_control && !element.hasAttribute("readonly");
       let checkbox = element.type === "checkbox";
@@ -1381,19 +1535,19 @@
         if (writable) return element.removeEventListener(event_name, handler);
       };
     }
-    wire_represented_object(object, child, path) {
-      let sync = (value) => child.represented_object = value;
+    wireRepresentedObject(object, child, path) {
+      let sync = (value) => child.representedObject = value;
       sync(Runtime.readPath(object, path));
       return Runtime.observePath(object, path, sync);
     }
-    wire_property(object, prefix, element, property, path) {
-      let resolved = this.resolve_path(prefix, path);
+    wireProperty(object, prefix, element, property, path) {
+      let resolved = this.resolvePath(prefix, path);
       let name = property === "readonly" ? "readOnly" : property;
-      let render = (value) => this.write_property(element, name, value);
+      let render = (value) => this.writeProperty(element, name, value);
       render(Runtime.readPath(object, resolved));
       return Runtime.observePath(object, resolved, render);
     }
-    write_property(element, property, value) {
+    writeProperty(element, property, value) {
       if (property.slice(0, 5) === "data-" || property.slice(0, 5) === "aria-") {
         if (value == null || value === "") {
           element.removeAttribute(property);
@@ -1410,9 +1564,9 @@
         return;
       }
       ;
-      return element[property] = this.boolean_property_predicate(property) ? Runtime.isTruthy(value) : value;
+      return element[property] = this.isBooleanProperty(property) ? Runtime.isTruthy(value) : value;
     }
-    boolean_property_predicate(property) {
+    isBooleanProperty(property) {
       switch (property) {
         case "disabled":
         case "checked":
@@ -1428,7 +1582,7 @@
   };
   var Swill__Actions = class extends Swill__Object {
     wire(controller) {
-      controller.register_teardown(this.wire_into(
+      controller.registerTeardown(this.wireInto(
         controller,
         controller.view().element()
       ));
@@ -1437,11 +1591,11 @@
     // Actions in element's owned region dispatch from controller, as a list
     // row's do from its list. Returns the disposer; elements already wired
     // are left to their owner.
-    wire_into(controller, element) {
-      let disposers = this.owned_matching(element, "[data-action]").map((target) => this.wire_element(controller, target));
+    wireInto(controller, element) {
+      let disposers = this.ownedMatching(element, "[data-action]").map((target) => this.wireElement(controller, target));
       return () => disposers.forEach((dispose2) => dispose2());
     }
-    wire_element(controller, element) {
+    wireElement(controller, element) {
       let event_name, action_name;
       if (element.__swill_action__) return () => null;
       let specification = element.getAttribute("data-action").trim();
@@ -1455,7 +1609,7 @@
         action_name = specification;
       }
       ;
-      let handler = (event) => controller.perform_action(action_name, element, event);
+      let handler = (event) => controller.performAction(action_name, element, event);
       element.__swill_action__ = true;
       element.addEventListener(event_name, handler);
       return () => {
@@ -1479,7 +1633,7 @@
         Runtime.write(
           controller,
           name,
-          this.value_for(controller, by_name[name], element)
+          this.valueFor(controller, by_name[name], element)
         );
       });
       declared.forEach((descriptor) => {
@@ -1497,7 +1651,7 @@
       return found;
     }
     collect(element, found) {
-      return this.each_child(element, (child) => {
+      return this.eachChild(element, (child) => {
         if (child.hasAttribute("outlet")) found.push(child);
         if (!child.hasAttribute("controller")) return this.collect(child, found);
       });
@@ -1507,7 +1661,7 @@
     // must be: a typed outlet's value is checked against the declared type,
     // shallowly, as T.cast checks, so a mismatch fails here by outlet name
     // rather than at first use.
-    value_for(controller, descriptor, element) {
+    valueFor(controller, descriptor, element) {
       let name = descriptor.name;
       let value = this.materialize(controller, name, element);
       let typed = descriptor.type && descriptor.type !== "T.untyped";
@@ -1525,18 +1679,24 @@
       if (element.tagName === "TEMPLATE") return element;
       let view = element.__swill_view__;
       if (!view) throw new Error(`Outlet ${name} is not a managed element`);
-      let owner = view.controller_value();
+      let owner = view.controllerValue();
       return owner ? owner : view;
     }
     decode(controller, name, element) {
       let text = element.textContent.trim();
-      return controller.decode_outlet_data(
+      return controller.decodeOutletData(
         name,
         text.length === 0 ? null : JSON.parse(text)
       );
     }
   };
   var Swill__Awakening = class extends Swill__Object {
+    static wire(root) {
+      return new this().wire(root);
+    }
+    static detach(node) {
+      return new this().detach(node);
+    }
     // Returns the new controllers in document order. Awakening a fragment that
     // already sits under a live view adopts it into that view's tree.
     wire(root) {
@@ -1549,40 +1709,40 @@
     // between this and finish.
     awaken(root) {
       let controllers = [];
-      this.walk(root, this.nearest_view(root.parentElement), controllers);
-      this.each_reversed(controllers, (controller) => this.load(controller));
+      this.walk(root, this.nearestView(root.parentElement), controllers);
+      this.eachReversed(controllers, (controller) => this.load(controller));
       return controllers;
     }
     // controller_did_load once per controller, then appearance.
     finish(controllers) {
-      this.each_reversed(
+      this.eachReversed(
         controllers,
-        (controller) => controller.controller_did_load()
+        (controller) => controller.controllerDidLoad()
       );
-      this.each_reversed(
+      this.eachReversed(
         controllers,
-        (controller) => controller.view_will_appear()
+        (controller) => controller.viewWillAppear()
       );
-      return this.each_reversed(
+      return this.eachReversed(
         controllers,
-        (controller) => controller.view_did_appear()
+        (controller) => controller.viewDidAppear()
       );
     }
     load(controller) {
-      controller.view_did_load();
+      controller.viewDidLoad();
       new Swill__Outlets().connect(controller);
       new Swill__Bindings().wire(controller);
       new Swill__Actions().wire(controller);
-      return controller.awake_from_dom();
+      return controller.awakeFromDOM();
     }
     // An element that already has a View, such as a list row created in code,
     // is part of the tree whatever its attributes say.
     walk(element, owner, controllers) {
       let view = element.__swill_view__;
-      if (!view && this.managed_predicate(element)) view = this.create_view(element);
+      if (!view && this.isManaged(element)) view = this.createView(element);
       if (view) {
-        if (owner && !view.superview()) owner.adopt_subview(view);
-        if (element.hasAttribute("controller") && !view.controller_value()) {
+        if (owner && !view.superview()) owner.adoptSubview(view);
+        if (element.hasAttribute("controller") && !view.controllerValue()) {
           let controller_class = Runtime.resolve(element.getAttribute("controller"));
           let controller = new controller_class();
           controller.attach(element);
@@ -1591,14 +1751,14 @@
       }
       ;
       let next_owner = view ?? owner;
-      return this.each_child(
+      return this.eachChild(
         element,
         (child) => this.walk(child, next_owner, controllers)
       );
     }
     // A live element with klass, controller, or outlet. Templates and JSON
     // scripts are inert content, never objects.
-    managed_predicate(element) {
+    isManaged(element) {
       if (element.nodeType !== 1) return false;
       if (element.tagName === "TEMPLATE" || element.tagName === "SCRIPT") {
         return false;
@@ -1607,7 +1767,7 @@
       return element.hasAttribute("klass") || element.hasAttribute("controller") || element.hasAttribute("outlet");
     }
     // klass names a View subclass; a plain managed element gets a plain View.
-    create_view(element) {
+    createView(element) {
       let name = element.getAttribute("klass");
       if (!name) return new Swill__View(element);
       let view_class = Runtime.resolve(name);
@@ -1619,31 +1779,31 @@
       return view;
     }
     // Every controller in a subtree in document order, the node included.
-    controllers_within(node) {
+    controllersWithin(node) {
       let found = [];
-      this.collect_controllers(node, found);
+      this.collectControllers(node, found);
       return found;
     }
-    collect_controllers(element, found) {
+    collectControllers(element, found) {
       let view = element.__swill_view__;
-      let controller = view ? view.controller_value() : null;
+      let controller = view ? view.controllerValue() : null;
       if (controller) found.push(controller);
-      return this.each_child(
+      return this.eachChild(
         element,
-        (child) => this.collect_controllers(child, found)
+        (child) => this.collectControllers(child, found)
       );
     }
     // The counterpart of wire for a subtree being removed. Teardown recurses
     // into descendants and is idempotent, so document order is fine.
     detach(node) {
-      return this.controllers_within(node).forEach((controller) => controller.teardown());
+      return this.controllersWithin(node).forEach((controller) => controller.teardown());
     }
-    nearest_view(element) {
+    nearestView(element) {
       if (!element) return null;
       let view = element.__swill_view__;
-      return view ? view : this.nearest_view(element.parentElement);
+      return view ? view : this.nearestView(element.parentElement);
     }
-    each_reversed(controllers, callback) {
+    eachReversed(controllers, callback) {
       let index = controllers.length - 1;
       while (index >= 0) {
         callback(controllers[index]);
@@ -1658,12 +1818,12 @@
       this._suspended = false;
       this._on_change = null;
     }
-    available_predicate() {
+    isAvailable() {
       return this._browser != null && this._browser.location != null && this._browser.history != null;
     }
     params() {
       let found = {};
-      if (!this.available_predicate()) return found;
+      if (!this.isAvailable()) return found;
       let search = new URLSearchParams(this._browser.location.hash.replace(
         /^#/m,
         ""
@@ -1675,7 +1835,7 @@
     // a no-op. Writes are also dropped while fragment state is being applied.
     write(key, value, history) {
       if (history === "none" || this._suspended) return;
-      if (!this.available_predicate()) return;
+      if (!this.isAvailable()) return;
       let location = this._browser.location;
       let search = new URLSearchParams(location.hash.replace(/^#/m, ""));
       if (value == null) {
@@ -1704,7 +1864,7 @@
       }
     }
     observe(callback) {
-      if (!this.available_predicate()) return;
+      if (!this.isAvailable()) return;
       this._on_change = (_event) => callback();
       this._browser.addEventListener("popstate", this._on_change);
       return this._browser.addEventListener("hashchange", this._on_change);
@@ -1736,16 +1896,16 @@
     //
     // The window's own fragment param is its bare name (main=farewell); its
     // controller's state params are scoped under it (main.n=3).
-    scoped_key(key) {
+    scopedKey(key) {
       return `${this._name}.${key}`;
     }
-    add_restoration(disposer, key) {
+    addRestoration(disposer, key) {
       this._restoration_disposers.push(disposer);
       return this._restoration_keys.push(key);
     }
     // Release the current restoration subscriptions; returns the scoped keys
     // they covered so a caller can prune ones the next controller will not own.
-    dispose_restoration() {
+    disposeRestoration() {
       let disposers = this._restoration_disposers;
       let keys = this._restoration_keys;
       this._restoration_disposers = [];
@@ -1762,35 +1922,35 @@
     controller() {
       return this._controller;
     }
-    content_name() {
+    contentName() {
       return this._content_name;
     }
     // Resolves with nil when the window is dismissed.
     closed() {
       return this._closed;
     }
-    saved_first_responder() {
+    savedFirstResponder() {
       return this._saved_first_responder;
     }
-    save_first_responder(responder) {
+    saveFirstResponder(responder) {
       this._saved_first_responder = responder;
       return this._saved_first_responder;
     }
-    assign_content(content_name, controller) {
+    assignContent(content_name, controller) {
       this._content_name = content_name;
       this._controller = controller;
       return this._controller;
     }
     // A named [window] container, as opposed to a template-instantiated dialog.
-    container_predicate() {
+    isContainer() {
       return this._root.hasAttribute("window");
     }
-    contains_controller_predicate(candidate) {
+    containsController(candidate) {
       return candidate === this._controller || this._root.contains(candidate.view().element());
     }
     // Tear down the subtree, close a dialog, remove the root, and resolve.
     dismiss() {
-      this.dispose_restoration();
+      this.disposeRestoration();
       new Swill__Awakening().detach(this._root);
       if (this._root.close) this._root.close();
       this._root.remove();
@@ -1804,25 +1964,25 @@
       this._windows = [];
       this._templates = {};
       this._captured = {};
-      this._on_focus = (event) => this.sync_first_responder(event.target, event.relatedTarget);
-      this._on_focus_out = (event) => this.focus_left(event.relatedTarget);
-      this._on_key_down = (event) => this.first_responder().key_down(event);
-      this._on_key_up = (event) => this.first_responder().key_up(event);
+      this._on_focus = (event) => this.syncFirstResponder(event.target, event.relatedTarget);
+      this._on_focus_out = (event) => this.focusLeft(event.relatedTarget);
+      this._on_key_down = (event) => this.firstResponder().keyDown(event);
+      this._on_key_up = (event) => this.firstResponder().keyUp(event);
       root.addEventListener("focusin", this._on_focus);
       root.addEventListener("focusout", this._on_focus_out);
       root.addEventListener("keydown", this._on_key_down);
       root.addEventListener("keyup", this._on_key_up);
       this._fragments = new Swill__Fragments(root.ownerDocument.defaultView);
-      this.scan_templates();
-      this.prepare_window_containers();
+      this.scanTemplates();
+      this.prepareWindowContainers();
       let awakening = new Swill__Awakening();
       this._controllers = awakening.awaken(root);
-      this.register_window_containers();
-      this.restore_launched_windows();
+      this.registerWindowContainers();
+      this.restoreLaunchedWindows();
       awakening.finish(this._controllers);
-      this._fragments.observe(() => this.apply_fragment());
+      this._fragments.observe(() => this.applyFragment());
       this.watch(root);
-      this.application_did_launch();
+      this.applicationDidLaunch();
       return this;
     }
     // Every controller awakened at launch, in document order.
@@ -1835,10 +1995,10 @@
     // Idempotent: a page may see more than one pagehide before it is unloaded.
     terminate() {
       if (this._root.__swill_application__ !== this) return;
-      this.application_will_terminate();
+      this.applicationWillTerminate();
       this._fragments.release();
       if (this._observer) this._observer.disconnect();
-      this._windows.forEach((window) => this.release_window(window));
+      this._windows.forEach((window) => this.releaseWindow(window));
       this._windows = [];
       this._controllers.forEach((controller) => controller.teardown());
       this._controllers = [];
@@ -1849,10 +2009,10 @@
       this._first_responder = null;
       return this._root.__swill_application__ = null;
     }
-    application_did_launch() {
+    applicationDidLaunch() {
       return null;
     }
-    application_will_terminate() {
+    applicationWillTerminate() {
       return null;
     }
     // ---- windows ----
@@ -1860,32 +2020,25 @@
     // pre-rendered content, awaken it, record the content in the URL fragment
     // as a history entry, restore the new controller's state, and hand the
     // first responder to it. Returns that controller.
-    load_window_content(window_name, content_name) {
-      return this.load_window_content_with(
-        window_name,
-        content_name,
-        "push"
-      );
+    loadWindowContent(window_name, content_name) {
+      return this.loadWindowContentWith(window_name, content_name, "push");
     }
     // history is :push for navigation, :replace to rewrite the entry, or :none
     // when the fragment itself asked for the content (Back/Forward).
-    load_window_content_with(window_name, content_name, history) {
-      let window = this.window_named(window_name);
+    loadWindowContentWith(window_name, content_name, history) {
+      let window = this.windowNamed(window_name);
       if (!window) throw new Error(`No window container: ${window_name}`);
       let container = window.root();
-      let previous = this.first_responder();
+      let previous = this.firstResponder();
       let awakening = new Swill__Awakening();
-      this.each_child(container, (child) => awakening.detach(child));
+      this.eachChild(container, (child) => awakening.detach(child));
       container.replaceChildren();
-      container.appendChild(this.clone_window_content(content_name));
+      container.appendChild(this.cloneWindowContent(content_name));
       container.setAttribute("name", content_name);
       let controllers = awakening.awaken(container);
-      window.assign_content(
-        content_name,
-        this.top_controller_in(container)
-      );
+      window.assignContent(content_name, this.topControllerIn(container));
       this._fragments.write(window.name(), content_name, history);
-      this.restore_window_state(
+      this.restoreWindowState(
         window,
         history !== "none",
         history !== "none"
@@ -1893,9 +2046,9 @@
       awakening.finish(controllers);
       let controller = window.controller();
       if (controller) {
-        this.make_first_responder(controller);
-      } else if (this.attached_predicate(previous)) {
-        this.make_first_responder(previous);
+        this.makeFirstResponder(controller);
+      } else if (this.isAttached(previous)) {
+        this.makeFirstResponder(previous);
       }
       ;
       return controller;
@@ -1903,16 +2056,16 @@
     // Present a template as a window appended to the root. A <dialog> root is
     // shown. Dismiss it with dismiss(controller); the window's closed promise
     // resolves then.
-    show_window(name) {
-      return this.show_window_in(name, this._root);
+    showWindow(name) {
+      return this.showWindowIn(name, this._root);
     }
-    show_window_in(name, into) {
-      let node = this.clone_window_content(name);
+    showWindowIn(name, into) {
+      let node = this.cloneWindowContent(name);
       into.appendChild(node);
       let awakening = new Swill__Awakening();
       let controllers = awakening.awaken(node);
       let view = node.__swill_view__;
-      let controller = view ? view.controller_value() : null;
+      let controller = view ? view.controllerValue() : null;
       if (!controller) {
         awakening.detach(node);
         node.remove();
@@ -1921,44 +2074,44 @@
       ;
       if (node.show) node.show();
       let window = new Swill__Window(name, node);
-      window.assign_content(name, controller);
-      window.save_first_responder(this.first_responder());
+      window.assignContent(name, controller);
+      window.saveFirstResponder(this.firstResponder());
       this._windows.push(window);
-      this.restore_window_state(window, false, false);
+      this.restoreWindowState(window, false, false);
       awakening.finish(controllers);
-      this.make_first_responder(controller);
+      this.makeFirstResponder(controller);
       return window;
     }
     dismiss(controller) {
-      let window = this.window_containing(controller);
+      let window = this.windowContaining(controller);
       if (!window) return false;
       this._windows = this._windows.filter((candidate) => candidate !== window);
-      let saved = window.saved_first_responder();
+      let saved = window.savedFirstResponder();
       window.dismiss();
-      if (saved && this.attached_predicate(saved)) this.make_first_responder(saved);
+      if (saved && this.isAttached(saved)) this.makeFirstResponder(saved);
       return true;
     }
-    window_named(name) {
-      return this._windows.find((window) => this.matches_container_predicate(window, name));
+    windowNamed(name) {
+      return this._windows.find((window) => this.matchesContainer(window, name));
     }
-    window_content_predicate(name) {
-      return (this._captured[name] ?? this.window_template(name)) != null;
+    isWindowContent(name) {
+      return (this._captured[name] ?? this.windowTemplate(name)) != null;
     }
     // ---- first responder ----
     // The application itself when nothing more specific holds it.
-    first_responder() {
+    firstResponder() {
       return this._first_responder ?? this;
     }
     // Cocoa's makeFirstResponder: a responder that does not accept is refused
     // up front; the current first responder may refuse to resign; a responder
     // that refuses to become leaves the application as first responder.
-    make_first_responder(responder) {
-      if (responder && !responder.accepts_first_responder_predicate()) return false;
-      let current = this.first_responder();
+    makeFirstResponder(responder) {
+      if (responder && !responder.acceptsFirstResponder()) return false;
+      let current = this.firstResponder();
       if (responder === current) return true;
-      if (!current.resign_first_responder(responder)) return false;
+      if (!current.resignFirstResponder(responder)) return false;
       this._first_responder = null;
-      if (responder && responder.become_first_responder()) {
+      if (responder && responder.becomeFirstResponder()) {
         this._first_responder = responder;
       }
       ;
@@ -1966,12 +2119,12 @@
     }
     // The browser already moved focus; reconcile the first responder without
     // re-running become. A resign refusal restores focus to the refuser.
-    sync_first_responder(target, previous) {
-      let responder = this.responder_for(target);
-      let current = this.first_responder();
+    syncFirstResponder(target, previous) {
+      let responder = this.responderFor(target);
+      let current = this.firstResponder();
       if (responder === current) return;
-      if (!current.resign_first_responder(responder)) {
-        this.restore_focus(current, previous);
+      if (!current.resignFirstResponder(responder)) {
+        this.restoreFocus(current, previous);
         return;
       }
       ;
@@ -1982,15 +2135,15 @@
     // back here. A null destination (the browser's own chrome, or dead space
     // in the page) leaves it alone, as Cocoa does, so keys still reach it
     // when focus returns.
-    focus_left(destination) {
+    focusLeft(destination) {
       if (destination && !this._root.contains(destination)) {
         this._first_responder = null;
         return this._first_responder;
       }
     }
     // A first responder inside a region being torn down falls back here.
-    release_first_responder(element) {
-      let owner = this.responder_element(this.first_responder());
+    releaseFirstResponder(element) {
+      let owner = this.responderElement(this.firstResponder());
       if (owner && (owner === element || element.contains(owner))) {
         this._first_responder = null;
         return this._first_responder;
@@ -1998,13 +2151,13 @@
     }
     // The responder for a DOM location: the first managed view above it,
     // which yields its controller for a controller root and itself otherwise.
-    responder_for(element) {
+    responderFor(element) {
       if (!element) return null;
       let view = element.__swill_view__;
-      if (view) return view.controller_value() ?? view;
-      return this.responder_for(element.parentElement);
+      if (view) return view.controllerValue() ?? view;
+      return this.responderFor(element.parentElement);
     }
-    responder_element(responder) {
+    responderElement(responder) {
       if (responder instanceof Swill__Controller) {
         return responder.view().element();
       }
@@ -2012,16 +2165,16 @@
       if (responder instanceof Swill__View) return responder.element();
       return null;
     }
-    restore_focus(responder, previous) {
-      let owner = this.responder_element(responder);
+    restoreFocus(responder, previous) {
+      let owner = this.responderElement(responder);
       if (!owner) return;
-      let target = previous && owner.contains(previous) ? previous : owner.__swill_view__.first_focusable_element();
+      let target = previous && owner.contains(previous) ? previous : owner.__swill_view__.firstFocusableElement();
       if (target) return target.focus();
     }
     // ---- window templates, containers, and content ----
     // <template for="window" name="x"> anywhere, or <template name="x"> directly
     // under the root. Templates are inert; content is cloned from them.
-    scan_templates() {
+    scanTemplates() {
       return this._root.querySelectorAll("template[name]").forEach((template) => {
         let name = template.getAttribute("name");
         if (template.getAttribute("for") === "window" || template.parentElement === this._root) {
@@ -2030,23 +2183,23 @@
       });
     }
     // Rescans once on a miss so templates inserted after launch are found.
-    window_template(name) {
+    windowTemplate(name) {
       let found = this._templates[name];
       if (found) return found;
-      this.scan_templates();
+      this.scanTemplates();
       return this._templates[name];
     }
-    clone_window_content(name) {
+    cloneWindowContent(name) {
       let captured = this._captured[name];
       if (captured) return captured.cloneNode(true);
-      let template = this.window_template(name);
+      let template = this.windowTemplate(name);
       if (!template) throw new Error(`No window content template: ${name}`);
       let content = template.content;
       let node = content ? content.firstElementChild : template.firstElementChild;
       if (!node) throw new Error(`Empty window template: ${name}`);
       return node.cloneNode(true);
     }
-    window_containers() {
+    windowContainers() {
       let found = [];
       if (this._root.hasAttribute("window")) found.push(this._root);
       this._root.querySelectorAll("[window]").forEach((container) => found.push(container));
@@ -2055,9 +2208,9 @@
     // Before awakening: capture pre-rendered content under the container's
     // name so it can be reloaded later, and fill empty containers from the
     // template their name attribute (or window name) selects.
-    prepare_window_containers() {
+    prepareWindowContainers() {
       let params = this._fragments.params();
-      return this.window_containers().forEach((container) => {
+      return this.windowContainers().forEach((container) => {
         let window_name = container.getAttribute("window");
         let default_name = container.getAttribute("name") ?? window_name;
         let first = container.firstElementChild;
@@ -2065,62 +2218,62 @@
           this._captured[default_name] = first.cloneNode(true);
         }
         ;
-        let content_name = this.requested_content(
+        let content_name = this.requestedContent(
           window_name,
           default_name,
           params[window_name]
         );
         if (first && content_name === default_name) return;
         container.replaceChildren();
-        container.appendChild(this.clone_window_content(content_name));
+        container.appendChild(this.cloneWindowContent(content_name));
         container.setAttribute("name", content_name);
       });
     }
     // The fragment may name the content to show; unknown names are reported
     // and the default stands.
-    requested_content(window_name, default_name, requested) {
+    requestedContent(window_name, default_name, requested) {
       if (requested == null || requested === default_name) return default_name;
-      if (this.window_content_predicate(requested)) return requested;
+      if (this.isWindowContent(requested)) return requested;
       Runtime.warn(`window "${window_name}" requested unknown content "${requested}"`);
       return default_name;
     }
-    register_window_containers() {
-      return this.window_containers().forEach((container) => {
+    registerWindowContainers() {
+      return this.windowContainers().forEach((container) => {
         let window = new Swill__Window(container.getAttribute("window"), container);
-        window.assign_content(
+        window.assignContent(
           container.getAttribute("name"),
-          this.top_controller_in(container)
+          this.topControllerIn(container)
         );
         this._windows.push(window);
       });
     }
     // The first controller inside the container whose parent is outside it.
-    top_controller_in(container) {
-      return new Swill__Awakening().controllers_within(container).find((controller) => this.top_within_predicate(controller, container));
+    topControllerIn(container) {
+      return new Swill__Awakening().controllersWithin(container).find((controller) => this.isTopWithin(controller, container));
     }
-    top_within_predicate(controller, container) {
+    isTopWithin(controller, container) {
       let parent = controller.parent();
       return parent == null || !container.contains(parent.view().element());
     }
-    matches_container_predicate(window, name) {
-      return window.container_predicate() && window.name() === name;
+    matchesContainer(window, name) {
+      return window.isContainer() && window.name() === name;
     }
-    window_containing(controller) {
-      return this._windows.find((window) => this.holds_predicate(window, controller));
+    windowContaining(controller) {
+      return this._windows.find((window) => this.holds(window, controller));
     }
-    holds_predicate(window, controller) {
-      return window.contains_controller_predicate(controller);
+    holds(window, controller) {
+      return window.containsController(controller);
     }
-    attached_predicate(responder) {
+    isAttached(responder) {
       if (!responder) return false;
-      let element = this.responder_element(responder);
+      let element = this.responderElement(responder);
       return element != null && this._root.contains(element);
     }
     // At terminate: a container's content is torn down in place; a dialog is
     // dismissed.
-    release_window(window) {
-      if (window.container_predicate()) {
-        window.dispose_restoration();
+    releaseWindow(window) {
+      if (window.isContainer()) {
+        window.disposeRestoration();
         return new Swill__Awakening().detach(window.root());
       } else {
         return window.dismiss();
@@ -2132,12 +2285,12 @@
     // observed and written exactly as bind paths are. Runs after the load
     // phase and before controller_did_load, so restored values are in place
     // for it.
-    restore_window_state(window, prune_stale, write_content) {
-      let stale = window.dispose_restoration();
+    restoreWindowState(window, prune_stale, write_content) {
+      let stale = window.disposeRestoration();
       let controller = window.controller();
       let declarations2 = controller ? Runtime.restorations(controller) : [];
-      let keys = declarations2.map((declaration) => window.scoped_key(declaration.key));
-      let content = window.content_name();
+      let keys = declarations2.map((declaration) => window.scopedKey(declaration.key));
+      let content = window.contentName();
       if (write_content && content) {
         this._fragments.write(window.name(), content, "replace");
       }
@@ -2152,28 +2305,28 @@
       let params = this._fragments.params();
       let applied = 0;
       this._fragments.suspended(() => declarations2.forEach((declaration) => {
-        let text = params[window.scoped_key(declaration.key)];
+        let text = params[window.scopedKey(declaration.key)];
         if (text == null) return;
         let value = Runtime.decodeFragment(declaration.type, text);
         if (value == null) return;
         Runtime.writePath(controller, declaration.path, value);
         applied++;
       }));
-      if (declarations2.length > 0) controller.controller_did_restore(applied > 0);
+      if (declarations2.length > 0) controller.controllerDidRestore(applied > 0);
       return declarations2.forEach((declaration) => {
         let disposer = Runtime.observePath(
           controller,
           declaration.path,
-          (_value) => this.write_window_state(window)
+          (_value) => this.writeWindowState(window)
         );
-        window.add_restoration(disposer, window.scoped_key(declaration.key));
+        window.addRestoration(disposer, window.scopedKey(declaration.key));
       });
     }
-    restore_launched_windows() {
-      return this._windows.forEach((window) => this.restore_window_state(window, false, true));
+    restoreLaunchedWindows() {
+      return this._windows.forEach((window) => this.restoreWindowState(window, false, true));
     }
     // Push the controller's current restorable state into the fragment.
-    write_window_state(window) {
+    writeWindowState(window) {
       let controller = window.controller();
       if (!controller) return;
       return Runtime.restorations(controller).forEach((declaration) => {
@@ -2182,7 +2335,7 @@
           declaration.path
         ));
         this._fragments.write(
-          window.scoped_key(declaration.key),
+          window.scopedKey(declaration.key),
           value,
           "replace"
         );
@@ -2190,21 +2343,21 @@
     }
     // Back/Forward: a container whose fragment names other known content loads
     // it without touching history; otherwise its state is reapplied.
-    apply_fragment() {
+    applyFragment() {
       let params = this._fragments.params();
-      return this._windows.forEach((window) => this.apply_fragment_to(window, params));
+      return this._windows.forEach((window) => this.applyFragmentTo(window, params));
     }
-    apply_fragment_to(window, params) {
-      if (!window.container_predicate()) return;
+    applyFragmentTo(window, params) {
+      if (!window.isContainer()) return;
       let requested = params[window.name()];
-      if (requested != null && requested !== window.content_name()) {
-        return this.window_content_predicate(requested) ? this.load_window_content_with(
+      if (requested != null && requested !== window.contentName()) {
+        return this.isWindowContent(requested) ? this.loadWindowContentWith(
           window.name(),
           requested,
           "none"
         ) : Runtime.warn(`window "${window.name()}" requested unknown content "${requested}"`);
       } else {
-        return this.restore_window_state(window, false, false);
+        return this.restoreWindowState(window, false, false);
       }
     }
     // Code-created content awakens through the same path as markup: the
@@ -2254,31 +2407,31 @@
     // attribute on the root turns this on from markup.
     // Indexes of the selected objects among the arranged objects, ascending.
     // ---- selection ----
-    select_indexes(indexes) {
-      let arranged = this.arranged_objects();
+    selectIndexes(indexes) {
+      let arranged = this.arrangedObjects();
       let objects = [];
       indexes.forEach((index) => {
         if (index >= 0 && index < arranged.length) objects.push(arranged[index]);
       });
-      return this.selected_objects = objects;
+      return this.selectedObjects = objects;
     }
-    select_object(object) {
-      return this.selected_objects = object == null ? [] : [object];
+    selectObject(object) {
+      return this.selectedObjects = object == null ? [] : [object];
     }
-    deselect_all() {
-      return this.selected_objects = [];
+    deselectAll() {
+      return this.selectedObjects = [];
     }
-    select_first_if_nothing_selected() {
-      if (this.current_selection().length === 0 && this.arranged_objects().length > 0) {
-        return this.select_indexes([0]);
+    selectFirstIfNothingSelected() {
+      if (this.currentSelection().length === 0 && this.arrangedObjects().length > 0) {
+        return this.selectIndexes([0]);
       }
     }
     // Enter and double-click. By default the owner receives an
     // activate_selection target-action with this list as the sender; when no
     // responder handles it, nothing happens.
-    activate_selection() {
-      let target = this.next_responder();
-      let handler = target ? target.action_target("activate_selection") : null;
+    activateSelection() {
+      let target = this.nextResponder();
+      let handler = target ? target.actionTarget("activate_selection") : null;
       if (handler) {
         return Runtime.performAction(
           handler,
@@ -2291,112 +2444,107 @@
     // Runs when the leading selected object changes, not when only the
     // indexes do. The runtime keeps selected_object current because this
     // hook exists, and dispatches it before selected_objects_did_change.
-    selected_object_did_change(_previous, _object) {
+    selectedObjectDidChange(_previous, _object) {
       return null;
     }
     // The arranged object at index, or nil.
-    object_at(index) {
-      let arranged = this.arranged_objects();
+    objectAt(index) {
+      let arranged = this.arrangedObjects();
       return index >= 0 && index < arranged.length ? arranged[index] : null;
     }
     // The index of the row containing element, or -1 when it is in none; the
     // way an action handler learns which row its sender sits in.
-    row_for(element) {
-      let mount = this.container();
-      let node = element;
-      while (node && node.parentElement !== mount) {
-        node = node.parentElement;
-      }
-      ;
-      return node ? this.row_elements().indexOf(node) : -1;
+    rowFor(element) {
+      let row = this.containerView().childContaining(element);
+      let index = row ? Runtime.invoke(this.rowElements(), "index", row) : null;
+      return index == null ? -1 : index;
     }
     // ---- lifecycle ----
-    view_did_load() {
-      super.view_did_load();
-      let root = this._view.element();
-      if (!root.hasAttribute("tabindex")) root.setAttribute("tabindex", "0");
-      if (root.hasAttribute("multiple")) {
-        return this.allows_multiple_selection = true;
+    viewDidLoad() {
+      super.viewDidLoad();
+      this._view.ensureFocusable();
+      if (this._view.hasAttribute("multiple")) {
+        return this.allowsMultipleSelection = true;
       }
     }
     // After outlets connect, so rows and header_view are known.
-    awake_from_dom() {
-      super.awake_from_dom();
-      this.install_selection();
+    awakeFromDOM() {
+      super.awakeFromDOM();
+      this.installSelection();
       this._awakened = true;
-      return this.render_all();
+      return this.renderAll();
     }
-    represented_object_did_change(_previous, _objects) {
+    representedObjectDidChange(_previous, _objects) {
       this._selection_anchor = null;
-      if (this._awakened) this.render_all();
-      return this.reconcile_selection();
+      if (this._awakened) this.renderAll();
+      return this.reconcileSelection();
     }
-    selected_objects_did_change(_previous, objects) {
-      this.sync_selected_rows();
+    selectedObjectsDidChange(_previous, objects) {
+      this.syncSelectedRows();
       if (this._syncing_selection) return;
-      return this.syncing_selection(() => this.selected_object_id = this.identifier_for(this.leading(objects)));
+      return this.syncingSelection(() => this.selectedObjectId = this.identifierFor(this.leading(objects)));
     }
     // An id nobody carries clears the selection and stays pending.
-    selected_object_id_did_change(_previous, identifier) {
+    selectedObjectIdDidChange(_previous, identifier) {
       if (this._syncing_selection) return;
-      let object = this.object_with_id(identifier);
-      return this.syncing_selection(() => this.selected_objects = object ? [object] : []);
+      let object = this.objectWithId(identifier);
+      return this.syncingSelection(() => this.selectedObjects = object ? [object] : []);
     }
     // ---- keyboard ----
     // Taking the keyboard selects the first row when nothing is selected.
-    become_first_responder() {
-      if (!super.become_first_responder()) return false;
-      this.select_first_if_nothing_selected();
+    becomeFirstResponder() {
+      if (!super.becomeFirstResponder()) return false;
+      this.selectFirstIfNothingSelected();
       return true;
     }
     // Arrow keys move a single selection; everything else continues up.
-    key_down(event) {
+    keyDown(event) {
       let indexes, current, index;
-      let total = this.arranged_objects().length;
+      let total = this.arrangedObjects().length;
       let key = event.key;
       if (total > 0 && (key === "ArrowDown" || key === "ArrowUp")) {
         event.preventDefault();
-        indexes = this.current_indexes();
+        indexes = this.currentIndexes();
         current = indexes.length > 0 ? indexes[0] : -1;
         index = key === "ArrowDown" ? current + 1 : current - 1;
         if (index < 0) index = 0;
         if (index > total - 1) index = total - 1;
-        this.select_indexes([index]);
+        this.selectIndexes([index]);
         this._selection_anchor = index;
         return this._selection_anchor;
       } else {
-        return super.key_down(event);
+        return super.keyDown(event);
       }
     }
     // Enter activates the selection when there is one.
-    insert_newline(event) {
-      if (this.current_selection().length > 0) {
+    insertNewline(event) {
+      if (this.currentSelection().length > 0) {
         event.preventDefault();
-        return this.activate_selection();
+        return this.activateSelection();
       } else {
-        return super.insert_newline(event);
+        return super.insertNewline(event);
       }
     }
     // ---- rows ----
     // The objects the rows show, in order; subclasses may sort or filter.
-    arranged_objects() {
-      return this.represented_object ?? [];
+    arrangedObjects() {
+      return this.representedObject ?? [];
     }
     // Where rows mount.
     container() {
       let mount = this.rows;
       return mount ? mount.element() : this._view.element();
     }
-    container_view() {
+    containerView() {
       let mount = this.rows;
       return mount ? mount : this._view;
     }
     // Rows in order: the container's children other than templates and
     // whatever row_element? rejects.
-    row_elements() {
+    rowElements() {
       let found = [];
-      this.each_child(this.container(), (child) => {
-        if (child.tagName !== "TEMPLATE" && this.row_element_predicate(child)) {
+      this.eachChild(this.container(), (child) => {
+        if (child.tagName !== "TEMPLATE" && this.isRowElement(child)) {
           return found.push(child);
         }
       });
@@ -2404,16 +2552,16 @@
     }
     // Override when other children share the container. The header view is
     // never a row.
-    row_element_predicate(element) {
-      let header = this.header_view;
+    isRowElement(element) {
+      let header = this.headerView;
       return header == null || header.element() !== element;
     }
     // Real views per row, or bare elements when many rows must stay cheap.
-    rows_are_views_predicate() {
+    rowsAreViews() {
       return true;
     }
-    row_template() {
-      let found = this.owned_matching(
+    rowTemplate() {
+      let found = this.ownedMatching(
         this._view.element(),
         'template[for="row"]'
       );
@@ -2421,123 +2569,125 @@
     }
     // The element for item. Clones the row template; override to build rows
     // in code. Bindings, actions, selection, and configure_row still apply.
-    make_row_element(_item) {
-      let template = this.row_template();
-      let node = template ? template.content.firstElementChild : null;
+    makeRowElement(_item) {
+      let template = this.rowTemplate();
+      let node = template ? this.containerView().cloneTemplate(template) : null;
       if (!node) {
         throw new Error('List has no <template for="row"> and no make_row_element override');
       }
       ;
-      return node.cloneNode(true);
+      return node;
     }
     // NSTableView willDisplayCell analog.
-    configure_row(_element, _item) {
+    configureRow(_element, _item) {
       return null;
     }
-    render_all() {
-      this.clear_rows();
-      this.arranged_objects().forEach((item) => this.attach_row(item));
-      return this.sync_selected_rows();
+    renderAll() {
+      this.clearRows();
+      this.arrangedObjects().forEach((item) => this.attachRow(item));
+      return this.syncSelectedRows();
     }
-    attach_row(item) {
-      let element = this.make_row_element(item);
-      this.container().appendChild(element);
-      if (this.rows_are_views_predicate()) {
-        let row_view = element.__swill_view__ ?? new Swill__View(element);
-        this.container_view().adopt_subview(row_view);
+    attachRow(item) {
+      let element = this.makeRowElement(item);
+      this.containerView().append(element);
+      if (this.rowsAreViews()) {
+        let row_view = Swill__View.of(element) ?? new Swill__View(element);
+        this.containerView().adoptSubview(row_view);
       }
       ;
       let awakening = new Swill__Awakening();
       let controllers = awakening.awaken(element);
-      let release_bindings = new Swill__Bindings().wire_object(
+      let release_bindings = new Swill__Bindings().wireObject(
         item,
         element
       );
-      let release_actions = new Swill__Actions().wire_into(this, element);
+      let release_actions = new Swill__Actions().wireInto(this, element);
       element.__swill_row__ = () => {
         release_bindings();
         return release_actions();
       };
       awakening.finish(controllers);
-      return this.configure_row(element, item);
+      return this.configureRow(element, item);
     }
-    clear_rows() {
-      return this.row_elements().forEach((element) => this.release_row(element));
+    clearRows() {
+      return this.rowElements().forEach((element) => this.releaseRow(element));
     }
-    release_row(element) {
-      new Swill__Awakening().detach(element);
+    releaseRow(element) {
+      Swill__Awakening.detach(element);
       let release = element.__swill_row__;
       if (release) {
         release();
         element.__swill_row__ = null;
       }
       ;
-      let row_view = element.__swill_view__;
-      if (row_view) row_view.remove_from_superview();
-      return element.remove();
+      let row_view = Swill__View.of(element);
+      if (row_view) row_view.removeFromSuperview();
+      return this.containerView().remove(element);
     }
     // Reflect the selection onto the rendered rows and keep the leading
     // selected row in view.
-    sync_selected_rows() {
+    syncSelectedRows() {
       if (!this._awakened) return;
-      let indexes = this.current_indexes();
-      let elements = this.row_elements();
-      elements.forEach((element, index) => {
-        let selected = indexes.includes(index);
-        element.classList.toggle("selected", selected);
-        element.setAttribute("aria-selected", selected ? "true" : "false");
-      });
+      let indexes = this.currentIndexes();
+      let elements = this.rowElements();
+      elements.forEach((element, index) => this.containerView().markSelected(element, indexes.includes(index)));
       let first = indexes.length > 0 ? elements[indexes[0]] : null;
-      if (first?.scrollIntoView) return first.scrollIntoView({ block: "nearest" });
+      if (first) return this.containerView().reveal(first);
     }
     // ---- mouse: click selects, shift-click extends, double-click activates ----
-    install_selection() {
-      let root = this._view.element();
-      this._on_mouse_down = (event) => this.row_mouse_down(event);
-      this._on_click = (event) => this.row_clicked(event);
-      this._on_double_click = (event) => this.row_double_clicked(event);
-      root.addEventListener("mousedown", this._on_mouse_down);
-      root.addEventListener("click", this._on_click, true);
-      root.addEventListener("dblclick", this._on_double_click);
-      return this.register_teardown(() => {
-        root.removeEventListener("mousedown", this._on_mouse_down);
-        root.removeEventListener("click", this._on_click, true);
-        root.removeEventListener("dblclick", this._on_double_click);
-        this.clear_rows();
+    installSelection() {
+      let stop_mouse_down = this._view.listen(
+        "mousedown",
+        (event) => this.rowMouseDown(event),
+        false
+      );
+      let stop_click = this._view.listen(
+        "click",
+        (event) => this.rowClicked(event),
+        true
+      );
+      let stop_double_click = this._view.listen(
+        "dblclick",
+        (event) => this.rowDoubleClicked(event),
+        false
+      );
+      return this.registerTeardown(() => {
+        stop_mouse_down();
+        stop_click();
+        stop_double_click();
+        this.clearRows();
         this._awakened = false;
         return this._awakened;
       });
     }
     // Shift-click extends the selection; suppress the browser's text
     // selection sweep across rows.
-    row_mouse_down(event) {
-      if (!this.allows_multiple_selection || !event.shiftKey) return;
-      if (this.row_for(event.target) < 0) return;
+    rowMouseDown(event) {
+      if (!this.allowsMultipleSelection || !event.shiftKey) return;
+      if (this.rowFor(event.target) < 0) return;
       event.preventDefault();
-      let owner_document = this._view.element().ownerDocument;
-      let selection = owner_document.getSelection ? owner_document.getSelection() : null;
-      if (selection) return selection.removeAllRanges();
+      return this._view.clearTextSelection();
     }
-    row_clicked(event) {
-      let index = this.row_for(event.target);
+    rowClicked(event) {
+      let index = this.rowFor(event.target);
       if (index < 0) return;
       let anchor = this._selection_anchor;
-      if (this.allows_multiple_selection && event.shiftKey && anchor != null) {
-        return this.select_range(anchor, index);
+      if (this.allowsMultipleSelection && event.shiftKey && anchor != null) {
+        return this.selectRange(anchor, index);
       } else {
-        this.select_indexes([index]);
+        this.selectIndexes([index]);
         this._selection_anchor = index;
         return this._selection_anchor;
       }
     }
-    row_double_clicked(event) {
-      let index = this.row_for(event.target);
+    rowDoubleClicked(event) {
+      let index = this.rowFor(event.target);
       if (index < 0) return;
-      this.select_indexes([index]);
+      this.selectIndexes([index]);
       this._selection_anchor = index;
-      return this.activate_selection();
+      return this.activateSelection();
     }
-    select_range(anchor, index) {
+    selectRange(anchor, index) {
       let low = anchor < index ? anchor : index;
       let high = anchor < index ? index : anchor;
       let indexes = [];
@@ -2547,34 +2697,34 @@
         current++;
       }
       ;
-      return this.select_indexes(indexes);
+      return this.selectIndexes(indexes);
     }
     // ---- identity ----
     // The model id of object as a string, or nil when it has none.
-    identifier_for(object) {
+    identifierFor(object) {
       if (!object || !Runtime.respondsTo(object, "id")) return null;
-      let value = Runtime.read(object, "id");
+      let value = object.id;
       return value == null ? null : `${value}`;
     }
-    object_with_id(identifier) {
+    objectWithId(identifier) {
       if (identifier == null || identifier === "") return null;
-      return this.arranged_objects().find((candidate) => this.identifier_for(candidate) === identifier);
+      return this.arrangedObjects().find((candidate) => this.identifierFor(candidate) === identifier);
     }
     // Selection survivors after the collection changed; when none remain, the
     // id that is still wanted may now resolve.
-    reconcile_selection() {
-      let arranged = this.arranged_objects();
-      let survivors = this.current_selection().filter((object) => arranged.includes(object));
+    reconcileSelection() {
+      let arranged = this.arrangedObjects();
+      let survivors = this.currentSelection().filter((object) => arranged.includes(object));
       if (survivors.length === 0) {
-        let requested = this.object_with_id(this.selected_object_id);
+        let requested = this.objectWithId(this.selectedObjectId);
         if (requested) survivors = [requested];
       }
       ;
-      return this.syncing_selection(() => this.selected_objects = survivors);
+      return this.syncingSelection(() => this.selectedObjects = survivors);
     }
     // A write from one side of the selection to the other is marked so the
     // other side's hook does not write back.
-    syncing_selection(callback) {
+    syncingSelection(callback) {
       this._syncing_selection = true;
       try {
         return callback();
@@ -2586,26 +2736,26 @@
       return objects && objects.length > 0 ? objects[0] : null;
     }
     // The selection and its indexes as JavaScript arrays for the DOM code here.
-    current_selection() {
-      return this.selected_objects;
+    currentSelection() {
+      return this.selectedObjects;
     }
-    current_indexes() {
-      return this.selected_indexes;
+    currentIndexes() {
+      return this.selectedIndexes;
     }
   };
   var Swill__Controller__SortableList = class extends Swill__Controller__List {
     // The sort_by action: the sender's column names the key.
-    sort_by(sender) {
-      let key = this.sort_key_for(sender);
-      if (key) return this.toggle_sort(key);
+    sortBy(sender) {
+      let key = this.sortKeyFor(sender);
+      if (key) return this.toggleSort(key);
     }
     // Override when the column name lives elsewhere than data-column.
-    sort_key_for(sender) {
+    sortKeyFor(sender) {
       return sender.getAttribute("data-column");
     }
     // The same key flips the direction; a new key sorts ascending.
-    toggle_sort(key) {
-      return this.sort_key === key ? this.sort_direction = this.sort_direction === "ascending" ? "descending" : "ascending" : this.sort(
+    toggleSort(key) {
+      return this.sortKey === key ? this.sortDirection = this.sortDirection === "ascending" ? "descending" : "ascending" : this.sort(
         key,
         "ascending"
       );
@@ -2614,45 +2764,293 @@
     sort(key, direction) {
       this._changing_sort = true;
       try {
-        this.sort_key = key;
-        this.sort_direction = direction;
+        this.sortKey = key;
+        this.sortDirection = direction;
       } finally {
         this._changing_sort = false;
       }
       ;
-      return this.sort_did_change();
+      return this.sortDidChange();
     }
-    awake_from_dom() {
-      super.awake_from_dom();
-      return this.sync_sort_states();
+    awakeFromDOM() {
+      super.awakeFromDOM();
+      return this.syncSortStates();
     }
-    sort_key_did_change(_previous, _key) {
-      if (!this._changing_sort) return this.sort_did_change();
+    sortKeyDidChange(_previous, _key) {
+      if (!this._changing_sort) return this.sortDidChange();
     }
-    sort_direction_did_change(_previous, _direction) {
-      if (!this._changing_sort) return this.sort_did_change();
+    sortDirectionDidChange(_previous, _direction) {
+      if (!this._changing_sort) return this.sortDidChange();
     }
-    sort_did_change() {
-      this.sync_sort_states();
-      if (this._awakened) return this.render_all();
+    sortDidChange() {
+      this.syncSortStates();
+      if (this._awakened) return this.renderAll();
     }
     // The represented objects in sort order: nil values last when ascending,
     // numbers and booleans by value, everything else as text.
-    arranged_objects() {
-      let objects = super.arranged_objects();
-      let key = this.sort_key;
+    arrangedObjects() {
+      let objects = super.arrangedObjects();
+      let key = this.sortKey;
       if (!key) return objects;
-      let sign = this.sort_direction === "descending" ? -1 : 1;
+      let sign = this.sortDirection === "descending" ? -1 : 1;
       return objects.slice().sort((left, right) => Runtime.compareValues(
         Runtime.read(left, key),
         Runtime.read(right, key)
       ) * sign);
     }
-    sync_sort_states() {
-      let key = this.sort_key;
+    syncSortStates() {
+      let key = this.sortKey;
       let states2 = {};
-      if (key) states2[key] = this.sort_direction;
-      return this.sort_states = states2;
+      if (key) states2[key] = this.sortDirection;
+      return this.sortStates = states2;
+    }
+  };
+  var Swill__Controller__Editor = class extends Swill__Controller {
+    bindingRoot() {
+      return "represented_object";
+    }
+    // Two-way bindings have already written into the object, so nothing is
+    // pending and the answer is yes. A subclass whose control holds a value
+    // it cannot push back returns false.
+    commitEditing() {
+      return true;
+    }
+    discardEditing() {
+      return null;
+    }
+    insertNewline(event) {
+      event.preventDefault();
+      return this.commitEditing();
+    }
+    cancelOperation(event) {
+      return this.discardEditing();
+    }
+  };
+  var Swill__Controller__InlineEditor = class extends Swill__Controller__Editor {
+    insertNewline(event) {
+      event.preventDefault();
+      let host = this.editingHost();
+      return host ? host.endEditing(true) : this.commitEditing();
+    }
+    cancelOperation(event) {
+      let host = this.editingHost();
+      return host ? host.endEditing(false) : this.discardEditing();
+    }
+    resignFirstResponder(next_responder) {
+      if (!this.allowResignationTo(next_responder)) return false;
+      return super.resignFirstResponder(next_responder);
+    }
+    // Focus moving within the editor is free; leaving it asks the host. No
+    // host means the editor is already released.
+    allowResignationTo(responder) {
+      let element = this.responderElement(responder);
+      if (element && this._view.contains(element)) return true;
+      let host = this.editingHost();
+      return host ? host.editorShouldEndEditing(this) : true;
+    }
+    // The parent, when it hosts inline editing.
+    editingHost() {
+      let owner = this.parent();
+      return owner && Runtime.respondsTo(
+        owner,
+        "editor_should_end_editing"
+      ) ? owner : null;
+    }
+    responderElement(responder) {
+      if (responder instanceof Swill__Controller) {
+        return responder.view().element();
+      }
+      ;
+      if (responder instanceof Swill__View) return responder.element();
+      return null;
+    }
+  };
+  var Swill__Controller__EditableList = class extends Swill__Controller__SortableList {
+    // Activation edits the selected row instead of telling the owner.
+    activateSelection() {
+      let indexes = this.currentIndexes();
+      return indexes.length > 0 ? this.beginEditing(indexes[0]) : super.activateSelection();
+    }
+    isEditing() {
+      return this._editor != null;
+    }
+    // Teardown closes an open editor without committing.
+    awakeFromDOM() {
+      super.awakeFromDOM();
+      return this.registerTeardown(() => this.closeEditor());
+    }
+    // Whether the editor opened. An edit in progress is committed first; a
+    // refused commit keeps that editor.
+    beginEditing(index) {
+      let original = this.objectAt(index);
+      if (!original) return false;
+      if (this.isEditing() && !this.endEditing(true)) return false;
+      let copy = Runtime.respondsTo(original, "draft") ? original.draft() : Runtime.read(
+        original,
+        "dup"
+      );
+      return this.openEditor(index, original, copy);
+    }
+    // False only when a commit was refused; the editor then stays open.
+    endEditing(commit) {
+      let editor = this._editor;
+      let index = this._editing_index;
+      let original = this._editing_original;
+      if (!editor || index == null) return true;
+      let copy = null;
+      if (commit) {
+        if (!editor.commitEditing()) return false;
+        copy = this.editedObject;
+        let error = this.validationError(copy);
+        if (error) {
+          this.editingDidFailValidation(error);
+          return false;
+        }
+      } else {
+        editor.discardEditing();
+      }
+      ;
+      this.closeEditor();
+      if (commit) {
+        this.commitEdit(copy, original, index);
+      } else {
+        this.finishEdit(index, null);
+      }
+      ;
+      return true;
+    }
+    // NSEditor commitEditing: ask before anything that cannot proceed past an
+    // edit in progress.
+    commitEditingIfNeeded() {
+      return !this.isEditing() || this.endEditing(true);
+    }
+    // Asked by the inline editor when focus is leaving it. An unchanged copy
+    // is discarded; otherwise the edit commits when confirm_edit? agrees.
+    // Return false to keep focus in the editor.
+    editorShouldEndEditing(_editor) {
+      let copy = this.editedObject;
+      if (!this.editedObjectHasChanges(copy, this._editing_original)) {
+        this.endEditing(false);
+        return true;
+      }
+      ;
+      if (!this.confirmEdit(copy, this._editing_original)) return false;
+      return this.endEditing(true);
+    }
+    cancelOperation(event) {
+      return this.isEditing() ? this.endEditing(false) : super.cancelOperation(event);
+    }
+    toggleSort(key) {
+      if (this.commitEditingIfNeeded()) return super.toggleSort(key);
+    }
+    // A new collection ends an edit without committing: its row is gone.
+    representedObjectDidChange(previous, objects) {
+      if (this.isEditing()) this.endEditing(false);
+      return super.representedObjectDidChange(previous, objects);
+    }
+    // ---- policy hooks ----
+    commitEdit(copy, original, index) {
+      return this.finishEdit(index, this.applyEdit(copy, original, index));
+    }
+    // A model takes its draft back and stays the row's object; a plain object
+    // is replaced by the copy in a new collection. Returns the final object.
+    applyEdit(copy, original, _index) {
+      if (Runtime.respondsTo(original, "apply_draft")) {
+        original.applyDraft(copy);
+        return original;
+      }
+      ;
+      let source = this.representedObject ?? [];
+      let source_index = Runtime.invoke(source, "index", original);
+      let values = Runtime.read(source, "dup");
+      if (source_index) values[source_index] = copy;
+      this.representedObject = values;
+      return copy;
+    }
+    // An error that refuses the commit, or nil. Attribute validators already
+    // ran when the draft was written; a model's own validate, when it has
+    // one, is asked here.
+    validationError(object) {
+      if (!object || !Runtime.respondsTo(object, "validate")) return null;
+      return object.validate();
+    }
+    // Whether a focus-out commit should proceed. Override to confirm.
+    confirmEdit(_copy, _original) {
+      return true;
+    }
+    // Dirty tracking decides for a model; a plain copy counts as changed.
+    editedObjectHasChanges(copy, _original) {
+      if (!copy || !Runtime.respondsTo(copy, "dirty?")) return true;
+      return Runtime.read(copy, "dirty?") === true;
+    }
+    // Override to show the error; the editor stays open.
+    editingDidFailValidation(error) {
+      return Runtime.warn(`Edit refused: ${error.message}`);
+    }
+    // ---- rows and the editor ----
+    // The editor sits among the rows while editing, but is not one.
+    isRowElement(element) {
+      if (!super.isRowElement(element)) return false;
+      let editor = this._editor;
+      return editor == null || editor.view().element() !== element;
+    }
+    editorTemplate() {
+      let found = this.ownedMatching(
+        this._view.element(),
+        'template[for="editor"]'
+      );
+      return found.length > 0 ? found[0] : null;
+    }
+    openEditor(index, original, copy) {
+      let template = this.editorTemplate();
+      if (!template) {
+        throw new Error('EditableList has no <template for="editor">');
+      }
+      ;
+      let row = this.rowElements()[index];
+      if (!row) return false;
+      let node = this.containerView().cloneTemplate(template);
+      this.editedObject = copy;
+      this.containerView().mark(row, "being-edited", true);
+      this.containerView().insertAfter(row, node);
+      Swill__Awakening.wire(node);
+      let editor = Swill__View.controllerFor(node);
+      if (!(editor instanceof Swill__Controller__InlineEditor)) {
+        Swill__Awakening.detach(node);
+        this.containerView().remove(node);
+        throw new Error("The editor template root must be a Swill::Controller::InlineEditor");
+      }
+      ;
+      editor.bind(
+        "represented_object",
+        { to: this, key_path: "edited_object" }
+      );
+      this._editor = editor;
+      this._editing_index = index;
+      this._editing_original = original;
+      let app = this.application();
+      if (app) app.makeFirstResponder(editor);
+      return true;
+    }
+    closeEditor() {
+      let editor = this._editor;
+      this._editor = null;
+      this._editing_index = null;
+      this._editing_original = null;
+      this.editedObject = null;
+      if (!editor) return;
+      let element = editor.view().element();
+      Swill__Awakening.detach(element);
+      return this.containerView().remove(element);
+    }
+    // The row is a row again, the final object is selected, and the list
+    // takes the keyboard back.
+    finishEdit(index, final) {
+      let row = this.rowElements()[index];
+      if (row) this.containerView().mark(row, "being-edited", false);
+      if (final) this.selectObject(final);
+      let app = this.application();
+      if (app) return app.makeFirstResponder(this);
     }
   };
   function Swill__Model__Attributes(Superclass) {
@@ -2661,31 +3059,31 @@
       // reads seeded_by to do the same from collected declarations.
       // Materialize an instance from a wire hash keyed by attribute keys,
       // as Opal's Base.new(values) does.
-      collect_attributes() {
-        return Runtime.collect_attributes(this);
+      collectAttributes() {
+        return Runtime.collectAttributes(this);
       }
-      apply_attributes(source) {
-        return Runtime.apply_attributes(this, source);
+      applyAttributes(source) {
+        return Runtime.applyAttributes(this, source);
       }
       // Declared attributes coerce through the validate_<name>(value, previous)
       // convention, resolved from metadata. A validator may raise to reject.
-      coerce_property_value(name, value, previous) {
-        value = super.coerce_property_value(name, value, previous);
-        return Runtime.validate_attribute(this, name, value, previous);
+      coercePropertyValue(name, value, previous) {
+        value = super.coercePropertyValue(name, value, previous);
+        return Runtime.validateAttribute(this, name, value, previous);
       }
-      property_will_change(name, previous, value) {
-        return super.property_will_change(name, previous, value);
+      propertyWillChange(name, previous, value) {
+        return super.propertyWillChange(name, previous, value);
       }
     }
     return Swill__Model__Attributes_Layer;
   }
   function Swill__Model__Attributes_ClassMethods(Superclass) {
     class Swill__Model__Attributes_ClassMethods_Layer extends Object {
-      from_attributes(source) {
+      fromAttributes(source) {
         return Runtime.invoke(new this(), "apply_attributes", source);
       }
-      model_attributes() {
-        return Runtime.inheritableRegistry(this, "model_attributes", "hash");
+      modelAttributes() {
+        return Runtime.inheritableRegistry(this, "modelAttributes", "hash");
       }
     }
     Object.setPrototypeOf(Swill__Model__Attributes_ClassMethods_Layer.prototype, Superclass);
@@ -2694,44 +3092,44 @@
   function Swill__Model__DirtyTracking(Superclass) {
     class Swill__Model__DirtyTracking_Layer extends Superclass {
       dirty() {
-        return this.dirty_attributes.slice();
+        return this.dirtyAttributes.slice();
       }
-      mark_clean_bang() {
+      markClean() {
         this._dirty_baseline = {};
-        this.dirty_attributes = [];
+        this.dirtyAttributes = [];
         return this;
       }
       // Server, codec, and draft application is clean; only user mutation
       // through setters marks attributes dirty.
-      apply_attributes(source) {
+      applyAttributes(source) {
         this._dirty_suspensions = Runtime.logicalOr(
           this._dirty_suspensions,
           () => 0
         ) + 1;
         try {
-          super.apply_attributes(source);
+          super.applyAttributes(source);
         } finally {
           this._dirty_suspensions = this._dirty_suspensions - 1;
         }
         ;
         return this;
       }
-      property_will_change(name, previous, value) {
-        super.property_will_change(name, previous, value);
+      propertyWillChange(name, previous, value) {
+        super.propertyWillChange(name, previous, value);
         if (Runtime.logicalOr(this._dirty_suspensions, () => 0) > 0) return;
         if (!Runtime.isTruthy(Runtime.isAttribute(this, name))) return;
-        return this.mark_attribute_dirty(name, previous, value);
+        return this.markAttributeDirty(name, previous, value);
       }
-      mark_attribute_dirty(name, previous, value) {
+      markAttributeDirty(name, previous, value) {
         let baseline = this._dirty_baseline ||= {};
-        let names = this.dirty_attributes;
+        let names = this.dirtyAttributes;
         if (names.includes(name)) {
           if (Runtime.isEqual(baseline[name], value)) {
-            return this.dirty_attributes = names.filter((candidate) => !Runtime.isEqual(candidate, name));
+            return this.dirtyAttributes = names.filter((candidate) => !Runtime.isEqual(candidate, name));
           }
         } else {
           baseline[name] = previous;
-          return this.dirty_attributes = [...names, name];
+          return this.dirtyAttributes = [...names, name];
         }
       }
     }
@@ -2741,8 +3139,15 @@
     class Swill__Model__Drafts_Layer extends Superclass {
       draft() {
         let copy = new this.constructor();
-        Runtime.invoke(copy, "apply_attributes", this.collect_attributes());
+        Runtime.invoke(copy, "apply_attributes", this.collectAttributes());
         return copy;
+      }
+      // Take a draft's attributes back. Application is clean, as any
+      // apply_attributes is; the values already passed the validators when
+      // the draft was written.
+      applyDraft(copy) {
+        this.applyAttributes(Runtime.read(copy, "collect_attributes"));
+        return this;
       }
     }
     return Swill__Model__Drafts_Layer;
@@ -2763,10 +3168,12 @@
             "arity": 0
           },
           "coerce_property_value": {
-            "arity": 3
+            "arity": 3,
+            "js": "coercePropertyValue"
           },
           "property_will_change": {
-            "arity": 3
+            "arity": 3,
+            "js": "propertyWillChange"
           }
         }
       },
@@ -2774,13 +3181,16 @@
         factory: Swill__Ownership,
         methods: {
           "each_child": {
-            "arity": 2
+            "arity": 2,
+            "js": "eachChild"
           },
           "each_owned": {
-            "arity": 2
+            "arity": 2,
+            "js": "eachOwned"
           },
           "owned_matching": {
-            "arity": 2
+            "arity": 2,
+            "js": "ownedMatching"
           }
         }
       },
@@ -2794,10 +3204,12 @@
             "arity": 1
           },
           "unbind_all": {
-            "arity": 0
+            "arity": 0,
+            "js": "unbindAll"
           },
           "object_bindings": {
-            "arity": 0
+            "arity": 0,
+            "js": "objectBindings"
           }
         }
       },
@@ -2806,16 +3218,20 @@
         classFactory: Swill__Model__Attributes_ClassMethods,
         methods: {
           "collect_attributes": {
-            "arity": 0
+            "arity": 0,
+            "js": "collectAttributes"
           },
           "apply_attributes": {
-            "arity": 1
+            "arity": 1,
+            "js": "applyAttributes"
           },
           "coerce_property_value": {
-            "arity": 3
+            "arity": 3,
+            "js": "coercePropertyValue"
           },
           "property_will_change": {
-            "arity": 3
+            "arity": 3,
+            "js": "propertyWillChange"
           }
         }
       },
@@ -2827,16 +3243,19 @@
           },
           "mark_clean!": {
             "arity": 0,
-            "js": "mark_clean_bang"
+            "js": "markClean"
           },
           "apply_attributes": {
-            "arity": 1
+            "arity": 1,
+            "js": "applyAttributes"
           },
           "property_will_change": {
-            "arity": 3
+            "arity": 3,
+            "js": "propertyWillChange"
           },
           "mark_attribute_dirty": {
-            "arity": 3
+            "arity": 3,
+            "js": "markAttributeDirty"
           }
         }
       },
@@ -2845,6 +3264,10 @@
         methods: {
           "draft": {
             "arity": 0
+          },
+          "apply_draft": {
+            "arity": 1,
+            "js": "applyDraft"
           }
         }
       }
@@ -2861,35 +3284,44 @@
         properties: {},
         methods: {
           "next_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "nextResponder"
           },
           "perform_action": {
-            "arity": 3
+            "arity": 3,
+            "js": "performAction"
           },
           "action_target": {
-            "arity": 1
+            "arity": 1,
+            "js": "actionTarget"
           },
           "accepts_first_responder?": {
             "arity": 0,
-            "js": "accepts_first_responder_predicate"
+            "js": "acceptsFirstResponder"
           },
           "become_first_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "becomeFirstResponder"
           },
           "resign_first_responder": {
-            "arity": 1
+            "arity": 1,
+            "js": "resignFirstResponder"
           },
           "key_down": {
-            "arity": 1
+            "arity": 1,
+            "js": "keyDown"
           },
           "key_up": {
-            "arity": 1
+            "arity": 1,
+            "js": "keyUp"
           },
           "cancel_operation": {
-            "arity": 1
+            "arity": 1,
+            "js": "cancelOperation"
           },
           "insert_newline": {
-            "arity": 1
+            "arity": 1,
+            "js": "insertNewline"
           },
           "complete": {
             "arity": 1
@@ -2907,7 +3339,8 @@
             "arity": 0
           },
           "controller_value": {
-            "arity": 0
+            "arity": 0,
+            "js": "controllerValue"
           },
           "controller=": {
             "arity": 1
@@ -2922,38 +3355,95 @@
             "arity": 0
           },
           "adopt_subview": {
-            "arity": 1
+            "arity": 1,
+            "js": "adoptSubview"
           },
           "release_subview": {
-            "arity": 1
+            "arity": 1,
+            "js": "releaseSubview"
           },
           "remove_from_superview": {
-            "arity": 0
+            "arity": 0,
+            "js": "removeFromSuperview"
           },
           "assign_superview": {
-            "arity": 1
+            "arity": 1,
+            "js": "assignSuperview"
           },
           "next_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "nextResponder"
+          },
+          "has_attribute?": {
+            "arity": 1,
+            "js": "hasAttribute"
+          },
+          "contains?": {
+            "arity": 1,
+            "js": "contains"
+          },
+          "clone_template": {
+            "arity": 1,
+            "js": "cloneTemplate"
+          },
+          "append": {
+            "arity": 1
+          },
+          "insert_after": {
+            "arity": 2,
+            "js": "insertAfter"
+          },
+          "remove": {
+            "arity": 1
+          },
+          "child_containing": {
+            "arity": 1,
+            "js": "childContaining"
+          },
+          "mark": {
+            "arity": 3
+          },
+          "mark_selected": {
+            "arity": 2,
+            "js": "markSelected"
+          },
+          "reveal": {
+            "arity": 1
+          },
+          "ensure_focusable": {
+            "arity": 0,
+            "js": "ensureFocusable"
+          },
+          "clear_text_selection": {
+            "arity": 0,
+            "js": "clearTextSelection"
+          },
+          "listen": {
+            "arity": 3
           },
           "focusable_selector": {
-            "arity": 0
+            "arity": 0,
+            "js": "focusableSelector"
           },
           "first_focusable_element": {
-            "arity": 0
+            "arity": 0,
+            "js": "firstFocusableElement"
           },
           "focus_element": {
-            "arity": 0
+            "arity": 0,
+            "js": "focusElement"
           },
           "blur_element": {
-            "arity": 0
+            "arity": 0,
+            "js": "blurElement"
           },
           "accepts_first_responder?": {
             "arity": 0,
-            "js": "accepts_first_responder_predicate"
+            "js": "acceptsFirstResponder"
           },
           "become_first_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "becomeFirstResponder"
           }
         }
       },
@@ -2962,16 +3452,18 @@
         mixins: [Swill__ObjectBindings],
         properties: {
           "represented_object": {
+            js: "representedObject",
             type: "T.untyped",
             attribute: false,
-            defaultValue: function default_represented_object() {
+            defaultValue: function default_representedObject() {
               return null;
             }
           }
         },
         methods: {
           "binding_root": {
-            "arity": 0
+            "arity": 0,
+            "js": "bindingRoot"
           },
           "attach": {
             "arity": 1
@@ -2983,62 +3475,78 @@
             "arity": 0
           },
           "child_controllers": {
-            "arity": 0
+            "arity": 0,
+            "js": "childControllers"
           },
           "application": {
             "arity": 0
           },
           "next_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "nextResponder"
           },
           "register_teardown": {
-            "arity": 1
+            "arity": 1,
+            "js": "registerTeardown"
           },
           "accepts_first_responder?": {
             "arity": 0,
-            "js": "accepts_first_responder_predicate"
+            "js": "acceptsFirstResponder"
           },
           "become_first_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "becomeFirstResponder"
           },
           "resign_first_responder": {
-            "arity": 1
+            "arity": 1,
+            "js": "resignFirstResponder"
           },
           "teardown": {
             "arity": 0
           },
           "decode_outlet_data": {
-            "arity": 2
+            "arity": 2,
+            "js": "decodeOutletData"
           },
           "view_did_load": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewDidLoad"
           },
           "awake_from_dom": {
-            "arity": 0
+            "arity": 0,
+            "js": "awakeFromDOM"
           },
           "controller_did_restore": {
-            "arity": 1
+            "arity": 1,
+            "js": "controllerDidRestore"
           },
           "controller_did_load": {
-            "arity": 0
+            "arity": 0,
+            "js": "controllerDidLoad"
           },
           "view_will_appear": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewWillAppear"
           },
           "view_did_appear": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewDidAppear"
           },
           "view_will_disappear": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewWillDisappear"
           },
           "view_did_disappear": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewDidDisappear"
           },
           "nearest_application": {
-            "arity": 1
+            "arity": 1,
+            "js": "nearestApplication"
           },
           "collect_child_controllers": {
-            "arity": 2
+            "arity": 2,
+            "js": "collectChildControllers"
           }
         }
       },
@@ -3051,35 +3559,43 @@
             "arity": 1
           },
           "wire_object": {
-            "arity": 2
+            "arity": 2,
+            "js": "wireObject"
           },
           "wire_region": {
-            "arity": 4
+            "arity": 4,
+            "js": "wireRegion"
           },
           "wire_properties": {
-            "arity": 4
+            "arity": 4,
+            "js": "wireProperties"
           },
           "release": {
             "arity": 1
           },
           "resolve_path": {
-            "arity": 2
+            "arity": 2,
+            "js": "resolvePath"
           },
           "wire_element": {
-            "arity": 3
+            "arity": 3,
+            "js": "wireElement"
           },
           "wire_represented_object": {
-            "arity": 3
+            "arity": 3,
+            "js": "wireRepresentedObject"
           },
           "wire_property": {
-            "arity": 5
+            "arity": 5,
+            "js": "wireProperty"
           },
           "write_property": {
-            "arity": 3
+            "arity": 3,
+            "js": "writeProperty"
           },
           "boolean_property?": {
             "arity": 1,
-            "js": "boolean_property_predicate"
+            "js": "isBooleanProperty"
           }
         }
       },
@@ -3092,10 +3608,12 @@
             "arity": 1
           },
           "wire_into": {
-            "arity": 2
+            "arity": 2,
+            "js": "wireInto"
           },
           "wire_element": {
-            "arity": 2
+            "arity": 2,
+            "js": "wireElement"
           }
         }
       },
@@ -3114,7 +3632,8 @@
             "arity": 2
           },
           "value_for": {
-            "arity": 3
+            "arity": 3,
+            "js": "valueFor"
           },
           "materialize": {
             "arity": 3
@@ -3146,25 +3665,30 @@
           },
           "managed?": {
             "arity": 1,
-            "js": "managed_predicate"
+            "js": "isManaged"
           },
           "create_view": {
-            "arity": 1
+            "arity": 1,
+            "js": "createView"
           },
           "controllers_within": {
-            "arity": 1
+            "arity": 1,
+            "js": "controllersWithin"
           },
           "collect_controllers": {
-            "arity": 2
+            "arity": 2,
+            "js": "collectControllers"
           },
           "detach": {
             "arity": 1
           },
           "nearest_view": {
-            "arity": 1
+            "arity": 1,
+            "js": "nearestView"
           },
           "each_reversed": {
-            "arity": 2
+            "arity": 2,
+            "js": "eachReversed"
           }
         }
       },
@@ -3177,7 +3701,7 @@
           },
           "available?": {
             "arity": 0,
-            "js": "available_predicate"
+            "js": "isAvailable"
           },
           "params": {
             "arity": 0
@@ -3204,13 +3728,16 @@
             "arity": 2
           },
           "scoped_key": {
-            "arity": 1
+            "arity": 1,
+            "js": "scopedKey"
           },
           "add_restoration": {
-            "arity": 2
+            "arity": 2,
+            "js": "addRestoration"
           },
           "dispose_restoration": {
-            "arity": 0
+            "arity": 0,
+            "js": "disposeRestoration"
           },
           "name": {
             "arity": 0
@@ -3222,27 +3749,31 @@
             "arity": 0
           },
           "content_name": {
-            "arity": 0
+            "arity": 0,
+            "js": "contentName"
           },
           "closed": {
             "arity": 0
           },
           "saved_first_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "savedFirstResponder"
           },
           "save_first_responder": {
-            "arity": 1
+            "arity": 1,
+            "js": "saveFirstResponder"
           },
           "assign_content": {
-            "arity": 2
+            "arity": 2,
+            "js": "assignContent"
           },
           "container?": {
             "arity": 0,
-            "js": "container_predicate"
+            "js": "isContainer"
           },
           "contains_controller?": {
             "arity": 1,
-            "js": "contains_controller_predicate"
+            "js": "containsController"
           },
           "dismiss": {
             "arity": 0
@@ -3267,117 +3798,147 @@
             "arity": 0
           },
           "application_did_launch": {
-            "arity": 0
+            "arity": 0,
+            "js": "applicationDidLaunch"
           },
           "application_will_terminate": {
-            "arity": 0
+            "arity": 0,
+            "js": "applicationWillTerminate"
           },
           "load_window_content": {
-            "arity": 2
+            "arity": 2,
+            "js": "loadWindowContent"
           },
           "load_window_content_with": {
-            "arity": 3
+            "arity": 3,
+            "js": "loadWindowContentWith"
           },
           "show_window": {
-            "arity": 1
+            "arity": 1,
+            "js": "showWindow"
           },
           "show_window_in": {
-            "arity": 2
+            "arity": 2,
+            "js": "showWindowIn"
           },
           "dismiss": {
             "arity": 1
           },
           "window_named": {
-            "arity": 1
+            "arity": 1,
+            "js": "windowNamed"
           },
           "window_content?": {
             "arity": 1,
-            "js": "window_content_predicate"
+            "js": "isWindowContent"
           },
           "first_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "firstResponder"
           },
           "make_first_responder": {
-            "arity": 1
+            "arity": 1,
+            "js": "makeFirstResponder"
           },
           "sync_first_responder": {
-            "arity": 2
+            "arity": 2,
+            "js": "syncFirstResponder"
           },
           "focus_left": {
-            "arity": 1
+            "arity": 1,
+            "js": "focusLeft"
           },
           "release_first_responder": {
-            "arity": 1
+            "arity": 1,
+            "js": "releaseFirstResponder"
           },
           "responder_for": {
-            "arity": 1
+            "arity": 1,
+            "js": "responderFor"
           },
           "responder_element": {
-            "arity": 1
+            "arity": 1,
+            "js": "responderElement"
           },
           "restore_focus": {
-            "arity": 2
+            "arity": 2,
+            "js": "restoreFocus"
           },
           "scan_templates": {
-            "arity": 0
+            "arity": 0,
+            "js": "scanTemplates"
           },
           "window_template": {
-            "arity": 1
+            "arity": 1,
+            "js": "windowTemplate"
           },
           "clone_window_content": {
-            "arity": 1
+            "arity": 1,
+            "js": "cloneWindowContent"
           },
           "window_containers": {
-            "arity": 0
+            "arity": 0,
+            "js": "windowContainers"
           },
           "prepare_window_containers": {
-            "arity": 0
+            "arity": 0,
+            "js": "prepareWindowContainers"
           },
           "requested_content": {
-            "arity": 3
+            "arity": 3,
+            "js": "requestedContent"
           },
           "register_window_containers": {
-            "arity": 0
+            "arity": 0,
+            "js": "registerWindowContainers"
           },
           "top_controller_in": {
-            "arity": 1
+            "arity": 1,
+            "js": "topControllerIn"
           },
           "top_within?": {
             "arity": 2,
-            "js": "top_within_predicate"
+            "js": "isTopWithin"
           },
           "matches_container?": {
             "arity": 2,
-            "js": "matches_container_predicate"
+            "js": "matchesContainer"
           },
           "window_containing": {
-            "arity": 1
+            "arity": 1,
+            "js": "windowContaining"
           },
           "holds?": {
             "arity": 2,
-            "js": "holds_predicate"
+            "js": "holds"
           },
           "attached?": {
             "arity": 1,
-            "js": "attached_predicate"
+            "js": "isAttached"
           },
           "release_window": {
-            "arity": 1
+            "arity": 1,
+            "js": "releaseWindow"
           },
           "restore_window_state": {
-            "arity": 3
+            "arity": 3,
+            "js": "restoreWindowState"
           },
           "restore_launched_windows": {
-            "arity": 0
+            "arity": 0,
+            "js": "restoreLaunchedWindows"
           },
           "write_window_state": {
-            "arity": 1
+            "arity": 1,
+            "js": "writeWindowState"
           },
           "apply_fragment": {
-            "arity": 0
+            "arity": 0,
+            "js": "applyFragment"
           },
           "apply_fragment_to": {
-            "arity": 2
+            "arity": 2,
+            "js": "applyFragmentTo"
           },
           "watch": {
             "arity": 1
@@ -3401,11 +3962,12 @@
         mixins: [Swill__Ownership],
         properties: {
           "header_view": {
+            js: "headerView",
             type: "T.nilable(Swill::View)",
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_header_view() {
+            defaultValue: function default_headerView() {
               return null;
             }
           },
@@ -3414,179 +3976,222 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_rows() {
+            defaultValue: function defaultRows() {
               return null;
             }
           },
           "allows_multiple_selection": {
+            js: "allowsMultipleSelection",
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_allows_multiple_selection() {
+            defaultValue: function default_allowsMultipleSelection() {
               return false;
             }
           },
           "selected_objects": {
+            js: "selectedObjects",
             type: "T::Array[T.untyped]",
             attribute: false,
-            defaultValue: function default_selected_objects() {
+            defaultValue: function default_selectedObjects() {
               return [];
             }
           },
           "selected_object_id": {
+            js: "selectedObjectId",
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function default_selected_object_id() {
+            defaultValue: function default_selectedObjectId() {
               return null;
             }
           },
           "selected_indexes": {
+            js: "selectedIndexes",
             type: "T::Array[Integer]",
             attribute: false,
-            compute: function compute_selected_indexes() {
-              let selection = this.current_selection();
+            compute: function compute_selectedIndexes() {
+              let selection = this.currentSelection();
               let found = [];
-              this.arranged_objects().forEach((object, index) => {
+              this.arrangedObjects().forEach((object, index) => {
                 if (selection.includes(object)) found.push(index);
               });
               return found;
             }
           },
           "selected_object": {
+            js: "selectedObject",
             type: "T.untyped",
             attribute: false,
-            compute: function compute_selected_object() {
-              return this.leading(this.current_selection());
+            compute: function compute_selectedObject() {
+              return this.leading(this.currentSelection());
             }
           }
         },
         methods: {
           "select_indexes": {
-            "arity": 1
+            "arity": 1,
+            "js": "selectIndexes"
           },
           "select_object": {
-            "arity": 1
+            "arity": 1,
+            "js": "selectObject"
           },
           "deselect_all": {
-            "arity": 0
+            "arity": 0,
+            "js": "deselectAll"
           },
           "select_first_if_nothing_selected": {
-            "arity": 0
+            "arity": 0,
+            "js": "selectFirstIfNothingSelected"
           },
           "activate_selection": {
-            "arity": 0
+            "arity": 0,
+            "js": "activateSelection"
           },
           "selected_object_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "selectedObjectDidChange"
           },
           "object_at": {
-            "arity": 1
+            "arity": 1,
+            "js": "objectAt"
           },
           "row_for": {
-            "arity": 1
+            "arity": 1,
+            "js": "rowFor"
           },
           "view_did_load": {
-            "arity": 0
+            "arity": 0,
+            "js": "viewDidLoad"
           },
           "awake_from_dom": {
-            "arity": 0
+            "arity": 0,
+            "js": "awakeFromDOM"
           },
           "represented_object_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "representedObjectDidChange"
           },
           "selected_objects_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "selectedObjectsDidChange"
           },
           "selected_object_id_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "selectedObjectIdDidChange"
           },
           "become_first_responder": {
-            "arity": 0
+            "arity": 0,
+            "js": "becomeFirstResponder"
           },
           "key_down": {
-            "arity": 1
+            "arity": 1,
+            "js": "keyDown"
           },
           "insert_newline": {
-            "arity": 1
+            "arity": 1,
+            "js": "insertNewline"
           },
           "arranged_objects": {
-            "arity": 0
+            "arity": 0,
+            "js": "arrangedObjects"
           },
           "container": {
             "arity": 0
           },
           "container_view": {
-            "arity": 0
+            "arity": 0,
+            "js": "containerView"
           },
           "row_elements": {
-            "arity": 0
+            "arity": 0,
+            "js": "rowElements"
           },
           "row_element?": {
             "arity": 1,
-            "js": "row_element_predicate"
+            "js": "isRowElement"
           },
           "rows_are_views?": {
             "arity": 0,
-            "js": "rows_are_views_predicate"
+            "js": "rowsAreViews"
           },
           "row_template": {
-            "arity": 0
+            "arity": 0,
+            "js": "rowTemplate"
           },
           "make_row_element": {
-            "arity": 1
+            "arity": 1,
+            "js": "makeRowElement"
           },
           "configure_row": {
-            "arity": 2
+            "arity": 2,
+            "js": "configureRow"
           },
           "render_all": {
-            "arity": 0
+            "arity": 0,
+            "js": "renderAll"
           },
           "attach_row": {
-            "arity": 1
+            "arity": 1,
+            "js": "attachRow"
           },
           "clear_rows": {
-            "arity": 0
+            "arity": 0,
+            "js": "clearRows"
           },
           "release_row": {
-            "arity": 1
+            "arity": 1,
+            "js": "releaseRow"
           },
           "sync_selected_rows": {
-            "arity": 0
+            "arity": 0,
+            "js": "syncSelectedRows"
           },
           "install_selection": {
-            "arity": 0
+            "arity": 0,
+            "js": "installSelection"
           },
           "row_mouse_down": {
-            "arity": 1
+            "arity": 1,
+            "js": "rowMouseDown"
           },
           "row_clicked": {
-            "arity": 1
+            "arity": 1,
+            "js": "rowClicked"
           },
           "row_double_clicked": {
-            "arity": 1
+            "arity": 1,
+            "js": "rowDoubleClicked"
           },
           "select_range": {
-            "arity": 2
+            "arity": 2,
+            "js": "selectRange"
           },
           "identifier_for": {
-            "arity": 1
+            "arity": 1,
+            "js": "identifierFor"
           },
           "object_with_id": {
-            "arity": 1
+            "arity": 1,
+            "js": "objectWithId"
           },
           "reconcile_selection": {
-            "arity": 0
+            "arity": 0,
+            "js": "reconcileSelection"
           },
           "syncing_selection": {
-            "arity": 1
+            "arity": 1,
+            "js": "syncingSelection"
           },
           "leading": {
             "arity": 1
           },
           "current_selection": {
-            "arity": 0
+            "arity": 0,
+            "js": "currentSelection"
           },
           "current_indexes": {
-            "arity": 0
+            "arity": 0,
+            "js": "currentIndexes"
           }
         }
       },
@@ -3594,57 +4199,224 @@
         constructor: Swill__Controller__SortableList,
         properties: {
           "sort_key": {
+            js: "sortKey",
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function default_sort_key() {
+            defaultValue: function default_sortKey() {
               return null;
             }
           },
           "sort_direction": {
+            js: "sortDirection",
             type: "String",
             attribute: false,
-            defaultValue: function default_sort_direction() {
+            defaultValue: function default_sortDirection() {
               return "ascending";
             }
           },
           "sort_states": {
+            js: "sortStates",
             type: "T::Hash[String, String]",
             attribute: false,
-            defaultValue: function default_sort_states() {
+            defaultValue: function default_sortStates() {
               return {};
             }
           }
         },
         methods: {
           "sort_by": {
-            "arity": 1
+            "arity": 1,
+            "js": "sortBy"
           },
           "sort_key_for": {
-            "arity": 1
+            "arity": 1,
+            "js": "sortKeyFor"
           },
           "toggle_sort": {
-            "arity": 1
+            "arity": 1,
+            "js": "toggleSort"
           },
           "sort": {
             "arity": 2
           },
           "awake_from_dom": {
-            "arity": 0
+            "arity": 0,
+            "js": "awakeFromDOM"
           },
           "sort_key_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "sortKeyDidChange"
           },
           "sort_direction_did_change": {
-            "arity": 2
+            "arity": 2,
+            "js": "sortDirectionDidChange"
           },
           "sort_did_change": {
-            "arity": 0
+            "arity": 0,
+            "js": "sortDidChange"
           },
           "arranged_objects": {
-            "arity": 0
+            "arity": 0,
+            "js": "arrangedObjects"
           },
           "sync_sort_states": {
-            "arity": 0
+            "arity": 0,
+            "js": "syncSortStates"
+          }
+        }
+      },
+      "Swill::Controller::Editor": {
+        constructor: Swill__Controller__Editor,
+        properties: {},
+        methods: {
+          "binding_root": {
+            "arity": 0,
+            "js": "bindingRoot"
+          },
+          "commit_editing": {
+            "arity": 0,
+            "js": "commitEditing"
+          },
+          "discard_editing": {
+            "arity": 0,
+            "js": "discardEditing"
+          },
+          "insert_newline": {
+            "arity": 1,
+            "js": "insertNewline"
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          }
+        }
+      },
+      "Swill::Controller::InlineEditor": {
+        constructor: Swill__Controller__InlineEditor,
+        properties: {},
+        methods: {
+          "insert_newline": {
+            "arity": 1,
+            "js": "insertNewline"
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          },
+          "resign_first_responder": {
+            "arity": 1,
+            "js": "resignFirstResponder"
+          },
+          "allow_resignation_to?": {
+            "arity": 1,
+            "js": "allowResignationTo"
+          },
+          "editing_host": {
+            "arity": 0,
+            "js": "editingHost"
+          },
+          "responder_element": {
+            "arity": 1,
+            "js": "responderElement"
+          }
+        }
+      },
+      "Swill::Controller::EditableList": {
+        constructor: Swill__Controller__EditableList,
+        properties: {
+          "edited_object": {
+            js: "editedObject",
+            type: "T.untyped",
+            attribute: false,
+            defaultValue: function default_editedObject() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "activate_selection": {
+            "arity": 0,
+            "js": "activateSelection"
+          },
+          "editing?": {
+            "arity": 0,
+            "js": "isEditing"
+          },
+          "awake_from_dom": {
+            "arity": 0,
+            "js": "awakeFromDOM"
+          },
+          "begin_editing": {
+            "arity": 1,
+            "js": "beginEditing"
+          },
+          "end_editing": {
+            "arity": 1,
+            "js": "endEditing"
+          },
+          "commit_editing_if_needed": {
+            "arity": 0,
+            "js": "commitEditingIfNeeded"
+          },
+          "editor_should_end_editing": {
+            "arity": 1,
+            "js": "editorShouldEndEditing"
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          },
+          "toggle_sort": {
+            "arity": 1,
+            "js": "toggleSort"
+          },
+          "represented_object_did_change": {
+            "arity": 2,
+            "js": "representedObjectDidChange"
+          },
+          "commit_edit": {
+            "arity": 3,
+            "js": "commitEdit"
+          },
+          "apply_edit": {
+            "arity": 3,
+            "js": "applyEdit"
+          },
+          "validation_error": {
+            "arity": 1,
+            "js": "validationError"
+          },
+          "confirm_edit?": {
+            "arity": 2,
+            "js": "confirmEdit"
+          },
+          "edited_object_has_changes?": {
+            "arity": 2,
+            "js": "editedObjectHasChanges"
+          },
+          "editing_did_fail_validation": {
+            "arity": 1,
+            "js": "editingDidFailValidation"
+          },
+          "row_element?": {
+            "arity": 1,
+            "js": "isRowElement"
+          },
+          "editor_template": {
+            "arity": 0,
+            "js": "editorTemplate"
+          },
+          "open_editor": {
+            "arity": 3,
+            "js": "openEditor"
+          },
+          "close_editor": {
+            "arity": 0,
+            "js": "closeEditor"
+          },
+          "finish_edit": {
+            "arity": 2,
+            "js": "finishEdit"
           }
         }
       },
@@ -3653,30 +4425,31 @@
         mixins: [Swill__Model__Attributes, Swill__Model__DirtyTracking, Swill__Model__Drafts],
         properties: {
           "dirty_attributes": {
+            js: "dirtyAttributes",
             type: "T::Array[T.untyped]",
             attribute: false,
-            defaultValue: function default_dirty_attributes() {
+            defaultValue: function default_dirtyAttributes() {
               return [];
             }
           },
           "dirty?": {
-            js: "dirty_predicate",
+            js: "isDirty",
             type: "T::Boolean",
             attribute: false,
-            compute: function compute_dirty_predicate() {
-              return !Runtime.isEmpty(this.dirty_attributes);
+            compute: function compute_isDirty() {
+              return !Runtime.isEmpty(this.dirtyAttributes);
             }
           },
           "id": {
             type: "T.nilable(String)",
             attribute: true,
             key: "id",
-            defaultValue: function default_id() {
+            defaultValue: function defaultId() {
               return null;
             }
           }
         },
-        registries: { model_attributes: {
+        registries: { modelAttributes: {
           "id": { property: "id", key: "id" }
         } },
         methods: {}
@@ -3769,54 +4542,16 @@
     }
     return { properties, methods };
   }
-  function bridge(prototype, internalName, publicName) {
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, internalName);
-    if (!descriptor || typeof descriptor.value !== "function") {
-      throw new Error(`Missing framework method: ${internalName}`);
-    }
-    const original = descriptor.value;
-    Object.defineProperty(prototype, publicName, {
-      configurable: true,
-      writable: true,
-      value: original
-    });
-    Object.defineProperty(prototype, internalName, {
-      ...descriptor,
-      value(...args) {
-        return this[publicName](...args);
-      }
-    });
-  }
   function browserAPI(definitions, Runtime2) {
     const Controller = definitions.Swill__Controller;
     const Application = definitions.Swill__Application;
     const View = definitions.Swill__View;
     const List = definitions.Swill__Controller__List;
     const SortableList = definitions.Swill__Controller__SortableList;
-    const roots = /* @__PURE__ */ new Set([Controller, Application, View, List, SortableList]);
-    [
-      ["binding_root", "bindingRoot"],
-      ["decode_outlet_data", "decodeOutletData"],
-      ["view_did_load", "viewDidLoad"],
-      ["awake_from_dom", "awakeFromDOM"],
-      ["controller_did_restore", "controllerDidRestore"],
-      ["controller_did_load", "controllerDidLoad"],
-      ["view_will_appear", "viewWillAppear"],
-      ["view_did_appear", "viewDidAppear"],
-      ["view_will_disappear", "viewWillDisappear"],
-      ["view_did_disappear", "viewDidDisappear"]
-    ].forEach(([internalName, publicName]) => bridge(Controller.prototype, internalName, publicName));
-    bridge(Application.prototype, "application_did_launch", "applicationDidLaunch");
-    bridge(Application.prototype, "application_will_terminate", "applicationWillTerminate");
-    [
-      ["make_row_element", "makeRowElement"],
-      ["configure_row", "configureRow"],
-      ["rows_are_views_predicate", "rowsAreViews"],
-      ["row_element_predicate", "isRowElement"],
-      ["selected_object_did_change", "selectedObjectDidChange"],
-      ["activate_selection", "activateSelection"]
-    ].forEach(([internalName, publicName]) => bridge(List.prototype, internalName, publicName));
-    bridge(SortableList.prototype, "sort_key_for", "sortKeyFor");
+    const Editor = definitions.Swill__Controller__Editor;
+    const InlineEditor = definitions.Swill__Controller__InlineEditor;
+    const EditableList = definitions.Swill__Controller__EditableList;
+    const roots = /* @__PURE__ */ new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList]);
     function register(name, klass) {
       if (arguments.length === 1) {
         klass = name;
@@ -3865,6 +4600,9 @@
       View,
       List,
       SortableList,
+      Editor,
+      InlineEditor,
+      EditableList,
       register,
       start
     });

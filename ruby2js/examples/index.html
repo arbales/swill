@@ -42,6 +42,9 @@
           <template for="row">
             <tr><td bind="name"></td><td bind="role"></td><td><button data-action="remove_person">Remove</button></td></tr>
           </template>
+          <template for="editor">
+            <tr controller="Swill::Controller::InlineEditor"><td><input bind="name"></td><td><input bind="role"></td><td>Enter saves, Escape cancels</td></tr>
+          </template>
         </tbody>
       </table>
       <p>Selected: <output bind="@selected_object.name"></output></p>
