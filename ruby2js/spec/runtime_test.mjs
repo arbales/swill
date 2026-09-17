@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {loadBundles} from "./load_bundles.mjs";
 
-const {Runtime} = loadBundles();
+const {Runtime, context} = loadBundles();
 
 const SwillObject = Runtime.resolve("Swill::Object");
 const Person = Runtime.resolve("Demo::Person");
@@ -1011,6 +1011,10 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   f.parent.person.name = "";
   assert.equal(link.href, "");
   assert.equal(link.getAttribute("data-name"), null, "empty strings remove data attributes");
+  const flagged = element("i", {"bind-data-on": "person.nil?", "bind-aria-busy": "person.nil?"});
+  const releaseFlag = [bindings.wireProperty(f.parent, null, flagged, "data-on", "person.nil?"), bindings.wireProperty(f.parent, null, flagged, "aria-busy", "person.nil?")];
+  assert.deepEqual([flagged.getAttribute("data-on"), flagged.getAttribute("aria-busy")], [null, "false"], "false removes a data attribute and is written to an ARIA one");
+  releaseFlag.forEach(dispose => dispose());
   f.parent.person = null;
   assert.equal(link.href, "");
   assert.equal(link.attributes.href, undefined, "nil removes href");
@@ -1947,4 +1951,222 @@ test("bind on a control keeps the control's value equal to the path both ways", 
   host.teardown();
   host.choice = "c";
   assert.equal(control.value, "typed", "teardown releases the binding");
+});
+
+// ---- models over the wire ----
+
+const Author = Runtime.resolve("Demo::Author");
+const Book = Runtime.resolve("Demo::Book");
+const Note = Runtime.resolve("Demo::Note");
+const Wire = Runtime.resolve("Swill::Wire");
+const ModelBase = Runtime.resolve("Swill::Model::Base");
+const ValueTransformer = Runtime.resolve("Swill::ValueTransformer");
+
+// Arrays and objects made in the sandbox have that realm's prototypes;
+// compare their contents.
+const plain = value => JSON.parse(JSON.stringify(value));
+
+afterEach(() => { [Author, Book, Note].forEach(klass => klass.clear()); delete context.fetch; });
+
+// A fake server behind the sandbox's fetch: routes keyed "METHOD url" answer
+// a JSON body, a function of the request, or null for 204. Every request
+// is recorded with its decoded body.
+function fakeServer(routes) {
+  const requests = [];
+  context.fetch = async (url, init = {}) => {
+    const method = init.method ?? "GET";
+    const json = init.headers?.["Content-Type"] === "application/vnd.api+json";
+    const request = {method, url, headers: init.headers, body: json && init.body != null ? JSON.parse(init.body) : init.body ?? null};
+    requests.push(request);
+    if (!Object.hasOwn(routes, `${method} ${url}`)) return {ok: false, status: 404, json: async () => ({})};
+    const route = routes[`${method} ${url}`];
+    const body = typeof route === "function" ? route(request) : route;
+    if (body === null) return {ok: true, status: 204, json: async () => { throw new Error("no content"); }};
+    return {ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body))};
+  };
+  return requests;
+}
+
+const authorsDocument = {
+  data: [
+    {id: "1", type: "authors", attributes: {name: "Ada", born: 1815},
+     relationships: {books: {data: [{id: "10", type: "books"}, {id: "11", type: "books"}]}}},
+    {id: "2", type: "authors", attributes: {name: "Grace"}, relationships: {books: {data: []}}}
+  ],
+  included: [
+    {id: "10", type: "books", attributes: {title: "Notes"}, relationships: {author: {data: {id: "1", type: "authors"}}}},
+    {id: "11", type: "books", attributes: {title: "Engines"}, relationships: {author: {data: {id: "1", type: "authors"}}}}
+  ]
+};
+
+test("JSON:API documents pool records by type and hydrate relationships from included resources", async () => {
+  const requests = fakeServer({"GET /api/authors": authorsDocument});
+  const authors = await Author.findAll();
+  assert.deepEqual(plain(authors.map(author => [author.id, author.name, author.born])), [["1", "Ada", 1815], ["2", "Grace", null]]);
+  const [ada, grace] = authors;
+  assert.deepEqual(plain(ada.books.map(book => book.title)), ["Notes", "Engines"]);
+  assert.ok(ada.books[0].author === ada, "has_one resolves to the pooled owner");
+  assert.deepEqual(plain([ada.isRelationshipLoaded("books"), ada.books[0].isRelationshipLoaded("author"), grace.books]), [true, true, []]);
+  assert.ok((await Author.find("1")) === ada, "find answers the pooled instance without a request");
+  assert.equal(requests.length, 1);
+  assert.ok(Book.get("10") === ada.books[0]);
+  assert.ok(Author.store() !== Book.store(), "each class has its own store");
+  assert.ok(ModelBase.classForType("books") === Book && ModelBase.classForType("pages") === null);
+  assert.deepEqual(plain([ada.isDirty, Author.isPooled("2"), Author.values().length]), [false, true, 2], "applied attributes are clean");
+  assert.deepEqual(plain(ada.relationships().map(relationship => [relationship.name(), relationship.key(), relationship.isMany()])), [["books", "books", true]]);
+});
+
+test("save posts a new record, patches only dirty attributes, and delete leaves the pool", async () => {
+  const requests = fakeServer({
+    "POST /api/authors": request => ({data: {id: "7", type: "authors", attributes: {...request.body.data.attributes, name: request.body.data.attributes.name.trim()}}}),
+    "PATCH /api/authors/7": {data: {id: "7", type: "authors", attributes: {name: "Ada Lovelace", born: 1815}}},
+    "DELETE /api/authors/7": null
+  });
+  const author = new Author();
+  author.name = "  ";
+  await assert.rejects(author.save(), /name must not be blank/);
+  author.name = " Ada ";
+  author.born = 1815;
+  const saved = await author.save();
+  assert.ok(saved === author);
+  assert.deepEqual(plain(requests[0].body), {data: {type: "authors", attributes: {name: " Ada ", born: 1815}}}, "a create sends every attribute and no id");
+  assert.equal(requests[0].headers["Content-Type"], "application/vnd.api+json");
+  assert.deepEqual(plain([author.id, author.name, author.isDirty]), ["7", "Ada", false], "the server's answer is applied");
+  assert.ok(Author.get("7") === author, "the saved instance is the pooled one");
+  await author.save();
+  assert.equal(requests.length, 1, "a clean record is not sent");
+  author.name = "Ada Lovelace";
+  await author.save();
+  assert.deepEqual(plain(requests[1].body), {data: {type: "authors", id: "7", attributes: {name: "Ada Lovelace"}}}, "an update sends the dirty attributes");
+  assert.equal(author.isDirty, false);
+  await author.delete();
+  assert.deepEqual(plain([requests[2].method, requests[2].url, Author.get("7")]), ["DELETE", "/api/authors/7", null]);
+  await new Author().delete();
+  assert.equal(requests.length, 3, "a record without an id has nothing to delete");
+});
+
+test("relationships load from their URL with a loading flag, and reload refreshes a pooled record", async () => {
+  const requests = fakeServer({
+    "GET /api/authors/1": {data: {id: "1", type: "authors", attributes: {name: "Ada", born: 1816}}},
+    "GET /api/authors/1/books": {data: [{id: "10", type: "books", attributes: {title: "Notes"}}]},
+    "GET /api/books/10/author": {data: {id: "1", type: "authors", attributes: {name: "Ada"}}}
+  });
+  const ada = await Author.find("1");
+  assert.deepEqual(plain([ada.name, ada.born, ada.isRelationshipLoaded("books"), ada.books]), ["Ada", 1816, false, []]);
+  const flags = [];
+  ada.observe("books_loading", value => flags.push(value));
+  const pending = ada.loadRelationship("books");
+  assert.equal(ada.booksLoading, true);
+  const books = await pending;
+  assert.deepEqual(plain([books.map(book => book.title), ada.books === books, flags]), [["Notes"], true, [true, false]]);
+  assert.ok((await ada.loadRelationship("books")) === books, "a loaded relationship is not requested again");
+  assert.equal(requests.length, 2);
+  const book = books[0];
+  assert.equal(book.relationship("author").urlFor(book), "/api/books/10/author", "without a pattern, the owner's URL is followed by the key");
+  assert.equal(ada.relationship("books").urlFor(ada), "/api/authors/1/books", ":id in a pattern is the owner's id");
+  assert.ok((await book.loadRelationship("author")) === ada);
+  ada.name = "Changed";
+  await ada.reload();
+  assert.deepEqual(plain([ada.name, ada.isDirty]), ["Ada", false]);
+  assert.throws(() => ada.relationship("title"), /title is not a relationship/);
+  await assert.rejects(new Author().reload(), /reload requires an id/);
+});
+
+test("plain JSON codec, datasets, query parameters, and the wire's base URL", async () => {
+  const requests = fakeServer({
+    "GET https://example.test/api/notes?q=milk&limit=2": [{id: 3, body: "Milk"}, {id: 4, body: "Eggs"}],
+    "GET https://example.test/api/notes": [{id: 3, body: "Milk!"}],
+    "POST https://example.test/api/notes": request => ({id: 9, ...request.body}),
+    "GET https://example.test/api/missing": null
+  });
+  Wire.default().baseURL = "https://example.test";
+  try {
+    const notes = await Note.where({q: "milk", limit: 2, skip: null});
+    assert.deepEqual(plain(notes.map(note => [note.id, note.body])), [["3", "Milk"], ["4", "Eggs"]], "plain JSON ids are strings in the pool");
+    const note = new Note();
+    note.body = "Bread";
+    await note.save();
+    assert.deepEqual(plain([requests[1].body, note.id, Note.get("9") === note]), [{body: "Bread"}, "9", true]);
+    const dataset = Note.dataset("/api/notes", {});
+    const states = [];
+    dataset.observe("loading", value => states.push(value));
+    await dataset.reload();
+    assert.deepEqual(plain([dataset.records.map(item => item.body), dataset.records[0] === notes[0], states, dataset.error]),
+      [["Milk!"], true, [true, false], null]);
+    const failing = Note.dataset("/api/nowhere", {});
+    await failing.reload();
+    assert.match(failing.error, /GET https:\/\/example.test\/api\/nowhere -> 404/);
+    assert.equal(failing.loading, false);
+    assert.equal(await Wire.default().requestJSON("GET", "/api/missing", null), null, "204 yields nil");
+  } finally {
+    Wire.default().baseURL = "";
+  }
+});
+
+test("the wire encodes forms, resolves relative URLs against its base, and reports failures", async () => {
+  const requests = fakeServer({"POST /api/login": {ok: 1}});
+  const wire = new Wire();
+  const answer = await wire.requestFormJSON("POST", "/api/login", {user: "ada", token: null, n: 2});
+  assert.deepEqual(plain([answer, requests[0].body, requests[0].headers["Content-Type"]]), [{ok: 1}, "user=ada&n=2", "application/x-www-form-urlencoded"]);
+  assert.equal(requests[0].headers.Accept, "application/vnd.api+json, application/json");
+  wire.baseURL = "https://api.test";
+  assert.deepEqual(plain([wire.resolveURL("api/x"), wire.resolveURL("/api/x"), wire.resolveURL("https://other.test/y")]),
+    ["https://api.test/api/x", "https://api.test/api/x", "https://other.test/y"]);
+  await assert.rejects(wire.getJSON("/api/nowhere", {}), /GET https:\/\/api.test\/api\/nowhere -> 404/);
+  assert.equal(Wire.urlWithParams("/a?x=1", {y: "2 3"}), "/a?x=1&y=2+3");
+  assert.equal(Wire.resourceURL("/api/notes", "a/b"), "/api/notes/a%2Fb");
+});
+
+test("codecs agree with MRI", async () => {
+  fakeServer({"GET /api/authors": authorsDocument});
+  const authors = await Author.findAll();
+  const ada = authors[0];
+  const result = {};
+  result.authors = authors.map(author => [author.id, author.name, author.born]);
+  result.books = ada.books.map(book => book.title);
+  result.linked = ada.books[0].author === ada;
+  result.loaded = [ada.isRelationshipLoaded("books"), ada.books[0].isRelationshipLoaded("author")];
+  result.pooled = Author.get("1") === ada && Book.get("10") === ada.books[0];
+  result.clean = ada.isDirty;
+  ada.name = "Ada Lovelace";
+  result.patch = ada.serialize(true);
+  const draft = new Note();
+  draft.body = "Bread";
+  result.post = draft.serialize(false);
+  const note = Note.parseOne({id: 3, body: "Milk"});
+  result.note = [note.id, note.body, Note.get("3") === note];
+  assert.deepEqual(plain(result), JSON.parse(readFileSync("build/mri-models.json")));
+});
+
+test("transform= formats and parses through value transformers; predicate readers end bind-* paths", () => {
+  const author = new Author();
+  author.born = 1815;
+  const root = element("div", {}, [
+    element("input", {bind: "born", transform: "number"}),
+    element("span", {bind: "born", transform: "number"}),
+    element("button", {"bind-disabled": "name.blank?", "bind-data-old": "born.positive?"}),
+    element("input", {bind: "name", transform: "shout"})
+  ]);
+  const [born, shown, button, shouted] = root.children;
+  const bindings = new Bindings();
+  assert.throws(() => bindings.wireObject(author, element("div", {}, [element("input", {bind: "name", transform: "nope"})])), /unknown transform nope/);
+  class Shout extends ValueTransformer {
+    format(value) { return String(value ?? "").toUpperCase(); }
+    parse(text) { return text.toLowerCase(); }
+  }
+  ValueTransformer.register("shout", new Shout());
+  const dispose = bindings.wireObject(author, root);
+  assert.deepEqual(plain([born.value, shown.textContent, button.disabled, button.getAttribute("data-old"), shouted.value]), ["1815", "1815", true, "true", ""]);
+  born.value = "1816";
+  born.dispatchEvent(new Event("input"));
+  assert.deepEqual(plain([author.born, shown.textContent]), [1816, "1816"], "number parses the field");
+  born.value = " ";
+  born.dispatchEvent(new Event("input"));
+  assert.deepEqual(plain([author.born, shown.textContent, button.getAttribute("data-old")]), [null, "", null], "blank text is nil");
+  shouted.value = "ADA";
+  shouted.dispatchEvent(new Event("input"));
+  assert.deepEqual(plain([author.name, shouted.value, button.disabled]), ["ada", "ADA", false]);
+  assert.deepEqual(plain([Runtime.read(-2, "negative?"), Runtime.read(0, "zero?"), Runtime.read(null, "positive?")]), [true, true, null]);
+  assert.equal(ValueTransformer.named("boolean").parse("on"), true);
+  dispose();
 });

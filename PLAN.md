@@ -160,16 +160,62 @@ The initial kernel and DOM-boundary spike is complete and verified:
   `editor_should_end_editing` and `confirm_edit?`, sorting commits first, a
   new collection discards). The demo's people table edits in place.
 
+- models: `Swill::Model::Base` with `endpoint`/`resource_type`/`codec` set in
+  the class body (class settings applied at installation), one identity
+  store per class, JSON:API and plain JSON codecs (included resources pooled
+  first, relationships hydrated from the pool, ids strings in the pool),
+  `find`/`fetch`/`find_all`/`where`/`fetch_all`, `save` (POST or a dirty-only
+  PATCH, the answer applied, the record pooled), `delete`, `reload`,
+  `validate`, datasets (`records`/`loading`/`error`), `has_many`/`has_one`
+  with `:id` URL patterns, explicit `load_relationship` and a `<name>_loading`
+  property, and `Swill::Wire.default` as the fetch boundary. The compiler
+  types class objects (`self.class`, `T.class_of`, class methods'
+  `self`), awaited values (an async signature names the value), bare
+  browser globals (`fetch`), and rescued errors; JSON:API parsing and dirty
+  serialization run identically on MRI;
+- value transformers (`transform="number"` on a bound element, custom ones
+  registered by name); `positive?`, `negative?`, and `zero?` as value
+  readers at the end of a binding path.
+
 Before beginning another feature slice, checkpoint the current verified work.
 
-## Immediate Next Slice: One Giraffic Flow
+## Toolchain
 
-The static example is ported (item 7.1). Item 7.2 begins: one backend-backed
-Giraffic flow covering dataset loading, selection, detached editing,
-persistence, restoration, and a relationship, pulling in the deferred model
-steps (codecs, datasets and the wire boundary, create/update/reload/delete,
-relationships) as it actually requires them. The static example's brewery
-search comes back with the dataset step.
+Consumers get the framework two ways (decided 16 September 2026): `swill.js`
+published to a CDN for plain-JavaScript use, and a gem whose `swill` binary
+compiles a Ruby application. The binary comes first; gem packaging later.
+
+- `swill build [ENTRY]` compiles the sources an entry file's
+  `require_relative` lines name, in that order, against the framework's
+  interface, and bundles them into one script reading the framework from the
+  page; `--out`, `--minify`, and `--with-framework` (a copy of `swill.js`
+  beside the output). `swill watch [ENTRY]` polls the sources and rebuilds.
+  `esbuild` is required, as it already is for formatting.
+- Open: the gem must carry a built `swill.js` and, ideally, a precomputed
+  framework interface; source maps point at generated JavaScript, not Ruby.
+
+- the bar application (`~/Workspace/bar`) has a Ruby frontend under
+  `frontend-ruby/` (models, pages, popups, the recipe form), built with
+  `bin/drinks frontend:build --ruby` through `swill build`, served with
+  `DRINKS_FRONTEND=ruby`, and checked in headless Chrome against a fake
+  JSON:API server. Its `PORT.md` classes every markup change as naming,
+  framework, or port. Framework changes it forced: `Application#browser`,
+  timer and microtask globals, `false` removing a `data-*` attribute, a
+  content-chosen first responder standing after a window load, multi-
+  statement blocks yielding their last expression, arithmetic typing, and
+  the build validating the framework interface it hands an application.
+
+## Immediate Next Slice: Gem Packaging and Consumer Typing
+
+The bar frontend is ported (item 7.2). Next: the gem. It must carry the
+built `swill.js`, the precomputed framework interface, and the generated
+RBIs with a `sorbet/config` template, so an application typechecks and
+builds without the framework checkout. Questions the port raised, to
+decide then: short markup aliases for framework controllers
+(`controller="List"`), and whether `@` in a nested controller's region
+should ever reach the page (the port answered with `@parent.`, and the
+strict rule stands). The static example's brewery search comes back with
+the dataset step.
 
 ## Ordered Roadmap
 
@@ -200,21 +246,23 @@ search comes back with the dataset step.
 - First-responder focus and keyboard routing sit on top of stable ownership.
 - Action names remain constrained to installed generated methods.
 
-### 4. Model Vertical Slice
-
-Port model behavior as independently composable concerns:
+### 4. Model Vertical Slice (done)
 
 1. validation and dirty tracking (done);
-2. identity stores and model type registration (deferred);
-3. plain JSON and JSON:API codecs;
-4. observable datasets and the browser wire boundary;
-5. create, update, reload, and delete;
+2. identity stores and model type registration (done: `Runtime.identityStore`
+   per class, `resource_type` found through `Runtime.classWithSetting`);
+3. plain JSON and JSON:API codecs (done; JSON:API parsing and serialization
+   are shared MRI examples);
+4. observable datasets and the browser wire boundary (done: `Model::Dataset`,
+   `Swill::Wire`);
+5. create, update, reload, and delete (done);
 6. `has_one` and `has_many`, loading state, reload methods, and included-record
-   hydration.
+   hydration (done; loading is explicit through `load_relationship`, never a
+   side effect of reading the property).
 
-Each step must run shared MRI examples where the source is genuinely portable.
-Network behavior stays behind an injectable boundary; server persistence,
-authorization, and transactions do not move into the browser.
+Network behavior stays behind `Swill::Wire`, which calls the page's `fetch`;
+server persistence, authorization, and transactions do not move into the
+browser.
 
 ### 5. Templates, Windows, and Restoration
 
@@ -314,6 +362,21 @@ Recorded so they are fixed deliberately rather than rediscovered:
 - The core value type tables (`filters/core_types.rb`) cover common methods
   and blocks; a method outside them is a build error. Grow the tables as
   real code needs them, each entry with its MRI comparison.
+- Methods take positional required arguments only (September 2026): no
+  optional or keyword arguments, so the model API is spelled `find(id)`,
+  `where(params)`, `fetch_all(url, params)` rather than options hashes. Add
+  optional positional arguments when a real signature needs them.
+- Relationships do not load on read (September 2026): `menu.recipes` is what
+  was hydrated or assigned, and `load_relationship("recipes")` asks the
+  server. The TypeScript original loads lazily from the getter; that hides a
+  request behind a property read and was left out on purpose.
+- `await` is a command call: `T.cast(await x, Type)` parses as
+  `await(x, Type)` and is rejected for the extra argument. Await into a
+  local first (September 2026).
+- Attribute values are not checked against their declared types when a
+  document applies them: a server's `null` lands in a `String` attribute.
+  Readers that format such values stringify first. Decide whether
+  `apply_attributes` should coerce or refuse (September 2026).
 
 ## Explicitly Deferred
 

@@ -311,6 +311,12 @@ export function valueRead(value, name) {
   switch (name) {
     case "nil?":
       return value == null;
+    case "zero?":
+      return typeof value === "number" && value === 0;
+    case "positive?":
+      return typeof value === "number" && value > 0;
+    case "negative?":
+      return typeof value === "number" && value < 0;
     case "blank?":
       return isBlank(value);
     case "present?":
@@ -386,6 +392,9 @@ export function encodeFragment(value) {
 export const NIL_READERS = ["nil?", "blank?", "present?", "to_s", "to_i", "to_f"];
 export const VALUE_READERS = [
   "nil?",
+  "zero?",
+  "positive?",
+  "negative?",
   "blank?",
   "present?",
   "empty?",

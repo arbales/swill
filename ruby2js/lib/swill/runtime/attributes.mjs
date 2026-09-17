@@ -23,14 +23,24 @@ export function outlets(object) {
     .filter(descriptor => descriptor.outlet);
 }
 
-export function collectAttributes(object) {
+// Attribute values keyed by wire key; with names, only those attributes.
+export function collectAttributes(object, only = null) {
   const result = {};
   for (const descriptor of declarations(object.constructor, "properties").values()) {
-    if (descriptor.attribute && !descriptor.computed) {
+    if (descriptor.attribute && !descriptor.computed && (only === null || only.includes(descriptor.name))) {
       result[descriptor.key] = object[descriptor.js];
     }
   }
   return result;
+}
+
+// The installed has_many/has_one descriptor for a name, or null.
+export function relationship(object, name) {
+  return declarations(object.constructor, "relationships").get(name) ?? null;
+}
+
+export function relationships(object) {
+  return [...declarations(object.constructor, "relationships").values()];
 }
 
 export function applyAttributes(object, source) {

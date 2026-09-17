@@ -7,6 +7,7 @@ const names = new Map();
 const mixinMetadata = new WeakMap();
 const mixinClassFactories = new WeakMap();
 const classConfiguration = new WeakMap();
+const identityStores = new WeakMap();
 
 function configuration(klass) {
   if (!classConfiguration.has(klass)) {
@@ -86,7 +87,9 @@ export function install(meta) {
         properties,
         methods(descriptor.methods),
         descriptor.registries,
-        descriptor.restorations ?? []
+        descriptor.restorations ?? [],
+        descriptor.settings ?? [],
+        descriptor.relationships ?? {}
       );
 
       pending.delete(klass);
@@ -161,6 +164,26 @@ export function classSetting(klass, name, values) {
   return typeof parent?.[name] === "function" ? parent[name]() : null;
 }
 
+// The installed class whose own setting (not an inherited one) has the
+// value, or null: how a JSON:API type finds its model class.
+export function classWithSetting(name, value) {
+  for (const klass of classes.values()) {
+    if (classConfiguration.get(klass)?.settings.get(name) === value) return klass;
+  }
+  return null;
+}
+
+// One identity store per class, created on first use from the installed
+// Store class, so a subclass never shares its parent's records.
+export function identityStore(klass) {
+  let store = identityStores.get(klass);
+  if (!store) {
+    store = new (resolve("Swill::Model::Store"))();
+    identityStores.set(klass, store);
+  }
+  return store;
+}
+
 // Reject declarations the runtime cannot honor.
 function rejectProtocolConflicts(klass, properties, restorations) {
   const parent = Object.getPrototypeOf(klass);
@@ -192,13 +215,23 @@ function rejectProtocolConflicts(klass, properties, restorations) {
   }
 }
 
-export function installClass(klass, name, properties, methods, registries = {}, restorations = []) {
+export function installClass(klass, name, properties, methods, registries = {}, restorations = [],
+  settings = [], relationships = {}) {
   if (classes.has(name)) {
     throw new Error(`Duplicate class: ${name}`);
   }
 
   rejectProtocolConflicts(klass, properties, restorations);
-  installMetadata(klass, properties, methods, restorations);
+  installMetadata(klass, properties, methods, restorations, relationships);
+
+  // Class body settings (endpoint "/api/menus") apply through the setting
+  // method the class's ClassMethods declare.
+  for (const setting of settings) {
+    if (typeof klass[setting.js] !== "function") {
+      throw new Error(`Missing setting declaration: ${setting.name}`);
+    }
+    klass[setting.js](setting.value);
+  }
 
   const propertyByName = new Map(properties.map(property => [property.name, property]));
   for (const [registryName, seeds] of Object.entries(registries)) {

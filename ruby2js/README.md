@@ -377,6 +377,54 @@ pushed into the object, and `discard_editing`, on Enter and Escape. The host
 holds the object already, so nothing is returned; an editor that answers
 false keeps the edit open.
 
+### Models
+
+`Swill::Model::Base` is the client model: declared attributes with validation
+and dirty tracking, one identity pool per class, persistence over the wire,
+and relationships. A class names its endpoint and JSON:API type in its body:
+
+```ruby
+class Menu < Swill::Model::Base
+  endpoint "/api/menus"
+  resource_type "menus"
+  attribute :name, type: String, default: ""
+  attribute :event_date, type: String, default: ""
+  has_many :menu_recipes, type: MenuRecipe, key: "menu_recipes", url: "/api/menus/:id/recipes"
+end
+
+menus = await Menu.find_all                 # GET /api/menus, pooled by id
+menu = await Menu.find(id)                  # the pooled instance, or a fetch
+menu.name = "Brunch"                        # dirty; observers of name run
+await menu.save                             # PATCH with the dirty attributes
+await menu.load_relationship("menu_recipes") # GET /api/menus/:id/recipes once
+await menu.delete
+```
+
+Class methods: `find`, `fetch` (always the server's), `find_all`,
+`where(params)`, `fetch_all(url, params)`, `dataset(url, params)` (an
+observable `records`/`loading`/`error` triple), `get`/`put`/`remove`/`clear`
+on the pool, `parse_one`/`parse_many`. Instance methods: `save`, `delete`,
+`reload`, `validate` (a message refuses the save), `serialize(dirty_only)`,
+`draft`/`apply_draft`, `load_relationship`/`reload_relationship`,
+`relationship_loaded?`, and a `<name>_loading` property per relationship.
+Persistence is `async`; awaiting it yields the record.
+
+JSON:API is the default codec: a document's `included` resources are pooled
+first and `relationships` linkage is resolved from the pool, so a book's
+`author` is the same instance as the authors list's. `codec
+Swill::Model::PlainJSON` reads `{id, ...attributes}` objects instead. Every
+request goes through `Swill::Wire.default` (`base_url`, JSON and form
+bodies, a 204 is `nil`, a failed status raises), which calls the page's
+`fetch`; tests replace that.
+
+Markup bindings format and parse through value transformers:
+`<input bind="servings" transform="number">` shows a number and writes a
+number or `nil` back, and `transform="amount"` names one an application
+registered with `Swill::ValueTransformer.register("amount", AmountTransformer.new)`.
+A `bind-*` path may end in a value reader, `bind-disabled="@query.blank?"`
+or `bind-data-need="live_delta.positive?"`; `positive?`, `negative?`, and
+`zero?` join `blank?`, `present?`, and `empty?`.
+
 ### Sorbet
 
 Declarations carry explicit types, and method signatures feed the compiler's
@@ -397,6 +445,38 @@ on a nilable property lowers to a direct call on the class, and `T.unsafe`
 makes the sends on its result dynamic. No other `T` construct is allowed in a
 body, and no browser `sorbet-runtime` is bundled. The build generates RBIs for
 declared accessors and type-check-only probes for declaration expressions.
+
+### Building an application
+
+The `swill` command compiles an application against the framework and
+bundles it into one script that reads the framework from the page:
+
+```sh
+exe/swill build frontend            # frontend/app.rb, output frontend/dist/app.js
+exe/swill build frontend/app.rb --out public/assets/app.js --with-framework
+exe/swill watch frontend            # rebuild as the sources change
+```
+
+The entry file's `require_relative` lines name the sources in order, as they
+would on MRI; the compiler treats those lines as inert. The page loads
+`swill.js` (from a CDN, or the copy `--with-framework` places beside the
+output) before `app.js`, and names its application with
+`<body application="...">`. `esbuild` must be on the path; a source map is
+written beside the output.
+
+### Application ports
+
+The "bar" application (`~/Workspace/bar`, a Roda API with a TypeScript
+Swill frontend) has a second frontend in Ruby under `frontend-ruby/`,
+compiled by `bin/drinks frontend:build --ruby` through the `swill` command
+and checked in headless Chrome against a fake JSON:API server
+(`node frontend-ruby/spec/browser_check.mjs`). Its `PORT.md` lists every
+markup change against the TypeScript markup and whether it is a naming
+difference, a framework difference, or a choice of the port. Two framework
+rules came out of it: a `false` value removes a `data-*` attribute (ARIA
+attributes keep `"false"`), and a first responder that new window content
+chooses while loading (a field focused in `controller_did_load`) stands.
+`Swill::Application#browser` is the window, for `prompt` and `print`.
 
 ### The static example
 

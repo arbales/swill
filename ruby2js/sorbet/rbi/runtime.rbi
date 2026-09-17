@@ -84,8 +84,20 @@ module Swill
     sig { params(value: T.untyped, type: String).returns(T::Boolean) }
     def self.conforms(value, type); end
 
-    sig { params(object: T.untyped).returns(T::Hash[T.untyped, T.untyped]) }
-    def self.collect_attributes(object); end
+    sig { params(object: T.untyped, only: T.nilable(T::Array[T.untyped])).returns(T::Hash[T.untyped, T.untyped]) }
+    def self.collect_attributes(object, only = nil); end
+
+    sig { params(klass: T.untyped).returns(T.untyped) }
+    def self.identity_store(klass); end
+
+    sig { params(name: String, value: T.untyped).returns(T.untyped) }
+    def self.class_with_setting(name, value); end
+
+    sig { params(object: T.untyped, name: String).returns(T.nilable(T::Hash[String, T.untyped])) }
+    def self.relationship(object, name); end
+
+    sig { params(object: T.untyped).returns(T::Array[T::Hash[String, T.untyped]]) }
+    def self.relationships(object); end
 
     sig { params(object: T.untyped, source: T.untyped).returns(T.untyped) }
     def self.apply_attributes(object, source); end
@@ -112,6 +124,42 @@ class Swill::Object
 
   sig { params(name: Symbol, type: T.untyped, default: T.untyped, key: T.any(Symbol, String)).void }
   def self.attribute(name, type:, default:, key: name); end
+
+  # async def name ... end: the method is asynchronous; await inside it
+  # yields the awaited value. Both compile to JavaScript's own keywords. An
+  # async method's signature names the value it yields, and await is the
+  # identity, as it is on MRI.
+  sig { params(definition: Symbol).returns(Symbol) }
+  def self.async(definition); end
+
+  sig { type_parameters(:T).params(value: T.type_parameter(:T)).returns(T.type_parameter(:T)) }
+  def await(value); end
+
+  sig { type_parameters(:T).params(value: T.type_parameter(:T)).returns(T.type_parameter(:T)) }
+  def self.await(value); end
+end
+
+class Swill::Model::Base
+  extend T::Sig
+
+  # has_many :name, type: Class, key: "wire_key", url: "/api/owners/:id/name"
+  sig { params(name: Symbol, type: T.untyped, key: T.nilable(T.any(Symbol, String)), url: T.nilable(String)).void }
+  def self.has_many(name, type:, key: nil, url: nil); end
+
+  sig { params(name: Symbol, type: T.untyped, key: T.nilable(T.any(Symbol, String)), url: T.nilable(String)).void }
+  def self.has_one(name, type:, key: nil, url: nil); end
+end
+
+module Swill::Model::Identity
+  extend T::Helpers
+  mixes_in_class_methods(ClassMethods)
+end
+
+module Swill::Model::Identity::ClassMethods
+  extend T::Helpers
+  extend T::Generic
+  has_attached_class!(:out) { {upper: Swill::Model::Base} }
+  requires_ancestor { T.class_of(Swill::Model::Base) }
 end
 
 class Swill::Controller

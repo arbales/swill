@@ -22,6 +22,12 @@ module Swill
         dirty_attributes.dup # Pragma: array
       end
 
+      # The dirty attributes' values by wire key: what a PATCH carries.
+      sig { returns(T::Hash[T.untyped, T.untyped]) }
+      def collect_dirty_attributes
+        Swill::Runtime.collect_attributes(self, dirty_attributes)
+      end
+
       sig { returns(T.untyped) }
       def mark_clean!
         @dirty_baseline = {}

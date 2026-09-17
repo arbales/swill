@@ -49,15 +49,28 @@ module Swill
         def on_def(node)
           name, args, body = node.children
           method = @entry["methods"].find { |candidate| candidate["name"] == name.to_s }
+          # A ClassMethods layer compiles its methods as instance methods of
+          # a placeholder; inside them self is the class.
+          static = false
+          unless method
+            method = @entry.fetch("class_method_entries", []).find { |candidate| candidate["name"] == name.to_s }
+            static = !method.nil?
+          end
           previous = @local_types
           previous_method = @current_method
+          previous_async = @in_async
+          previous_static = @in_class_method
           @current_method = method
+          @in_async = method ? method["async"] == true : false
+          @in_class_method = static
           local_types_for(method, body)
           # Ruby2JS's explicit method node preserves source locations for filters.
           super(node.updated(:defm, [Knowledge.member(name).to_sym, args, body]))
         ensure
           @local_types = previous
           @current_method = previous_method
+          @in_async = previous_async
+          @in_class_method = previous_static
         end
 
         def on_const(node)
@@ -100,14 +113,23 @@ module Swill
         # take no blocks, so only a collection can receive one, and its type
         # must be declared.
         def on_block(node)
+          previous_async = @in_async
+          # A block or lambda is its own function: no await inside it.
+          @in_async = false
+          lower_block(node)
+        ensure
+          @in_async = previous_async
+        end
+
+        def lower_block(node)
           call, args, body = node.children
-          return super unless call.type == :send
+          return super_block(node) unless call.type == :send
           receiver, method, *call_args = call.children
           # A block on a native receiver is a JavaScript callback, its
           # parameters typed as the DOM member declares them.
           if receiver && native_type?(static_type(receiver))
             types = native_callback_types(static_type(receiver), method, call_args.length) || []
-            return with_parameter_types(args, types, body) { super(node) }
+            return with_parameter_types(args, types, body) { super_block(node) }
           end
           if receiver && dynamic_receiver?(receiver)
             raise CompileError, "block call #{method} on an untyped receiver; give #{receiver.loc.expression.source} a static type"
@@ -118,7 +140,11 @@ module Swill
             lowered = lower_core_block(node, kind, type, receiver, method, call_args, args, body)
             return lowered if lowered
           end
-          super
+          super_block(node)
+        end
+
+        def super_block(node)
+          method(:on_block).super_method.call(node)
         end
 
         # T.let on an assignment is lowered here, before Pragma would erase it
@@ -141,12 +167,18 @@ module Swill
           method = @entry["static_methods"].find { |candidate| candidate["name"] == name.to_s }
           previous = @local_types
           previous_method = @current_method
+          previous_async = @in_async
+          previous_static = @in_class_method
           @current_method = method
+          @in_async = method ? method["async"] == true : false
+          @in_class_method = true
           local_types_for(method, body)
           lower_defs(node)
         ensure
           @local_types = previous
           @current_method = previous_method
+          @in_async = previous_async
+          @in_class_method = previous_static
         end
 
         # The converter's own defs handling, reached from lower_defs.
@@ -162,6 +194,8 @@ module Swill
           if node.type == :csend && !native_type?(static_type(receiver))
             raise CompileError, "safe navigation (&.) is not lowered on a Ruby receiver; guard #{receiver.loc.expression.source} with a local"
           end
+          return lower_async(node) if Knowledge.async_wrapper?(node)
+          return lower_await(args) if receiver.nil? && method == :await
           return lower_sorbet(node) if SorbetOperations.operation?(node)
           return lower_raise(args) if receiver.nil? && method == :raise
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
@@ -184,6 +218,12 @@ module Swill
           if receiver && receiver.type != :self
             return receiver_send(node, receiver, method, args) || super
           end
+          # In a class method self is the class: its static methods and the
+          # configuration its ClassMethods provide.
+          if @in_class_method && !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
+             (entry = @knowledge.class_member_entry(@entry["name"], method))
+            return s(:call, receiver ? process(receiver) : s(:self), entry["js"].to_sym, *typed_arguments(entry, args))
+          end
           if @properties.include?(method.to_s) && args.empty?
             return s(:attr, receiver ? process(receiver) : s(:self), Knowledge.member(method).to_sym)
           end
@@ -192,9 +232,13 @@ module Swill
           end
           # A collected method on self: its signature types the lambdas
           # passed to it.
-          if !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
+          if !@in_class_method && !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
              (entry = @knowledge.method_entry(@entry["name"], method))
             return s(:call, receiver ? process(receiver) : s(:self), entry["js"].to_sym, *typed_arguments(entry, args))
+          end
+          # A browser function called bare, as Kernel's are.
+          if receiver.nil? && DOM::GLOBALS.key?(method.to_s) && !NATIVE_SENDS.include?(method)
+            return s(:call, nil, method, *process_all(args))
           end
           super
         end
@@ -213,8 +257,32 @@ module Swill
           type = static_type(receiver)
           # nil? is defined for every value, including nil itself.
           return s(:send, process(receiver), :==, s(:nil)) if method == :nil? && args.empty?
+          # An Array from another realm (a page's JSON) is still an Array.
+          if %i[is_a? kind_of? instance_of?].include?(method) && args.length == 1 &&
+             args.first.type == :const && @knowledge.constant(args.first) == "Array"
+            return s(:call, s(:const, nil, :Array), :isArray, process(receiver))
+          end
           return lower_native(node, receiver, method, args, type) if native_type?(type)
+          # A JavaScript intrinsic or DOM class named as the receiver: its
+          # static members are native (JSON.generate is JSON.stringify).
+          if receiver.type == :const && method != :new
+            constant = @knowledge.constant(receiver)
+            if JS_INTRINSICS.include?(constant) || DOM.native?(constant)
+              return lower_native(node, receiver, method, args, constant)
+            end
+          end
+          # A class object: new constructs it (the converter's form), and
+          # its class members are called.
+          if (owner = class_of_type(type))
+            return nil if method == :new
+            if (entry = @knowledge.class_member_entry(owner, name))
+              return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
+            end
+            return nil
+          end
           if (klass = swill_class(type))
+            # An object's class is its constructor.
+            return s(:attr, process(receiver), :constructor) if method == :class && args.empty?
             # Ruby's dup of a framework object is the runtime's copy.
             if method == :dup && args.empty?
               return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, "dup"))
@@ -231,7 +299,7 @@ module Swill
             return nil
           end
           if receiver.type == :const && (constant_class = swill_class(@knowledge.constant(receiver))) &&
-             (entry = @knowledge.static_method_entry(constant_class, name))
+             (entry = @knowledge.class_member_entry(constant_class, name))
             return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
           end
           if receiver.type == :const && method == :new && DOM.native?(@knowledge.constant(receiver))
@@ -253,15 +321,17 @@ module Swill
         # it does not list follows them. Operators and indexing stay with the
         # converter. Safe navigation is JavaScript's own here.
         def lower_native(node, receiver, method, args, type)
-          name = method.to_s
           return nil if OPERATORS.include?(method) || NATIVE_SENDS.include?(method)
+          # Ruby's JSON.generate is JSON.stringify; parse is the same name.
+          method = :stringify if type == "JSON" && method == :generate
+          name = method.to_s
           target = process(receiver)
           args = native_arguments(type, method, args)
           if name.match?(/\A[A-Za-z_]\w*=\z/) && args.length == 1
             return s(:send, target, method, args.first)
           end
-          inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
-          member = inner == "JavaScript" ? nil : DOM.member(inner, name)
+          inner = DOM.base(type)
+          member = DOM.native?(inner) ? DOM.member(inner, name) : nil
           kind = member ? member[0] : nil
           return s(:attr, target, method) if %i[attr accessor].include?(kind)
           return s(:attr, target, method) if kind.nil? && args.empty? && !node.is_method?

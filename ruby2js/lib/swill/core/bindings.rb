@@ -5,8 +5,10 @@ module Swill
   # Wires markup bindings for one controller's owned region, or for a region
   # such as a list row that belongs to a plain object.
   #
-  #   bind="path"        two-way for form controls, one-way for text
-  #   bind-prop="path"   one-way DOM property
+  #   bind="path"                  two-way for form controls, one-way for text
+  #   bind="path" transform="name" through a registered ValueTransformer
+  #   bind-prop="path"             one-way DOM property; a path may end in a
+  #                                value reader (name.blank?, delta.positive?)
   #
   # Paths resolve under the controller's binding_root; a leading @ ignores it.
   # A bind on a child controller's root belongs to this controller and feeds
@@ -75,15 +77,33 @@ module Swill
       path.length == 0 ? "#{prefix}" : "#{prefix}.#{path}"
     end
 
+    # The element's transform="name", or nil; an unregistered name is an
+    # error at wiring, not a silent passthrough.
+    sig { params(element: Element).returns(T.nilable(ValueTransformer)) }
+    def transformer_for(element)
+      name = element.getAttribute("transform")
+      return nil unless name
+      transformer = ValueTransformer.named(name)
+      raise "unknown transform #{name}" unless transformer
+      transformer
+    end
+
+    sig { params(value: T.untyped, transformer: T.nilable(ValueTransformer)).returns(T.untyped) }
+    def display(value, transformer)
+      return transformer.format(value) if transformer
+      value == nil ? "" : value
+    end
+
     # A value binding. On a child controller's root the value becomes the
     # child's represented object; otherwise it renders into the element.
     sig { params(object: Swill::Object, element: Element, prefix: T.nilable(Symbol)).returns(T.proc.void) }
     def wire_element(object, element, prefix)
       path = resolve_path(prefix, T.must(element.getAttribute("bind")))
+      transformer = transformer_for(element)
       view = element.__swill_view__
       child = view ? view.controller_value : nil
       return wire_represented_object(object, child, path) if child
-      return wire_control(object, T.cast(view, Control), path) if view.is_a?(Control)
+      return wire_control(object, T.cast(view, Control), path, transformer) if view.is_a?(Control)
       form_control = element.matches("input, textarea, select")
       writable = form_control && !element.hasAttribute("readonly")
       checkbox = element.type == "checkbox"
@@ -94,9 +114,9 @@ module Swill
         if checkbox
           element.checked = Runtime.isTruthy(value)
         elsif form_control
-          element.value = value == nil ? "" : value
+          element.value = display(value, transformer)
         else
-          element.textContent = value == nil ? "" : value
+          element.textContent = display(value, transformer)
         end
       end
       render.(nil)
@@ -105,6 +125,7 @@ module Swill
       event_name = element.matches("select") || checkbox ? "change" : "input"
       handler = ->(event) do
         value = checkbox ? element.checked : element.value
+        value = transformer.parse(element.value) if transformer && !checkbox
         Runtime.writePath(object, path, value)
       end
       element.addEventListener(event_name, handler) if writable
@@ -117,16 +138,17 @@ module Swill
 
     # A control's own value property is kept equal to the path, both ways;
     # the control decides how that reaches its element.
-    sig { params(object: Swill::Object, control: Control, path: String).returns(T.proc.void) }
-    def wire_control(object, control, path)
+    sig { params(object: Swill::Object, control: Control, path: String, transformer: T.nilable(ValueTransformer)).returns(T.proc.void) }
+    def wire_control(object, control, path, transformer)
       Runtime.assertWritablePath(object, path)
       render = ->(_value) do
-        value = Runtime.readPath(object, path)
-        Runtime.write(control, "value", value == nil ? "" : value)
+        Runtime.write(control, "value", display(Runtime.readPath(object, path), transformer))
       end
       render.(nil)
       release_render = Runtime.observePath(object, path, render)
-      release_input = control.observe("value", ->(value) { Runtime.writePath(object, path, value) })
+      release_input = control.observe("value", ->(value) do
+        Runtime.writePath(object, path, transformer ? transformer.parse(value) : value)
+      end)
       ->() do
         release_render.()
         release_input.()
@@ -151,8 +173,10 @@ module Swill
 
     sig { params(element: Element, property: String, value: T.untyped).void }
     def write_property(element, property, value)
+      # A data attribute is a flag or a value: false, nil, and "" remove
+      # it. ARIA attributes keep "false", which is a state of its own.
       if property.start_with?("data-") || property.start_with?("aria-")
-        if value == nil || value == ""
+        if value == nil || value == "" || (value == false && property.start_with?("data-"))
           element.removeAttribute(property)
         else
           element.setAttribute(property, value)

@@ -64,10 +64,34 @@ module Swill
           @in_class_method = previous
         end
 
-        # Methods, and on a class its static methods; a mixin's def self.included
-        # is interpreted at collection, never compiled.
+        # Methods, and on a class its static methods, either possibly wrapped
+        # in async; a mixin's def self.included is interpreted at collection,
+        # never compiled.
         def class_body_statement?(statement)
+          statement = statement.children[2] if Knowledge.async_wrapper?(statement)
           statement.type == :def || (statement.type == :defs && @entry["kind"] == "class")
+        end
+
+        # async def compiles to an async method, whose body may await; the
+        # node is built without a location so the converter sees a method,
+        # not a getter.
+        def lower_async(node)
+          inner = node.children[2]
+          if inner.type == :def
+            lowered = on_def(inner)
+            s(:async, *lowered.children)
+          else
+            lowered = on_defs(inner)
+            s(:asyncs, *lowered.children)
+          end
+        end
+
+        # await is JavaScript's; it belongs inside an async method, and not
+        # inside a block or lambda there, whose function is not the method.
+        def lower_await(args)
+          raise CompileError, "await takes one expression" unless args.length == 1
+          raise CompileError, "await outside an async method; declare the method with async def" unless @in_async
+          s(:send, nil, :await, process(args.first))
         end
 
         def bare_new?(receiver, method)

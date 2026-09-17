@@ -5,6 +5,8 @@ import {
   installClass,
   inheritableRegistry,
   classSetting,
+  classWithSetting,
+  identityStore,
   resolve,
   nameOf
 } from "./runtime/install.mjs";
@@ -30,13 +32,14 @@ import {must, cast, absurd, conforms} from "./runtime/types.mjs";
 import {
   isAttribute, validateAttribute,
   restorations, outlets,
-  collectAttributes, applyAttributes
+  collectAttributes, applyAttributes,
+  relationship, relationships
 } from "./runtime/attributes.mjs";
 
 export const Runtime = {
   // Classes
   install, include, installClass,
-  inheritableRegistry, classSetting, resolve, nameOf,
+  inheritableRegistry, classSetting, classWithSetting, identityStore, resolve, nameOf,
 
   // Values
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate,
@@ -64,6 +67,7 @@ export const Runtime = {
 
   // Declarations
   isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
+  relationship, relationships,
 
   // Invalid URL input is reported, not raised.
   warn(message) {

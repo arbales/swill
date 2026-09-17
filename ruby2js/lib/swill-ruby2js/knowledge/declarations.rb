@@ -8,6 +8,8 @@ module Swill
       
         DECLARATION_TYPE = /\A(?:String|Integer|T::Boolean|T\.nilable\((?:String|[A-Z]\w*(?:::\w+)*)\)|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)\z/
         DECLARATION_MACROS = %i[property attribute outlet].freeze
+        RELATIONSHIP_MACROS = %i[has_many has_one].freeze
+        SETTING_LITERALS = %i[str sym int float true false nil].freeze
 
         def declaration?(node)
           call = node.type == :block ? node.children.first : node
@@ -59,6 +61,65 @@ module Swill
           entry["restorations"] << {"path" => text, "key" => key || text}
         end
 
+
+        # has_many :name, type: Class, key: "wire_key", url: "/api/owners/:id/name"
+        # declares the observable relationship property, its _loading flag,
+        # and the descriptor the runtime installs. The class is resolved
+        # after every entry is collected, so it may be declared later.
+        def collect_relationship(entry, node)
+          _, macro, name, options = node.children
+          raise CompileError, "relationship names must be literal symbols" unless name&.type == :sym
+          raise CompileError, "#{macro} requires type: and accepts key: and url:" unless options&.type == :hash
+          pairs = options.children.to_h do |pair|
+            key, value = pair.children
+            raise CompileError, "expected literal keyword" unless key.type == :sym
+            [key.children.first, value]
+          end
+          raise CompileError, "unknown #{macro} keyword" unless (pairs.keys - %i[type key url]).empty?
+          type = pairs.fetch(:type) { raise CompileError, "#{macro} requires type:" }
+          # A class declared later is named by a string, as Ruby needs.
+          unless type.type == :const || (type.type == :str && type.children.first.match?(/\A[A-Z]\w*(?:::\w+)*\z/))
+            raise CompileError, "#{macro} type: must be a class constant or its name"
+          end
+          key = pairs[:key]
+          raise CompileError, "#{macro} key: must be a literal symbol or string" if key && !%i[sym str].include?(key.type)
+          url = pairs[:url]
+          raise CompileError, "#{macro} url: must be a literal string" if url && url.type != :str
+          property_name = name.children.first.to_s
+          raise CompileError, "unsupported property name #{property_name}" unless property_name.match?(/\A[a-z_]\w*\z/)
+          kind = macro == :has_many ? "many" : "one"
+          constant = type.type == :const ? constant(type) : type.children.first
+          entry["properties"] << {
+            "name" => property_name, "js" => self.class.member(property_name),
+            "type" => kind == "many" ? "T::Array[#{constant}]" : "T.nilable(#{constant})",
+            "attribute" => false, "computed" => false, "expression" => kind == "many" ? "[]" : "nil"
+          }
+          loading = "#{property_name}_loading"
+          entry["properties"] << {
+            "name" => loading, "js" => self.class.member(loading), "type" => "T::Boolean",
+            "attribute" => false, "computed" => false, "expression" => "false"
+          }
+          entry["relationships"] << {
+            "name" => property_name, "key" => key ? key.children.first.to_s : property_name,
+            "kind" => kind, "type" => constant, "url" => url&.children&.first
+          }
+        end
+
+        # endpoint "/api/menus" in a class body: a value for a class_setting
+        # an included ClassMethods declares, applied at installation. A
+        # literal or a class constant; nothing is evaluated.
+        def collect_setting_value(entry, node)
+          _, name, *values = node.children
+          raise CompileError, "#{name} takes one value" unless values.length == 1
+          value = values.first
+          if SETTING_LITERALS.include?(value.type)
+            entry["setting_values"][name.to_s] = {"literal" => value.type == :nil ? nil : value.children.first}
+          elsif value.type == :const
+            entry["setting_values"][name.to_s] = {"constant" => constant(value)}
+          else
+            raise CompileError, "#{name} accepts a literal or a class constant, not #{value.loc.expression.source}"
+          end
+        end
 
         def collect_property(entry, node)
           call = node.type == :block ? node.children.first : node

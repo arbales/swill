@@ -21,9 +21,13 @@ export function hasInstalledMetadata(klass) {
   return false;
 }
 
-export function installMetadata(klass, properties, methods, restorations = []) {
+export function installMetadata(klass, properties, methods, restorations = [], relationships = {}) {
   const parent = Object.getPrototypeOf(klass);
   metadata.set(klass, {
+    relationships: new Map([
+      ...declarations(parent, "relationships"),
+      ...Object.entries(relationships)
+    ]),
     properties: new Map([
       ...declarations(parent, "properties"),
       ...properties.map(item => [item.name, item])

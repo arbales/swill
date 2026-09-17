@@ -1,6 +1,6 @@
 require "rake"
 require "fileutils"
-require_relative "lib/swill-ruby2js/compiler"
+require_relative "lib/swill-ruby2js/build"
 
 ROOT = __dir__
 DIST = File.join(ROOT, "dist")
@@ -39,7 +39,7 @@ def compile_spike
   File.write("build/framework.external.mjs", Swill::Ruby2JS::Compiler.format_javascript(shim))
 
   application = Swill::Ruby2JS::Compiler.new(imports: interface)
-  %w[examples/models.rb examples/concerns.rb examples/application.rb examples/static.rb].each do |path|
+  Swill::Ruby2JS::Build.new("examples").sources.each do |path|
     application.add(File.read(path), file: path)
   end
   application.modules(name: "application", runtime: "./framework.external.mjs",
@@ -79,6 +79,7 @@ task test: :typecheck do
   Dir.chdir(ROOT) do
     sh "bundle exec ruby spec/compiler_test.rb"
     sh "bundle exec ruby spec/shared_test.rb"
+    sh "bundle exec ruby spec/cli_test.rb"
     sh "node --test spec/runtime_test.mjs"
     sh "node --test spec/bundle_test.mjs"
   end

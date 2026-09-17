@@ -1,11 +1,18 @@
 require "minitest/autorun"
 require "json"
 require_relative "mri_adapter"
+require_relative "../lib/swill/core/wire"
 require_relative "../lib/swill/model/attributes"
 require_relative "../lib/swill/model/dirty_tracking"
 require_relative "../lib/swill/model/drafts"
+require_relative "../lib/swill/model/store"
+require_relative "../lib/swill/model/identity"
+require_relative "../lib/swill/model/relationship"
+require_relative "../lib/swill/model/codec"
+require_relative "../lib/swill/model/dataset"
 require_relative "../lib/swill/model/base"
 require_relative "../examples/models"
+require_relative "../examples/records"
 require_relative "../examples/concerns"
 
 class SharedTest < Minitest::Test
@@ -118,5 +125,45 @@ class SharedTest < Minitest::Test
     assert_equal "[<Ada>]", renamed
     assert_equal ["[<Ada>]", "[<ADA>]"], changes
     File.write("build/mri-result.json", JSON.pretty_generate(result) + "\n")
+  end
+end
+
+class SharedModelTest < Minitest::Test
+  DOCUMENT = {
+    "data" => [
+      {"id" => "1", "type" => "authors", "attributes" => {"name" => "Ada", "born" => 1815},
+       "relationships" => {"books" => {"data" => [{"id" => "10", "type" => "books"}, {"id" => "11", "type" => "books"}]}}},
+      {"id" => "2", "type" => "authors", "attributes" => {"name" => "Grace"}, "relationships" => {"books" => {"data" => []}}}
+    ],
+    "included" => [
+      {"id" => "10", "type" => "books", "attributes" => {"title" => "Notes"},
+       "relationships" => {"author" => {"data" => {"id" => "1", "type" => "authors"}}}},
+      {"id" => "11", "type" => "books", "attributes" => {"title" => "Engines"},
+       "relationships" => {"author" => {"data" => {"id" => "1", "type" => "authors"}}}}
+    ]
+  }.freeze
+
+  def test_json_api_and_plain_json_codecs_on_mri
+    authors = Demo::Author.parse_many(DOCUMENT)
+    ada = T.must(authors.first)
+    result = {}
+    result["authors"] = authors.map { |author| [author.id, author.name, author.born] }
+    result["books"] = ada.books.map(&:title)
+    result["linked"] = ada.books.first.author.equal?(ada)
+    result["loaded"] = [ada.relationship_loaded?("books"), ada.books.first.relationship_loaded?("author")]
+    result["pooled"] = Demo::Author.get("1").equal?(ada) && Demo::Book.get("10").equal?(ada.books.first)
+    result["clean"] = ada.dirty?
+    ada.name = "Ada Lovelace"
+    result["patch"] = ada.serialize(true)
+    draft = Demo::Note.new
+    draft.body = "Bread"
+    result["post"] = draft.serialize(false)
+    note = T.must(Demo::Note.parse_one({"id" => 3, "body" => "Milk"}))
+    result["note"] = [note.id, note.body, Demo::Note.get("3").equal?(note)]
+    assert_equal [["1", "Ada", 1815], ["2", "Grace", nil]], result["authors"]
+    assert_equal %w[Notes Engines], result["books"]
+    assert_equal({"data" => {"type" => "authors", "attributes" => {"name" => "Ada Lovelace"}, "id" => "1"}}, result["patch"])
+    assert_equal({"body" => "Bread"}, result["post"])
+    File.write("build/mri-models.json", JSON.pretty_generate(result) + "\n")
   end
 end

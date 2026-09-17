@@ -10,6 +10,10 @@
   var Swill__ObjectBindings = framework.Swill__ObjectBindings;
   var Swill__Notification = framework.Swill__Notification;
   var Swill__NotificationCenter = framework.Swill__NotificationCenter;
+  var Swill__Wire = framework.Swill__Wire;
+  var Swill__ValueTransformer = framework.Swill__ValueTransformer;
+  var Swill__NumberTransformer = framework.Swill__NumberTransformer;
+  var Swill__BooleanTransformer = framework.Swill__BooleanTransformer;
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
   var Swill__Control = framework.Swill__Control;
@@ -35,6 +39,14 @@
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
   var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;
   var Swill__Model__Drafts = framework.Swill__Model__Drafts;
+  var Swill__Model__Store = framework.Swill__Model__Store;
+  var Swill__Model__Identity = framework.Swill__Model__Identity;
+  var Swill__Model__Identity_ClassMethods = framework.Swill__Model__Identity_ClassMethods;
+  var Swill__Model__Relationship = framework.Swill__Model__Relationship;
+  var Swill__Model__Codec = framework.Swill__Model__Codec;
+  var Swill__Model__PlainJSON = framework.Swill__Model__PlainJSON;
+  var Swill__Model__JSONAPI = framework.Swill__Model__JSONAPI;
+  var Swill__Model__Dataset = framework.Swill__Model__Dataset;
   var Swill__Model__Base = framework.Swill__Model__Base;
 
   // build/application.classes.mjs
@@ -87,6 +99,15 @@
       if (Runtime.isEmpty(cleaned)) throw new Error("role must not be blank");
       return cleaned;
     }
+  };
+  var Demo__Book = class extends Swill__Model__Base {
+  };
+  var Demo__Author = class extends Swill__Model__Base {
+    validate() {
+      return Runtime.isEmpty(Runtime.strip(this.name)) ? "name must not be blank" : null;
+    }
+  };
+  var Demo__Note = class extends Swill__Model__Base {
   };
   function NameTracking(Superclass) {
     class NameTracking_Layer extends Superclass {
@@ -585,6 +606,109 @@
           }
         }
       },
+      "Demo::Book": {
+        constructor: Demo__Book,
+        properties: {
+          "title": {
+            type: "String",
+            attribute: true,
+            key: "title",
+            defaultValue: function defaultTitle() {
+              return "";
+            }
+          },
+          "author": {
+            type: "T.nilable(Demo::Author)",
+            attribute: false,
+            defaultValue: function defaultAuthor() {
+              return null;
+            }
+          },
+          "author_loading": {
+            js: "authorLoading",
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function default_authorLoading() {
+              return false;
+            }
+          }
+        },
+        registries: { modelAttributes: {
+          "title": { property: "title", key: "title" }
+        } },
+        settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "resource_type", js: "resourceType", value: "books" }],
+        relationships: {
+          "author": { name: "author", key: "author", kind: "one", type: Demo__Author, url: null }
+        },
+        methods: {}
+      },
+      "Demo::Author": {
+        constructor: Demo__Author,
+        properties: {
+          "name": {
+            type: "String",
+            attribute: true,
+            key: "name",
+            defaultValue: function defaultName2() {
+              return "";
+            }
+          },
+          "born": {
+            type: "T.nilable(Integer)",
+            attribute: true,
+            key: "born",
+            defaultValue: function defaultBorn() {
+              return null;
+            }
+          },
+          "books": {
+            type: "T::Array[Demo::Book]",
+            attribute: false,
+            defaultValue: function defaultBooks() {
+              return [];
+            }
+          },
+          "books_loading": {
+            js: "booksLoading",
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function default_booksLoading() {
+              return false;
+            }
+          }
+        },
+        registries: { modelAttributes: {
+          "name": { property: "name", key: "name" },
+          "born": { property: "born", key: "born" }
+        } },
+        settings: [{ name: "endpoint", js: "endpoint", value: "/api/authors" }, { name: "resource_type", js: "resourceType", value: "authors" }],
+        relationships: {
+          "books": { name: "books", key: "books", kind: "many", type: Demo__Book, url: "/api/authors/:id/books" }
+        },
+        methods: {
+          "validate": {
+            "arity": 0
+          }
+        }
+      },
+      "Demo::Note": {
+        constructor: Demo__Note,
+        properties: {
+          "body": {
+            type: "String",
+            attribute: true,
+            key: "body",
+            defaultValue: function defaultBody() {
+              return "";
+            }
+          }
+        },
+        registries: { modelAttributes: {
+          "body": { property: "body", key: "body" }
+        } },
+        settings: [{ name: "endpoint", js: "endpoint", value: "/api/notes" }, { name: "codec", js: "codec", value: Swill__Model__PlainJSON }],
+        methods: {}
+      },
       "ConcernRecord": {
         constructor: ConcernRecord,
         mixins: [NameTracking, NameValidation],
@@ -593,7 +717,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName2() {
+            defaultValue: function defaultName3() {
               return "Ada";
             }
           },
@@ -621,7 +745,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName3() {
+            defaultValue: function defaultName4() {
               return "Grace";
             }
           }
@@ -636,7 +760,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName4() {
+            defaultValue: function defaultName5() {
               return "Ada";
             }
           },
@@ -907,7 +1031,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName5() {
+            defaultValue: function defaultName6() {
               return "world";
             }
           },
@@ -961,7 +1085,7 @@
           "name": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultName6() {
+            defaultValue: function defaultName7() {
               return "";
             }
           },

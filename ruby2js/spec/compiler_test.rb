@@ -319,6 +319,238 @@ class CompilerTest < Minitest::Test
     assert_includes js, "other.nextWidget()", "a member the class does not declare falls back to an explicit call"
   end
 
+  # async and await are reserved forms: async def marks a method
+  # asynchronous, await yields inside it, and both compile to JavaScript's
+  # keywords. await elsewhere is rejected.
+  def test_async_methods_and_await_compile_to_javascript_keywords
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Loader < TestObject
+        extend T::Sig
+        property :total, type: Integer, default: 0
+
+        sig { params(value: Integer).returns(T.untyped) }
+        def later(value)
+          Promise.resolve(value)
+        end
+
+        sig { void }
+        async def load
+          first = await later(2)
+          second = await later(3)
+          self.total = first + second
+        end
+
+        sig { params(values: T::Array[Integer]).returns(T.untyped) }
+        async def self.sum(values)
+          results = await Promise.all(values.map { |value| Promise.resolve(value) })
+          results.sum
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "async load() {"
+    assert_includes js, "let first = await this.later(2);"
+    assert_includes js, "static async sum(values) {"
+    assert_includes js, "let results = await Promise.all("
+    assert_equal [5, 6], execute(js + <<~JS)
+      const loader = new (Runtime.resolve("Loader"))();
+      loader.load().then(() => Runtime.resolve("Loader").sum([1, 2, 3])).then(sum => console.log(JSON.stringify([loader.total, sum])));
+    JS
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def go; await later; end") }
+    assert_includes error.message, "await outside an async method"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript("async def go; [1].each { |x| await x }; end")
+    end
+    assert_includes error.message, "await outside an async method"
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
+      class TestObject < Swill::Object; end
+      class Loader < TestObject
+        async def load; self.total = (await 2) + (await 3); end
+        property :total, type: Integer, default: 0
+      end
+      loader = Loader.new
+      loader.load
+      puts JSON.generate(loader.total)
+    RUBY
+    assert status.success?, ruby
+    assert_equal 5, JSON.parse(ruby), "on MRI async is a plain method and await yields its argument"
+  end
+
+  # A class body sets what an included ClassMethods declares as a
+  # class_setting, and declares has_many/has_one relationships; both are
+  # metadata the runtime installs, never evaluated Ruby.
+  def test_class_bodies_configure_settings_and_declare_relationships
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Feature
+        def self.included(base); base.extend(ClassMethods); end
+        module ClassMethods
+          extend Swill::Declarations
+          class_setting :endpoint
+          class_setting :codec
+        end
+      end
+      class Codec < TestObject; end
+      class Chapter < TestObject
+        include Feature
+        endpoint "/api/chapters"
+        has_one :book, type: "Book", key: "book"
+      end
+      class Book < TestObject
+        include Feature
+        endpoint "/api/books"
+        codec Codec
+        has_many :chapters, type: Chapter, url: "/api/books/:id/chapters"
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, 'settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "codec", js: "codec", value: Codec }]'
+    assert_includes js, '"chapters": { name: "chapters", key: "chapters", kind: "many", type: Chapter, url: "/api/books/:id/chapters" }'
+    assert_includes js, '"book": { name: "book", key: "book", kind: "one", type: Book, url: null }'
+    rbi = compiler.rbi
+    assert_includes rbi, "sig { returns(T::Array[Chapter]) }\n  def chapters; end"
+    assert_includes rbi, "sig { returns(T.nilable(Book)) }\n  def book; end"
+    assert_includes rbi, "def chapters_loading; end"
+    assert_equal ["/api/books", "Codec", ["chapters"], "many", true, [], false, "/api/chapters", "Book"], execute(js + <<~JS)
+      const book = new Book();
+      console.log(JSON.stringify([Book.endpoint(), Book.codec().name, Runtime.relationships(book).map(r => r.name),
+        Runtime.relationship(book, "chapters").kind, Runtime.relationship(book, "chapters").type === Chapter,
+        book.chapters, book.chaptersLoading, Chapter.endpoint(), Runtime.classWithSetting("endpoint", "/api/books").name]));
+    JS
+    [
+      ["endpoint compute_url", "endpoint accepts a literal or a class constant"],
+      ["endpoint", "endpoint takes one value"],
+      ["has_many :chapters", "has_many requires type:"],
+      ["has_many :chapters, type: \"chapter\"", "type: must be a class constant or its name"],
+      ["has_one :cover, type: Book, extra: 1", "unknown has_one keyword"],
+      ["has_one :cover, type: Missing", "unknown constant Missing"]
+    ].each do |declaration, message|
+      error = assert_raises(Swill::Ruby2JS::CompileError, declaration) do
+        compiler_with_test_object.add(<<~RUBY).javascript(runtime: "../lib/swill/runtime.mjs")
+          module Feature
+            def self.included(base); base.extend(ClassMethods); end
+            module ClassMethods
+              extend Swill::Declarations
+              class_setting :endpoint
+            end
+          end
+          class Book < TestObject
+            include Feature
+            #{declaration}
+          end
+        RUBY
+      end
+      assert_includes error.message, message
+    end
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript('endpoint "/api/x"') }
+    assert_includes error.message, "unsupported class body", "a setting nothing declares is not a macro"
+    error = assert_raises(Swill::Ruby2JS::CompileError) { compiler_with_test_object.add("module M\nhas_many :x, type: TestObject\nend").javascript(runtime: "../lib/swill/runtime.mjs") }
+    assert_includes error.message, "relationships are declared on classes"
+  end
+
+  # A class object is a typed receiver: self.class, x.class, a T.class_of
+  # parameter, and self in a class method all reach the class's static
+  # methods and configuration. An awaited async member yields its declared
+  # type, a bare browser function is JavaScript's, and a rescued error is
+  # an Error.
+  def test_class_objects_awaits_and_browser_globals_are_typed
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Record < TestObject
+        extend T::Sig
+        property :name, type: String, default: ""
+        sig { params(value: String).returns(T.attached_class) }
+        def self.named(value)
+          record = new
+          record.name = value
+          record
+        end
+        sig { returns(T.attached_class) }
+        async def self.later
+          await Promise.resolve(named("later"))
+        end
+        sig { params(klass: T.class_of(Record)).returns(String) }
+        def sibling_name(klass)
+          klass.named("sibling").name
+        end
+        sig { returns(String) }
+        async def own_name
+          fresh = await self.class.later
+          fresh.name.upcase
+        end
+        sig { params(url: String).returns(T::Boolean) }
+        async def probe(url)
+          response = await fetch(url, {"method" => "HEAD"})
+          response.ok
+        end
+        sig { params(other: Record).returns(String) }
+        def describe(other)
+          JSON.generate(other.class.named("x").name)
+        end
+        sig { returns(String) }
+        def guarded
+          begin
+            raise "boom"
+          rescue => failure
+            failure.message
+          end
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, 'return klass.named("sibling").name;', "a T.class_of receiver calls the static method; the result reads its property"
+    assert_includes js, "let fresh = await this.constructor.later();"
+    assert_includes js, "return Runtime.upcase(fresh.name);", "an awaited async method yields its declared type"
+    assert_includes js, "let response = await fetch(url, {"
+    assert_includes js, "return response.ok;", "a bare fetch yields a Response"
+    assert_includes js, 'JSON.stringify(other.constructor.named("x").name)'
+    assert_includes js, "return failure.message;"
+    stub = "globalThis.fetch = async (url, init) => ({ok: init.method === \"HEAD\"});\n"
+    assert_equal ["LATER", true, "sibling", "\"x\"", "boom"], execute(stub + js + <<~JS)
+      const record = new Record();
+      Promise.all([record.ownName(), record.probe("/x")]).then(([own, ok]) =>
+        console.log(JSON.stringify([own, ok, record.siblingName(Record), record.describe(record), record.guarded()])));
+    JS
+    rbi = Swill::Ruby2JS::DOM.rbi
+    assert_includes rbi, "module Kernel"
+    assert_includes rbi, "sig { params(url: String, init: T.untyped).returns(Response) }\n  def fetch(url, init = nil); end", "the RBI names the awaited value"
+  end
+
+  # A block of several statements yields its last expression, a hash
+  # included, whatever the method it is passed to.
+  def test_multi_statement_blocks_yield_their_last_expression
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Grouper < TestObject
+        extend T::Sig
+        sig { params(items: T::Array[Integer]).returns(T::Array[T.untyped]) }
+        def pairs(items)
+          items.map do |item|
+            doubled = item * 2
+            {"item" => item, "doubled" => doubled}
+          end
+        end
+        sig { params(items: T::Array[Integer]).returns(T::Array[Integer]) }
+        def descending(items)
+          items.sort do |left, right|
+            difference = right - left
+            difference
+          end
+        end
+        sig { params(items: T::Array[Integer]).returns(T::Array[Integer]) }
+        def big(items)
+          items.select do |item|
+            limit = 2
+            item > limit
+          end
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "return { item, doubled };"
+    assert_equal [[{"item" => 1, "doubled" => 2}], [3, 2, 1], [3]], execute(js + <<~JS)
+      const grouper = new (Runtime.resolve("Grouper"))();
+      console.log(JSON.stringify([grouper.pairs([1]), grouper.descending([1, 3, 2]), grouper.big([1, 2, 3])]));
+    JS
+  end
+
   def test_sorbet_runtime_operations_type_their_results
     compiler = Swill::Ruby2JS::Compiler.new
     compiler.add("class Leaf\nextend T::Sig\nsig { returns(Integer) }\ndef size; 1; end\nend\nclass Holder\ndef pick(value, node); T.cast(value, Leaf).size; T.must(node).size; end\nend")
@@ -1306,9 +1538,15 @@ class CompilerTest < Minitest::Test
     framework = Swill::Ruby2JS::Compiler.new
       .add(File.read("lib/swill/core/observable.rb"))
       .add(File.read("lib/swill/core/object.rb"))
+      .add(File.read("lib/swill/core/wire.rb"))
       .add(File.read("lib/swill/model/attributes.rb"))
       .add(File.read("lib/swill/model/dirty_tracking.rb"))
       .add(File.read("lib/swill/model/drafts.rb"))
+      .add(File.read("lib/swill/model/store.rb"))
+      .add(File.read("lib/swill/model/identity.rb"))
+      .add(File.read("lib/swill/model/relationship.rb"))
+      .add(File.read("lib/swill/model/codec.rb"))
+      .add(File.read("lib/swill/model/dataset.rb"))
       .add(File.read("lib/swill/model/base.rb"))
     compiler = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface)
     compiler.add(File.read("examples/models.rb"))

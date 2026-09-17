@@ -18,15 +18,15 @@ module Swill
         def native_type?(type)
           return false unless type
           return true if type == "JavaScript"
-          DOM.native?(type[/\AT\.nilable\((.+)\)\z/, 1] || type)
+          DOM.native?(DOM.base(type))
         end
 
         # What a native receiver's member yields: the DOM table's type, the
         # indexed element type, or an untyped JavaScript value.
         def native_member_type(type, method)
-          inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
+          inner = DOM.base(type)
           return DOM::INDEXED.fetch(inner, "JavaScript") if method == :[]
-          member = inner == "JavaScript" ? nil : DOM.member(inner, method)
+          member = DOM.native?(inner) ? DOM.member(inner, method) : nil
           return "JavaScript" unless member
           member[1] == "T.self_type" ? inner : member[1]
         end
@@ -51,6 +51,65 @@ module Swill
           type == "void" ? nil : type
         end
 
+        # What a call to a collected member yields: its signature's return
+        # type with T.attached_class and T.self_type standing for the
+        # receiver's class, or a Promise when the member is async.
+        def member_result(entry, owner)
+          return nil unless entry
+          return "Promise" if entry["async"]
+          type = return_type(entry)
+          type && attached(type, owner)
+        end
+
+        def attached(type, owner)
+          type.gsub("T.attached_class", owner).gsub("T.self_type", owner)
+        end
+
+        # The class a T.class_of(X) type names, resolved, or nil.
+        def class_of_type(type)
+          bare = type.to_s[/\AT\.nilable\((.+)\)\z/, 1] || type.to_s
+          inner = bare[/\AT\.class_of\((.+)\)\z/, 1]
+          inner && swill_class(inner)
+        end
+
+        # What await yields: an async member's declared type (the value, as
+        # the method's signature describes it), a Promise's element, or the
+        # expression's own type.
+        def await_type(node)
+          entry, owner = send_entry(node)
+          return entry["returns"] && attached(return_type(entry).to_s, owner) if entry && entry["async"]
+          type = static_type(node)
+          # An untyped JavaScript value stays untyped once awaited: Ruby's
+          # dynamic readers apply to whatever it turns out to be.
+          return nil if type.nil? || type == "JavaScript"
+          return DOM.awaited(type) if DOM.base(type) == "Promise"
+          type
+        end
+
+        # The collected member a send names and the class it belongs to.
+        def send_entry(node)
+          return nil unless node.respond_to?(:type) && node.type == :send
+          receiver, method, = node.children
+          if receiver.nil? || receiver.type == :self
+            owner = @entry["name"]
+            entry = @in_class_method ? @knowledge.class_member_entry(owner, method) : @knowledge.method_entry(owner, method)
+            return entry && [entry, owner]
+          end
+          if receiver.type == :const
+            klass = swill_class(@knowledge.constant(receiver))
+            entry = klass && @knowledge.class_member_entry(klass, method)
+            return entry && [entry, klass]
+          end
+          type = static_type(receiver)
+          if (owner = class_of_type(type))
+            entry = @knowledge.class_member_entry(owner, method)
+            return entry && [entry, owner]
+          end
+          klass = swill_class(type)
+          entry = klass && @knowledge.method_entry(klass, method)
+          entry && [entry, klass]
+        end
+
         def infer_local_types(node)
           all_assignments = Hash.new { |hash, name| hash[name] = [] }
           collect_local_assignments(node, all_assignments)
@@ -59,6 +118,8 @@ module Swill
           # Parameter signatures describe entry values, not later assignments.
           # Without full flow analysis, an assigned parameter is no longer static.
           all_assignments.each_key { |name| @local_types.delete(name) }
+          # A raised Ruby error is a JavaScript Error, so a rescued one is.
+          collect_rescue_variables(node).each { |name| @local_types[name] = "Error" }
           # A local is typed when its first assignment is a statement (in the
           # body, a branch, a loop, or a block, never a subexpression) that
           # precedes every read; later assignments may sit anywhere as long
@@ -127,11 +188,14 @@ module Swill
             sites.each do |entry, entry_method, body, ivar, value|
               previous_entry = @entry
               previous = @local_types
+              previous_static = @in_class_method
               @entry = entry
+              @in_class_method = entry.fetch("static_methods", []).include?(entry_method)
               local_types_for(entry_method, body)
               found[ivar] << static_type(value)
               @local_types = previous
               @entry = previous_entry
+              @in_class_method = previous_static
             end
             types = found.each_with_object({}) do |(name, kinds), result|
               kinds = kinds.compact unless strict
@@ -216,6 +280,16 @@ module Swill
           end
         end
 
+        def collect_rescue_variables(node, names = [])
+          return names unless node.respond_to?(:type)
+          if node.type == :resbody
+            variable = node.children[1]
+            names << variable.children.first.to_s if variable&.type == :lvasgn
+          end
+          node.children.each { |child| collect_rescue_variables(child, names) }
+          names
+        end
+
         def collect_local_assignments(node, assignments)
           return unless node.respond_to?(:type)
           if node.type == :lvasgn
@@ -253,8 +327,12 @@ module Swill
           when :send
             return sorbet_operation_type(node) if SorbetOperations.operation?(node)
             receiver, method, *args = node.children
-            # Constructing a collected class yields that class; its static
-            # methods yield their signature's return type.
+            return await_type(args.first) if receiver.nil? && method == :await && args.length == 1
+            # self.class is the class object; in a class method so is self.
+            return "T.class_of(#{@entry['name']})" if receiver&.type == :self && method == :class && args.empty?
+            return @entry["name"] if receiver.nil? && method == :new && @in_class_method
+            # Constructing a collected class yields that class; its class
+            # members yield their signature's return type.
             if receiver&.type == :const
               constant = @knowledge.constant(receiver)
               if DOM.native?(constant) || JS_INTRINSICS.include?(constant)
@@ -262,24 +340,52 @@ module Swill
               end
               klass = swill_class(constant)
               return klass if klass && method == :new
-              return klass ? return_type(@knowledge.static_method_entry(klass, method)) : nil
+              return klass ? member_result(@knowledge.class_member_entry(klass, method), klass) : nil
             end
             return "T::Boolean" if %i[== != ! < > <= >= is_a? kind_of? instance_of?].include?(method)
+            if %i[+ - * / %].include?(method) && args.length == 1 && receiver
+              arithmetic = arithmetic_type(static_type(receiver), static_type(args.first), method)
+              return arithmetic if arithmetic
+            end
             return "T::Boolean" if BOOLEAN_READERS.include?(method) && args.empty? && receiver
             if receiver.nil? || receiver.type == :self
-              return @property_types[method.to_s] if args.empty? && @property_types.key?(method.to_s)
-              return return_type(@knowledge.method_entry(@entry["name"], method))
+              owner = @entry["name"]
+              if @in_class_method
+                entry = @knowledge.class_member_entry(owner, method)
+                return member_result(entry, owner) if entry
+              else
+                return @property_types[method.to_s] if args.empty? && @property_types.key?(method.to_s)
+                entry = @knowledge.method_entry(owner, method)
+                return member_result(entry, owner) if entry
+              end
+              global = receiver.nil? ? DOM::GLOBALS[method.to_s] : nil
+              return global ? global[0] : nil
             end
             receiver_type = static_type(receiver)
             return native_member_type(receiver_type, method) if native_type?(receiver_type)
+            if (owner = class_of_type(receiver_type))
+              return owner if method == :new
+              return member_result(@knowledge.class_member_entry(owner, method), owner)
+            end
             core = core_result_type(receiver_type, method, args)
             return core if core
             klass = swill_class(receiver_type)
             return nil unless klass
+            return "T.class_of(#{klass})" if method == :class && args.empty?
             property = @knowledge.property_entry(klass, method)
             return property["type"] if property && args.empty?
-            return_type(@knowledge.method_entry(klass, method))
+            member_result(@knowledge.method_entry(klass, method), klass)
           end
+        end
+
+        # Arithmetic on numbers: Float when either side is, else Integer;
+        # String + String is a String. Anything else has no type.
+        def arithmetic_type(left, right, method)
+          return "String" if method == :+ && left == "String" && right == "String"
+          numbers = %w[Integer Float]
+          return nil unless numbers.include?(left) && numbers.include?(right)
+          return "Float" if left == "Float" || right == "Float"
+          method == :/ ? "Integer" : "Integer"
         end
 
         # left || right: a nil left yields the right, so a nilable class on the
@@ -304,7 +410,7 @@ module Swill
         # The callback parameter types a native member declares for the
         # argument at index, or nil.
         def native_callback_types(type, method, index)
-          inner = type.to_s[/\AT\.nilable\((.+)\)\z/, 1] || type.to_s
+          inner = DOM.base(type)
           spec = DOM::CONSTRUCTORS[inner] if method == :new
           spec ||= (member = DOM.native?(inner) ? DOM.member(inner, method) : nil) && member[0] == :method ? member[2] : nil
           return nil unless spec
@@ -366,7 +472,7 @@ module Swill
 
         def truthiness_kind(type)
           return :unknown unless type
-          return :native if native_type?(type)
+          return :native if native_type?(type) || type.start_with?("T.class_of(")
           return :boolean if type == "T::Boolean"
           return :nil if type == "NilClass"
           if (match = type.match(/\AT\.nilable\((.+)\)\z/))
@@ -386,7 +492,7 @@ module Swill
 
         def identity_comparable?(type)
           return false unless type
-          return true if native_type?(type)
+          return true if native_type?(type) || type.start_with?("T.class_of(")
           return true if %w[String Integer Float Symbol T::Boolean NilClass].include?(type)
           inner = type[/\AT\.nilable\((.+)\)\z/, 1]
           return identity_comparable?(inner) if inner

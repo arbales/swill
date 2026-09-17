@@ -108,6 +108,7 @@ A class or mixin body may contain only:
 | `property` / `attribute` / `outlet` | Collected as declarations (below) |
 | `restorable :path, key: :k` | Controllers only. A literal dotted path whose first segment is a declared property; the leaf's declared type is recorded when every segment is statically typed. Emitted as `restorations` metadata |
 | `def self.name(positional, args)` | Classes only: a static method under the same name rules. Inside it `self` is the class and a bare `new` constructs it; `self.new` is rejected as a name |
+| `async def name(...)`, `async def self.name(...)` | The same, marked asynchronous: it compiles to an `async` method and its body may `await` |
 | `def self.included(base)` | Mixins only; see [Included hooks](#included-hooks) |
 | `module ClassMethods` | Mixins only; see [Class methods](#class-methods) |
 | nested `class` / `module` | Mixins only; collected as namespaced entries |
@@ -143,6 +144,23 @@ outlet :extra, type: T.untyped, optional: true
 Each entry rejects duplicate property names, including duplicates between its
 own declarations and those copied from included hooks.
 
+### Relationships and class settings
+
+```ruby
+class Menu < Swill::Model::Base
+  endpoint "/api/menus"
+  resource_type "menus"
+  codec Swill::Model::PlainJSON      # JSON:API unless declared
+  has_many :menu_recipes, type: MenuRecipe, key: "menu_recipes", url: "/api/menus/:id/recipes"
+  has_one :detail, type: "CocktailDetail"
+end
+```
+
+| Rule | Detail |
+| --- | --- |
+| Settings | A class body may call any `class_setting` an included `ClassMethods` (or an ancestor's) declares, with one literal (string, symbol, number, boolean, `nil`) or one class constant. Nothing is evaluated: the value is emitted as `settings` in the meta object and applied through the setting method at installation. A name no mixin declares is an unsupported class body |
+| `has_many` / `has_one` | Literal symbol name; `type:` a class constant, or its name as a string when the class is declared later; `key:` literal symbol or string, the wire key, defaulting to the name; `url:` a literal string in which `:id` stands for the owner's id. Declares two stored properties, `name` (`T::Array[Type]` defaulting to `[]`, or `T.nilable(Type)` defaulting to `nil`) and `name_loading` (`T::Boolean`), and a descriptor emitted as `relationships`. The type must resolve to a class after collection. Relationships are declared on classes, not mixins |
+
 ### Included hooks
 
 A mixin may declare exactly one `def self.included(base)` whose body consists
@@ -161,10 +179,10 @@ A mixin's `module ClassMethods` may contain:
 | `extend Swill::Declarations` | Accepted and erased; the compiler implements the protocol |
 | `inheritable_registry :name` / `:name, :array` | A per-class registry that copies its parent's contents on first access |
 | `inheritable_registry :name, seeded_by: :attribute` | The same registry, and every class inheriting it receives one entry per `attribute` declaration, emitted as `registries` in the meta object. On MRI the macro's own implementation seeds it |
-| `class_setting :name` | A per-class value that falls back to the parent's |
-| `def name(positional)` | Compiled as a class-side method |
-| `def property` / `def attribute` / `def outlet` | Not compiled: a class method named after a declaration macro is that macro's MRI implementation, and the compiler lowers the declaration itself |
-| `sig { ... }` | Erased |
+| `class_setting :name` | A per-class value that falls back to the parent's; a class body sets it with a literal (see [Relationships and class settings](#relationships-and-class-settings)), and the value is stored under the Ruby name so `Runtime.classWithSetting` can look a class up by it |
+| `def name(positional)` | Compiled as a class-side method; inside it `self` is the class, so bare calls reach static methods, other `ClassMethods` methods, registries, and settings |
+| `def property` / `def attribute` / `def outlet` / `def has_many` / `def has_one` | Not compiled: a class method named after a declaration macro is that macro's MRI implementation, and the compiler lowers the declaration itself |
+| `extend T::Sig`, `sig { ... }` | Read for parameter and return types, never emitted |
 
 ### Pragmas
 
@@ -349,7 +367,14 @@ the runtime is reached only where a fact is genuinely unavailable.
 | Local variable | Inferred when its assignments' types merge (the same class or core type, nilable when any is nil, an empty `[]` or `{}` fitting a typed collection) and its first assignment is a statement, in the body or in a branch, loop, or block, that precedes every read; an assignment may refer to the variable itself; an assigned parameter loses its signature type |
 | Instance variable | `T.nilable(Class)` when every assignment anywhere in the class has a static type and the non-nil ones name one framework class; otherwise none |
 | `left \|\| right` | The right's type when both sides name the same class, nilable or not on the left: a nil left yields the right |
-| `Const.static_method(...)` | The static method's `sig` return type |
+| `Const.member(...)` | The `sig` return type of the static method, or of the method, registry, or setting an included `ClassMethods` provides; registries and settings are `T.untyped`. `T.attached_class` and `T.self_type` in the type stand for the receiving class |
+| `self.class`, `receiver.class` for a framework-class receiver, `self` in a class method | `T.class_of(Class)` |
+| `receiver.member(...)` where the receiver is `T.class_of(Class)` | As `Const.member`, and `receiver.new` yields the class |
+| `name(...)` for an async method, without `await` | `Promise` |
+| `await expression` | An async member's declared type (its signature names the value it yields); the element of a `Promise[X]` type from the DOM table; otherwise the expression's own type, and none for an untyped JavaScript value |
+| `fetch(...)`, `encodeURIComponent(...)`, `setTimeout(...)`, `clearTimeout(...)`, `queueMicrotask(...)`: the bare browser functions the DOM table lists as globals, when the class defines no method of that name | The table's type; `fetch` yields `Promise[Response]`, `setTimeout` an `Integer` |
+| `left + right`, `-`, `*`, `/`, `%` on `Integer` or `Float` operands | `Float` when either side is, else `Integer`; `String + String` is `String` |
+| A `rescue => name` variable | `Error`, the DOM table's class for a thrown JavaScript error, so `name.message` reads |
 | `name` or `self.name` for a declared property | The declared type, including inherited and included declarations |
 | `name(...)` or `self.name(...)` for a collected method | Its `sig` return type; `void` yields no type |
 | `super(...)` / `super` | The enclosing method's return type |
@@ -408,6 +433,12 @@ For `receiver.name(args)` where the receiver is not `self`:
 | Framework class | `name = value` for a declared property | `receiver.name = value` |
 | Framework class | Collected method | `receiver.name(args)` |
 | Framework class | Anything else | Pragma filter if it applies, else an explicit call |
+| Framework class | `class` | `receiver.constructor` |
+| A class object (`T.class_of(Class)`, `self.class`, a class constant) | A static method, or a `ClassMethods` method, registry, or setting | `receiver.name(args)`, lambdas typed by the signature |
+| A class object | `new(args)` | `new receiver(args)` |
+| A JavaScript intrinsic or DOM class named as the receiver (`JSON`, `Promise`, `Math`) | Anything but `new` | Native; `JSON.generate` is `JSON.stringify` |
+| Any | `is_a?(Array)`, `kind_of?(Array)`, `instance_of?(Array)` | `Array.isArray(receiver)`, so an array from another realm (a page's JSON) counts |
+| Core collection | A block of several statements | The block's last expression is its value, as in Ruby: the body compiles with an explicit return (the converter alone returns only single-expression bodies) |
 | DOM class or untyped JavaScript value | Anything | Native, per [Native types](#native-types) |
 | Any | `nil?` | `receiver == null` |
 | Core value type (below), nilable or not | A method in its table | The table's form; a method outside the table is rejected |
@@ -502,11 +533,35 @@ not its elements, as sorbet-runtime does. Unions, procs, mixins, and unknown
 constants are rejected. `T.let` on an assignment keeps its check and types the
 local; the upstream Pragma filter would otherwise erase it.
 
+### Asynchrony
+
+`async` and `await` are reserved forms with JavaScript's meaning. `async def
+name` (Ruby parses it as `async(def ...)`) declares an asynchronous method,
+compiled with the `async` keyword, so calling it yields a promise. `await
+expression` inside such a method compiles to `await`. `await` outside an
+async method, or inside a block or lambda within one (their functions are
+not the method), is rejected. On MRI, `Swill::Object` provides `async` as a
+no-op wrapper and `await` as the identity, so shared code runs synchronously
+there.
+
+An async method's signature names the value it yields, not the promise:
+`sig { returns(T.attached_class) }` on `async def self.find(id)` means `await
+Menu.find(id)` is a `Menu` to the compiler and, through `await`'s generic
+identity signature, to Sorbet. A call without `await` is a `Promise`. The
+DOM table writes `Promise[Response]` for `fetch`; the RBI shows Sorbet the
+element, as MRI's `await` would yield it, and the compiler types the awaited
+value. `Promise.all`, `Promise.resolve`, and the rest of the browser's
+promise API are native, as any DOM class is, and their awaited values are
+untyped.
+
 ### Exceptions
 
 `raise "message"` and `raise "interpolated #{message}"` compile to
 `throw new Error(...)`. Bare `raise`, `raise SomeClass`, `raise SomeClass, msg`,
-and `raise variable` are rejected. `rescue` is outside the current boundary.
+and `raise variable` are rejected. `begin`/`rescue => error`/`ensure` is the
+converter's `try`/`catch`/`finally`; the rescued variable is typed `Error`,
+so `error.message` is a native read. Rescuing a named class is outside the
+boundary: a thrown value is whatever JavaScript threw.
 
 ## Runtime reference
 
@@ -590,11 +645,14 @@ registered from JavaScript, which the compiler never sees.
 
 | Function | Behavior |
 | --- | --- |
-| `collectAttributes(object)` | `{key: value}` for every stored `attribute` declaration, including inherited ones |
+| `collectAttributes(object, only = null)` | `{key: value}` for every stored `attribute` declaration, including inherited ones; with an array of names, only those |
+| `relationship(object, name)` / `relationships(object)` | The installed `has_many`/`has_one` descriptor `{name, key, kind, type, url}` for a name (or `null`), or all of them, inherited ones included |
+| `identityStore(klass)` | The class's own `Swill::Model::Store`, created on first use |
+| `classWithSetting(name, value)` | The installed class whose own setting, by Ruby name, has the value, or `null`: how a JSON:API type finds its model class |
 | `applyAttributes(object, source)` | Assigns each attribute from `source[key]`, else `source[name]`, through the property protocol |
 | `Model::Attributes.from_attributes(source)` | Class method from the shared mixin: `new` plus `apply_attributes`, so `decode_outlet_data` can hand an outlet typed `T::Array[Person]` real people |
 | `inheritableRegistry(klass, name, "hash" \| "array")` | Returns the class's own registry, created on first access as a copy of the parent's |
-| `classSetting(klass, name, values)` | With one value, stores it; with none, returns the class's own value or the parent's; more than one value throws |
+| `classSetting(klass, name, values)` | With one value, stores it; with none, returns the class's own value or the parent's; more than one value throws. `installClass` applies a class body's `settings` through the setting method after mixins are attached, and throws for a setting no `ClassMethods` declares |
 
 ## Property protocol
 

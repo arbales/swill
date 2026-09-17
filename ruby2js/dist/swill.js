@@ -24,9 +24,13 @@
     }
     return false;
   }
-  function installMetadata(klass, properties, methods, restorations2 = []) {
+  function installMetadata(klass, properties, methods, restorations2 = [], relationships2 = {}) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
+      relationships: new Map([
+        ...declarations(parent, "relationships"),
+        ...Object.entries(relationships2)
+      ]),
       properties: new Map([
         ...declarations(parent, "properties"),
         ...properties.map((item) => [item.name, item])
@@ -205,7 +209,7 @@
       (value) => !removed.some((other) => isEqual(other, value))
     );
   }
-  function fetch(hash, key, ...fallback) {
+  function fetch2(hash, key, ...fallback) {
     if (Object.hasOwn(hash, key)) return hash[key];
     if (fallback.length > 0) return fallback[0];
     throw new Error(`key not found: ${key}`);
@@ -260,6 +264,12 @@
     switch (name) {
       case "nil?":
         return value == null;
+      case "zero?":
+        return typeof value === "number" && value === 0;
+      case "positive?":
+        return typeof value === "number" && value > 0;
+      case "negative?":
+        return typeof value === "number" && value < 0;
       case "blank?":
         return isBlank(value);
       case "present?":
@@ -328,6 +338,9 @@
   var NIL_READERS = ["nil?", "blank?", "present?", "to_s", "to_i", "to_f"];
   var VALUE_READERS = [
     "nil?",
+    "zero?",
+    "positive?",
+    "negative?",
     "blank?",
     "present?",
     "empty?",
@@ -498,6 +511,7 @@
   var mixinMetadata = /* @__PURE__ */ new WeakMap();
   var mixinClassFactories = /* @__PURE__ */ new WeakMap();
   var classConfiguration = /* @__PURE__ */ new WeakMap();
+  var identityStores = /* @__PURE__ */ new WeakMap();
   function configuration(klass) {
     if (!classConfiguration.has(klass)) {
       classConfiguration.set(klass, {
@@ -559,7 +573,9 @@
           properties,
           methods(descriptor.methods),
           descriptor.registries,
-          descriptor.restorations ?? []
+          descriptor.restorations ?? [],
+          descriptor.settings ?? [],
+          descriptor.relationships ?? {}
         );
         pending.delete(klass);
         progress = true;
@@ -613,6 +629,20 @@
     const parent = Object.getPrototypeOf(klass);
     return typeof parent?.[name] === "function" ? parent[name]() : null;
   }
+  function classWithSetting(name, value) {
+    for (const klass of classes.values()) {
+      if (classConfiguration.get(klass)?.settings.get(name) === value) return klass;
+    }
+    return null;
+  }
+  function identityStore(klass) {
+    let store = identityStores.get(klass);
+    if (!store) {
+      store = new (resolve("Swill::Model::Store"))();
+      identityStores.set(klass, store);
+    }
+    return store;
+  }
   function rejectProtocolConflicts(klass, properties, restorations2) {
     const parent = Object.getPrototypeOf(klass);
     const declared = new Map([
@@ -638,12 +668,18 @@
       keys.add(restoration.key);
     }
   }
-  function installClass(klass, name, properties, methods, registries = {}, restorations2 = []) {
+  function installClass(klass, name, properties, methods, registries = {}, restorations2 = [], settings = [], relationships2 = {}) {
     if (classes.has(name)) {
       throw new Error(`Duplicate class: ${name}`);
     }
     rejectProtocolConflicts(klass, properties, restorations2);
-    installMetadata(klass, properties, methods, restorations2);
+    installMetadata(klass, properties, methods, restorations2, relationships2);
+    for (const setting of settings) {
+      if (typeof klass[setting.js] !== "function") {
+        throw new Error(`Missing setting declaration: ${setting.name}`);
+      }
+      klass[setting.js](setting.value);
+    }
     const propertyByName = new Map(properties.map((property) => [property.name, property]));
     for (const [registryName, seeds] of Object.entries(registries)) {
       if (typeof klass[registryName] !== "function") {
@@ -904,14 +940,20 @@
   function outlets(object) {
     return [...declarations(object.constructor, "properties").values()].filter((descriptor) => descriptor.outlet);
   }
-  function collectAttributes(object) {
+  function collectAttributes(object, only = null) {
     const result = {};
     for (const descriptor of declarations(object.constructor, "properties").values()) {
-      if (descriptor.attribute && !descriptor.computed) {
+      if (descriptor.attribute && !descriptor.computed && (only === null || only.includes(descriptor.name))) {
         result[descriptor.key] = object[descriptor.js];
       }
     }
     return result;
+  }
+  function relationship(object, name) {
+    return declarations(object.constructor, "relationships").get(name) ?? null;
+  }
+  function relationships(object) {
+    return [...declarations(object.constructor, "relationships").values()];
   }
   function applyAttributes(object, source) {
     for (const descriptor of declarations(object.constructor, "properties").values()) {
@@ -933,6 +975,8 @@
     installClass,
     inheritableRegistry,
     classSetting,
+    classWithSetting,
+    identityStore,
     resolve,
     nameOf,
     // Values
@@ -976,7 +1020,7 @@
     append,
     prepend,
     difference,
-    fetch,
+    fetch: fetch2,
     deleteKey,
     intDiv,
     modulo,
@@ -1009,6 +1053,8 @@
     outlets,
     collectAttributes,
     applyAttributes,
+    relationship,
+    relationships,
     // Invalid URL input is reported, not raised.
     warn(message) {
       console.warn(`[Swill] ${message}`);
@@ -1022,6 +1068,7 @@
     Swill__Application: () => Swill__Application,
     Swill__Awakening: () => Swill__Awakening,
     Swill__Bindings: () => Swill__Bindings,
+    Swill__BooleanTransformer: () => Swill__BooleanTransformer,
     Swill__Control: () => Swill__Control,
     Swill__Control__CustomSelect: () => Swill__Control__CustomSelect,
     Swill__Control__Select: () => Swill__Control__Select,
@@ -1037,10 +1084,19 @@
     Swill__Model__Attributes: () => Swill__Model__Attributes,
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
     Swill__Model__Base: () => Swill__Model__Base,
+    Swill__Model__Codec: () => Swill__Model__Codec,
+    Swill__Model__Dataset: () => Swill__Model__Dataset,
     Swill__Model__DirtyTracking: () => Swill__Model__DirtyTracking,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
+    Swill__Model__Identity: () => Swill__Model__Identity,
+    Swill__Model__Identity_ClassMethods: () => Swill__Model__Identity_ClassMethods,
+    Swill__Model__JSONAPI: () => Swill__Model__JSONAPI,
+    Swill__Model__PlainJSON: () => Swill__Model__PlainJSON,
+    Swill__Model__Relationship: () => Swill__Model__Relationship,
+    Swill__Model__Store: () => Swill__Model__Store,
     Swill__Notification: () => Swill__Notification,
     Swill__NotificationCenter: () => Swill__NotificationCenter,
+    Swill__NumberTransformer: () => Swill__NumberTransformer,
     Swill__Object: () => Swill__Object,
     Swill__ObjectBindings: () => Swill__ObjectBindings,
     Swill__Observable: () => Swill__Observable,
@@ -1048,8 +1104,10 @@
     Swill__Ownership: () => Swill__Ownership,
     Swill__Responder: () => Swill__Responder,
     Swill__RowEdit: () => Swill__RowEdit,
+    Swill__ValueTransformer: () => Swill__ValueTransformer,
     Swill__View: () => Swill__View,
-    Swill__Window: () => Swill__Window
+    Swill__Window: () => Swill__Window,
+    Swill__Wire: () => Swill__Wire
   });
 
   // build/framework.classes.mjs
@@ -1194,6 +1252,132 @@
       let list = this._observers[name];
       if (list) list.slice().forEach((callback) => callback(notification));
       return notification;
+    }
+  };
+  var Swill__Wire = class _Swill__Wire extends Swill__Object {
+    static default() {
+      let wire = this._default;
+      if (wire) return wire;
+      this._default = Runtime.cast(
+        new _Swill__Wire(),
+        "T.nilable(Swill::Wire)"
+      );
+      return Runtime.must(this._default);
+    }
+    async getJSON(url, params) {
+      return await this.request(
+        "GET",
+        _Swill__Wire.urlWithParams(url, params),
+        null,
+        null
+      );
+    }
+    async requestJSON(method, url, body) {
+      return await this.request(
+        method,
+        url,
+        body,
+        "application/vnd.api+json"
+      );
+    }
+    async requestFormJSON(method, url, body) {
+      return await this.request(
+        method,
+        url,
+        _Swill__Wire.encodeParams(body),
+        "application/x-www-form-urlencoded"
+      );
+    }
+    async request(method, url, body, content_type) {
+      let request_url = this.resolveURL(url);
+      let headers = Runtime.cast(
+        { Accept: "application/vnd.api+json, application/json" },
+        "T::Hash[String, String]"
+      );
+      let init = Runtime.cast(
+        { method, headers },
+        "T::Hash[String, T.untyped]"
+      );
+      if (body != null) {
+        if (content_type != null) headers["Content-Type"] = content_type;
+        init.body = content_type === "application/x-www-form-urlencoded" ? body : JSON.stringify(body);
+      }
+      ;
+      let response = await fetch(request_url, init);
+      if (!response.ok) {
+        throw new Error(`${method} ${request_url} -> ${response.status}`);
+      }
+      ;
+      if (response.status === 204) return null;
+      return await response.json();
+    }
+    resolveURL(url) {
+      let prefix = this.baseURL;
+      if (Runtime.isEmpty(prefix) || url.startsWith("http://") || url.startsWith("https://")) {
+        return url;
+      }
+      ;
+      return url.startsWith("/") ? `${prefix}${url}` : `${prefix}/${url}`;
+    }
+    static urlWithParams(url, params) {
+      let query = this.encodeParams(params);
+      if (Runtime.isEmpty(query)) return url;
+      let separator = url.includes("?") ? "&" : "?";
+      return `${url}${separator}${query}`;
+    }
+    static encodeParams(values) {
+      let search = new URLSearchParams();
+      Object.entries(values).forEach(([key, value]) => {
+        if (value != null) search.set(key, `${value}`);
+      });
+      return search.toString();
+    }
+    static resourceURL(collection_url, id) {
+      return `${collection_url}/${encodeURIComponent(id)}`;
+    }
+  };
+  var Swill__ValueTransformer = class _Swill__ValueTransformer extends Swill__Object {
+    static register(name, transformer) {
+      _Swill__ValueTransformer.registry()[name] = transformer;
+      return transformer;
+    }
+    static named(name) {
+      return _Swill__ValueTransformer.registry()[name];
+    }
+    static registry() {
+      let known = this._registry;
+      if (known) return known;
+      this._registry = Runtime.cast(
+        {
+          string: new _Swill__ValueTransformer(),
+          number: new Swill__NumberTransformer(),
+          boolean: new Swill__BooleanTransformer()
+        },
+        "T.nilable(T::Hash[String, ValueTransformer])"
+      );
+      return Runtime.must(this._registry);
+    }
+    // The text shown for a value; nil shows as nothing.
+    format(value) {
+      return value == null ? "" : `${value}`;
+    }
+    // The value a control's text stands for.
+    parse(text) {
+      return text;
+    }
+  };
+  var Swill__NumberTransformer = class extends Swill__ValueTransformer {
+    parse(text) {
+      let stripped = Runtime.strip(text);
+      return Runtime.isEmpty(stripped) ? null : Runtime.toFloat(stripped);
+    }
+  };
+  var Swill__BooleanTransformer = class extends Swill__ValueTransformer {
+    format(value) {
+      return Runtime.isTruthy(value) ? "true" : "false";
+    }
+    parse(text) {
+      return text === "true" || text === "1" || text === "on";
     }
   };
   var Swill__Responder = class extends Swill__Object {
@@ -1474,7 +1658,7 @@
         let option = this._element.ownerDocument.createElement("option");
         option.value = value;
         option.textContent = value;
-        this._element.appendChild(option);
+        return this._element.appendChild(option);
       });
       return this.syncValue();
     }
@@ -1620,7 +1804,7 @@
           "click",
           (_event) => this.choose(this.optionValue(option))
         );
-        this._popup.appendChild(row);
+        return this._popup.appendChild(row);
       });
       this.syncButton();
       return this.syncSelectedOption();
@@ -1815,11 +1999,10 @@
     collectChildControllers(view, found) {
       return view.subviews().forEach((subview) => {
         let controller = subview.controllerValue();
-        if (controller) {
-          Runtime.append(found, controller);
-        } else {
-          this.collectChildControllers(subview, found);
-        }
+        return controller ? Runtime.append(found, controller) : this.collectChildControllers(
+          subview,
+          found
+        );
       });
     }
   };
@@ -1867,7 +2050,7 @@
       return element.getAttributeNames().forEach((name) => {
         if (!name.startsWith("bind-")) return;
         let property = Runtime.must(Runtime.slice(name, 5, name.length));
-        Runtime.append(disposers, this.wireProperty(
+        return Runtime.append(disposers, this.wireProperty(
           object,
           prefix,
           element,
@@ -1890,6 +2073,19 @@
       if (prefix == null) return path;
       return path.length === 0 ? `${prefix}` : `${prefix}.${path}`;
     }
+    // The element's transform="name", or nil; an unregistered name is an
+    // error at wiring, not a silent passthrough.
+    transformerFor(element) {
+      let name = element.getAttribute("transform");
+      if (name == null) return null;
+      let transformer = Swill__ValueTransformer.named(name);
+      if (!transformer) throw new Error(`unknown transform ${name}`);
+      return transformer;
+    }
+    display(value, transformer) {
+      if (transformer) return transformer.format(value);
+      return value == null ? "" : value;
+    }
     // A value binding. On a child controller's root the value becomes the
     // child's represented object; otherwise it renders into the element.
     wireElement(object, element, prefix) {
@@ -1897,6 +2093,7 @@
         prefix,
         Runtime.must(element.getAttribute("bind"))
       );
+      let transformer = this.transformerFor(element);
       let view = element.__swill_view__;
       let child = view ? view.controllerValue() : null;
       if (child) return this.wireRepresentedObject(object, child, path);
@@ -1904,7 +2101,8 @@
         return this.wireControl(
           object,
           Runtime.cast(view, "Swill::Control"),
-          path
+          path,
+          transformer
         );
       }
       ;
@@ -1917,9 +2115,9 @@
         if (checkbox) {
           return element.checked = Runtime.isTruthy(value);
         } else if (form_control) {
-          return element.value = value == null ? "" : value;
+          return element.value = this.display(value, transformer);
         } else {
-          return element.textContent = value == null ? "" : value;
+          return element.textContent = this.display(value, transformer);
         }
       };
       render(null);
@@ -1927,6 +2125,10 @@
       let event_name = element.matches("select") || checkbox ? "change" : "input";
       let handler = (event) => {
         let value = checkbox ? element.checked : element.value;
+        if (Runtime.isTruthy(transformer && !checkbox)) {
+          value = transformer.parse(element.value);
+        }
+        ;
         return Runtime.writePath(object, path, value);
       };
       if (Runtime.isTruthy(writable)) element.addEventListener(event_name, handler);
@@ -1939,18 +2141,20 @@
     }
     // A control's own value property is kept equal to the path, both ways;
     // the control decides how that reaches its element.
-    wireControl(object, control, path) {
+    wireControl(object, control, path, transformer) {
       Runtime.assertWritablePath(object, path);
-      let render = (_value) => {
-        let value = Runtime.readPath(object, path);
-        return Runtime.write(control, "value", value == null ? "" : value);
-      };
+      let render = (_value) => Runtime.write(
+        control,
+        "value",
+        this.display(Runtime.readPath(object, path), transformer)
+      );
       render(null);
       let release_render = Runtime.observePath(object, path, render);
-      let release_input = control.observe(
-        "value",
-        (value) => Runtime.writePath(object, path, value)
-      );
+      let release_input = control.observe("value", (value) => Runtime.writePath(
+        object,
+        path,
+        transformer ? transformer.parse(value) : value
+      ));
       return () => {
         release_render();
         return release_input();
@@ -1970,7 +2174,7 @@
     }
     writeProperty(element, property, value) {
       if (property.startsWith("data-") || property.startsWith("aria-")) {
-        if (value == null || value === "") {
+        if (Runtime.isTruthy(value == null || value === "" || value === false && property.startsWith("data-"))) {
           element.removeAttribute(property);
         } else {
           element.setAttribute(property, value);
@@ -2059,7 +2263,7 @@
         ;
         if (connected[name]) throw new Error(`Duplicate outlet: ${name}`);
         connected[name] = true;
-        Runtime.write(
+        return Runtime.write(
           controller,
           name,
           this.valueFor(controller, by_name[name], element)
@@ -2136,10 +2340,10 @@
   };
   var Swill__Awakening = class extends Swill__Object {
     static wire(root) {
-      return Runtime.invoke(new this(), "wire", root);
+      return new this().wire(root);
     }
     static detach(node) {
-      return Runtime.invoke(new this(), "detach", node);
+      return new this().detach(node);
     }
     // Returns the new controllers in document order. Awakening a fragment that
     // already sits under a live view adopts it into that view's tree.
@@ -2287,10 +2491,7 @@
       ;
       let query = search.toString();
       let next_url = location.pathname + location.search + (Runtime.isEmpty(query) ? "" : "#" + query);
-      if (Runtime.isEqual(
-        next_url,
-        location.pathname + location.search + location.hash
-      )) return;
+      if (next_url === location.pathname + location.search + location.hash) return;
       return history === "push" ? browser.history.pushState(
         null,
         "",
@@ -2478,6 +2679,11 @@
       this.applicationDidLaunch();
       return this;
     }
+    // The browser window the application runs in, for what only it offers:
+    // a prompt, printing.
+    browser() {
+      return Runtime.must(this.root().ownerDocument.defaultView);
+    }
     // Every controller awakened at launch, in document order.
     controllers() {
       return this._controllers;
@@ -2543,7 +2749,9 @@
       awakening.finish(controllers);
       let controller = window.controller();
       if (controller) {
-        this.makeFirstResponder(controller);
+        if (!this.isResponderWithin(this.firstResponder(), container)) {
+          this.makeFirstResponder(controller);
+        }
       } else if (this.isAttached(previous)) {
         this.makeFirstResponder(previous);
       }
@@ -2575,7 +2783,10 @@
       Runtime.append(this._windows, window);
       this.restoreWindowState(window, false, false);
       awakening.finish(controllers);
-      this.makeFirstResponder(controller);
+      if (!this.isResponderWithin(this.firstResponder(), node)) {
+        this.makeFirstResponder(controller);
+      }
+      ;
       return window;
     }
     dismiss(controller) {
@@ -2755,7 +2966,7 @@
         if (Runtime.isTruthy(first && content_name === default_name)) return;
         container.replaceChildren();
         container.appendChild(this.cloneWindowContent(content_name));
-        container.setAttribute("name", content_name);
+        return container.setAttribute("name", content_name);
       });
     }
     // The fragment may name the content to show; unknown names are reported
@@ -2773,7 +2984,7 @@
           container.getAttribute("name"),
           this.topControllerIn(container)
         );
-        Runtime.append(this._windows, window);
+        return Runtime.append(this._windows, window);
       });
     }
     // The first controller inside the container whose parent is outside it.
@@ -2792,6 +3003,13 @@
     }
     holds(window, controller) {
       return window.containsController(controller);
+    }
+    // Whether a responder's element sits inside an element; the application
+    // itself sits nowhere.
+    isResponderWithin(responder, container) {
+      if (responder === this) return false;
+      let element = this.responderElement(responder);
+      return element != null && container.contains(element);
     }
     isAttached(responder) {
       if (!responder) return false;
@@ -2849,7 +3067,7 @@
           Runtime.read(declaration, "path"),
           value
         );
-        applied++;
+        return ++applied;
       }));
       if (!Runtime.isEmpty(declarations2)) {
         controller.controllerDidRestore(applied > 0);
@@ -2861,7 +3079,7 @@
           Runtime.read(declaration, "path"),
           (_value) => this.writeWindowState(window)
         );
-        window.addRestoration(
+        return window.addRestoration(
           disposer,
           window.scopedKey(Runtime.read(declaration, "key"))
         );
@@ -2882,7 +3100,7 @@
           controller,
           Runtime.read(declaration, "path")
         ));
-        this._fragments.write(
+        return this._fragments.write(
           window.scopedKey(Runtime.read(declaration, "key")),
           value,
           "replace"
@@ -2918,7 +3136,7 @@
         record2.removedNodes.forEach((node) => {
           if (node.nodeType === 1) return awakening.detach(node);
         });
-        record2.addedNodes.forEach((node) => {
+        return record2.addedNodes.forEach((node) => {
           if (node.nodeType === 1) return awakening.wire(node);
         });
       }));
@@ -3686,6 +3904,7 @@
       // reads seeded_by to do the same from collected declarations.
       // Materialize an instance from a wire hash keyed by attribute keys,
       // as Opal's Base.new(values) does.
+      // Attribute values by wire key.
       collectAttributes() {
         return Runtime.collectAttributes(this);
       }
@@ -3720,6 +3939,10 @@
     class Swill__Model__DirtyTracking_Layer extends Superclass {
       dirty() {
         return this.dirtyAttributes.slice();
+      }
+      // The dirty attributes' values by wire key: what a PATCH carries.
+      collectDirtyAttributes() {
+        return Runtime.collectAttributes(this, this.dirtyAttributes);
       }
       markClean() {
         this._dirty_baseline = {};
@@ -3766,7 +3989,7 @@
     class Swill__Model__Drafts_Layer extends Superclass {
       draft() {
         let copy = new this.constructor();
-        Runtime.invoke(copy, "apply_attributes", this.collectAttributes());
+        copy.applyAttributes(this.collectAttributes());
         return copy;
       }
       // Take a draft's attributes back. Application is clean, as any
@@ -3779,7 +4002,448 @@
     }
     return Swill__Model__Drafts_Layer;
   }
+  var Swill__Model__Store = class extends Swill__Object {
+    constructor() {
+      super();
+      this._instances = Runtime.cast({}, "T::Hash[String, Base]");
+    }
+    get(id) {
+      return Object.hasOwn(this._instances, id) ? this._instances[id] : null;
+    }
+    isInclude(id) {
+      return Object.hasOwn(this._instances, id);
+    }
+    put(instance) {
+      let id = instance.id;
+      if (id == null) throw new Error("Store#put requires an id");
+      let existing = this._instances[id];
+      if (Runtime.isTruthy(existing && existing !== instance)) {
+        existing.applyAttributes(instance.collectAttributes());
+        return existing;
+      }
+      ;
+      this._instances[id] = instance;
+      return instance;
+    }
+    remove(id) {
+      return Runtime.deleteKey(this._instances, id);
+    }
+    clear() {
+      this._instances = {};
+      return this._instances;
+    }
+    values() {
+      return Object.values(this._instances);
+    }
+  };
+  function Swill__Model__Identity(Superclass) {
+    class Swill__Model__Identity_Layer extends Superclass {
+    }
+    return Swill__Model__Identity_Layer;
+  }
+  function Swill__Model__Identity_ClassMethods(Superclass) {
+    class Swill__Model__Identity_ClassMethods_Layer extends Object {
+      store() {
+        return Runtime.identityStore(this);
+      }
+      get(id) {
+        return this.store().get(id);
+      }
+      isPooled(id) {
+        return this.store().isInclude(id);
+      }
+      put(instance) {
+        return this.store().put(instance);
+      }
+      remove(id) {
+        return this.store().remove(id);
+      }
+      clear() {
+        return this.store().clear();
+      }
+      values() {
+        return this.store().values();
+      }
+      endpoint(...values) {
+        return Runtime.classSetting(this, "endpoint", values);
+      }
+      resourceType(...values) {
+        return Runtime.classSetting(this, "resource_type", values);
+      }
+      codec(...values) {
+        return Runtime.classSetting(this, "codec", values);
+      }
+    }
+    Object.setPrototypeOf(Swill__Model__Identity_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Model__Identity_ClassMethods_Layer.prototype;
+  }
+  var Swill__Model__Relationship = class extends Swill__Object {
+    constructor(descriptor) {
+      super();
+      this._name = Runtime.cast(descriptor.name, "String");
+      this._key = Runtime.cast(descriptor.key, "String");
+      this._kind = Runtime.cast(descriptor.kind, "String");
+      this._type = descriptor.type;
+      this._url = Runtime.cast(descriptor.url, "T.nilable(String)");
+    }
+    name() {
+      return this._name;
+    }
+    key() {
+      return this._key;
+    }
+    isMany() {
+      return this._kind === "many";
+    }
+    modelClass() {
+      return this._type;
+    }
+    // Where an owner's related records are: the declared pattern with the
+    // owner's id, or the owner's own URL followed by the key.
+    urlFor(owner) {
+      let id = Runtime.must(owner.id);
+      let pattern = this._url;
+      if (pattern != null) return pattern.replace(":id", encodeURIComponent(id));
+      return `${owner.constructor.resourceURL(id)}/${this._key}`;
+    }
+  };
+  var Swill__Model__Codec = class extends Swill__Object {
+    static parseOne(model_class, payload) {
+      return (() => {
+        throw new Error("codec does not parse");
+      })();
+    }
+    static parseMany(model_class, payload) {
+      return (() => {
+        throw new Error("codec does not parse");
+      })();
+    }
+    static serialize(model, dirty_only) {
+      return (() => {
+        throw new Error("codec does not serialize");
+      })();
+    }
+    static attributesOf(model, dirty_only) {
+      let attributes = dirty_only ? model.collectDirtyAttributes() : model.collectAttributes();
+      Runtime.deleteKey(attributes, "id");
+      return attributes;
+    }
+  };
+  var Swill__Model__PlainJSON = class extends Swill__Model__Codec {
+    static parseOne(model_class, payload) {
+      if (payload == null) return null;
+      return this.materialize(
+        model_class,
+        Runtime.cast(payload, "T::Hash[String, T.untyped]")
+      );
+    }
+    static parseMany(model_class, payload) {
+      return Runtime.cast(payload, "T::Array[T.untyped]").map((item) => this.materialize(
+        model_class,
+        Runtime.cast(item, "T::Hash[String, T.untyped]")
+      ));
+    }
+    static serialize(model, dirty_only) {
+      return Swill__Model__Codec.attributesOf(model, dirty_only);
+    }
+    static materialize(model_class, values) {
+      let raw = values.id;
+      let id = raw == null ? null : `${raw}`;
+      let instance = (id != null ? model_class.get(id) : null) || new model_class();
+      instance.applyAttributes(values);
+      instance.applyAttributes({ id });
+      if (id != null) model_class.put(instance);
+      return instance;
+    }
+  };
+  var Swill__Model__JSONAPI = class extends Swill__Model__Codec {
+    static parseOne(model_class, payload) {
+      let document2 = Runtime.cast(payload, "T::Hash[String, T.untyped]");
+      let data = document2.data;
+      if (Array.isArray(data)) {
+        throw new Error("expected a single JSON:API resource");
+      }
+      ;
+      this.pool(document2);
+      return data == null ? null : this.pooled(Runtime.cast(
+        data,
+        "T::Hash[String, T.untyped]"
+      ));
+    }
+    static parseMany(model_class, payload) {
+      let document2 = Runtime.cast(payload, "T::Hash[String, T.untyped]");
+      let data = document2.data;
+      if (!Array.isArray(data)) throw new Error("expected a JSON:API collection");
+      this.pool(document2);
+      return Runtime.compact(this.resourcesIn(data).map((resource) => this.pooled(resource)));
+    }
+    static serialize(model, dirty_only) {
+      let attributes = Swill__Model__Codec.attributesOf(model, dirty_only);
+      let resource = Runtime.cast(
+        { type: model.constructor.resourceType(), attributes },
+        "T::Hash[String, T.untyped]"
+      );
+      let id = model.id;
+      if (id != null) resource.id = id;
+      return { data: resource };
+    }
+    static pool(document2) {
+      let resources = this.resourcesIn(document2.included).concat(this.resourcesIn(document2.data));
+      resources.forEach((resource) => this.materialize(resource));
+      return resources.forEach((resource) => this.hydrate(resource));
+    }
+    static resourcesIn(value) {
+      if (value == null) return [];
+      if (Array.isArray(value)) {
+        return Runtime.cast(value, "T::Array[T::Hash[String, T.untyped]]");
+      }
+      ;
+      return [Runtime.cast(value, "T::Hash[String, T.untyped]")];
+    }
+    static materialize(resource) {
+      let raw_type = resource.type;
+      let type = `${raw_type}`;
+      let model_class = Swill__Model__Base.classForType(type);
+      if (!model_class) {
+        Runtime.warn(`no model class declares resource_type ${type}`);
+        return null;
+      }
+      ;
+      let raw_id = resource.id;
+      if (raw_id == null) {
+        Runtime.warn(`a JSON:API resource of type ${type} has no id`);
+        return null;
+      }
+      ;
+      let id = `${raw_id}`;
+      let instance = model_class.get(id) || new model_class();
+      let attributes = resource.attributes;
+      if (Runtime.isTruthy(attributes)) instance.applyAttributes(attributes);
+      instance.applyAttributes({ id });
+      return model_class.put(instance);
+    }
+    static pooled(resource) {
+      let raw_type = resource.type;
+      let model_class = Swill__Model__Base.classForType(`${raw_type}`);
+      let id = resource.id;
+      if (!Runtime.isTruthy(model_class && id != null)) return null;
+      return model_class.get(`${id}`);
+    }
+    static hydrate(resource) {
+      let instance = this.pooled(resource);
+      let linkages = resource.relationships;
+      if (!Runtime.isTruthy(instance && linkages)) return;
+      return instance.relationships().forEach((relationship2) => {
+        let related, related_one;
+        let linkage = Runtime.logicalOr(
+          linkages[relationship2.key()],
+          () => linkages[relationship2.name()]
+        );
+        if (!Runtime.isTruthy(linkage)) return;
+        let data = linkage.data;
+        if (relationship2.isMany()) {
+          if (!Array.isArray(data)) return;
+          related = this.resourcesIn(data).map((item) => this.pooled(item));
+          if (related.includes(null)) return;
+          return instance.assignRelationship(relationship2.name(), related);
+        } else if (data == null) {
+          return instance.assignRelationship(relationship2.name(), null);
+        } else if (!Array.isArray(data)) {
+          related_one = this.pooled(Runtime.cast(
+            data,
+            "T::Hash[String, T.untyped]"
+          ));
+          if (related_one) {
+            return instance.assignRelationship(relationship2.name(), related_one);
+          }
+        }
+      });
+    }
+  };
+  var Swill__Model__Dataset = class extends Swill__Object {
+    constructor(model_class, url, params) {
+      super();
+      this._model_class = model_class;
+      this._url = url;
+      this._params = params;
+    }
+    url() {
+      return this._url;
+    }
+    params() {
+      return this._params;
+    }
+    async reload() {
+      this.loading = true;
+      this.error = null;
+      try {
+        this.records = this._model_class.parseMany(await Swill__Wire.default().getJSON(
+          this._url,
+          this._params
+        ));
+      } catch (failure) {
+        this.error = failure.message;
+      } finally {
+        this.loading = false;
+      }
+      ;
+      return this;
+    }
+  };
   var Swill__Model__Base = class extends Swill__Object {
+    constructor() {
+      super();
+      this._loaded_relationships = Runtime.cast([], "T::Array[String]");
+    }
+    static classForType(type) {
+      return Runtime.classWithSetting("resource_type", type);
+    }
+    static activeCodec() {
+      return Runtime.logicalOr(this.codec(), () => Swill__Model__JSONAPI);
+    }
+    static parseOne(payload) {
+      return this.activeCodec().parseOne(this, payload);
+    }
+    static parseMany(payload) {
+      return this.activeCodec().parseMany(this, payload);
+    }
+    static endpointURL() {
+      let url = this.endpoint();
+      if (!Runtime.isTruthy(url)) throw new Error("no endpoint declared");
+      return `${url}`;
+    }
+    static resourceURL(id) {
+      return Swill__Wire.resourceURL(this.endpointURL(), id);
+    }
+    static async find(id) {
+      let cached = this.get(id);
+      if (cached) return cached;
+      return await this.fetch(id);
+    }
+    static async fetch(id) {
+      let url = this.resourceURL(id);
+      let record2 = this.parseOne(await Swill__Wire.default().getJSON(
+        url,
+        {}
+      ));
+      if (!record2) throw new Error(`no record at ${url}`);
+      return record2;
+    }
+    static async findAll() {
+      return await this.fetchAll(this.endpointURL(), {});
+    }
+    static async where(params) {
+      return await this.fetchAll(this.endpointURL(), params);
+    }
+    static async fetchAll(url, params) {
+      return this.parseMany(await Swill__Wire.default().getJSON(
+        url,
+        params
+      ));
+    }
+    static dataset(url, params) {
+      return new Swill__Model__Dataset(this, url, params);
+    }
+    // ---- writing ----
+    // An error message that refuses a save, or nil. Attribute validators
+    // run as values are written; this is the whole record's check.
+    validate() {
+      return null;
+    }
+    serialize(dirty_only) {
+      return this.constructor.activeCodec().serialize(this, dirty_only);
+    }
+    async save() {
+      let problem = this.validate();
+      if (problem != null) throw new Error(`${problem}`);
+      let creating = this.id == null;
+      if (Runtime.isTruthy(!creating && !this.isDirty)) return this;
+      let method = creating ? "POST" : "PATCH";
+      let url = creating ? this.constructor.endpointURL() : this.constructor.resourceURL(Runtime.must(this.id));
+      let response = await Swill__Wire.default().requestJSON(
+        method,
+        url,
+        this.serialize(!creating)
+      );
+      let persisted = this.constructor.parseOne(response);
+      if (!persisted) throw new Error(`${method} ${url} returned no record`);
+      this.id = persisted.id;
+      this.applyAttributes(persisted.collectAttributes());
+      this.markClean();
+      if (Runtime.isTruthy(creating && persisted !== this)) {
+        this.constructor.remove(Runtime.must(this.id));
+      }
+      ;
+      this.constructor.put(this);
+      return this;
+    }
+    async delete() {
+      let identifier = this.id;
+      if (identifier == null) return this;
+      await Swill__Wire.default().requestJSON(
+        "DELETE",
+        this.constructor.resourceURL(identifier),
+        null
+      );
+      this.constructor.remove(identifier);
+      return this;
+    }
+    async reload() {
+      let identifier = this.id;
+      if (identifier == null) throw new Error("reload requires an id");
+      await this.constructor.fetch(identifier);
+      this.markClean();
+      return this;
+    }
+    // ---- relationships ----
+    relationships() {
+      let descriptors = Runtime.cast(
+        Runtime.relationships(this),
+        "T::Array[T::Hash[String, T.untyped]]"
+      );
+      return descriptors.map((descriptor) => new Swill__Model__Relationship(descriptor));
+    }
+    relationship(name) {
+      let descriptor = Runtime.relationship(this, name);
+      if (!Runtime.isTruthy(descriptor)) {
+        throw new Error(`${name} is not a relationship`);
+      }
+      ;
+      return new Swill__Model__Relationship(descriptor);
+    }
+    isRelationshipLoaded(name) {
+      return this._loaded_relationships.includes(name);
+    }
+    // A relationship's value, assigned here or hydrated from a document;
+    // loading it asks the server only when it has not been.
+    assignRelationship(name, value) {
+      Runtime.write(this, name, value);
+      if (!this.isRelationshipLoaded(name)) {
+        return Runtime.append(this._loaded_relationships, name);
+      }
+    }
+    async loadRelationship(name) {
+      if (this.isRelationshipLoaded(name)) return Runtime.read(this, name);
+      return await this.reloadRelationship(name);
+    }
+    async reloadRelationship(name) {
+      let descriptor = this.relationship(name);
+      let model_class = descriptor.modelClass();
+      let value = null;
+      Runtime.write(this, `${name}_loading`, true);
+      try {
+        let payload = await Swill__Wire.default().getJSON(
+          descriptor.urlFor(this),
+          {}
+        );
+        value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
+        this.assignRelationship(name, value);
+      } finally {
+        Runtime.write(this, `${name}_loading`, false);
+      }
+      ;
+      return value;
+    }
   };
 
   // build/framework.meta.mjs
@@ -3868,6 +4532,10 @@
           "dirty": {
             "arity": 0
           },
+          "collect_dirty_attributes": {
+            "arity": 0,
+            "js": "collectDirtyAttributes"
+          },
           "mark_clean!": {
             "arity": 0,
             "js": "markClean"
@@ -3897,6 +4565,11 @@
             "js": "applyDraft"
           }
         }
+      },
+      "Swill::Model::Identity": {
+        factory: Swill__Model__Identity,
+        classFactory: Swill__Model__Identity_ClassMethods,
+        methods: {}
       }
     },
     classes: {
@@ -3937,6 +4610,73 @@
           },
           "post": {
             "arity": 3
+          }
+        }
+      },
+      "Swill::Wire": {
+        constructor: Swill__Wire,
+        properties: {
+          "base_url": {
+            js: "baseURL",
+            type: "String",
+            attribute: false,
+            defaultValue: function default_baseURL() {
+              return "";
+            }
+          }
+        },
+        methods: {
+          "get_json": {
+            "arity": 2,
+            "js": "getJSON"
+          },
+          "request_json": {
+            "arity": 3,
+            "js": "requestJSON"
+          },
+          "request_form_json": {
+            "arity": 3,
+            "js": "requestFormJSON"
+          },
+          "request": {
+            "arity": 4
+          },
+          "resolve_url": {
+            "arity": 1,
+            "js": "resolveURL"
+          }
+        }
+      },
+      "Swill::ValueTransformer": {
+        constructor: Swill__ValueTransformer,
+        properties: {},
+        methods: {
+          "format": {
+            "arity": 1
+          },
+          "parse": {
+            "arity": 1
+          }
+        }
+      },
+      "Swill::NumberTransformer": {
+        constructor: Swill__NumberTransformer,
+        properties: {},
+        methods: {
+          "parse": {
+            "arity": 1
+          }
+        }
+      },
+      "Swill::BooleanTransformer": {
+        constructor: Swill__BooleanTransformer,
+        properties: {},
+        methods: {
+          "format": {
+            "arity": 1
+          },
+          "parse": {
+            "arity": 1
           }
         }
       },
@@ -4424,12 +5164,19 @@
             "arity": 2,
             "js": "resolvePath"
           },
+          "transformer_for": {
+            "arity": 1,
+            "js": "transformerFor"
+          },
+          "display": {
+            "arity": 2
+          },
           "wire_element": {
             "arity": 3,
             "js": "wireElement"
           },
           "wire_control": {
-            "arity": 3,
+            "arity": 4,
             "js": "wireControl"
           },
           "wire_represented_object": {
@@ -4638,6 +5385,9 @@
           "launch": {
             "arity": 1
           },
+          "browser": {
+            "arity": 0
+          },
           "controllers": {
             "arity": 0
           },
@@ -4777,6 +5527,10 @@
           "holds?": {
             "arity": 2,
             "js": "holds"
+          },
+          "responder_within?": {
+            "arity": 2,
+            "js": "isResponderWithin"
           },
           "attached?": {
             "arity": 1,
@@ -5316,9 +6070,119 @@
           }
         }
       },
+      "Swill::Model::Store": {
+        constructor: Swill__Model__Store,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "get": {
+            "arity": 1
+          },
+          "include?": {
+            "arity": 1,
+            "js": "isInclude"
+          },
+          "put": {
+            "arity": 1
+          },
+          "remove": {
+            "arity": 1
+          },
+          "clear": {
+            "arity": 0
+          },
+          "values": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Model::Relationship": {
+        constructor: Swill__Model__Relationship,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "name": {
+            "arity": 0
+          },
+          "key": {
+            "arity": 0
+          },
+          "many?": {
+            "arity": 0,
+            "js": "isMany"
+          },
+          "model_class": {
+            "arity": 0,
+            "js": "modelClass"
+          },
+          "url_for": {
+            "arity": 1,
+            "js": "urlFor"
+          }
+        }
+      },
+      "Swill::Model::Codec": {
+        constructor: Swill__Model__Codec,
+        properties: {},
+        methods: {}
+      },
+      "Swill::Model::PlainJSON": {
+        constructor: Swill__Model__PlainJSON,
+        properties: {},
+        methods: {}
+      },
+      "Swill::Model::JSONAPI": {
+        constructor: Swill__Model__JSONAPI,
+        properties: {},
+        methods: {}
+      },
+      "Swill::Model::Dataset": {
+        constructor: Swill__Model__Dataset,
+        properties: {
+          "records": {
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue: function defaultRecords() {
+              return [];
+            }
+          },
+          "loading": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue: function defaultLoading() {
+              return false;
+            }
+          },
+          "error": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue: function defaultError() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 3
+          },
+          "url": {
+            "arity": 0
+          },
+          "params": {
+            "arity": 0
+          },
+          "reload": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::Model::Base": {
         constructor: Swill__Model__Base,
-        mixins: [Swill__Model__Attributes, Swill__Model__DirtyTracking, Swill__Model__Drafts],
+        mixins: [Swill__Model__Attributes, Swill__Model__DirtyTracking, Swill__Model__Drafts, Swill__Model__Identity],
         properties: {
           "dirty_attributes": {
             js: "dirtyAttributes",
@@ -5348,7 +6212,48 @@
         registries: { modelAttributes: {
           "id": { property: "id", key: "id" }
         } },
-        methods: {}
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "validate": {
+            "arity": 0
+          },
+          "serialize": {
+            "arity": 1
+          },
+          "save": {
+            "arity": 0
+          },
+          "delete": {
+            "arity": 0
+          },
+          "reload": {
+            "arity": 0
+          },
+          "relationships": {
+            "arity": 0
+          },
+          "relationship": {
+            "arity": 1
+          },
+          "relationship_loaded?": {
+            "arity": 1,
+            "js": "isRelationshipLoaded"
+          },
+          "assign_relationship": {
+            "arity": 2,
+            "js": "assignRelationship"
+          },
+          "load_relationship": {
+            "arity": 1,
+            "js": "loadRelationship"
+          },
+          "reload_relationship": {
+            "arity": 1,
+            "js": "reloadRelationship"
+          }
+        }
       }
     }
   };
@@ -5452,6 +6357,16 @@
     const Select = definitions.Swill__Control__Select;
     const CustomSelect = definitions.Swill__Control__CustomSelect;
     const NotificationCenter = definitions.Swill__NotificationCenter;
+    const Wire = definitions.Swill__Wire;
+    const ValueTransformer = definitions.Swill__ValueTransformer;
+    const Model = Object.freeze({
+      Base: definitions.Swill__Model__Base,
+      Store: definitions.Swill__Model__Store,
+      Codec: definitions.Swill__Model__Codec,
+      PlainJSON: definitions.Swill__Model__PlainJSON,
+      JSONAPI: definitions.Swill__Model__JSONAPI,
+      Dataset: definitions.Swill__Model__Dataset
+    });
     const roots = /* @__PURE__ */ new Set([
       Controller,
       Application,
@@ -5522,6 +6437,9 @@
       Select,
       CustomSelect,
       NotificationCenter,
+      Wire,
+      ValueTransformer,
+      Model,
       register,
       start
     });

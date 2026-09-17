@@ -21,6 +21,9 @@ module Swill
               collect_scope(nested, scope + [constant(name)])
             elsif node.type == :class
               collect_entry(node, scope, "class")
+            elsif node.type == :send && node.children[0].nil? && %i[require require_relative].include?(node.children[1])
+              # Source order is the build's concern (swill build follows
+              # require_relative from the entry); here the line is inert.
             else
               raise CompileError, "unsupported top-level #{node.type}: #{node.loc.expression.source}"
             end
@@ -41,10 +44,15 @@ module Swill
             "kind" => kind, "scope" => scope, "node" => node,
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
             "includes" => [], "properties" => [], "methods" => [], "static_methods" => [], "included_properties" => [],
-            "class_methods" => [], "registries" => [], "settings" => [], "restorations" => []
+            "class_methods" => [], "class_method_entries" => [], "registries" => [], "settings" => [],
+            "setting_values" => {}, "relationships" => [], "restorations" => []
           }
           pending_signature = nil
           statements(node.children.last).each do |child|
+            # async def name ... end parses as async(def ...): the method is
+            # asynchronous and may await.
+            async = self.class.async_wrapper?(child)
+            child = child.children[2] if async
             if child.type == :def
               method, args, = child.children
               unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :method_missing
@@ -58,7 +66,8 @@ module Swill
                 "name" => method.to_s, "js" => self.class.member(method),
                 "arity" => args.children.length,
                 "parameters" => signature_parameters(pending_signature),
-                "returns" => signature_return(pending_signature)
+                "returns" => signature_return(pending_signature),
+                "async" => async
               }
               pending_signature = nil
             elsif signature?(child)
@@ -81,7 +90,7 @@ module Swill
                 entry["properties"].concat(mixin.fetch("included_properties", []).map(&:dup))
               end
             elsif child.type == :defs && kind == "class"
-              collect_static_method(entry, child, pending_signature)
+              collect_static_method(entry, child, pending_signature, async)
               pending_signature = nil
             elsif child.type == :defs && kind == "mixin"
               collect_included_hook(entry, child)
@@ -92,6 +101,11 @@ module Swill
               # collect_scope records nested constants as their own entries.
             elsif child.type == :send && child.children[0..1] == [nil, :restorable]
               collect_restorable(entry, child)
+            elsif child.type == :send && child.children[0].nil? && RELATIONSHIP_MACROS.include?(child.children[1])
+              raise CompileError, "relationships are declared on classes" unless kind == "class"
+              collect_relationship(entry, child)
+            elsif child.type == :send && child.children[0].nil? && setting_declared?(entry, child.children[1])
+              collect_setting_value(entry, child)
             elsif declaration?(child)
               collect_property(entry, child)
             else
@@ -109,7 +123,12 @@ module Swill
 
         # def self.name(args) on a class: a static method. Inside it, self is
         # the class and a bare new constructs it.
-        def collect_static_method(entry, node, signature)
+        def self.async_wrapper?(node)
+          node.type == :send && node.children[0].nil? && node.children[1] == :async &&
+            node.children.length == 3 && node.children[2].respond_to?(:type) && %i[def defs].include?(node.children[2].type)
+        end
+
+        def collect_static_method(entry, node, signature, async)
           receiver, method, args, body = node.children
           raise CompileError, "class methods are defined on self" unless receiver.type == :self
           unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :new
@@ -121,7 +140,8 @@ module Swill
           validate_expression!(body)
           entry["static_methods"] << {
             "name" => method.to_s, "js" => self.class.member(method), "arity" => args.children.length,
-            "parameters" => signature_parameters(signature), "returns" => signature_return(signature)
+            "parameters" => signature_parameters(signature), "returns" => signature_return(signature),
+            "async" => async
           }
         end
 
@@ -158,13 +178,15 @@ module Swill
         end
 
         def collect_class_methods(entry, node)
+          pending_signature = nil
           statements(node.children.last).each do |statement|
             if statement.type == :def
               method, args, = statement.children
-              if DECLARATION_MACROS.include?(method)
+              if DECLARATION_MACROS.include?(method) || RELATIONSHIP_MACROS.include?(method)
                 # A class method named after a declaration macro is its MRI
                 # implementation. The compiler lowers the declaration itself
                 # (collect_property) and never compiles that body.
+                pending_signature = nil
                 next
               end
               unless args.children.all? { |arg| arg.type == :arg }
@@ -172,9 +194,16 @@ module Swill
               end
               validate_expression!(statement.children.last)
               entry["class_methods"] << statement
+              entry["class_method_entries"] << {
+                "name" => method.to_s, "js" => self.class.member(method), "arity" => args.children.length,
+                "parameters" => signature_parameters(pending_signature),
+                "returns" => signature_return(pending_signature)
+              }
+              pending_signature = nil
             elsif statement.type == :send && statement.children[0..1] == [nil, :extend] &&
-                  constant(statement.children.fetch(2)) == "Swill::Declarations"
-              # The compiler implements this finite declaration protocol directly.
+                  %w[Swill::Declarations T::Sig].include?(constant(statement.children.fetch(2)))
+              # The compiler implements this finite declaration protocol
+              # directly; T::Sig is annotation-only.
             elsif statement.type == :send && statement.children.first.nil? &&
                   %i[inheritable_registry class_setting].include?(statement.children[1])
               _, macro, name, *options = statement.children
@@ -186,7 +215,9 @@ module Swill
                 entry["settings"] << name.children.first.to_s
               end
             elsif signature?(statement)
-              # Sorbet checks signatures; executable definitions omit them.
+              # Sorbet checks signatures; executable definitions omit them,
+              # and the compiler reads the types.
+              pending_signature = statement
             else
               raise CompileError, "unsupported ClassMethods body: #{statement.loc.expression.source}"
             end

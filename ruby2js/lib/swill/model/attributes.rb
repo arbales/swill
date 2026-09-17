@@ -7,6 +7,9 @@ module Swill
     # the class-side protocol statically and the runtime installs ordinary
     # JavaScript properties from the resulting metadata.
     module Attributes
+      extend T::Sig
+
+      sig { params(base: T.class_of(Swill::Object)).void }
       def self.included(base)
         base.extend(ClassMethods)
       end
@@ -35,10 +38,13 @@ module Swill
         end
       end
 
+      # Attribute values by wire key.
+      sig { returns(T::Hash[T.untyped, T.untyped]) }
       def collect_attributes
         Swill::Runtime.collect_attributes(self)
       end
 
+      sig { params(source: T.untyped).returns(T.self_type) }
       def apply_attributes(source)
         Swill::Runtime.apply_attributes(self, source)
       end

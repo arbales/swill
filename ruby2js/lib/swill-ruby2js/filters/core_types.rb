@@ -247,6 +247,13 @@ module Swill
             when :negated then truthy_body(body, true)
             else body ? process(body) : s(:begin)
             end
+          # A body of several statements is a function body, whose last
+          # expression is the block's value, as it is in Ruby. (The Return
+          # filter leaves these methods' blocks alone, expecting concise
+          # arrow functions, which only single expressions become.)
+          if body_node.type == :begin && body_node.children.length > 1
+            body_node = s(:autoreturn, body_node)
+          end
           subject = process(receiver)
           subject = s(:call, s(:const, nil, :Object), :entries, subject) if kind == :hash
           call =

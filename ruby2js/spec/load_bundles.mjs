@@ -13,8 +13,10 @@ export function bundleEnvironment({minified = false} = {}) {
   return {context, load};
 }
 
+// The framework with the sandbox global alongside, so a test can install
+// what a page would provide (a fetch).
 export function loadBundles() {
   const environment = bundleEnvironment();
   environment.load("swill");
-  return environment.load("app");
+  return {...environment.load("app"), context: environment.context};
 }

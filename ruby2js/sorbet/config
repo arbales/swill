@@ -31,3 +31,10 @@ lib/swill/model/base.rb
 --dir=sorbet/checks
 --silence-dev-message
 --enable-experimental-requires-ancestor
+lib/swill/core/wire.rb
+lib/swill/core/value_transformer.rb
+lib/swill/model/store.rb
+lib/swill/model/identity.rb
+lib/swill/model/relationship.rb
+lib/swill/model/codec.rb
+lib/swill/model/dataset.rb

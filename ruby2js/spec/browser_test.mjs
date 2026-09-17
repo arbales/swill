@@ -29,6 +29,7 @@ let socket;
 const pending = new Map();
 const exceptions = [];
 let sequence = 0;
+let evaluate;
 const call = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
   const id = ++sequence;
   pending.set(id, {resolve, reject});
@@ -74,7 +75,7 @@ try {
   const {targetId} = await call("Target.createTarget", {url: "about:blank"});
   const {sessionId} = await call("Target.attachToTarget", {targetId, flatten: true});
   await call("Runtime.enable", {}, sessionId);
-  const evaluate = async expression => {
+  evaluate = async expression => {
     const result = await call("Runtime.evaluate", {expression, awaitPromise: true, returnByValue: true}, sessionId);
     assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
     return result.result.value;
@@ -438,6 +439,15 @@ try {
   assert.equal(await evaluate(`Swill.Application.isRunning()`), false);
   assert.deepEqual(exceptions, []);
   console.log("Chrome: compiled Ruby and no-build JavaScript applications passed.");
+} catch (error) {
+  // What the page saw, for the failure.
+  console.error("page exceptions:", JSON.stringify(exceptions.map(e => e.exceptionDetails?.exception?.description ?? e.exceptionDetails?.text), null, 2));
+  try {
+    console.error("main window:", JSON.stringify(await evaluate(`[document.body.dataset.swillError || null, document.querySelector("[window=main]")?.outerHTML.slice(0, 400)]`)));
+  } catch (inner) {
+    console.error("page state unavailable:", inner.message);
+  }
+  throw error;
 } finally {
   clearTimeout(timeout);
   socket?.close();

@@ -99,6 +99,52 @@ module Swill
           nil
         end
 
+        # A member of the class object: a static method, or a method,
+        # registry, or setting an included mixin's ClassMethods provides, on
+        # the class or an ancestor. Configuration reads answer T.untyped.
+        def class_member_entry(type, method)
+          entry = entries.find { |candidate| candidate["name"] == type }
+          return nil unless entry
+          name = method.to_s
+          found = entry.fetch("static_methods", []).find { |candidate| candidate["name"] == name }
+          return found if found
+          # A mixin's own ClassMethods, while its layer compiles.
+          found = entry.fetch("class_method_entries", []).find { |candidate| candidate["name"] == name }
+          return found if found
+          if entry.fetch("registries", []).any? { |registry| registry["name"] == name } || entry.fetch("settings", []).include?(name)
+            return {"name" => name, "js" => Knowledge.member(name), "arity" => 0, "parameters" => {},
+                    "returns" => "T.untyped", "configuration" => true}
+          end
+          entry["includes"].reverse_each do |mixin_name|
+            mixin = entries.find { |candidate| candidate["name"] == resolve(mixin_name, entry["scope"]) }
+            next unless mixin && mixin["extends_class_methods"]
+            found = mixin.fetch("class_method_entries", []).find { |candidate| candidate["name"] == name }
+            return found if found
+            if mixin["registries"].any? { |registry| registry["name"] == name } || mixin["settings"].include?(name)
+              return {"name" => name, "js" => Knowledge.member(name), "arity" => 0, "parameters" => {},
+                      "returns" => "T.untyped", "configuration" => true}
+            end
+          end
+          return nil unless entry["parent"]
+          class_member_entry(resolve(entry["parent"], entry["scope"]), method)
+        rescue CompileError
+          nil
+        end
+
+        # Whether a class body may set +name+: a class_setting an included
+        # mixin, or an ancestor's, declares. The entry is still being built.
+        def setting_declared?(entry, name)
+          entry["includes"].each do |mixin_name|
+            mixin = entries.find { |candidate| candidate["name"] == resolve(mixin_name, entry["scope"]) }
+            return true if mixin && mixin.fetch("settings", []).include?(name.to_s)
+          end
+          return false unless entry["parent"]
+          parent = entries.find { |candidate| candidate["name"] == resolve(entry["parent"], entry["scope"]) }
+          parent ? setting_declared?(parent, name) : false
+        rescue CompileError
+          false
+        end
+
         def property_entry(type, name)
           entry = entries.find { |candidate| candidate["name"] == type }
           return nil unless entry

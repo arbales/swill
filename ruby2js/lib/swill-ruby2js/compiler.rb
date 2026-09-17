@@ -24,6 +24,8 @@ module Swill
       lib/swill/core/ownership.rb
       lib/swill/core/object_bindings.rb
       lib/swill/core/notification_center.rb
+      lib/swill/core/wire.rb
+      lib/swill/core/value_transformer.rb
       lib/swill/core/responder.rb
       lib/swill/core/view.rb
       lib/swill/control/base.rb
@@ -46,6 +48,11 @@ module Swill
       lib/swill/model/attributes.rb
       lib/swill/model/dirty_tracking.rb
       lib/swill/model/drafts.rb
+      lib/swill/model/store.rb
+      lib/swill/model/identity.rb
+      lib/swill/model/relationship.rb
+      lib/swill/model/codec.rb
+      lib/swill/model/dataset.rb
       lib/swill/model/base.rb
     ].freeze
 
@@ -62,6 +69,9 @@ module Swill
         def add(source, file: "(spike)")
           knowledge.collect(source, file)
           self
+        rescue CompileError => error
+          raise error if file == "(spike)"
+          raise CompileError, "#{file}: #{error.message}"
         end
 
         def javascript(runtime:, framework: nil)
@@ -134,7 +144,11 @@ module Swill
             parent = mixin ? "Superclass" : (entry["parent"] ? reference(entry["parent"], scope) : "Object")
             class_name = mixin ? "#{id}_Layer" : id
             source = entry["node"].loc.expression.source
-            js = convert(source, entry, compiled_class: class_name, compiled_parent: parent)
+            js = begin
+              convert(source, entry, compiled_class: class_name, compiled_parent: parent)
+            rescue CompileError => error
+              raise CompileError, "#{entry['node'].loc.expression.source_buffer.name} (#{entry['name']}): #{error.message}"
+            end
             if mixin
               lines << "export function #{id}(Superclass) {\n#{js}\nreturn #{class_name};\n}"
               lines << class_method_factory(entry) if entry["extends_class_methods"]
@@ -196,6 +210,7 @@ module Swill
               restoration["type"] = restoration_type(entry, restoration["path"].split("."))
             end
             resolve_outlet_types(entry)
+            resolve_relationship_types(entry)
             canonicalize_signatures(entry)
             members = entry["properties"].map { |p| [p["js"], p["name"]] } +
               entry["methods"].map { |m| [m["js"], m["name"]] }
@@ -207,13 +222,14 @@ module Swill
             available << entry["name"]
           end
         end
+        public :validate!
 
         # Signature types are written in the entry's own scope (View inside
         # module Swill). An importing build resolves them from elsewhere, so
         # every class name that resolves here is spelled out in full.
         def canonicalize_signatures(entry)
           scope = entry["name"].split("::")
-          (entry["methods"] + entry.fetch("static_methods", [])).each do |method|
+          (entry["methods"] + entry.fetch("static_methods", []) + entry.fetch("class_method_entries", [])).each do |method|
             method["returns"] = canonical_type(method["returns"], scope) if method["returns"]
             method["parameters"] = method["parameters"].transform_values { |type| canonical_type(type, scope) }
           end
@@ -243,6 +259,23 @@ module Swill
             target = knowledge.entries.find { |candidate| candidate["name"] == resolved }
             raise CompileError, "outlet #{property['name']}: #{inner} is not a class" unless target["kind"] == "class"
             property["type"] = type.sub(inner, resolved)
+          end
+        end
+
+        # A relationship names a model class, possibly declared later; the
+        # descriptor and the two properties carry its installed name.
+        def resolve_relationship_types(entry)
+          entry["relationships"].each do |relationship|
+            resolved = knowledge.resolve(relationship["type"], entry["name"].split("::"))
+            target = knowledge.entries.find { |candidate| candidate["name"] == resolved }
+            unless target["kind"] == "class"
+              raise CompileError, "relationship #{relationship['name']}: #{relationship['type']} is not a class"
+            end
+            %W[#{relationship['name']} #{relationship['name']}_loading].each do |name|
+              property = entry["properties"].find { |candidate| candidate["name"] == name }
+              property["type"] = property["type"].sub(relationship["type"], resolved)
+            end
+            relationship["type"] = resolved
           end
         end
 

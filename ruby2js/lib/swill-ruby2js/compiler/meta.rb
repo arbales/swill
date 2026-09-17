@@ -31,6 +31,21 @@ module Swill
                 fields << "registries: {#{seeded.join(",\n")}}"
               end
             end
+            unless mixin || entry["setting_values"].empty?
+              settings = entry["setting_values"].map do |name, value|
+                literal = value.key?("constant") ? reference(value["constant"], entry["scope"]) : value["literal"].to_json
+                "{name: #{name.to_json}, js: #{Knowledge.member(name).to_json}, value: #{literal}}"
+              end
+              fields << "settings: [#{settings.join(', ')}]"
+            end
+            unless mixin || entry["relationships"].empty?
+              relationships = entry["relationships"].map do |relationship|
+                "#{object_key(relationship['name'])}: {name: #{relationship['name'].to_json}, " \
+                  "key: #{relationship['key'].to_json}, kind: #{relationship['kind'].to_json}, " \
+                  "type: #{reference(relationship['type'], entry['scope'])}, url: #{relationship['url'].to_json}}"
+              end
+              fields << "relationships: {\n#{relationships.join(",\n")}\n}"
+            end
             unless mixin || entry["restorations"].empty?
           restorations = entry["restorations"].map do |restoration|
             "{path: #{restoration['path'].to_json}, key: #{restoration['key'].to_json}, type: #{restoration['type'].to_json}}"
@@ -94,8 +109,10 @@ module Swill
             "#{Knowledge.member(name)}() { return Runtime.inheritableRegistry(this, " \
               "#{Knowledge.member(name).to_json}, #{registry['initial'].to_json}); }"
           end
+          # A setting is stored under its Ruby name, the name a lookup by
+          # value (Runtime.classWithSetting) is written with.
           declarations.concat(entry["settings"].map do |name|
-            "#{Knowledge.member(name)}(...values) { return Runtime.classSetting(this, #{Knowledge.member(name).to_json}, values); }"
+            "#{Knowledge.member(name)}(...values) { return Runtime.classSetting(this, #{name.to_json}, values); }"
           end)
           unless declarations.empty?
             insertion = declarations.join("\n")

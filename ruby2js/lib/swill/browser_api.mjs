@@ -109,6 +109,16 @@ export function browserAPI(definitions, Runtime) {
   const Select = definitions.Swill__Control__Select;
   const CustomSelect = definitions.Swill__Control__CustomSelect;
   const NotificationCenter = definitions.Swill__NotificationCenter;
+  const Wire = definitions.Swill__Wire;
+  const ValueTransformer = definitions.Swill__ValueTransformer;
+  const Model = Object.freeze({
+    Base: definitions.Swill__Model__Base,
+    Store: definitions.Swill__Model__Store,
+    Codec: definitions.Swill__Model__Codec,
+    PlainJSON: definitions.Swill__Model__PlainJSON,
+    JSONAPI: definitions.Swill__Model__JSONAPI,
+    Dataset: definitions.Swill__Model__Dataset
+  });
   const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList,
     Control, TextField, Select, CustomSelect]);
 
@@ -171,6 +181,9 @@ export function browserAPI(definitions, Runtime) {
     Select,
     CustomSelect,
     NotificationCenter,
+    Wire,
+    ValueTransformer,
+    Model,
     register,
     start
   });

@@ -74,6 +74,13 @@ module Swill
       self
     end
 
+    # The browser window the application runs in, for what only it offers:
+    # a prompt, printing.
+    sig { returns(DOMWindow) }
+    def browser
+      T.must(root.ownerDocument.defaultView)
+    end
+
     # Every controller awakened at launch, in document order.
     sig { returns(T::Array[Controller]) }
     def controllers
@@ -142,7 +149,9 @@ module Swill
       awakening.finish(controllers)
       controller = window.controller
       if controller
-        make_first_responder(controller)
+        # The content's own choice (a field focused in controller_did_load)
+        # stands; otherwise the controller takes the first responder.
+        make_first_responder(controller) unless responder_within?(first_responder, container)
       elsif attached?(previous)
         make_first_responder(previous)
       end
@@ -177,7 +186,7 @@ module Swill
       @windows << window
       restore_window_state(window, false, false)
       awakening.finish(controllers)
-      make_first_responder(controller)
+      make_first_responder(controller) unless responder_within?(first_responder, node)
       window
     end
 
@@ -417,6 +426,15 @@ module Swill
     sig { params(window: Window, controller: Controller).returns(T::Boolean) }
     def holds?(window, controller)
       window.contains_controller?(controller)
+    end
+
+    # Whether a responder's element sits inside an element; the application
+    # itself sits nowhere.
+    sig { params(responder: Responder, container: Element).returns(T::Boolean) }
+    def responder_within?(responder, container)
+      return false if responder == self
+      element = responder_element(responder)
+      element != nil && container.contains(element)
     end
 
     sig { params(responder: T.nilable(Responder)).returns(T::Boolean) }
