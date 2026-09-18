@@ -14,7 +14,9 @@ document and the code disagree, fix one of them in the same change.
 | `swill-ruby2js/names.rb` | Identifier and member encoding, JavaScript intrinsics, `CompileError` |
 | `swill-ruby2js/knowledge.rb` | The fact model: entries, constant resolution, method and property lookup |
 | `swill-ruby2js/knowledge/collection.rb` | Walking class and module bodies into entries |
-| `swill-ruby2js/knowledge/declarations.rb` | The `property`, `attribute`, and `outlet` DSL |
+| `swill-ruby2js/knowledge/reflection.rb` | Loaded classes to entries: what a class body declared |
+| `swill-ruby2js/knowledge/validation.rb` | What a method body may contain |
+| `swill-ruby2js/loader.rb` | Containers, the shared framework container, DOM stubs, and load errors |
 | `swill-ruby2js/knowledge/dom.rb` | The DOM and browser intrinsics as the compiler knows them; generates `sorbet/rbi/dom.rbi` |
 | `swill-ruby2js/knowledge/signatures.rb` | Reading `sig` parameter and return types and source ranges |
 | `swill-ruby2js/filters/shared_lowering.rb` | `raise`, callable invocation, constructor, static method, `warn`, and `respond_to?` lowering |
@@ -33,6 +35,9 @@ document and the code disagree, fix one of them in the same change.
 | `swill/runtime/paths.mjs` | Key paths, dynamic read and write, `respond_to?`, and action dispatch |
 | `swill/runtime/install.mjs` | Installation, mixin linking, registries, and the class registry |
 | `swill/runtime/attributes.mjs` | Outlet and attribute views of an object |
+| `swill/runtime/declarations.rb` | The MRI host's declaration primitives: `property`, registries, settings, `forward`, `macro` |
+| `swill/runtime/properties.rb` | The MRI host's mutation and read path, mirroring `properties.mjs` |
+| `swill/runtime/attributes.rb` | The MRI host's attribute views, mirroring `attributes.mjs` |
 | `swill/browser_api.mjs` | Plain JavaScript registration and manual application startup |
 
 ## Contents
@@ -52,7 +57,8 @@ document and the code disagree, fix one of them in the same change.
 ```text
 Ruby source
   → Ruby2JS.parse                 (Prism walker on Ruby 3.4+, parser gem otherwise)
-  → Knowledge#collect             (static facts; class bodies are never executed)
+  → Loader#evaluate               (class bodies run in a container; method bodies never do)
+  → Knowledge#collect             (structure from the AST, declarations by reflection)
   → Compiler#validate!            (ordering, ancestry, member collisions)
   → Ruby2JS.convert per entry     (Swill filters + Return; Pragma on shared Ruby)
   → esbuild --loader=js           (formatting only; part of every emission)
@@ -72,21 +78,57 @@ The suite passes and produces identical bundles under either.
 
 ## Knowledge collection
 
-`Swill::Ruby2JS::Knowledge` walks the AST and records one entry per class or
-mixin. Nothing is evaluated. An entry holds:
+Only one thing about a Ruby class body genuinely cannot be ported to the
+browser 1:1: it runs at class-definition time, and the browser must receive
+classes whose accessors and metadata are already installed. So the compiler
+runs it. `Swill::Ruby2JS::Loader` evaluates every source on MRI inside an
+anonymous container module, and `Swill::Ruby2JS::Knowledge` then builds one
+entry per class or mixin from two sources: the AST, for everything only the
+source knows, and the defined class, for everything the class body declared.
+Method bodies never run; the sources only have to load.
 
-| Field | Content |
-| --- | --- |
-| `name`, `identifier` | Ruby constant path and its JavaScript identifier |
-| `kind` | `class` or `mixin` |
-| `scope`, `parent` | Enclosing namespaces and the superclass constant as written |
-| `includes` | Mixins in factory-nesting order (see [Mixins](#mixins)) |
-| `properties` | Own declarations plus copies of included-hook declarations |
-| `methods` | Name, JavaScript member name, arity, signature parameter types, signature return type |
-| `included_properties` | Declarations a mixin's `self.included` hook contributes |
-| `class_methods`, `registries`, `settings` | A mixin's `ClassMethods` protocol |
+Collection is three passes per file. First the constants the source would
+declare, so a file that would reopen a class the compiler already knows is
+rejected before it can mutate the shared framework container. Then the
+evaluation. Then the entries.
+
+An entry holds:
+
+| Field | From | Content |
+| --- | --- | --- |
+| `name`, `identifier` | AST | Ruby constant path and its JavaScript identifier |
+| `kind` | AST | `class` or `mixin` |
+| `scope`, `parent` | AST | Enclosing namespaces and the superclass constant as written |
+| `includes` | AST | Mixins in factory-nesting order (see [Mixins](#mixins)) |
+| `methods` | AST, plus `forward` | Name, JavaScript member name, arity, signature parameter types, signature return type, and whether it is asynchronous |
+| `class_methods` | AST | A mixin's `ClassMethods` bodies, compiled as written |
+| `properties` | class | One descriptor per `property`, in declaration order, however it was declared |
+| `registries`, `settings` | class | What a mixin's `ClassMethods` declares |
+| `registry_values`, `setting_values` | class | What this class put in a registry, and what it set a setting to |
+| `restorations` | class | Bindable paths kept in the URL fragment |
+| `included_properties` | class | What a mixin's `self.included` hook declares, read from a class that includes it |
 
 Imported entries from another compiler carry the same fields, minus the AST.
+
+### Containers
+
+A container is an anonymous `Module` with a temporary name, so a build adds
+nothing to the global namespace and is collectable when it ends. Inside one,
+`require` and `require_relative` are inert: the build decides the order and
+hands the sources over in it.
+
+The framework's container is built once per process. Each application's
+container is given the framework's own constants, so an application resolves
+`Swill::Controller`, subclasses the same class object, keeps its own
+declarations, and leaves the framework's untouched. A watch rebuild evaluates
+only the application's files.
+
+Sigs and declarations may name a DOM class, so a stub for every entry in
+`knowledge/dom.rb` is defined in the container first, parents before children.
+
+A load error becomes a `CompileError` reading `path:line: message`, with the
+container's prefix stripped, and Sorbet's declaration state is reset so a
+failed class body cannot poison the next one.
 
 ### Modules
 
@@ -105,8 +147,7 @@ A class or mixin body may contain only:
 | `sig { ... }` | Parameter and return types are recorded for lowering, then erased |
 | `extend T::Sig` | Erased |
 | `include A, B` / `include A` | Recorded; targets must be previously defined mixins |
-| `property` / `attribute` / `outlet` | Collected as declarations (below) |
-| `restorable :path, key: :k` | Controllers only. A literal dotted path whose first segment is a declared property; the leaf's declared type is recorded when every segment is statically typed. Emitted as `restorations` metadata |
+| `property :name, ...`, or any declaration macro | Ran when the class body ran; the entry reads what it declared off the class (see [Declaration macros](#declaration-macros)) |
 | `def self.name(positional, args)` | Classes only: a static method under the same name rules. Inside it `self` is the class and a bare `new` constructs it; `self.new` is rejected as a name |
 | `async def name(...)`, `async def self.name(...)` | The same, marked asynchronous: it compiles to an `async` method and its body may `await` |
 | `def self.included(base)` | Mixins only; see [Included hooks](#included-hooks) |
@@ -115,7 +156,45 @@ A class or mixin body may contain only:
 
 Anything else is a compile error naming the statement.
 
-### Declarations
+### Declaration macros
+
+A declaration is ordinary Ruby: a class method that runs when the class body
+runs. `property` is the primitive every other declaration is built on, and a
+macro is a class method marked with `macro`, which makes it callable in a class
+body and keeps it out of the emitted JavaScript.
+
+```ruby
+module Swill
+  module Model
+    module Relationships
+      module ClassMethods
+        extend Swill::Declarations
+
+        inheritable_registry :model_relationships
+
+        macro def has_many(name, type:, key: name, url: nil, will_access: true)
+          declare_relationship(name, type, key, url, "many", will_access)
+        end
+      end
+    end
+  end
+end
+```
+
+A macro may declare five kinds of thing, all of them serializable:
+
+| Primitive | Emits |
+| --- | --- |
+| `property` (and `outlet`, `restorable`, `attribute`, `has_many` built on it) | A descriptor the runtime installs as a prototype accessor |
+| `inheritable_registry` entries | Data in the class's own registry |
+| `class_setting` values | A value applied at installation |
+| `forward` | A real, typed method on the class |
+| `will_access:` on a property | The read notifies the object, so a value can load itself |
+
+Nothing else reaches the browser: no macro machinery is emitted, and a plugin's
+macro emits the same shapes with no change to the compiler. A macro may not
+`define_method` with a block, because the block closes over the macro's locals
+and compiling it would mean substituting captured values into an AST.
 
 ```ruby
 property :loud, type: T::Boolean, default: false
@@ -130,45 +209,56 @@ outlet :seed, type: T::Hash[String, String]
 outlet :extra, type: T.untyped, optional: true
 ```
 
-| Rule | Detail |
+| Keyword | Detail |
 | --- | --- |
-| Name | Literal symbol matching `/\A[a-z_]\w*\??\z/`; a `?` suffix only on computed properties |
-| Keywords | `type:` required; `default:` optional for `property`, required for `attribute`; `key:` only meaningful for `attribute`; `optional:` only for `outlet` |
-| Types | `String`, `Integer`, `T::Boolean`, `T.nilable(String)`, `T.nilable(Const)`, `T::Array[...]`, `T::Hash[...]`, a constant path, or `T.untyped` as an explicit opt-out of static lowering |
-| Outlets | A stored, nilable, observable property with `outlet` and `optional` metadata, connected at awakening; never computed and never defaulted. The macro is declared on `Swill::Controller` in the RBI, so Sorbet limits it to controllers |
-| Outlet types | Name the connected value: a framework class for a view or child controller, `T::Hash[...]` or `T::Array[...]` for decoded JSON, `T.untyped` for anything. A class type is resolved to its installed name after collection and must be a class. Awakening checks a typed outlet's value against the type shallowly, as `T.cast` does, so a JSON script that decodes to the wrong shape, or that is connected where a view is declared, fails by outlet name |
-| Defaults | Literal string, integer, `nil`, `true`, `false`, or an empty `[]` or `{}`; the generated default is a function, so each instance gets its own collection. Non-empty collection literals are rejected |
-| Computed | Block form, `do`/`end` or braces, no block arguments, no `default:`; `attribute` cannot be computed |
-| Key | Literal symbol or string; defaults to the name |
+| Name | Matches `/\A[a-z_]\w*\??\z/`; a `?` suffix only on computed properties |
+| `type:` | A Sorbet type, or its text when the class it names is defined later |
+| `default:` | Literal string, number, symbol, `nil`, `true`, `false`, or an empty `[]` or `{}`; the emitted default is a function, so each instance gets its own collection. Anything mutable is rejected |
+| Block | A computed property: no block arguments, no `default:` |
+| `attribute:`, `key:` | Marks the property an attribute with a wire key, which is what the validation, dirty-tracking, and codec paths read |
+| `outlet:`, `optional:` | Marks the property an outlet, connected at awakening |
+| `will_access:` | The getter calls `property_will_access(name)` before it resolves |
 
-Each entry rejects duplicate property names, including duplicates between its
-own declarations and those copied from included hooks.
+The framework's own macros:
 
-### Relationships and class settings
+| Macro | Declares |
+| --- | --- |
+| `attribute :name, type:, default:, key:` | A property marked as an attribute, and the same declaration as data in `model_attributes` |
+| `outlet :field, type:, optional:` | A stored, nilable, observable property with `outlet` and `optional` metadata. Declared on `Swill::Controller`, so only a controller can call it. The type names the connected value: a framework class for a view or child controller, `T::Hash[...]` or `T::Array[...]` for decoded JSON, `T.untyped` for anything. Awakening checks a typed outlet's value against the type shallowly, as `T.cast` does, so a JSON script that decodes to the wrong shape fails by outlet name |
+| `restorable :path, key: :k` | A dotted property path the application keeps in the URL fragment. The leaf's declared type is recorded when every segment is statically typed. Declared on `Swill::Controller` |
+| `has_many :name, type:, key:, url:, will_access:` | Two properties (`name`, of `T::Array[Type]` defaulting to `[]`, and `name_loading`), a `model_relationships` entry, and `load_name` / `reload_name` as real typed methods. `:id` in `url:` stands for the owner's id |
+| `has_one :name, ...` | The same, with `T.nilable(Type)` defaulting to `nil` |
+
+A relationship, or an outlet, may name a class defined later by writing its
+name as a string, which is what a genuine cycle needs; the descriptor carries
+the installed name either way, and the compiler checks that the name is a
+class once the whole graph is known.
+
+### Class settings
 
 ```ruby
 class Menu < Swill::Model::Base
   endpoint "/api/menus"
   resource_type "menus"
   codec Swill::Model::PlainJSON      # JSON:API unless declared
-  has_many :menu_recipes, type: MenuRecipe, key: "menu_recipes", url: "/api/menus/:id/recipes"
-  has_one :detail, type: "CocktailDetail"
 end
 ```
 
-| Rule | Detail |
-| --- | --- |
-| Settings | A class body may call any `class_setting` an included `ClassMethods` (or an ancestor's) declares, with one literal (string, symbol, number, boolean, `nil`) or one class constant. Nothing is evaluated: the value is emitted as `settings` in the meta object and applied through the setting method at installation. A name no mixin declares is an unsupported class body |
-| `has_many` / `has_one` | Literal symbol name; `type:` a class constant, or its name as a string when the class is declared later; `key:` literal symbol or string, the wire key, defaulting to the name; `url:` a literal string in which `:id` stands for the owner's id. Declares two stored properties, `name` (`T::Array[Type]` defaulting to `[]`, or `T.nilable(Type)` defaulting to `nil`) and `name_loading` (`T::Boolean`), and a descriptor emitted as `relationships`. The type must resolve to a class after collection. Relationships are declared on classes, not mixins |
+A class body may set any `class_setting` an included `ClassMethods`, or an
+ancestor's, declares. The value is emitted as `settings` in the meta object and
+applied through the setting method at installation, and is stored under the
+Ruby name so `Runtime.classWithSetting` can look a class up by it. Reading a
+setting in a class body says nothing and is rejected; a name nothing declares
+is an undefined method, with the file and line it was written on.
 
 ### Included hooks
 
 A mixin may declare exactly one `def self.included(base)` whose body consists
-only of `base.extend(ClassMethods)` and literal `base.property` /
-`base.attribute` calls, stored or computed. Those declarations are copied into
-every class that includes the mixin, each class receiving its own descriptor,
-and a computed block compiles in each receiving class. The hook itself is
-never emitted or executed.
+only of `base.extend(ClassMethods)` and declarations on `base`. Every class
+that includes the mixin runs the hook and so owns its own descriptors, and a
+computed block compiles in each receiving class. The hook is never emitted, and
+the compiler runs it once more against a throwaway class so the mixin's own
+RBI can name what it declares.
 
 ### Class methods
 
@@ -176,12 +266,11 @@ A mixin's `module ClassMethods` may contain:
 
 | Statement | Result |
 | --- | --- |
-| `extend Swill::Declarations` | Accepted and erased; the compiler implements the protocol |
-| `inheritable_registry :name` / `:name, :array` | A per-class registry that copies its parent's contents on first access |
-| `inheritable_registry :name, seeded_by: :attribute` | The same registry, and every class inheriting it receives one entry per `attribute` declaration, emitted as `registries` in the meta object. On MRI the macro's own implementation seeds it |
-| `class_setting :name` | A per-class value that falls back to the parent's; a class body sets it with a literal (see [Relationships and class settings](#relationships-and-class-settings)), and the value is stored under the Ruby name so `Runtime.classWithSetting` can look a class up by it |
+| `extend Swill::Declarations` | Accepted and erased: the browser gets the declarations' result, not the primitives |
+| `inheritable_registry :name` / `:name, :array` | A per-class registry that copies its parent's contents on first access. What a class put in it travels in the meta object as `registries` and is applied at installation |
+| `class_setting :name` | A per-class value that falls back to the parent's; a class body sets it with a literal (see [Class settings](#class-settings)), and the value is stored under the Ruby name so `Runtime.classWithSetting` can look a class up by it |
 | `def name(positional)` | Compiled as a class-side method; inside it `self` is the class, so bare calls reach static methods, other `ClassMethods` methods, registries, and settings |
-| `def property` / `def attribute` / `def outlet` / `def has_many` / `def has_one` | Not compiled: a class method named after a declaration macro is that macro's MRI implementation, and the compiler lowers the declaration itself |
+| `macro def name(...)` | A declaration macro. It runs when a class body calls it and is never emitted, so its body may use the full declaration vocabulary |
 | `extend T::Sig`, `sig { ... }` | Read for parameter and return types, never emitted |
 
 ### Pragmas
@@ -255,24 +344,30 @@ export const meta = {
       mixins: [NormalizeName, StripName, DecorateName],
       properties: {
         "name": {type: "String", attribute: true, key: "name",
-                 defaultValue: function defaultName() { return ""; }},
+                 defaultValue() { return ""; }},
         "label": {type: "String", attribute: false,
                   compute: function computeLabel() { return this.loud ? Runtime.upcase(this.name) : this.name; }},
         "blank?": {js: "isBlank", type: "T::Boolean", attribute: false, compute: ...},
         "badge": {type: "T.nilable(Demo::Badge)", attribute: false, outlet: true, optional: false,
-                  defaultValue: function defaultBadge() { return null; }},
-        "seed": {type: "T.nilable(T::Hash[String, String])", attribute: false, outlet: true, optional: false,
-                 defaultValue: function defaultSeed() { return null; }}
+                  defaultValue() { return null; }},
+        "books": {type: "T::Array[Demo::Book]", attribute: false, willAccess: true,
+                  defaultValue() { return []; }}
       },
-      registries: {modelAttributes: {"name": {property: "name", key: "name"}}},
-      methods: {"greeting": {"arity": 0}, "rename": {"arity": 1}}
+      registries: {
+        modelAttributes: {"name": {"name": "name", "key": "name", "type": "String", "default": ""}},
+        modelRelationships: {"books": {"name": "books", "key": "books", "kind": "many",
+                                       "type": "Demo::Book", "url": "/api/authors/:id/books"}}
+      },
+      methods: {"greeting": {"arity": 0}, "loadBooks": {"arity": 0}}
     }
   }
 };
 ```
 
-`meta` contains executable functions and plain data. It contains no Ruby
-source and no compiler AST. Object keys use the Ruby name; `js` is present only
+`meta` is the serialization of each class's declaration-time state, and
+`Runtime.install` is its deserializer. Registry values and settings are plain
+data the runtime applies without knowing what any of it means; a plugin's macro
+emits the same shapes. `meta` contains no Ruby source and no compiler AST. Object keys use the Ruby name; `js` is present only
 when the JavaScript member differs. A `__proto__` key is emitted as a computed
 key so it stays an ordinary entry.
 
@@ -575,7 +670,7 @@ prototypes it did not create, and provides no universal dynamic send.
 | --- | --- |
 | `install(meta)` | Validates every entry first, then installs classes superclass-first regardless of key order. Errors: `Duplicate class`, `Missing constructor`, `Unknown mixin for`, `Duplicate constructor in meta`, `Mixin factory must be a function`, `ClassMethods factory must be a function`, `Unresolvable superclass order in meta` |
 | `include(klass, mixins, incoming)` | Rewires `klass` and `klass.prototype` through the mixin layers once, before instances exist, and copies `ClassMethods` helpers onto the constructor. Error: `Mixins must be attached before class installation` |
-| `installClass(klass, name, properties, methods, registries, restorations)` | Records metadata, seeds registries, defines accessors on the prototype, and registers the name. Errors: `Duplicate class`, `Setter method for declared property`, `Restorable path must start with a declared property`, `Duplicate restorable key`, `Missing registry declaration`, `Unknown registry property` |
+| `installClass(klass, name, properties, methods, registries, restorations, settings)` | Records metadata, applies settings and registry values, defines accessors on the prototype, and registers the name. Errors: `Duplicate class`, `Setter method for declared property`, `Restorable path must start with a declared property`, `Duplicate restorable key`, `Missing registry declaration`, `Missing setting declaration` |
 | `resolve(name)` | Returns the registered constructor for a Ruby name. Fails closed with `Unknown class`; markup cannot reach globals or prototypes |
 
 Metadata is inherited: a class's property and method tables start from its
@@ -646,7 +741,6 @@ registered from JavaScript, which the compiler never sees.
 | Function | Behavior |
 | --- | --- |
 | `collectAttributes(object, only = null)` | `{key: value}` for every stored `attribute` declaration, including inherited ones; with an array of names, only those |
-| `relationship(object, name)` / `relationships(object)` | The installed `has_many`/`has_one` descriptor `{name, key, kind, type, url}` for a name (or `null`), or all of them, inherited ones included |
 | `identityStore(klass)` | The class's own `Swill::Model::Store`, created on first use |
 | `classWithSetting(name, value)` | The installed class whose own setting, by Ruby name, has the value, or `null`: how a JSON:API type finds its model class |
 | `applyAttributes(object, source)` | Assigns each attribute from `source[key]`, else `source[name]`, through the property protocol |
@@ -656,13 +750,33 @@ registered from JavaScript, which the compiler never sees.
 
 ## Property protocol
 
-Accessors installed by `installClass` share one mutation path:
+Accessors installed by `installClass` share one mutation path, and one read
+path:
 
 ```text
-read previous → coerce_property_value(name, value, previous)
+write: read previous → coerce_property_value(name, value, previous)
   → compare with isEqual → property_will_change(name, previous, value)
   → store → notify
+
+read: record the dependency → property_will_access(name) → resolve
 ```
+
+The three hooks are Cocoa's, and a class overrides them rather than redefining
+an accessor:
+
+| Cocoa | Swill | When |
+| --- | --- | --- |
+| `-validateValue:forKey:error:` | `coerce_property_value(name, value, previous)` | Before a write |
+| `-willChangeValueForKey:` | `property_will_change(name, previous, value)` | Before a write lands |
+| `-willAccessValueForKey:` | `property_will_access(name)` | Before a read returns |
+
+`property_will_access` runs only for a property declared `will_access:`, so an
+ordinary read costs nothing. `Swill::Model::Base` overrides it to load a
+relationship nobody prefetched: reading `recipe.ingredients` answers what it
+has and fills in when the request lands. The guard — the record has an id, the
+relationship is neither loaded nor loading, and its last load did not fail — is
+what keeps a re-render from re-requesting. `reload_<name>` is how an
+application asks again.
 
 `notify` runs, in order: dependents of the property (computed invalidation),
 the `name_did_change(previous, value)` method if the class collected one, then
@@ -696,11 +810,10 @@ where it is raised:
 | Top level | Anything other than `class` and `module` |
 | Constants | Unknown or non-static constants; reopened or duplicate constants; a superclass or mixin defined later in the same build; a superclass that is a mixin; an include target that is a class |
 | Methods | Names outside `/\A[a-z_]\w*[!?=]?\z/`; `method_missing`; optional, keyword, splat, or block parameters; a method whose name is also an inherited property |
-| Declarations | Non-literal names, keywords, types, defaults, or keys; unknown keywords; unsupported types; `attribute` without `default:`; non-empty collection defaults; computed `attribute`; computed with `default:`; block arguments; duplicate names; a stored property ending in `?`; `outlet` with a default, a block, or a non-literal `optional:`; an `outlet` whose class type is a mixin; `restorable` with a non-literal path or key, any keyword but `key:`, or a path that is not dotted property names. Which classes may declare `outlet` and `restorable` is Sorbet's rule, from the handwritten RBI; whether a `restorable` path starts at a declared property, and whether keys collide, is checked by the runtime at installation |
+| Declarations | A macro's own keywords are Ruby's, so a missing or unknown one is rejected where it is written. The declaration primitives reject: an unsupported property name, a stored property ending in `?`, a duplicate name, a mutable default, a computed property with a default, a computed outlet, a restorable path that is not dotted property names, and registry storage other than `:hash` or `:array`. The compiler rejects a declared class name that does not name a class, and a class body that calls something no ancestor declares. Which classes may declare `outlet` and `restorable` is where their macros are defined; whether a `restorable` path starts at a declared property, and whether keys collide, is checked by the runtime at installation |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
 | Expressions | Any `T` construct in an executable body other than `T.must`, `T.cast`, `T.let`, `T.assert_type!`, `T.unsafe`, and `T.absurd` with the right number of arguments; a type argument outside the checkable types, or naming a mixin or an unknown constant; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments; safe navigation (`&.`) on the shared surface |
-| `ClassMethods` registries | `inheritable_registry` keywords other than `seeded_by: :attribute` |
 | Exceptions | Any `raise` form other than a literal message string |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |
 | Members | Two members with the same encoded JavaScript name |

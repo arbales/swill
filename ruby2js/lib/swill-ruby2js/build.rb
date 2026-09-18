@@ -48,7 +48,7 @@ module Swill
       # The framework's interface, compiled from its sources once per process.
       def self.framework
         @framework ||= begin
-          compiler = Compiler.new
+          compiler = Compiler.new(loader: Loader.framework)
           FRAMEWORK_SOURCES.each do |path|
             file = File.join(ROOT, path)
             compiler.add(File.read(file), file: file)

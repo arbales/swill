@@ -3,8 +3,10 @@
 
 module Swill
   module Ruby2JS
-    # The meta object: constructors, mixin factories, property descriptors,
-    # registries, and method arities that Runtime.install consumes.
+    # The meta object: the serialization of each class's declaration-time
+    # state. Constructors, mixin factories, property descriptors, registry
+    # values, settings, restorations, and method arities, all of which
+    # Runtime.install replays. Nothing here knows what a declaration means.
     class Compiler
         def meta_object
           groups = {"mixins" => [], "classes" => []}
@@ -21,38 +23,28 @@ module Swill
                 "#{object_key(property['name'])}: #{property_js(property, entry)}"
               end
               fields << "properties: {\n#{properties.join(",\n")}\n}"
-              attributes = entry["properties"].select { |property| property["attribute"] }
-              registries = attributes.any? ? seeded_registries(entry) : []
-              unless registries.empty?
-                seeds = attributes.map do |property|
-                  "#{object_key(property['name'])}: {property: #{property['name'].to_json}, key: #{property['key'].to_json}}"
+              unless entry["registry_values"].empty?
+                registries = entry["registry_values"].map do |name, values|
+                  "#{Knowledge.member(name)}: #{serialize_value(values, entry)}"
                 end
-                seeded = registries.map { |registry| "#{Knowledge.member(registry['name'])}: {\n#{seeds.join(",\n")}\n}" }
-                fields << "registries: {#{seeded.join(",\n")}}"
+                fields << "registries: {\n#{registries.join(",\n")}\n}"
+              end
+              unless entry["setting_values"].empty?
+                settings = entry["setting_values"].map do |name, value|
+                  "{name: #{name.to_json}, js: #{Knowledge.member(name).to_json}, " \
+                    "value: #{serialize_value(value, entry)}}"
+                end
+                fields << "settings: [#{settings.join(', ')}]"
+              end
+              unless entry["restorations"].empty?
+                restorations = entry["restorations"].map do |restoration|
+                  "{path: #{restoration['path'].to_json}, key: #{restoration['key'].to_json}, " \
+                    "type: #{restoration['type'].to_json}}"
+                end
+                fields << "restorations: [#{restorations.join(', ')}]"
               end
             end
-            unless mixin || entry["setting_values"].empty?
-              settings = entry["setting_values"].map do |name, value|
-                literal = value.key?("constant") ? reference(value["constant"], entry["scope"]) : value["literal"].to_json
-                "{name: #{name.to_json}, js: #{Knowledge.member(name).to_json}, value: #{literal}}"
-              end
-              fields << "settings: [#{settings.join(', ')}]"
-            end
-            unless mixin || entry["relationships"].empty?
-              relationships = entry["relationships"].map do |relationship|
-                "#{object_key(relationship['name'])}: {name: #{relationship['name'].to_json}, " \
-                  "key: #{relationship['key'].to_json}, kind: #{relationship['kind'].to_json}, " \
-                  "type: #{reference(relationship['type'], entry['scope'])}, url: #{relationship['url'].to_json}}"
-              end
-              fields << "relationships: {\n#{relationships.join(",\n")}\n}"
-            end
-            unless mixin || entry["restorations"].empty?
-          restorations = entry["restorations"].map do |restoration|
-            "{path: #{restoration['path'].to_json}, key: #{restoration['key'].to_json}, type: #{restoration['type'].to_json}}"
-          end
-          fields << "restorations: [#{restorations.join(', ')}]"
-        end
-        methods = entry["methods"].map do |method|
+            methods = entry["methods"].map do |method|
               descriptor = {"arity" => method["arity"]}
               descriptor["js"] = method["js"] if method["js"] != method["name"]
               "#{object_key(method['name'])}: #{JSON.pretty_generate(descriptor)}"
@@ -65,12 +57,22 @@ module Swill
 
       private
 
-        # Registries that included ClassMethods declare as seeded by the
-        # attribute macro, anywhere in the entry's ancestry.
-        def seeded_registries(entry)
-          included_modules(entry).flat_map do |name|
-            mixin = knowledge.entries.find { |candidate| candidate["name"] == name }
-            (mixin ? mixin.fetch("registries", []) : []).select { |registry| registry["seeded_by"] == "attribute" }
+        # Declared data as a JavaScript expression: literals, symbols as
+        # strings, nested hashes and arrays, and a class reference as the
+        # identifier the class is emitted under. This is the whole of what a
+        # macro may put in a registry or a setting.
+        def serialize_value(value, entry)
+          case value
+          when ::Hash
+            return reference(value["class"], entry["scope"]) if value.keys == ["class"]
+            pairs = value.map { |key, item| "#{object_key(key.to_s)}: #{serialize_value(item, entry)}" }
+            "{#{pairs.join(', ')}}"
+          when ::Array
+            "[#{value.map { |item| serialize_value(item, entry) }.join(', ')}]"
+          when ::Symbol
+            value.to_s.to_json
+          else
+            value.to_json
           end
         end
 
@@ -81,20 +83,27 @@ module Swill
         end
 
         def property_js(property, entry)
-          function = "#{property['computed'] ? 'compute' : 'default'}_#{property['js']}"
-          expression = convert("def #{function}()\n#{property['expression']}\nend", entry)
-          # A converted property function is embedded as an object value rather than
-          # emitted at module scope, so contain any converter prelude and return the
-          # named function.
-          unless expression.lstrip.start_with?("function ")
-            expression = "(() => {\n#{expression}\nreturn #{function};\n})()"
-          end
           metadata = property.reject do |key, _|
-            %w[expression name computed].include?(key) || (key == "js" && property["js"] == property["name"])
+            %w[expression name computed default].include?(key) ||
+              (key == "js" && property["js"] == property["name"])
           end.map do |key, value|
-            "#{key}: #{value.to_json}"
+            "#{Knowledge.member(key)}: #{value.to_json}"
           end
-          metadata << "#{property['computed'] ? 'compute' : 'defaultValue'}: #{expression}"
+          if property["computed"]
+            function = "compute_#{property['js']}"
+            expression = convert("def #{function}()\n#{property['expression']}\nend", entry)
+            # A converted property function is embedded as an object value rather than
+            # emitted at module scope, so contain any converter prelude and return the
+            # named function.
+            unless expression.lstrip.start_with?("function ")
+              expression = "(() => {\n#{expression}\nreturn #{function};\n})()"
+            end
+            metadata << "compute: #{expression}"
+          else
+            # A stored default is a literal, and the function is what makes
+            # each instance's array or hash its own.
+            metadata << "defaultValue() { return #{serialize_value(property['default'], entry)}; }"
+          end
           "{\n#{metadata.join(",\n")}\n}"
         end
 

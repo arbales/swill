@@ -7,15 +7,15 @@ module NameTracking
 
   sig { params(base: T.class_of(Swill::Object)).void }
   def self.included(base)
-    base.attribute :name, type: String, default: "Ada"
+    base.property :name, type: String, default: "Ada"
     base.property :baseline, type: T.nilable(String), default: nil
     base.property :dirty, type: T::Boolean, default: false
   end
 
-  sig { params(name: Symbol, previous: T.untyped, value: T.untyped).void }
+  sig { params(name: String, previous: T.untyped, value: T.untyped).void }
   def property_will_change(name, previous, value)
     super(name, previous, value)
-    if name == :name
+    if name == "name"
       if baseline == nil
         self.baseline = previous
       end
@@ -27,10 +27,10 @@ end
 module NameValidation
   extend T::Sig
 
-  sig { params(name: Symbol, value: T.untyped, previous: T.untyped).returns(T.untyped) }
+  sig { params(name: String, value: T.untyped, previous: T.untyped).returns(T.untyped) }
   def coerce_property_value(name, value, previous)
     value = super(name, value, previous)
-    if name == :name
+    if name == "name"
       value = value.strip
       if value == ""
         raise "name must not be blank"
@@ -46,7 +46,7 @@ class ConcernRecord < Swill::Object
 end
 
 class SpecializedRecord < ConcernRecord
-  attribute :name, type: String, default: "Grace"
+  property :name, type: String, default: "Grace"
 end
 
 class OtherConcernRecord < Swill::Object

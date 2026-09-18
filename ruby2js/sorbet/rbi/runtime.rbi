@@ -93,37 +93,67 @@ module Swill
     sig { params(name: String, value: T.untyped).returns(T.untyped) }
     def self.class_with_setting(name, value); end
 
-    sig { params(object: T.untyped, name: String).returns(T.nilable(T::Hash[String, T.untyped])) }
-    def self.relationship(object, name); end
-
-    sig { params(object: T.untyped).returns(T::Array[T::Hash[String, T.untyped]]) }
-    def self.relationships(object); end
-
     sig { params(object: T.untyped, source: T.untyped).returns(T.untyped) }
     def self.apply_attributes(object, source); end
+
+    # Declaration-time helpers. These run while a class body is evaluated on
+    # MRI and are never compiled into the browser.
+    sig { params(type: T.untyped).returns(T.untyped) }
+    def self.type_name(type); end
+
+    sig { params(type: T.untyped).returns(T.untyped) }
+    def self.optional_type(type); end
+
+    sig { params(type: T.untyped, owner: T.untyped).returns(String) }
+    def self.class_name(type, owner); end
   end
 
+  # The five things a declaration macro may declare, all serializable.
   module Declarations
     extend T::Sig
 
-    sig { params(name: Symbol, initial: Symbol, seeded_by: T.nilable(Symbol)).void }
-    def inheritable_registry(name, initial = :hash, seeded_by: nil); end
+    # macro def has_many(...) — a declaration macro, callable in a class body
+    # and never emitted.
+    sig { params(name: Symbol).returns(Symbol) }
+    def macro(name); end
+
+    sig { params(name: Symbol, initial: Symbol).void }
+    def inheritable_registry(name, initial = :hash); end
 
     sig { params(name: Symbol).void }
     def class_setting(name); end
+
+    # A real, typed method that hands its arguments to another.
+    sig do
+      params(name: T.any(Symbol, String), to: T.any(Symbol, String), with: T::Array[T.untyped],
+             parameters: T::Hash[T.untyped, T.untyped], returns: T.untyped, async: T::Boolean).void
+    end
+    def forward(name, to:, with: [], parameters: {}, returns: nil, async: false); end
   end
 end
 
 class Swill::Object
   extend T::Sig
+  extend Swill::Declarations
 
   # Computed blocks are checked per receiving class by the generated type
   # probes, so the block itself binds loosely here.
-  sig { params(name: Symbol, type: T.untyped, default: T.untyped, block: T.nilable(T.proc.bind(T.untyped).returns(T.untyped))).void }
-  def self.property(name, type:, default: nil, &block); end
+  sig do
+    params(name: T.any(Symbol, String), type: T.untyped, default: T.untyped,
+           key: T.nilable(T.any(Symbol, String)), attribute: T::Boolean, outlet: T::Boolean,
+           optional: T::Boolean, will_access: T::Boolean,
+           block: T.nilable(T.proc.bind(T.untyped).returns(T.untyped))).void
+  end
+  def self.property(name, type:, default: nil, key: nil, attribute: false, outlet: false,
+                    optional: false, will_access: false, &block); end
 
-  sig { params(name: Symbol, type: T.untyped, default: T.untyped, key: T.any(Symbol, String)).void }
-  def self.attribute(name, type:, default:, key: name); end
+  # A bindable path the application keeps in the URL fragment. Controller's
+  # restorable macro is the spelling.
+  sig { params(path: T.any(Symbol, String), key: T.any(Symbol, String)).returns(String) }
+  def self.declare_restoration(path, key: path); end
+
+  sig { returns(T::Hash[String, T.untyped]) }
+  def self.swill_properties; end
 
   # async def name ... end: the method is asynchronous; await inside it
   # yields the awaited value. Both compile to JavaScript's own keywords. An
@@ -139,15 +169,17 @@ class Swill::Object
   def self.await(value); end
 end
 
-class Swill::Model::Base
+module Swill::Model::Relationships
+  extend T::Helpers
+  mixes_in_class_methods(ClassMethods)
+end
+
+module Swill::Model::Relationships::ClassMethods
   extend T::Sig
-
-  # has_many :name, type: Class, key: "wire_key", url: "/api/owners/:id/name"
-  sig { params(name: Symbol, type: T.untyped, key: T.nilable(T.any(Symbol, String)), url: T.nilable(String)).void }
-  def self.has_many(name, type:, key: nil, url: nil); end
-
-  sig { params(name: Symbol, type: T.untyped, key: T.nilable(T.any(Symbol, String)), url: T.nilable(String)).void }
-  def self.has_one(name, type:, key: nil, url: nil); end
+  extend T::Helpers
+  extend T::Generic
+  has_attached_class!(:out) { {upper: Swill::Model::Base} }
+  requires_ancestor { T.class_of(Swill::Model::Base) }
 end
 
 module Swill::Model::Identity
@@ -160,16 +192,6 @@ module Swill::Model::Identity::ClassMethods
   extend T::Generic
   has_attached_class!(:out) { {upper: Swill::Model::Base} }
   requires_ancestor { T.class_of(Swill::Model::Base) }
-end
-
-class Swill::Controller
-  extend T::Sig
-
-  sig { params(name: Symbol, type: T.untyped, optional: T::Boolean).void }
-  def self.outlet(name, type:, optional: false); end
-
-  sig { params(path: T.any(Symbol, String), key: T.nilable(T.any(Symbol, String))).void }
-  def self.restorable(path, key: nil); end
 end
 
 module Swill::Model::DirtyTracking

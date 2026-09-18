@@ -17,18 +17,19 @@ module Swill
       module ClassMethods
         extend Swill::Declarations
 
-        # On MRI the attribute macro below seeds the registry; the compiler
-        # reads seeded_by to do the same from collected declarations.
-        inheritable_registry :model_attributes, seeded_by: :attribute
+        inheritable_registry :model_attributes
 
-        def attribute(name, type:, default:, key: name)
-          model_attributes[name] = {
-            name: name,
-            key: key,
-            type: type,
-            default: default
+        # An attribute is a property that carries a wire key and an attribute
+        # mark: the validation, dirty tracking, and codec paths all read those
+        # marks off the property descriptor. The registry is the same
+        # declaration as data, for code that asks the class rather than an
+        # instance.
+        macro def attribute(name, type:, default:, key: name)
+          model_attributes[name.to_s] = {
+            "name" => name.to_s, "key" => key.to_s,
+            "type" => Swill::Runtime.type_name(type), "default" => default
           }
-          property(name, type: type, default: default)
+          property name, type: type, default: default, attribute: true, key: key
         end
 
         # Materialize an instance from a wire hash keyed by attribute keys,

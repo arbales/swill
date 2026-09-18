@@ -23,5 +23,12 @@ module Swill
     sig { params(name: String, previous: T.untyped, value: T.untyped).void }
     def property_will_change(name, previous, value)
     end
+
+    # Cocoa's -willAccessValueForKey:, and the third of the three hooks this
+    # framework speaks. A property declared will_access: notifies its object
+    # before the read resolves, so the value can load itself.
+    sig { params(name: String).void }
+    def property_will_access(name)
+    end
   end
 end

@@ -37,7 +37,7 @@ test("real Attributes concern builds isolated inherited registries", () => {
   assert.notEqual(SpecialPerson.modelAttributes(), Person.modelAttributes());
   assert.equal(Person.modelAttributes().name.type, "String");
   assert.equal(SpecialPerson.modelAttributes().role.key, "job");
-  assert.equal(SpecialPerson.modelAttributes().role.defaultValue(), "editor");
+  assert.equal(SpecialPerson.modelAttributes().role.default, "editor");
 });
 
 test("included declarations and super-based mutation hooks agree with MRI", () => {
@@ -1971,6 +1971,11 @@ afterEach(() => { [Author, Book, Note].forEach(klass => klass.clear()); delete c
 // A fake server behind the sandbox's fetch: routes keyed "METHOD url" answer
 // a JSON body, a function of the request, or null for 204. Every request
 // is recorded with its decoded body.
+// Let a request started by a property read settle.
+function settle() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
 function fakeServer(routes) {
   const requests = [];
   context.fetch = async (url, init = {}) => {
@@ -2052,13 +2057,19 @@ test("relationships load from their URL with a loading flag, and reload refreshe
     "GET /api/books/10/author": {data: {id: "1", type: "authors", attributes: {name: "Ada"}}}
   });
   const ada = await Author.find("1");
-  assert.deepEqual(plain([ada.name, ada.born, ada.isRelationshipLoaded("books"), ada.books]), ["Ada", 1816, false, []]);
   const flags = [];
   ada.observe("books_loading", value => flags.push(value));
-  const pending = ada.loadRelationship("books");
-  assert.equal(ada.booksLoading, true);
-  const books = await pending;
-  assert.deepEqual(plain([books.map(book => book.title), ada.books === books, flags]), [["Notes"], true, [true, false]]);
+  // Reading a relationship nobody prefetched starts its request: the value
+  // answers what it has, and fills in when the request lands.
+  assert.deepEqual(plain([ada.name, ada.born, ada.isRelationshipLoaded("books"), ada.books]), ["Ada", 1816, false, []]);
+  assert.equal(ada.booksLoading, true, "the read started the request");
+  await settle();
+  const books = ada.books;
+  assert.deepEqual(plain([books.map(book => book.title), ada.isRelationshipLoaded("books"), flags]),
+    [["Notes"], true, [true, false]]);
+  assert.equal(requests.length, 2, "one request for the record, one for the relationship");
+  ada.books;
+  assert.equal(requests.length, 2, "a loaded relationship is not requested again on a second read");
   assert.ok((await ada.loadRelationship("books")) === books, "a loaded relationship is not requested again");
   assert.equal(requests.length, 2);
   const book = books[0];

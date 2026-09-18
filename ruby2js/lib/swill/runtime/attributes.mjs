@@ -34,15 +34,6 @@ export function collectAttributes(object, only = null) {
   return result;
 }
 
-// The installed has_many/has_one descriptor for a name, or null.
-export function relationship(object, name) {
-  return declarations(object.constructor, "relationships").get(name) ?? null;
-}
-
-export function relationships(object) {
-  return [...declarations(object.constructor, "relationships").values()];
-}
-
 export function applyAttributes(object, source) {
   for (const descriptor of declarations(object.constructor, "properties").values()) {
     if (!descriptor.attribute || descriptor.computed) continue;

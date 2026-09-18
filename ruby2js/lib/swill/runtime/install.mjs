@@ -88,8 +88,7 @@ export function install(meta) {
         methods(descriptor.methods),
         descriptor.registries,
         descriptor.restorations ?? [],
-        descriptor.settings ?? [],
-        descriptor.relationships ?? {}
+        descriptor.settings ?? []
       );
 
       pending.delete(klass);
@@ -216,13 +215,13 @@ function rejectProtocolConflicts(klass, properties, restorations) {
 }
 
 export function installClass(klass, name, properties, methods, registries = {}, restorations = [],
-  settings = [], relationships = {}) {
+  settings = []) {
   if (classes.has(name)) {
     throw new Error(`Duplicate class: ${name}`);
   }
 
   rejectProtocolConflicts(klass, properties, restorations);
-  installMetadata(klass, properties, methods, restorations, relationships);
+  installMetadata(klass, properties, methods, restorations);
 
   // Class body settings (endpoint "/api/menus") apply through the setting
   // method the class's ClassMethods declare.
@@ -233,25 +232,16 @@ export function installClass(klass, name, properties, methods, registries = {}, 
     klass[setting.js](setting.value);
   }
 
-  const propertyByName = new Map(properties.map(property => [property.name, property]));
-  for (const [registryName, seeds] of Object.entries(registries)) {
+  // Registry values a macro declared: data, applied to the class's own copy
+  // of the registry. The runtime never learns what any of it means.
+  for (const [registryName, values] of Object.entries(registries ?? {})) {
     if (typeof klass[registryName] !== "function") {
       throw new Error(`Missing registry declaration: ${registryName}`);
     }
 
     const registry = klass[registryName]();
-    for (const [name, seed] of Object.entries(seeds)) {
-      const property = propertyByName.get(seed.property);
-      if (!property) {
-        throw new Error(`Unknown registry property: ${seed.property}`);
-      }
-
-      registry[name] = {
-        ...seed,
-        type: property.type,
-        defaultValue: property.defaultValue
-      };
-    }
+    if (Array.isArray(registry)) registry.push(...Object.values(values));
+    else Object.assign(registry, values);
   }
 
   for (const descriptor of properties) {
@@ -259,6 +249,9 @@ export function installClass(klass, name, properties, methods, registries = {}, 
       configurable: true,
       get() {
         record(this, descriptor.name);
+        // Reads follow record, will-access, resolve. Only a property that
+        // declares willAccess pays for the hook.
+        if (descriptor.willAccess) this.propertyWillAccess(descriptor.name);
         return descriptor.computed
           ? computedValue(this, descriptor)
           : storedValue(this, descriptor);

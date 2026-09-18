@@ -3,10 +3,27 @@ require "open3"
 require_relative "../lib/swill-ruby2js/compiler"
 
 class CompilerTest < Minitest::Test
+  # A miniature of the framework: the observation hooks a declared property
+  # calls, and two declaration macros of its own. A fixture declares its own
+  # macros the same way a plugin would.
   TEST_OBJECT = <<~RUBY
-    class TestObject
-      def coerce_property_value(name, value, previous); value; end
-      def property_will_change(name, previous, value); end
+    module Swill
+      class Object
+        extend T::Sig
+        def coerce_property_value(name, value, previous); value; end
+        def property_will_change(name, previous, value); end
+        def property_will_access(name); end
+      end
+    end
+    class TestObject < Swill::Object
+      macro def self.outlet(name, type:, optional: false, &computed)
+        property name, type: Swill::Runtime.optional_type(type), default: nil,
+                       outlet: true, optional: optional, &computed
+      end
+
+      macro def self.restorable(path, key: path)
+        declare_restoration(path, key: key)
+      end
     end
   RUBY
 
@@ -174,7 +191,7 @@ class CompilerTest < Minitest::Test
       console.log(JSON.stringify([holder.mustGreeting(), holder.castName(person), holder.letCount(["a"]),
         holder.nilableCast(null), holder.unsafeLength("abc"), holder.either(false), failures]));
     JS
-    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_host", "-e", <<~RUBY)
       class TestObject < Swill::Object; end
       #{SORBET_OPERATIONS}
       holder = Holder.new
@@ -284,7 +301,14 @@ class CompilerTest < Minitest::Test
   def test_typed_receivers_resolve_from_knowledge_and_dom_receivers_from_the_table
     compiler = Swill::Ruby2JS::Compiler.new
     compiler.add(<<~RUBY)
-      class Widget
+      module Swill
+        class Object
+          def property_will_access(name); end
+          def coerce_property_value(name, value, previous); value; end
+          def property_will_change(name, previous, value); end
+        end
+      end
+      class Widget < Swill::Object
         extend T::Sig
         property :count, type: Integer, default: 0
         sig { returns(Integer) }
@@ -362,7 +386,7 @@ class CompilerTest < Minitest::Test
       javascript("async def go; [1].each { |x| await x }; end")
     end
     assert_includes error.message, "await outside an async method"
-    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_host", "-e", <<~RUBY)
       class TestObject < Swill::Object; end
       class Loader < TestObject
         async def load; self.total = (await 2) + (await 3); end
@@ -380,15 +404,42 @@ class CompilerTest < Minitest::Test
   # class_setting, and declares has_many/has_one relationships; both are
   # metadata the runtime installs, never evaluated Ruby.
   def test_class_bodies_configure_settings_and_declare_relationships
-    compiler = compiler_with_test_object.add(<<~RUBY)
+    # A relationship is ordinary Ruby: two properties, a registry entry, and
+    # two forwarded methods. A plugin's macro is written exactly this way.
+    feature = <<~RUBY
       module Feature
         def self.included(base); base.extend(ClassMethods); end
         module ClassMethods
           extend Swill::Declarations
+          inheritable_registry :model_relationships
           class_setting :endpoint
           class_setting :codec
+
+          macro def has_many(name, type:, key: name, url: nil)
+            relate(name, type, key, url, "many")
+          end
+
+          macro def has_one(name, type:, key: name, url: nil)
+            relate(name, type, key, url, "one")
+          end
+
+          macro def relate(name, type, key, url, kind)
+            target = Swill::Runtime.class_name(type, self)
+            many = kind == "many"
+            value_type = many ? "T::Array[\#{target}]" : "T.nilable(\#{target})"
+            property name, type: value_type, default: (many ? [] : nil), will_access: true
+            property :"\#{name}_loading", type: T::Boolean, default: false
+            model_relationships[name.to_s] = {"name" => name.to_s, "key" => key.to_s,
+                                              "kind" => kind, "type" => target, "url" => url}
+            forward :"load_\#{name}", to: :load_relationship, with: [name.to_s],
+                    returns: value_type, async: true
+            forward :"reload_\#{name}", to: :reload_relationship, with: [name.to_s],
+                    returns: value_type, async: true
+          end
         end
       end
+    RUBY
+    compiler = compiler_with_test_object.add(feature + <<~RUBY)
       class Codec < TestObject; end
       class Chapter < TestObject
         include Feature
@@ -404,47 +455,44 @@ class CompilerTest < Minitest::Test
     RUBY
     js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
     assert_includes js, 'settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "codec", js: "codec", value: Codec }]'
-    assert_includes js, '"chapters": { name: "chapters", key: "chapters", kind: "many", type: Chapter, url: "/api/books/:id/chapters" }'
-    assert_includes js, '"book": { name: "book", key: "book", kind: "one", type: Book, url: null }'
+    assert_includes js, 'modelRelationships: { "chapters": { "name": "chapters", "key": "chapters", "kind": "many", "type": "Chapter", "url": "/api/books/:id/chapters" } }'
+    assert_includes js, 'modelRelationships: { "book": { "name": "book", "key": "book", "kind": "one", "type": "Book", "url": null } }'
+    # The macro declares callable members, not just properties.
+    assert_includes js, "async loadChapters() {\n    return await this.loadRelationship(\"chapters\");"
     rbi = compiler.rbi
     assert_includes rbi, "sig { returns(T::Array[Chapter]) }\n  def chapters; end"
     assert_includes rbi, "sig { returns(T.nilable(Book)) }\n  def book; end"
     assert_includes rbi, "def chapters_loading; end"
-    assert_equal ["/api/books", "Codec", ["chapters"], "many", true, [], false, "/api/chapters", "Book"], execute(js + <<~JS)
+    assert_includes rbi, "sig { returns(T::Array[Chapter]) }\n  def load_chapters; end"
+    assert_equal ["/api/books", "Codec", ["chapters"], "many", "Chapter", [], false, "/api/chapters", "Book"], execute(js + <<~JS)
       const book = new Book();
-      console.log(JSON.stringify([Book.endpoint(), Book.codec().name, Runtime.relationships(book).map(r => r.name),
-        Runtime.relationship(book, "chapters").kind, Runtime.relationship(book, "chapters").type === Chapter,
+      const chapters = Book.modelRelationships();
+      console.log(JSON.stringify([Book.endpoint(), Book.codec().name, Object.keys(chapters),
+        chapters.chapters.kind, chapters.chapters.type,
         book.chapters, book.chaptersLoading, Chapter.endpoint(), Runtime.classWithSetting("endpoint", "/api/books").name]));
     JS
+    # A macro's rejections are the ones its own definition makes, and the
+    # compiler's are the ones only the graph can make.
     [
-      ["endpoint compute_url", "endpoint accepts a literal or a class constant"],
+      ["endpoint compute_url", "undefined local variable or method 'compute_url'"],
       ["endpoint", "endpoint takes one value"],
-      ["has_many :chapters", "has_many requires type:"],
-      ["has_many :chapters, type: \"chapter\"", "type: must be a class constant or its name"],
-      ["has_one :cover, type: Book, extra: 1", "unknown has_one keyword"],
-      ["has_one :cover, type: Missing", "unknown constant Missing"]
+      ["has_many :chapters", "missing keyword: :type"],
+      ["has_many :chapters, type: \"chapter\"", "unknown constant chapter"],
+      ["has_one :cover, type: Book, extra: 1", "unknown keyword: :extra"],
+      ["has_one :cover, type: Missing", "uninitialized constant"]
     ].each do |declaration, message|
       error = assert_raises(Swill::Ruby2JS::CompileError, declaration) do
-        compiler_with_test_object.add(<<~RUBY).javascript(runtime: "../lib/swill/runtime.mjs")
-          module Feature
-            def self.included(base); base.extend(ClassMethods); end
-            module ClassMethods
-              extend Swill::Declarations
-              class_setting :endpoint
-            end
-          end
-          class Book < TestObject
-            include Feature
-            #{declaration}
-          end
-        RUBY
+        compiler_with_test_object.add("#{feature}class Book < TestObject\ninclude Feature\n#{declaration}\nend")
+          .javascript(runtime: "../lib/swill/runtime.mjs")
       end
       assert_includes error.message, message
     end
     error = assert_raises(Swill::Ruby2JS::CompileError) { javascript('endpoint "/api/x"') }
-    assert_includes error.message, "unsupported class body", "a setting nothing declares is not a macro"
-    error = assert_raises(Swill::Ruby2JS::CompileError) { compiler_with_test_object.add("module M\nhas_many :x, type: TestObject\nend").javascript(runtime: "../lib/swill/runtime.mjs") }
-    assert_includes error.message, "relationships are declared on classes"
+    assert_includes error.message, "undefined method 'endpoint'", "a setting nothing declares is not a macro"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add("module M\nhas_many :x, type: TestObject\nend").javascript(runtime: "../lib/swill/runtime.mjs")
+    end
+    assert_includes error.message, "undefined method 'has_many' for module M", "a module declares nothing a class does"
   end
 
   # A class object is a typed receiver: self.class, x.class, a T.class_of
@@ -623,11 +671,30 @@ class CompilerTest < Minitest::Test
     end
   end
 
-  def test_attribute_requires_an_explicit_default
+  # A macro's keywords are Ruby's own: whatever its definition requires is
+  # required, and the rejection is the one Ruby gives, with the file and line
+  # the declaration is written on.
+  def test_a_macros_required_keyword_is_required
     error = assert_raises(Swill::Ruby2JS::CompileError) do
-      javascript("attribute :name, type: String")
+      compiler_with_test_object.add(<<~RUBY)
+        module Recorded
+          def self.included(base); base.extend(ClassMethods); end
+          module ClassMethods
+            extend Swill::Declarations
+            inheritable_registry :model_attributes
+            macro def attribute(name, type:, default:, key: name)
+              model_attributes[name.to_s] = {"name" => name.to_s, "key" => key.to_s}
+              property name, type: type, default: default, attribute: true, key: key
+            end
+          end
+        end
+        class Example < TestObject
+          include Recorded
+          attribute :name, type: String
+        end
+      RUBY
     end
-    assert_equal "attribute declaration requires default:", error.message
+    assert_includes error.message, "missing keyword: :default"
   end
 
   def test_missing_include_and_reopened_class_are_rejected
@@ -696,12 +763,15 @@ class CompilerTest < Minitest::Test
     framework = compiler_with_test_object.add(<<~RUBY)
       module Feature
         def self.included(base)
-          base.attribute :name, type: String, default: "Ada"
+          base.property :name, type: String, default: "Ada"
         end
         def label; name; end
       end
     RUBY
-    application = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface).add(<<~RUBY)
+    application = Swill::Ruby2JS::Compiler.new(
+      imports: framework.knowledge.interface,
+      loader: framework.loader && Swill::Ruby2JS::Loader.new(parent: framework.loader)
+    ).add(<<~RUBY)
       class First < TestObject
         include Feature
       end
@@ -789,6 +859,7 @@ class CompilerTest < Minitest::Test
 
     entries = compiler.knowledge.local.to_h { |entry| [entry["name"], entry["kind"]] }
     assert_equal({
+      "Swill::Object" => "class",
       "TestObject" => "class",
       "Feature" => "mixin",
       "Feature::Helper" => "class",
@@ -1078,8 +1149,8 @@ class CompilerTest < Minitest::Test
       console.log(JSON.stringify([core.strings("Grace", null), core.numbers(7, -2, 2.5),
         core.arrays([3, 1, 2], ["b", "", "a"]), core.hashes({a: 1, b: 2})]));
     JS
-    # The MRI adapter supplies blank? and present?, as the runtime does in JS.
-    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_adapter", "-e", <<~RUBY)
+    # The MRI host supplies blank? and present?, as the runtime does in JS.
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-r./spec/mri_host", "-e", <<~RUBY)
       class TestObject; end
       #{CORE_TYPES}
       core = Core.new
@@ -1186,7 +1257,12 @@ class CompilerTest < Minitest::Test
         class Object; end
         class Responder < Swill::Object; end
         class View < Responder; end
-        class Controller < Responder; end
+        class Controller < Responder
+          macro def self.outlet(name, type:, optional: false, &computed)
+            property name, type: Swill::Runtime.optional_type(type), default: nil,
+                           outlet: true, optional: optional, &computed
+          end
+        end
       end
     RUBY
     compiler.add(<<~RUBY)
@@ -1220,7 +1296,12 @@ class CompilerTest < Minitest::Test
         class Object; end
         class Responder < Swill::Object; end
         class View < Responder; end
-        class Controller < Responder; end
+        class Controller < Responder
+          macro def self.outlet(name, type:, optional: false, &computed)
+            property name, type: Swill::Runtime.optional_type(type), default: nil,
+                           outlet: true, optional: optional, &computed
+          end
+        end
       end
     RUBY
     [
@@ -1241,7 +1322,11 @@ class CompilerTest < Minitest::Test
       module Swill
         class Object; end
         class Responder < Swill::Object; end
-        class Controller < Responder; end
+        class Controller < Responder
+          macro def self.restorable(path, key: path)
+            declare_restoration(path, key: key)
+          end
+        end
       end
     RUBY
     compiler = Swill::Ruby2JS::Compiler.new.add(framework).add(<<~RUBY)
@@ -1540,6 +1625,7 @@ class CompilerTest < Minitest::Test
       .add(File.read("lib/swill/core/object.rb"))
       .add(File.read("lib/swill/core/wire.rb"))
       .add(File.read("lib/swill/model/attributes.rb"))
+      .add(File.read("lib/swill/model/relationships.rb"))
       .add(File.read("lib/swill/model/dirty_tracking.rb"))
       .add(File.read("lib/swill/model/drafts.rb"))
       .add(File.read("lib/swill/model/store.rb"))

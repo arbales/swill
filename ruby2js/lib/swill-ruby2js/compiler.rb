@@ -8,6 +8,7 @@ require "ruby2js/filter/pragma"
 require "ruby2js/filter/return"
 require_relative "names"
 require_relative "knowledge"
+require_relative "loader"
 require_relative "filters/sorbet_operations"
 require_relative "filters/shared_lowering"
 require_relative "filters/static_types"
@@ -46,6 +47,7 @@ module Swill
       lib/swill/controller/inline_editor.rb
       lib/swill/controller/editable_list.rb
       lib/swill/model/attributes.rb
+      lib/swill/model/relationships.rb
       lib/swill/model/dirty_tracking.rb
       lib/swill/model/drafts.rb
       lib/swill/model/store.rb
@@ -62,8 +64,17 @@ module Swill
     class Compiler
       attr_reader :knowledge
 
-        def initialize(imports: [])
-          @knowledge = Knowledge.new(imports)
+        # Sources are loaded into a container so their declarations can be
+        # read back. A compiler with imports is an application, and shares the
+        # framework's container; one without is a root, and gets its own.
+        def initialize(imports: [], loader: :default)
+          loader = imports.empty? ? Loader.new : Loader.new(parent: Loader.framework) if loader == :default
+          @knowledge = Knowledge.new(imports, loader: loader)
+        end
+
+        # The container this compiler's sources are loaded into.
+        def loader
+          knowledge.loader
         end
 
         def add(source, file: "(spike)")
@@ -143,7 +154,7 @@ module Swill
             mixin = entry["kind"] == "mixin"
             parent = mixin ? "Superclass" : (entry["parent"] ? reference(entry["parent"], scope) : "Object")
             class_name = mixin ? "#{id}_Layer" : id
-            source = entry["node"].loc.expression.source
+            source = with_forwarded_methods(entry["node"].loc.expression.source, entry)
             js = begin
               convert(source, entry, compiled_class: class_name, compiled_parent: parent)
             rescue CompileError => error
@@ -262,13 +273,16 @@ module Swill
           end
         end
 
-        # A relationship names a model class, possibly declared later; the
-        # descriptor and the two properties carry its installed name.
+        # A declared class name is checked here, where the whole graph is
+        # known: a relationship may name a class defined later, or in a cycle,
+        # so its descriptor carries the name rather than the class.
         def resolve_relationship_types(entry)
-          entry["relationships"].each do |relationship|
+          relationships = entry["registry_values"]["model_relationships"]
+          return unless relationships
+          relationships.each_value do |relationship|
             resolved = knowledge.resolve(relationship["type"], entry["name"].split("::"))
             target = knowledge.entries.find { |candidate| candidate["name"] == resolved }
-            unless target["kind"] == "class"
+            unless target && target["kind"] == "class"
               raise CompileError, "relationship #{relationship['name']}: #{relationship['type']} is not a class"
             end
             %W[#{relationship['name']} #{relationship['name']}_loading].each do |name|
@@ -298,6 +312,21 @@ module Swill
             end
           end
           type
+        end
+
+        # A macro's forwarded methods are real methods on the class. They are
+        # written back as Ruby and compiled with the body they belong to,
+        # rather than substituted into generated JavaScript.
+        def with_forwarded_methods(source, entry)
+          forwards = entry["methods"].select { |method| method["to"] }
+          return source if forwards.empty?
+          body = forwards.map do |method|
+            call = "#{method['to']}(#{method['with'].map(&:to_json).join(', ')})"
+            "#{method['async'] ? "async def #{method['name']}\nawait " : "def #{method['name']}\n"}#{call}\nend"
+          end.join("\n")
+          stripped = source.rstrip
+          raise CompileError, "class body must end with end" unless stripped.end_with?("end")
+          "#{stripped[0...-3]}\n#{body}\nend\n"
         end
 
         def reference(name, scope)

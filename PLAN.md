@@ -167,8 +167,8 @@ The initial kernel and DOM-boundary spike is complete and verified:
   `find`/`fetch`/`find_all`/`where`/`fetch_all`, `save` (POST or a dirty-only
   PATCH, the answer applied, the record pooled), `delete`, `reload`,
   `validate`, datasets (`records`/`loading`/`error`), `has_many`/`has_one`
-  with `:id` URL patterns, explicit `load_relationship` and a `<name>_loading`
-  property, and `Swill::Wire.default` as the fetch boundary. The compiler
+  with `:id` URL patterns, loading on first read, `load_<name>`/`reload_<name>`
+  for code that must wait, and a `<name>_loading` property, and `Swill::Wire.default` as the fetch boundary. The compiler
   types class objects (`self.class`, `T.class_of`, class methods'
   `self`), awaited values (an async signature names the value), bare
   browser globals (`fetch`), and rescued errors; JSON:API parsing and dirty
@@ -257,8 +257,8 @@ the dataset step.
    `Swill::Wire`);
 5. create, update, reload, and delete (done);
 6. `has_one` and `has_many`, loading state, reload methods, and included-record
-   hydration (done; loading is explicit through `load_relationship`, never a
-   side effect of reading the property).
+   hydration (done; a read starts the load, and `load_<name>`/`reload_<name>`
+   are the macro's own methods for code that must await).
 
 Network behavior stays behind `Swill::Wire`, which calls the page's `fetch`;
 server persistence, authorization, and transactions do not move into the
@@ -366,10 +366,15 @@ Recorded so they are fixed deliberately rather than rediscovered:
   optional or keyword arguments, so the model API is spelled `find(id)`,
   `where(params)`, `fetch_all(url, params)` rather than options hashes. Add
   optional positional arguments when a real signature needs them.
-- Relationships do not load on read (September 2026): `menu.recipes` is what
-  was hydrated or assigned, and `load_relationship("recipes")` asks the
-  server. The TypeScript original loads lazily from the getter; that hides a
-  request behind a property read and was left out on purpose.
+- Relationships load on read (September 2026): a relationship nobody
+  prefetched starts its request when it is first read, answers what it has,
+  and fills in when the request lands, as the TypeScript original did.
+  `property_will_access` is the hook; the guard — the record has an id, the
+  relationship is neither loaded nor loading, and its last load did not fail —
+  is what keeps a re-render from re-requesting. `will_access: false` opts a
+  relationship out, and `load_<name>`/`reload_<name>` are how code that must
+  await asks. Watch for a computed property that reads a relationship and is
+  recomputed by that relationship's arrival.
 - `await` is a command call: `T.cast(await x, Type)` parses as
   `await(x, Type)` and is rejected for the extra argument. Await into a
   local first (September 2026).

@@ -1,8 +1,9 @@
 require "minitest/autorun"
 require "json"
-require_relative "mri_adapter"
+require_relative "mri_host"
 require_relative "../lib/swill/core/wire"
 require_relative "../lib/swill/model/attributes"
+require_relative "../lib/swill/model/relationships"
 require_relative "../lib/swill/model/dirty_tracking"
 require_relative "../lib/swill/model/drafts"
 require_relative "../lib/swill/model/store"
@@ -22,12 +23,12 @@ class SharedTest < Minitest::Test
       person: Demo::Person.model_attributes.keys,
       special: Demo::SpecialPerson.model_attributes.keys
     }
-    assert_equal [:id], result[:record]
-    assert_equal %i[id name], result[:person]
-    assert_equal %i[id name role], result[:special]
+    assert_equal %w[id], result[:record]
+    assert_equal %w[id name], result[:person]
+    assert_equal %w[id name role], result[:special]
     refute_same Swill::Model::Base.model_attributes, Demo::Person.model_attributes
     refute_same Demo::Person.model_attributes, Demo::SpecialPerson.model_attributes
-    assert_equal :job, Demo::SpecialPerson.model_attributes[:role][:key]
+    assert_equal "job", Demo::SpecialPerson.model_attributes["role"]["key"]
     File.write("build/mri-attributes.json", JSON.pretty_generate(result) + "\n")
   end
 
@@ -36,8 +37,8 @@ class SharedTest < Minitest::Test
       object = klass.new
       initial = object.name
       changes = []
-      object.observe(:dirty) { |value| changes << ["dirty", value] }
-      object.observe(:name) { |value| changes << ["name", value] }
+      object.observe("dirty", ->(value) { changes << ["dirty", value] })
+      object.observe("name", ->(value) { changes << ["name", value] })
       object.name = " #{initial} " # Coerced equality does not mark dirty.
       unchanged = [object.name, object.dirty, object.baseline]
       object.name = " Changed "
@@ -59,8 +60,8 @@ class SharedTest < Minitest::Test
   def test_dirty_tracking_and_validation_on_mri
     person = Demo::SpecialPerson.new
     changes = []
-    person.observe(:dirty?) { |value| changes << ["dirty?", value] }
-    person.observe(:dirty_attributes) { |value| changes << ["dirty_attributes", value.map(&:to_s)] }
+    person.observe("dirty?", ->(value) { changes << ["dirty?", value] })
+    person.observe("dirty_attributes", ->(value) { changes << ["dirty_attributes", value.map(&:to_s)] })
     steps = []
     steps << [person.dirty?, person.dirty.map(&:to_s)]
     person.name = "Ada"
@@ -109,7 +110,7 @@ class SharedTest < Minitest::Test
   def test_shared_model_contract_on_mri
     person = Demo::SpecialPerson.new
     changes = []
-    person.observe(:label) { |value| changes << value }
+    person.observe("label", ->(value) { changes << value })
     person.id = "42"
     renamed = person.rename(" Ada ")
     person.loud = true

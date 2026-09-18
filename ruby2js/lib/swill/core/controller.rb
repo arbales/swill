@@ -6,6 +6,22 @@ module Swill
     extend T::Sig
     include ObjectBindings
 
+    # An outlet is a property connected, at awakening, to the element in this
+    # controller's owned region that carries a matching outlet attribute.
+    # Unconnected until then, so its reader is nilable. Declared here rather
+    # than on Swill::Object because only a controller owns a region.
+    macro def self.outlet(name, type:, optional: false, &computed)
+      property name, type: Swill::Runtime.optional_type(type), default: nil,
+                     outlet: true, optional: optional, &computed
+    end
+
+    # restorable :query, key: :q — a bindable path whose value the
+    # application keeps in the URL fragment. The leaf type is derived when the
+    # class is compiled; the runtime checks the path at installation.
+    macro def self.restorable(path, key: path)
+      declare_restoration(path, key: key)
+    end
+
     # The object a parent binding assigns through bind="path" on this
     # controller root. Editors resolve their own bindings under it.
     property :represented_object, type: T.untyped, default: nil

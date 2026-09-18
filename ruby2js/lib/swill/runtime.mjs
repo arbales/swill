@@ -32,8 +32,7 @@ import {must, cast, absurd, conforms} from "./runtime/types.mjs";
 import {
   isAttribute, validateAttribute,
   restorations, outlets,
-  collectAttributes, applyAttributes,
-  relationship, relationships
+  collectAttributes, applyAttributes
 } from "./runtime/attributes.mjs";
 
 export const Runtime = {
@@ -67,7 +66,6 @@ export const Runtime = {
 
   // Declarations
   isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
-  relationship, relationships,
 
   // Invalid URL input is reported, not raised.
   warn(message) {

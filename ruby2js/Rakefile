@@ -6,7 +6,7 @@ ROOT = __dir__
 DIST = File.join(ROOT, "dist")
 
 def compile_spike
-  framework = Swill::Ruby2JS::Compiler.new
+  framework = Swill::Ruby2JS::Compiler.new(loader: Swill::Ruby2JS::Loader.framework)
   Swill::Ruby2JS::FRAMEWORK_SOURCES.each do |path|
     framework.add(File.read(path), file: path)
   end

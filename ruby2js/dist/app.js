@@ -37,6 +37,8 @@
   var Swill__Controller__EditableList = framework.Swill__Controller__EditableList;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
+  var Swill__Model__Relationships = framework.Swill__Model__Relationships;
+  var Swill__Model__Relationships_ClassMethods = framework.Swill__Model__Relationships_ClassMethods;
   var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;
   var Swill__Model__Drafts = framework.Swill__Model__Drafts;
   var Swill__Model__Store = framework.Swill__Model__Store;
@@ -101,10 +103,22 @@
     }
   };
   var Demo__Book = class extends Swill__Model__Base {
+    async loadAuthor() {
+      return await this.loadRelationship("author");
+    }
+    async reloadAuthor() {
+      return await this.reloadRelationship("author");
+    }
   };
   var Demo__Author = class extends Swill__Model__Base {
     validate() {
       return Runtime.isEmpty(Runtime.strip(this.name)) ? "name must not be blank" : null;
+    }
+    async loadBooks() {
+      return await this.loadRelationship("books");
+    }
+    async reloadBooks() {
+      return await this.reloadRelationship("books");
     }
   };
   var Demo__Note = class extends Swill__Model__Base {
@@ -534,14 +548,14 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName() {
+            defaultValue() {
               return "";
             }
           },
           "loud": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultLoud() {
+            defaultValue() {
               return false;
             }
           },
@@ -561,9 +575,9 @@
             }
           }
         },
-        registries: { modelAttributes: {
-          "name": { property: "name", key: "name" }
-        } },
+        registries: {
+          modelAttributes: { "name": { "name": "name", "key": "name", "type": "String", "default": "" } }
+        },
         methods: {
           "normalize": {
             "arity": 1
@@ -591,14 +605,14 @@
             type: "String",
             attribute: true,
             key: "job",
-            defaultValue: function defaultRole() {
+            defaultValue() {
               return "editor";
             }
           }
         },
-        registries: { modelAttributes: {
-          "role": { property: "role", key: "job" }
-        } },
+        registries: {
+          modelAttributes: { "role": { "name": "role", "key": "job", "type": "String", "default": "editor" } }
+        },
         methods: {
           "validate_role": {
             "arity": 2,
@@ -613,14 +627,15 @@
             type: "String",
             attribute: true,
             key: "title",
-            defaultValue: function defaultTitle() {
+            defaultValue() {
               return "";
             }
           },
           "author": {
             type: "T.nilable(Demo::Author)",
             attribute: false,
-            defaultValue: function defaultAuthor() {
+            willAccess: true,
+            defaultValue() {
               return null;
             }
           },
@@ -628,19 +643,26 @@
             js: "authorLoading",
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_authorLoading() {
+            defaultValue() {
               return false;
             }
           }
         },
-        registries: { modelAttributes: {
-          "title": { property: "title", key: "title" }
-        } },
-        settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "resource_type", js: "resourceType", value: "books" }],
-        relationships: {
-          "author": { name: "author", key: "author", kind: "one", type: Demo__Author, url: null }
+        registries: {
+          modelRelationships: { "author": { "name": "author", "key": "author", "kind": "one", "type": "Demo::Author", "url": null } },
+          modelAttributes: { "title": { "name": "title", "key": "title", "type": "String", "default": "" } }
         },
-        methods: {}
+        settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "resource_type", js: "resourceType", value: "books" }],
+        methods: {
+          "load_author": {
+            "arity": 0,
+            "js": "loadAuthor"
+          },
+          "reload_author": {
+            "arity": 0,
+            "js": "reloadAuthor"
+          }
+        }
       },
       "Demo::Author": {
         constructor: Demo__Author,
@@ -649,7 +671,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName2() {
+            defaultValue() {
               return "";
             }
           },
@@ -657,14 +679,15 @@
             type: "T.nilable(Integer)",
             attribute: true,
             key: "born",
-            defaultValue: function defaultBorn() {
+            defaultValue() {
               return null;
             }
           },
           "books": {
             type: "T::Array[Demo::Book]",
             attribute: false,
-            defaultValue: function defaultBooks() {
+            willAccess: true,
+            defaultValue() {
               return [];
             }
           },
@@ -672,22 +695,27 @@
             js: "booksLoading",
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_booksLoading() {
+            defaultValue() {
               return false;
             }
           }
         },
-        registries: { modelAttributes: {
-          "name": { property: "name", key: "name" },
-          "born": { property: "born", key: "born" }
-        } },
-        settings: [{ name: "endpoint", js: "endpoint", value: "/api/authors" }, { name: "resource_type", js: "resourceType", value: "authors" }],
-        relationships: {
-          "books": { name: "books", key: "books", kind: "many", type: Demo__Book, url: "/api/authors/:id/books" }
+        registries: {
+          modelRelationships: { "books": { "name": "books", "key": "books", "kind": "many", "type": "Demo::Book", "url": "/api/authors/:id/books" } },
+          modelAttributes: { "name": { "name": "name", "key": "name", "type": "String", "default": "" }, "born": { "name": "born", "key": "born", "type": "T.nilable(Integer)", "default": null } }
         },
+        settings: [{ name: "endpoint", js: "endpoint", value: "/api/authors" }, { name: "resource_type", js: "resourceType", value: "authors" }],
         methods: {
           "validate": {
             "arity": 0
+          },
+          "load_books": {
+            "arity": 0,
+            "js": "loadBooks"
+          },
+          "reload_books": {
+            "arity": 0,
+            "js": "reloadBooks"
           }
         }
       },
@@ -698,14 +726,14 @@
             type: "String",
             attribute: true,
             key: "body",
-            defaultValue: function defaultBody() {
+            defaultValue() {
               return "";
             }
           }
         },
-        registries: { modelAttributes: {
-          "body": { property: "body", key: "body" }
-        } },
+        registries: {
+          modelAttributes: { "body": { "name": "body", "key": "body", "type": "String", "default": "" } }
+        },
         settings: [{ name: "endpoint", js: "endpoint", value: "/api/notes" }, { name: "codec", js: "codec", value: Swill__Model__PlainJSON }],
         methods: {}
       },
@@ -715,23 +743,22 @@
         properties: {
           "name": {
             type: "String",
-            attribute: true,
-            key: "name",
-            defaultValue: function defaultName3() {
+            attribute: false,
+            defaultValue() {
               return "Ada";
             }
           },
           "baseline": {
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function defaultBaseline() {
+            defaultValue() {
               return null;
             }
           },
           "dirty": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultDirty() {
+            defaultValue() {
               return false;
             }
           }
@@ -743,9 +770,8 @@
         properties: {
           "name": {
             type: "String",
-            attribute: true,
-            key: "name",
-            defaultValue: function defaultName4() {
+            attribute: false,
+            defaultValue() {
               return "Grace";
             }
           }
@@ -758,23 +784,22 @@
         properties: {
           "name": {
             type: "String",
-            attribute: true,
-            key: "name",
-            defaultValue: function defaultName5() {
+            attribute: false,
+            defaultValue() {
               return "Ada";
             }
           },
           "baseline": {
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function defaultBaseline2() {
+            defaultValue() {
               return null;
             }
           },
           "dirty": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultDirty2() {
+            defaultValue() {
               return false;
             }
           }
@@ -787,14 +812,14 @@
           "person": {
             type: "T.nilable(Demo::Person)",
             attribute: false,
-            defaultValue: function defaultPerson() {
+            defaultValue() {
               return null;
             }
           },
           "fallback": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultFallback() {
+            defaultValue() {
               return "Nobody";
             }
           },
@@ -804,7 +829,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_nameField() {
+            defaultValue() {
               return null;
             }
           },
@@ -813,7 +838,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function defaultBadge() {
+            defaultValue() {
               return null;
             }
           },
@@ -822,7 +847,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function defaultSeed() {
+            defaultValue() {
               return null;
             }
           },
@@ -831,7 +856,7 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function defaultMissing() {
+            defaultValue() {
               return null;
             }
           },
@@ -839,14 +864,14 @@
             js: "badgeCount",
             type: "Integer",
             attribute: false,
-            defaultValue: function default_badgeCount() {
+            defaultValue() {
               return 0;
             }
           },
           "people": {
             type: "T::Array[Demo::Person]",
             attribute: false,
-            defaultValue: function defaultPeople() {
+            defaultValue() {
               return [];
             }
           },
@@ -855,7 +880,7 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function defaultRoster() {
+            defaultValue() {
               return null;
             }
           },
@@ -865,7 +890,7 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_peopleList() {
+            defaultValue() {
               return null;
             }
           },
@@ -921,14 +946,14 @@
           "count": {
             type: "Integer",
             attribute: false,
-            defaultValue: function defaultCount() {
+            defaultValue() {
               return 0;
             }
           },
           "restored": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultRestored() {
+            defaultValue() {
               return false;
             }
           },
@@ -963,7 +988,7 @@
           "launched": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultLaunched() {
+            defaultValue() {
               return false;
             }
           }
@@ -993,7 +1018,7 @@
             js: "selectionChanges",
             type: "Integer",
             attribute: false,
-            defaultValue: function default_selectionChanges() {
+            defaultValue() {
               return 0;
             }
           }
@@ -1012,7 +1037,7 @@
           "note": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultNote() {
+            defaultValue() {
               return "";
             }
           }
@@ -1031,7 +1056,7 @@
             type: "String",
             attribute: true,
             key: "name",
-            defaultValue: function defaultName6() {
+            defaultValue() {
               return "world";
             }
           },
@@ -1039,7 +1064,7 @@
             type: "String",
             attribute: true,
             key: "email_address",
-            defaultValue: function defaultEmail() {
+            defaultValue() {
               return "";
             }
           },
@@ -1068,10 +1093,9 @@
             }
           }
         },
-        registries: { modelAttributes: {
-          "name": { property: "name", key: "name" },
-          "email": { property: "email", key: "email_address" }
-        } },
+        registries: {
+          modelAttributes: { "name": { "name": "name", "key": "name", "type": "String", "default": "world" }, "email": { "name": "email", "key": "email_address", "type": "String", "default": "" } }
+        },
         methods: {
           "validate_email": {
             "arity": 2,
@@ -1085,14 +1109,14 @@
           "name": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultName7() {
+            defaultValue() {
               return "";
             }
           },
           "role": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultRole2() {
+            defaultValue() {
               return "";
             }
           }
@@ -1158,21 +1182,21 @@
           "user": {
             type: "T.nilable(Static::User)",
             attribute: false,
-            defaultValue: function defaultUser() {
+            defaultValue() {
               return null;
             }
           },
           "draft": {
             type: "T.nilable(Static::User)",
             attribute: false,
-            defaultValue: function defaultDraft() {
+            defaultValue() {
               return null;
             }
           },
           "saving": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultSaving() {
+            defaultValue() {
               return false;
             }
           },
@@ -1180,7 +1204,7 @@
             js: "firstResponderDebug",
             type: "String",
             attribute: false,
-            defaultValue: function default_firstResponderDebug() {
+            defaultValue() {
               return "None";
             }
           },
@@ -1188,7 +1212,7 @@
             js: "lastNotification",
             type: "String",
             attribute: false,
-            defaultValue: function default_lastNotification() {
+            defaultValue() {
               return "None";
             }
           },
@@ -1198,7 +1222,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_nameField2() {
+            defaultValue() {
               return null;
             }
           },
@@ -1208,7 +1232,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_draftEditor() {
+            defaultValue() {
               return null;
             }
           },
@@ -1291,7 +1315,7 @@
           "note": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultNote2() {
+            defaultValue() {
               return "";
             }
           },
@@ -1321,7 +1345,7 @@
           "count": {
             type: "Integer",
             attribute: false,
-            defaultValue: function defaultCount2() {
+            defaultValue() {
               return 0;
             }
           }
@@ -1339,7 +1363,7 @@
             js: "selectedPerson",
             type: "String",
             attribute: false,
-            defaultValue: function default_selectedPerson() {
+            defaultValue() {
               return "ada";
             }
           },
@@ -1349,7 +1373,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_standaloneTextField() {
+            defaultValue() {
               return null;
             }
           },
@@ -1359,7 +1383,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_standaloneSelect() {
+            defaultValue() {
               return null;
             }
           },
@@ -1369,7 +1393,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_customSelect() {
+            defaultValue() {
               return null;
             }
           }
@@ -1392,7 +1416,7 @@
             js: "activatedPerson",
             type: "String",
             attribute: false,
-            defaultValue: function default_activatedPerson() {
+            defaultValue() {
               return "None";
             }
           },
@@ -1402,7 +1426,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function default_peopleList2() {
+            defaultValue() {
               return null;
             }
           },
@@ -1439,7 +1463,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function defaultField() {
+            defaultValue() {
               return null;
             }
           }
@@ -1460,14 +1484,14 @@
           "query": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultQuery() {
+            defaultValue() {
               return "Ruby";
             }
           },
           "page": {
             type: "Integer",
             attribute: false,
-            defaultValue: function defaultPage() {
+            defaultValue() {
               return 1;
             }
           },
@@ -1476,7 +1500,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function defaultField2() {
+            defaultValue() {
               return null;
             }
           }
@@ -1499,7 +1523,7 @@
           "query": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultQuery2() {
+            defaultValue() {
               return "Details";
             }
           },
@@ -1508,7 +1532,7 @@
             attribute: false,
             outlet: true,
             optional: false,
-            defaultValue: function defaultField3() {
+            defaultValue() {
               return null;
             }
           }

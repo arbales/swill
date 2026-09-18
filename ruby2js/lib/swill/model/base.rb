@@ -11,16 +11,18 @@ module Swill
     #     endpoint "/api/menus"
     #     resource_type "menus"
     #     attribute :name, type: String, default: ""
-    #     has_many :menu_recipes, type: MenuRecipe, key: "menu_recipes", url: "/api/menus/:id/recipes"
+    #     has_many :recipes, type: MenuRecipe, key: "menu_recipes", url: "/api/menus/:id/recipes"
     #   end
     #
     #   menu = await Menu.find(id)        # the pooled instance, or a fetch
     #   menu.name = "Brunch"              # dirty; observers of name run
     #   await menu.save                   # PATCH with the dirty attributes
-    #   await menu.load_relationship("menu_recipes")
+    #   menu.recipes                      # what it has; the read starts the request
+    #   await menu.load_recipes           # the same, for code that must wait
     class Base < Swill::Object
       extend T::Sig
       include Attributes
+      include Relationships
       include DirtyTracking
       include Drafts
       include Identity
@@ -31,6 +33,9 @@ module Swill
       def initialize
         super()
         @loaded_relationships = T.let([], T::Array[String])
+        # A relationship whose own load failed is not retried on every read;
+        # reload_<name> is how an application asks again.
+        @unloadable_relationships = T.let([], T::Array[String])
       end
 
       # ---- reading ----
@@ -165,15 +170,15 @@ module Swill
 
       sig { returns(T::Array[Relationship]) }
       def relationships
-        descriptors = T.let(Swill::Runtime.relationships(self), T::Array[T::Hash[String, T.untyped]])
+        descriptors = T.let(self.class.model_relationships.values, T::Array[T::Hash[String, T.untyped]])
         descriptors.map { |descriptor| Relationship.new(descriptor) }
       end
 
       sig { params(name: String).returns(Relationship) }
       def relationship(name)
-        descriptor = Swill::Runtime.relationship(self, name)
+        descriptor = self.class.model_relationships[name]
         raise "#{name} is not a relationship" unless descriptor
-        Relationship.new(descriptor)
+        Relationship.new(T.cast(descriptor, T::Hash[String, T.untyped]))
       end
 
       sig { params(name: String).returns(T::Boolean) }
@@ -195,6 +200,31 @@ module Swill
       async def load_relationship(name)
         return Swill::Runtime.read(self, name) if relationship_loaded?(name)
         await reload_relationship(name)
+      end
+
+      # Cocoa's -willAccessValueForKey:. A relationship nobody prefetched
+      # loads itself when it is first read: the value answers what it has,
+      # and fills in when the request lands. The guard is what keeps a
+      # re-render from re-requesting.
+      sig { params(name: String).void }
+      def property_will_access(name)
+        super(name)
+        return if id == nil
+        return unless self.class.model_relationships[name]
+        return if relationship_loaded?(name)
+        return if @unloadable_relationships.include?(name)
+        return if Swill::Runtime.read(self, "#{name}_loading") == true
+        load_relationship_in_background(name)
+      end
+
+      sig { params(name: String).void }
+      async def load_relationship_in_background(name)
+        begin
+          await reload_relationship(name)
+        rescue => failure
+          @unloadable_relationships << name
+          Swill::Runtime.warn("#{name} did not load: #{failure.message}")
+        end
       end
 
       sig { params(name: String).returns(T.untyped) }

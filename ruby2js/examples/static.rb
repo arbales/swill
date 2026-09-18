@@ -115,7 +115,7 @@ module Static
     property :last_notification, type: String, default: "None"
 
     outlet :name_field, type: Swill::View
-    outlet :draft_editor, type: Static::DraftEditor
+    outlet :draft_editor, type: "Static::DraftEditor"
 
     # Recomputed whenever user.name changes through the binding on the field.
     property :greeting, type: String do

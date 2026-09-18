@@ -27,6 +27,11 @@ module Swill
                   lines << "  def #{name}=(value); end"
                 end
               end
+              # A macro's forwarded methods are real, typed members.
+              entry["methods"].select { |method| method["to"] }.each do |method|
+                lines << "  sig { returns(#{method['returns']}) }"
+                lines << "  def #{method['name']}; end"
+              end
               lines << "end"
             end
             if mixin && entry["extends_class_methods"]
@@ -59,7 +64,9 @@ module Swill
             entry["properties"].each do |property|
               lines << "  sig { returns(#{property['type']}) }"
               lines << "  def __spike_check_#{property['js']}"
-              lines << property["expression"]
+              # A stored default is a literal value; a computed property is
+              # the block's source, checked in the receiver's own scope.
+              lines << (property["computed"] ? property["expression"] : property["default"].inspect)
               lines << "  end"
             end
             lines << "end"

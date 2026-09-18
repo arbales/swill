@@ -24,13 +24,9 @@
     }
     return false;
   }
-  function installMetadata(klass, properties, methods, restorations2 = [], relationships2 = {}) {
+  function installMetadata(klass, properties, methods, restorations2 = []) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
-      relationships: new Map([
-        ...declarations(parent, "relationships"),
-        ...Object.entries(relationships2)
-      ]),
       properties: new Map([
         ...declarations(parent, "properties"),
         ...properties.map((item) => [item.name, item])
@@ -574,8 +570,7 @@
           methods(descriptor.methods),
           descriptor.registries,
           descriptor.restorations ?? [],
-          descriptor.settings ?? [],
-          descriptor.relationships ?? {}
+          descriptor.settings ?? []
         );
         pending.delete(klass);
         progress = true;
@@ -668,41 +663,32 @@
       keys.add(restoration.key);
     }
   }
-  function installClass(klass, name, properties, methods, registries = {}, restorations2 = [], settings = [], relationships2 = {}) {
+  function installClass(klass, name, properties, methods, registries = {}, restorations2 = [], settings = []) {
     if (classes.has(name)) {
       throw new Error(`Duplicate class: ${name}`);
     }
     rejectProtocolConflicts(klass, properties, restorations2);
-    installMetadata(klass, properties, methods, restorations2, relationships2);
+    installMetadata(klass, properties, methods, restorations2);
     for (const setting of settings) {
       if (typeof klass[setting.js] !== "function") {
         throw new Error(`Missing setting declaration: ${setting.name}`);
       }
       klass[setting.js](setting.value);
     }
-    const propertyByName = new Map(properties.map((property) => [property.name, property]));
-    for (const [registryName, seeds] of Object.entries(registries)) {
+    for (const [registryName, values] of Object.entries(registries ?? {})) {
       if (typeof klass[registryName] !== "function") {
         throw new Error(`Missing registry declaration: ${registryName}`);
       }
       const registry = klass[registryName]();
-      for (const [name2, seed] of Object.entries(seeds)) {
-        const property = propertyByName.get(seed.property);
-        if (!property) {
-          throw new Error(`Unknown registry property: ${seed.property}`);
-        }
-        registry[name2] = {
-          ...seed,
-          type: property.type,
-          defaultValue: property.defaultValue
-        };
-      }
+      if (Array.isArray(registry)) registry.push(...Object.values(values));
+      else Object.assign(registry, values);
     }
     for (const descriptor of properties) {
       Object.defineProperty(klass.prototype, descriptor.js, {
         configurable: true,
         get() {
           record(this, descriptor.name);
+          if (descriptor.willAccess) this.propertyWillAccess(descriptor.name);
           return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
         },
         ...descriptor.computed ? {} : {
@@ -949,12 +935,6 @@
     }
     return result;
   }
-  function relationship(object, name) {
-    return declarations(object.constructor, "relationships").get(name) ?? null;
-  }
-  function relationships(object) {
-    return [...declarations(object.constructor, "relationships").values()];
-  }
   function applyAttributes(object, source) {
     for (const descriptor of declarations(object.constructor, "properties").values()) {
       if (!descriptor.attribute || descriptor.computed) continue;
@@ -1053,8 +1033,6 @@
     outlets,
     collectAttributes,
     applyAttributes,
-    relationship,
-    relationships,
     // Invalid URL input is reported, not raised.
     warn(message) {
       console.warn(`[Swill] ${message}`);
@@ -1093,6 +1071,8 @@
     Swill__Model__JSONAPI: () => Swill__Model__JSONAPI,
     Swill__Model__PlainJSON: () => Swill__Model__PlainJSON,
     Swill__Model__Relationship: () => Swill__Model__Relationship,
+    Swill__Model__Relationships: () => Swill__Model__Relationships,
+    Swill__Model__Relationships_ClassMethods: () => Swill__Model__Relationships_ClassMethods,
     Swill__Model__Store: () => Swill__Model__Store,
     Swill__Notification: () => Swill__Notification,
     Swill__NotificationCenter: () => Swill__NotificationCenter,
@@ -1123,6 +1103,12 @@
         return value;
       }
       propertyWillChange(name, previous, value) {
+        return null;
+      }
+      // Cocoa's -willAccessValueForKey:, and the third of the three hooks this
+      // framework speaks. A property declared will_access: notifies its object
+      // before the read resolves, so the value can load itself.
+      propertyWillAccess(name) {
         return null;
       }
     }
@@ -1883,6 +1869,13 @@
     }
   };
   var Swill__Controller = class extends Swill__Responder {
+    // An outlet is a property connected, at awakening, to the element in this
+    // controller's owned region that carries a matching outlet attribute.
+    // Unconnected until then, so its reader is nilable. Declared here rather
+    // than on Swill::Object because only a controller owns a region.
+    // restorable :query, key: :q — a bindable path whose value the
+    // application keeps in the URL fragment. The leaf type is derived when the
+    // class is compiled; the runtime checks the path at installation.
     // The object a parent binding assigns through bind="path" on this
     // controller root. Editors resolve their own bindings under it.
     // Property under which bind paths in this region resolve; nil binds
@@ -3900,8 +3893,11 @@
   };
   function Swill__Model__Attributes(Superclass) {
     class Swill__Model__Attributes_Layer extends Superclass {
-      // On MRI the attribute macro below seeds the registry; the compiler
-      // reads seeded_by to do the same from collected declarations.
+      // An attribute is a property that carries a wire key and an attribute
+      // mark: the validation, dirty tracking, and codec paths all read those
+      // marks off the property descriptor. The registry is the same
+      // declaration as data, for code that asks the class rather than an
+      // instance.
       // Materialize an instance from a wire hash keyed by attribute keys,
       // as Opal's Base.new(values) does.
       // Attribute values by wire key.
@@ -3934,6 +3930,20 @@
     }
     Object.setPrototypeOf(Swill__Model__Attributes_ClassMethods_Layer.prototype, Superclass);
     return Swill__Model__Attributes_ClassMethods_Layer.prototype;
+  }
+  function Swill__Model__Relationships(Superclass) {
+    class Swill__Model__Relationships_Layer extends Superclass {
+    }
+    return Swill__Model__Relationships_Layer;
+  }
+  function Swill__Model__Relationships_ClassMethods(Superclass) {
+    class Swill__Model__Relationships_ClassMethods_Layer extends Object {
+      modelRelationships() {
+        return Runtime.inheritableRegistry(this, "modelRelationships", "hash");
+      }
+    }
+    Object.setPrototypeOf(Swill__Model__Relationships_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Model__Relationships_ClassMethods_Layer.prototype;
   }
   function Swill__Model__DirtyTracking(Superclass) {
     class Swill__Model__DirtyTracking_Layer extends Superclass {
@@ -4083,7 +4093,7 @@
       this._name = Runtime.cast(descriptor.name, "String");
       this._key = Runtime.cast(descriptor.key, "String");
       this._kind = Runtime.cast(descriptor.kind, "String");
-      this._type = descriptor.type;
+      this._type = Runtime.cast(descriptor.type, "String");
       this._url = Runtime.cast(descriptor.url, "T.nilable(String)");
     }
     name() {
@@ -4095,8 +4105,10 @@
     isMany() {
       return this._kind === "many";
     }
+    // The declared class, by its installed name: a relationship may name a
+    // class defined later, so the descriptor carries the name.
     modelClass() {
-      return this._type;
+      return Runtime.resolve(this._type);
     }
     // Where an owner's related records are: the declared pattern with the
     // owner's id, or the owner's own URL followed by the key.
@@ -4233,28 +4245,28 @@
       let instance = this.pooled(resource);
       let linkages = resource.relationships;
       if (!Runtime.isTruthy(instance && linkages)) return;
-      return instance.relationships().forEach((relationship2) => {
+      return instance.relationships().forEach((relationship) => {
         let related, related_one;
         let linkage = Runtime.logicalOr(
-          linkages[relationship2.key()],
-          () => linkages[relationship2.name()]
+          linkages[relationship.key()],
+          () => linkages[relationship.name()]
         );
         if (!Runtime.isTruthy(linkage)) return;
         let data = linkage.data;
-        if (relationship2.isMany()) {
+        if (relationship.isMany()) {
           if (!Array.isArray(data)) return;
           related = this.resourcesIn(data).map((item) => this.pooled(item));
           if (related.includes(null)) return;
-          return instance.assignRelationship(relationship2.name(), related);
+          return instance.assignRelationship(relationship.name(), related);
         } else if (data == null) {
-          return instance.assignRelationship(relationship2.name(), null);
+          return instance.assignRelationship(relationship.name(), null);
         } else if (!Array.isArray(data)) {
           related_one = this.pooled(Runtime.cast(
             data,
             "T::Hash[String, T.untyped]"
           ));
           if (related_one) {
-            return instance.assignRelationship(relationship2.name(), related_one);
+            return instance.assignRelationship(relationship.name(), related_one);
           }
         }
       });
@@ -4294,6 +4306,7 @@
     constructor() {
       super();
       this._loaded_relationships = Runtime.cast([], "T::Array[String]");
+      this._unloadable_relationships = Runtime.cast([], "T::Array[String]");
     }
     static classForType(type) {
       return Runtime.classWithSetting("resource_type", type);
@@ -4398,18 +4411,21 @@
     // ---- relationships ----
     relationships() {
       let descriptors = Runtime.cast(
-        Runtime.relationships(this),
+        Object.values(this.constructor.modelRelationships()),
         "T::Array[T::Hash[String, T.untyped]]"
       );
       return descriptors.map((descriptor) => new Swill__Model__Relationship(descriptor));
     }
     relationship(name) {
-      let descriptor = Runtime.relationship(this, name);
+      let descriptor = this.constructor.modelRelationships()[name];
       if (!Runtime.isTruthy(descriptor)) {
         throw new Error(`${name} is not a relationship`);
       }
       ;
-      return new Swill__Model__Relationship(descriptor);
+      return new Swill__Model__Relationship(Runtime.cast(
+        descriptor,
+        "T::Hash[String, T.untyped]"
+      ));
     }
     isRelationshipLoaded(name) {
       return this._loaded_relationships.includes(name);
@@ -4425,6 +4441,27 @@
     async loadRelationship(name) {
       if (this.isRelationshipLoaded(name)) return Runtime.read(this, name);
       return await this.reloadRelationship(name);
+    }
+    // Cocoa's -willAccessValueForKey:. A relationship nobody prefetched
+    // loads itself when it is first read: the value answers what it has,
+    // and fills in when the request lands. The guard is what keeps a
+    // re-render from re-requesting.
+    propertyWillAccess(name) {
+      super.propertyWillAccess(name);
+      if (this.id == null) return;
+      if (!Runtime.isTruthy(this.constructor.modelRelationships()[name])) return;
+      if (this.isRelationshipLoaded(name)) return;
+      if (this._unloadable_relationships.includes(name)) return;
+      if (Runtime.read(this, `${name}_loading`) === true) return;
+      return this.loadRelationshipInBackground(name);
+    }
+    async loadRelationshipInBackground(name) {
+      try {
+        return await this.reloadRelationship(name);
+      } catch (failure) {
+        Runtime.append(this._unloadable_relationships, name);
+        return Runtime.warn(`${name} did not load: ${failure.message}`);
+      }
     }
     async reloadRelationship(name) {
       let descriptor = this.relationship(name);
@@ -4465,6 +4502,10 @@
           "property_will_change": {
             "arity": 3,
             "js": "propertyWillChange"
+          },
+          "property_will_access": {
+            "arity": 1,
+            "js": "propertyWillAccess"
           }
         }
       },
@@ -4525,6 +4566,11 @@
             "js": "propertyWillChange"
           }
         }
+      },
+      "Swill::Model::Relationships": {
+        factory: Swill__Model__Relationships,
+        classFactory: Swill__Model__Relationships_ClassMethods,
+        methods: {}
       },
       "Swill::Model::DirtyTracking": {
         factory: Swill__Model__DirtyTracking,
@@ -4620,7 +4666,7 @@
             js: "baseURL",
             type: "String",
             attribute: false,
-            defaultValue: function default_baseURL() {
+            defaultValue() {
               return "";
             }
           }
@@ -4854,7 +4900,7 @@
           "delegate": {
             type: "T.untyped",
             attribute: false,
-            defaultValue: function defaultDelegate() {
+            defaultValue() {
               return null;
             }
           }
@@ -4872,7 +4918,7 @@
           "value": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultValue() {
+            defaultValue() {
               return "";
             }
           }
@@ -4901,14 +4947,14 @@
           "options": {
             type: "T::Array[String]",
             attribute: false,
-            defaultValue: function defaultOptions() {
+            defaultValue() {
               return [];
             }
           },
           "value": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultValue2() {
+            defaultValue() {
               return "";
             }
           }
@@ -4937,14 +4983,14 @@
           "options": {
             type: "T::Array[T::Hash[String, T.untyped]]",
             attribute: false,
-            defaultValue: function defaultOptions2() {
+            defaultValue() {
               return [];
             }
           },
           "value": {
             type: "String",
             attribute: false,
-            defaultValue: function defaultValue3() {
+            defaultValue() {
               return "";
             }
           }
@@ -5039,7 +5085,7 @@
             js: "representedObject",
             type: "T.untyped",
             attribute: false,
-            defaultValue: function default_representedObject() {
+            defaultValue() {
               return null;
             }
           }
@@ -5587,7 +5633,7 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function default_headerView() {
+            defaultValue() {
               return null;
             }
           },
@@ -5596,7 +5642,7 @@
             attribute: false,
             outlet: true,
             optional: true,
-            defaultValue: function defaultRows() {
+            defaultValue() {
               return null;
             }
           },
@@ -5604,7 +5650,7 @@
             js: "allowsMultipleSelection",
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function default_allowsMultipleSelection() {
+            defaultValue() {
               return false;
             }
           },
@@ -5612,7 +5658,7 @@
             js: "selectedObjects",
             type: "T::Array[T.untyped]",
             attribute: false,
-            defaultValue: function default_selectedObjects() {
+            defaultValue() {
               return [];
             }
           },
@@ -5620,7 +5666,7 @@
             js: "selectedObjectId",
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function default_selectedObjectId() {
+            defaultValue() {
               return null;
             }
           },
@@ -5822,7 +5868,7 @@
             js: "sortKey",
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function default_sortKey() {
+            defaultValue() {
               return null;
             }
           },
@@ -5830,7 +5876,7 @@
             js: "sortDirection",
             type: "String",
             attribute: false,
-            defaultValue: function default_sortDirection() {
+            defaultValue() {
               return "ascending";
             }
           },
@@ -5838,7 +5884,7 @@
             js: "sortStates",
             type: "T::Hash[String, String]",
             attribute: false,
-            defaultValue: function default_sortStates() {
+            defaultValue() {
               return {};
             }
           }
@@ -5970,7 +6016,7 @@
             js: "editedObject",
             type: "T.untyped",
             attribute: false,
-            defaultValue: function default_editedObject() {
+            defaultValue() {
               return null;
             }
           }
@@ -6146,21 +6192,21 @@
           "records": {
             type: "T::Array[T.untyped]",
             attribute: false,
-            defaultValue: function defaultRecords() {
+            defaultValue() {
               return [];
             }
           },
           "loading": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue: function defaultLoading() {
+            defaultValue() {
               return false;
             }
           },
           "error": {
             type: "T.nilable(String)",
             attribute: false,
-            defaultValue: function defaultError() {
+            defaultValue() {
               return null;
             }
           }
@@ -6182,13 +6228,13 @@
       },
       "Swill::Model::Base": {
         constructor: Swill__Model__Base,
-        mixins: [Swill__Model__Attributes, Swill__Model__DirtyTracking, Swill__Model__Drafts, Swill__Model__Identity],
+        mixins: [Swill__Model__Attributes, Swill__Model__Relationships, Swill__Model__DirtyTracking, Swill__Model__Drafts, Swill__Model__Identity],
         properties: {
           "dirty_attributes": {
             js: "dirtyAttributes",
             type: "T::Array[T.untyped]",
             attribute: false,
-            defaultValue: function default_dirtyAttributes() {
+            defaultValue() {
               return [];
             }
           },
@@ -6204,14 +6250,14 @@
             type: "T.nilable(String)",
             attribute: true,
             key: "id",
-            defaultValue: function defaultId() {
+            defaultValue() {
               return null;
             }
           }
         },
-        registries: { modelAttributes: {
-          "id": { property: "id", key: "id" }
-        } },
+        registries: {
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null } }
+        },
         methods: {
           "initialize": {
             "arity": 0
@@ -6249,6 +6295,14 @@
             "arity": 1,
             "js": "loadRelationship"
           },
+          "property_will_access": {
+            "arity": 1,
+            "js": "propertyWillAccess"
+          },
+          "load_relationship_in_background": {
+            "arity": 1,
+            "js": "loadRelationshipInBackground"
+          },
           "reload_relationship": {
             "arity": 1,
             "js": "reloadRelationship"
@@ -6273,7 +6327,7 @@
     const unknown = Object.keys(descriptor).filter((key) => !allowed.includes(key));
     if (unknown.length) throw new TypeError(`Unknown ${declaration} option: ${unknown[0]}`);
   }
-  function defaultValue4(name, descriptor) {
+  function defaultValue(name, descriptor) {
     if (!isObject(descriptor) || Array.isArray(descriptor)) {
       throw new TypeError(`Property ${name} must use a descriptor with default`);
     }
@@ -6300,7 +6354,7 @@
     assertDescriptorMap(declared, "properties");
     for (const [name, descriptor] of Object.entries(declared)) {
       if (name.length === 0) throw new TypeError("Property names must not be empty");
-      properties[name] = { defaultValue: defaultValue4(name, descriptor) };
+      properties[name] = { defaultValue: defaultValue(name, descriptor) };
       names2.add(name);
     }
     const outlets2 = ownDeclaration(klass, "outlets", {});

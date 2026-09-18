@@ -11,7 +11,7 @@ module Demo
     # plain View, the nested controller is itself the value, the JSON script
     # is decoded, and an optional outlet may be absent.
     outlet :name_field, type: Swill::View
-    outlet :badge, type: Demo::Badge
+    outlet :badge, type: "Demo::Badge"
     outlet :seed, type: T::Hash[String, String]
     outlet :missing, type: Swill::View, optional: true
 

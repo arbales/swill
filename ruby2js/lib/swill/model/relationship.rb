@@ -14,7 +14,7 @@ module Swill
         @name = T.let(descriptor["name"], String)
         @key = T.let(descriptor["key"], String)
         @kind = T.let(descriptor["kind"], String)
-        @type = T.unsafe(descriptor["type"])
+        @type = T.let(descriptor["type"], String)
         @url = T.let(descriptor["url"], T.nilable(String))
       end
 
@@ -33,9 +33,11 @@ module Swill
         @kind == "many"
       end
 
+      # The declared class, by its installed name: a relationship may name a
+      # class defined later, so the descriptor carries the name.
       sig { returns(T.class_of(Base)) }
       def model_class
-        @type
+        T.unsafe(Swill::Runtime.resolve(@type))
       end
 
       # Where an owner's related records are: the declared pattern with the

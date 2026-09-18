@@ -5,8 +5,9 @@ require_relative "names"
 
 module Swill
   module Ruby2JS
-    # Static facts about classes, mixins, declarations, and methods collected
-    # from source without evaluating it. Collection lives in knowledge/.
+    # Facts about classes, mixins, declarations, and methods: what only the
+    # source knows, read from the AST, and what a class body declared, read
+    # off the class the loader defined. Collection lives in knowledge/.
     class Knowledge
       attr_reader :entries
 
@@ -18,8 +19,14 @@ module Swill
         Names.member(name)
       end
 
-        def initialize(imports = [])
+        attr_reader :loader
+
+        def initialize(imports = [], loader:)
           @entries = imports.map { |entry| entry.merge("imported" => true) }
+          @loader = loader
+          # A computed block's source, by the file and line Proc#source_location
+          # reports, so a reflected descriptor can find the block it came from.
+          @blocks = {}
         end
 
         def collect(source, file)
@@ -33,6 +40,15 @@ module Swill
               end
             end
           end
+          # Three passes: what the source declares, so a class the compiler
+          # already knows cannot be reopened; the evaluation; then the
+          # entries, read from the classes it defined.
+          declared_names(statements(ast), []).each do |name|
+            raise CompileError, "reopened/duplicate constant #{name}" if entries.any? { |e| e["name"] == name }
+          end
+          # The path the evaluation used is the one a computed block's
+          # Proc#source_location reports, so the index is keyed by it.
+          index_blocks(ast, loader.evaluate(source, file))
           collect_scope(statements(ast), [])
           self
         end
@@ -111,19 +127,15 @@ module Swill
           # A mixin's own ClassMethods, while its layer compiles.
           found = entry.fetch("class_method_entries", []).find { |candidate| candidate["name"] == name }
           return found if found
-          if entry.fetch("registries", []).any? { |registry| registry["name"] == name } || entry.fetch("settings", []).include?(name)
-            return {"name" => name, "js" => Knowledge.member(name), "arity" => 0, "parameters" => {},
-                    "returns" => "T.untyped", "configuration" => true}
-          end
+          found = configuration_entry(entry, name)
+          return found if found
           entry["includes"].reverse_each do |mixin_name|
             mixin = entries.find { |candidate| candidate["name"] == resolve(mixin_name, entry["scope"]) }
             next unless mixin && mixin["extends_class_methods"]
             found = mixin.fetch("class_method_entries", []).find { |candidate| candidate["name"] == name }
             return found if found
-            if mixin["registries"].any? { |registry| registry["name"] == name } || mixin["settings"].include?(name)
-              return {"name" => name, "js" => Knowledge.member(name), "arity" => 0, "parameters" => {},
-                      "returns" => "T.untyped", "configuration" => true}
-            end
+            found = configuration_entry(mixin, name)
+            return found if found
           end
           return nil unless entry["parent"]
           class_member_entry(resolve(entry["parent"], entry["scope"]), method)
@@ -131,18 +143,18 @@ module Swill
           nil
         end
 
-        # Whether a class body may set +name+: a class_setting an included
-        # mixin, or an ancestor's, declares. The entry is still being built.
-        def setting_declared?(entry, name)
-          entry["includes"].each do |mixin_name|
-            mixin = entries.find { |candidate| candidate["name"] == resolve(mixin_name, entry["scope"]) }
-            return true if mixin && mixin.fetch("settings", []).include?(name.to_s)
+        # A registry read answers the collection it holds; a setting read
+        # answers whatever was declared.
+        def configuration_entry(owner, name)
+          registry = owner.fetch("registries", []).find { |candidate| candidate["name"] == name }
+          returns = if registry
+            registry["initial"] == "array" ? "T::Array[T.untyped]" : "T::Hash[T.untyped, T.untyped]"
+          elsif owner.fetch("settings", []).include?(name)
+            "T.untyped"
           end
-          return false unless entry["parent"]
-          parent = entries.find { |candidate| candidate["name"] == resolve(entry["parent"], entry["scope"]) }
-          parent ? setting_declared?(parent, name) : false
-        rescue CompileError
-          false
+          return nil unless returns
+          {"name" => name, "js" => Knowledge.member(name), "arity" => 0, "parameters" => {},
+           "returns" => returns, "configuration" => true}
         end
 
         def property_entry(type, name)
@@ -173,6 +185,7 @@ module Swill
 end
 
 require_relative "knowledge/dom"
+require_relative "knowledge/reflection"
 require_relative "knowledge/collection"
 require_relative "knowledge/signatures"
-require_relative "knowledge/declarations"
+require_relative "knowledge/validation"

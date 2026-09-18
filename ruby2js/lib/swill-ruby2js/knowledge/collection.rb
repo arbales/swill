@@ -30,6 +30,37 @@ module Swill
           end
         end
 
+        # The constants a source declares as entries, in the order a
+        # collection would record them. Read before anything is evaluated, so
+        # a file that would reopen a class the compiler already knows is
+        # rejected before it can mutate the shared framework container.
+        def declared_names(nodes, scope)
+          nodes.each_with_object([]) do |node, names|
+            if node.type == :module
+              name, body = node.children
+              children = statements(body)
+              nested = children.select { |child| namespace_declaration?(child) }
+              names << (scope + [constant(name)]).join("::") if children.empty? || nested.length != children.length
+              names.concat(declared_names(nested, scope + [constant(name)]))
+            elsif node.type == :class
+              names << (scope + [constant(node.children.first)]).join("::")
+            end
+          end
+        end
+
+        # Every block in a file, by the line Proc#source_location reports for
+        # it. A computed property's descriptor carries that location, which is
+        # how a reflected declaration finds the source to compile.
+        def index_blocks(node, file)
+          return unless node.respond_to?(:type)
+          if node.type == :block
+            source = block_body_source(node)
+            @blocks[[file, node.loc.expression.line]] = source
+            @blocks[[file, node.loc.begin.line]] = source if node.loc.respond_to?(:begin) && node.loc.begin
+          end
+          node.children.each { |child| index_blocks(child, file) }
+        end
+
         def namespace_declaration?(node)
           return true if node.type == :class
           node.type == :module && constant(node.children.first) != "ClassMethods"
@@ -45,12 +76,18 @@ module Swill
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
             "includes" => [], "properties" => [], "methods" => [], "static_methods" => [], "included_properties" => [],
             "class_methods" => [], "class_method_entries" => [], "registries" => [], "settings" => [],
-            "setting_values" => {}, "relationships" => [], "restorations" => []
+            "setting_values" => {}, "registry_values" => {}, "restorations" => []
           }
+          target = loader.constant(name)
+          raise CompileError, "#{name} did not load" if target.nil?
           pending_signature = nil
           statements(node.children.last).each do |child|
             # async def name ... end parses as async(def ...): the method is
             # asynchronous and may await.
+            # macro def self.outlet(...) — a declaration macro's own
+            # implementation. The compiler lowers the declaration and never
+            # compiles the body.
+            next if self.class.macro_wrapper?(child)
             async = self.class.async_wrapper?(child)
             child = child.children[2] if async
             if child.type == :def
@@ -85,9 +122,8 @@ module Swill
                 resolved = resolve(mixin_name, scope)
                 mixin = entries.find { |candidate| candidate["name"] == resolved }
                 raise CompileError, "include target must be a mixin" unless mixin["kind"] == "mixin"
-                # Interpret only the supported static declaration hook, never run
-                # application Ruby. Each receiver owns its declaration descriptors.
-                entry["properties"].concat(mixin.fetch("included_properties", []).map(&:dup))
+                # Whatever the mixin's included hook declared is on the class
+                # itself, which is where the entry reads it from.
               end
             elsif child.type == :defs && kind == "class"
               collect_static_method(entry, child, pending_signature, async)
@@ -99,21 +135,22 @@ module Swill
               collect_class_methods(entry, child)
             elsif kind == "mixin" && namespace_declaration?(child)
               # collect_scope records nested constants as their own entries.
-            elsif child.type == :send && child.children[0..1] == [nil, :restorable]
-              collect_restorable(entry, child)
-            elsif child.type == :send && child.children[0].nil? && RELATIONSHIP_MACROS.include?(child.children[1])
-              raise CompileError, "relationships are declared on classes" unless kind == "class"
-              collect_relationship(entry, child)
-            elsif child.type == :send && child.children[0].nil? && setting_declared?(entry, child.children[1])
-              collect_setting_value(entry, child)
-            elsif declaration?(child)
-              collect_property(entry, child)
+            elsif declared_call?(target, child)
+              # A declaration: the class body already ran, so the class itself
+              # records what it did and nothing is interpreted here.
             else
               raise CompileError, "unsupported class body in #{name}: #{child.loc.expression.source}"
             end
           end
-          names = entry["properties"].map { |property| property["name"] }
-          raise CompileError, "duplicate property in #{name}" unless names.uniq == names
+          Reflection.fill(entry, target, @blocks)
+          if entry["included_hook"]
+            probe = begin
+              loader.probe(target)
+            rescue ::StandardError => error
+              raise CompileError, "#{name} included hook: #{error.message}"
+            end
+            Reflection.fill_included(entry, probe, @blocks)
+          end
           if entry["extends_class_methods"] && entry["class_methods"].empty? &&
              entry["registries"].empty? && entry["settings"].empty?
             raise CompileError, "ClassMethods module is missing or empty"
@@ -121,10 +158,35 @@ module Swill
           entries << entry
         end
 
+        # Whether a class-body statement is a declaration: the property
+        # primitive, a macro an ancestor marked, or a setting an included
+        # ClassMethods declares.
+        def declared_call?(target, node)
+          call = node.type == :block ? node.children.first : node
+          return false unless call.respond_to?(:type) && call.type == :send && call.children.first.nil?
+          name = call.children[1]
+          return false unless Reflection.declaration?(target, name)
+          # A class body writes a setting; reading one there says nothing.
+          if Reflection.setting?(target, name) && call.children.length == 2
+            raise CompileError, "#{name} takes one value"
+          end
+          true
+        end
+
         # def self.name(args) on a class: a static method. Inside it, self is
         # the class and a bare new constructs it.
         def self.async_wrapper?(node)
-          node.type == :send && node.children[0].nil? && node.children[1] == :async &&
+          wrapper?(node, :async)
+        end
+
+        # macro def name(...) — the sibling of async def: the definition is a
+        # declaration macro, callable in a class body and never emitted.
+        def self.macro_wrapper?(node)
+          wrapper?(node, :macro)
+        end
+
+        def self.wrapper?(node, name)
+          node.type == :send && node.children[0].nil? && node.children[1] == name &&
             node.children.length == 3 && node.children[2].respond_to?(:type) && %i[def defs].include?(node.children[2].type)
         end
 
@@ -156,7 +218,7 @@ module Swill
           end
           entry["included_hook"] = true
           base = args.children.first.children.first
-          declarations = {"properties" => []}
+
           statements(body).each do |statement|
             call = statement.type == :block ? statement.children.first : statement
             receiver, method, *arguments = call.children if call.type == :send
@@ -164,31 +226,26 @@ module Swill
                method == :extend && arguments.length == 1 &&
                constant(arguments.first) == "ClassMethods"
               entry["extends_class_methods"] = true
-            elsif receiver&.type == :lvar && receiver.children == [base] &&
-                  %i[property attribute].include?(method)
-              # Stored or computed; a computed block compiles in each receiver.
-              collect_property(declarations, statement)
+            elsif receiver&.type == :lvar && receiver.children == [base]
+              # A declaration on the including class. What it declares is read
+              # from a class that includes the mixin; a computed block
+              # compiles in each receiver.
             else
-              raise CompileError, "included hooks support only literal base.property/base.attribute declarations"
+              raise CompileError, "included hooks support only declarations on base"
             end
           end
-          entry["included_properties"] = declarations["properties"]
-          names = entry["included_properties"].map { |property| property["name"] }
-          raise CompileError, "duplicate included property" unless names.uniq == names
         end
 
         def collect_class_methods(entry, node)
           pending_signature = nil
           statements(node.children.last).each do |statement|
-            if statement.type == :def
+            if self.class.macro_wrapper?(statement)
+              # A declaration macro's implementation. The compiler lowers the
+              # declaration itself and never compiles this body.
+              pending_signature = nil
+              next
+            elsif statement.type == :def
               method, args, = statement.children
-              if DECLARATION_MACROS.include?(method) || RELATIONSHIP_MACROS.include?(method)
-                # A class method named after a declaration macro is its MRI
-                # implementation. The compiler lowers the declaration itself
-                # (collect_property) and never compiles that body.
-                pending_signature = nil
-                next
-              end
               unless args.children.all? { |arg| arg.type == :arg }
                 raise CompileError, "class methods support only positional required arguments"
               end
@@ -206,14 +263,10 @@ module Swill
               # directly; T::Sig is annotation-only.
             elsif statement.type == :send && statement.children.first.nil? &&
                   %i[inheritable_registry class_setting].include?(statement.children[1])
-              _, macro, name, *options = statement.children
+              # A registry or a setting: the module already declared it, and
+              # the entry reads it back from the module itself.
+              _, macro, name, = statement.children
               raise CompileError, "#{macro} name must be a literal symbol" unless name&.type == :sym
-              if macro == :inheritable_registry
-                entry["registries"] << collect_registry(name, options)
-              else
-                raise CompileError, "class_setting coercion blocks are outside this slice" unless options.empty?
-                entry["settings"] << name.children.first.to_s
-              end
             elsif signature?(statement)
               # Sorbet checks signatures; executable definitions omit them,
               # and the compiler reads the types.
@@ -222,29 +275,6 @@ module Swill
               raise CompileError, "unsupported ClassMethods body: #{statement.loc.expression.source}"
             end
           end
-          names = entry["registries"].map { |item| item["name"] } + entry["settings"]
-          raise CompileError, "duplicate class declaration" unless names.uniq == names
-        end
-
-        # inheritable_registry :name [, :array] [, seeded_by: :attribute]. A
-        # registry seeded by a declaration macro receives, in every class that
-        # inherits it, one entry per declaration made with that macro.
-        def collect_registry(name, options)
-          keywords = options.last&.type == :hash ? options.pop : nil
-          initial = options.empty? ? :hash : options.first&.children&.first
-          unless options.length <= 1 && options.first&.type != :block && %i[hash array].include?(initial)
-            raise CompileError, "registry storage must be :hash or :array"
-          end
-          seeded_by = nil
-          keywords&.children&.each do |pair|
-            key, value = pair.children
-            unless key.type == :sym && key.children.first == :seeded_by &&
-                   value.type == :sym && value.children.first == :attribute
-              raise CompileError, "inheritable_registry accepts only seeded_by: :attribute"
-            end
-            seeded_by = value.children.first.to_s
-          end
-          {"name" => name.children.first.to_s, "initial" => initial.to_s, "seeded_by" => seeded_by}
         end
 
     end

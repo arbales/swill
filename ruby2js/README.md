@@ -396,7 +396,9 @@ menus = await Menu.find_all                 # GET /api/menus, pooled by id
 menu = await Menu.find(id)                  # the pooled instance, or a fetch
 menu.name = "Brunch"                        # dirty; observers of name run
 await menu.save                             # PATCH with the dirty attributes
-await menu.load_relationship("menu_recipes") # GET /api/menus/:id/recipes once
+menu.menu_recipes                           # GET /api/menus/:id/recipes once,
+                                            # and the binding fills in
+await menu.load_menu_recipes                # the same, for code that must wait
 await menu.delete
 ```
 
@@ -405,8 +407,9 @@ Class methods: `find`, `fetch` (always the server's), `find_all`,
 observable `records`/`loading`/`error` triple), `get`/`put`/`remove`/`clear`
 on the pool, `parse_one`/`parse_many`. Instance methods: `save`, `delete`,
 `reload`, `validate` (a message refuses the save), `serialize(dirty_only)`,
-`draft`/`apply_draft`, `load_relationship`/`reload_relationship`,
-`relationship_loaded?`, and a `<name>_loading` property per relationship.
+`draft`/`apply_draft`, and, per relationship, a `<name>_loading` property and
+`load_<name>`/`reload_<name>` for code that must wait on what a read would
+have started anyway.
 Persistence is `async`; awaiting it yields the record.
 
 JSON:API is the default codec: a document's `included` resources are pooled
@@ -498,6 +501,10 @@ The implementation covers:
 - static classes, inheritance, method-only mixins, and native `super`;
 - typed properties, attributes, computed values, and inherited defaults;
 - class settings and inheritable registries;
+- an open declaration vocabulary: the compiler loads the Ruby, so a macro is
+  an ordinary class method marked `macro`, and `attribute`, `outlet`,
+  `restorable`, and `has_many` are written in it rather than in the compiler.
+  A plugin's own macro needs no compiler change;
 - mutation hooks, observation, value bindings, actions, drafts, and disposal;
 - compiled object, responder, view, controller, ownership, bindings, actions,
   and awakening framework slices;
@@ -529,7 +536,7 @@ The implementation covers:
 - generated RBIs and expression probes;
 - readable and minified script bundles with source maps.
 
-It does not claim general Ruby modules, reflection, mutable declaration defaults,
+It does not claim general Ruby modules, runtime reflection, mutable declaration defaults,
 Sorbet constructs beyond the compiled `T` operations, dynamic class mutation,
 editor controllers, controls, or a complete model-layer port. Unsupported forms
 fail compilation.
