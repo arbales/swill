@@ -10,11 +10,12 @@ module Swill
     #
     #   has_many :ingredients, type: Ingredient, url: "/api/recipes/:id/ingredients"
     #
-    # declares +ingredients+ and +ingredients_loading+, records the
+    # declares +ingredients+ and its key-value loading state, records the
     # descriptor, and defines +load_ingredients+ and +reload_ingredients+.
     # Because the value property is declared will_access:, reading
     # +ingredients+ on a persisted record that has not loaded them starts the
-    # request and fills the value in when it lands.
+    # request and fills the value in when it lands, so a binding on the value
+    # is all an application needs to write.
     module Relationships
       extend T::Sig
 
@@ -44,7 +45,13 @@ module Swill
           many = kind == "many"
           value_type = many ? "T::Array[#{target}]" : "T.nilable(#{target})"
           property name, type: value_type, default: (many ? [] : nil), will_access: will_access
+          # Key-value loading, as AVFoundation spells it: a relationship is
+          # unknown, loading, loaded, or failed. Every state is a property, so
+          # a spinner, an empty state, and a failure are all bindings rather
+          # than a controller method with a rescue.
           property :"#{name}_loading", type: T::Boolean, default: false
+          property :"#{name}_loaded", type: T::Boolean, default: false
+          property :"#{name}_error", type: T.nilable(String), default: nil
           model_relationships[name.to_s] = {
             "name" => name.to_s, "key" => key.to_s, "kind" => kind,
             "type" => target, "url" => url

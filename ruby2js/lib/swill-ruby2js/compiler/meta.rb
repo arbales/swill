@@ -44,10 +44,13 @@ module Swill
                 fields << "restorations: [#{restorations.join(', ')}]"
               end
             end
-            methods = entry["methods"].map do |method|
-              descriptor = {"arity" => method["arity"]}
-              descriptor["js"] = method["js"] if method["js"] != method["name"]
-              "#{object_key(method['name'])}: #{JSON.pretty_generate(descriptor)}"
+            methods = entry["methods"].flat_map do |method|
+              Knowledge.variants(method).map do |variant|
+                descriptor = {"arity" => variant["arity"]}
+                descriptor["js"] = variant["js"] if variant["js"] != variant["name"]
+                descriptor["family"] = variant["family"] if variant["family"]
+                "#{object_key(variant['name'])}: #{JSON.pretty_generate(descriptor)}"
+              end
             end
             fields << "methods: {\n#{methods.join(",\n")}\n}"
             groups[mixin ? "mixins" : "classes"] << "#{entry['name'].to_json}: {\n#{fields.join(",\n")}\n}"

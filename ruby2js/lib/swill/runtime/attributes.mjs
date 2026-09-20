@@ -1,17 +1,23 @@
 // Declaration-backed outlets and model attributes.
 import {declarations} from "./metadata.mjs";
+import {resolveMethod} from "./paths.mjs";
 
 export function isAttribute(object, name) {
   return !!declarations(object.constructor, "properties").get(name)?.attribute;
 }
 
-// Resolve validate_<name> through installed metadata.
+// Resolve validate_<name> through installed metadata. A validator is always
+// sent the value and the previous one, so one that cannot take both is a
+// mistake and says so rather than never running.
 export function validateAttribute(object, name, value, previous) {
   if (!isAttribute(object, name)) return value;
-  const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
-  return validator && validator.arity === 2
-    ? object[validator.js](value, previous)
-    : value;
+  const methods = declarations(object.constructor, "methods");
+  const validator = resolveMethod(methods, `validate_${name}`, 2);
+  if (validator) return object[validator.js](value, previous);
+  if (methods.has(`validate_${name}`)) {
+    throw new Error(`Validator must take a value and a previous value: validate_${name}`);
+  }
+  return value;
 }
 
 export function restorations(object) {

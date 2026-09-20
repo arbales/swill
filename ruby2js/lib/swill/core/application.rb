@@ -68,7 +68,7 @@ module Swill
       register_window_containers
       restore_launched_windows
       awakening.finish(@controllers)
-      @fragments.observe(->() { apply_fragment })
+      @fragments.start_observing(->() { apply_fragment })
       watch(root)
       application_did_launch
       self
@@ -97,12 +97,12 @@ module Swill
     def terminate
       return unless Application.running? && Application.shared == self
       application_will_terminate
-      @fragments.release
+      @fragments.stop_observing
       observer = @observer
       observer.disconnect if observer
       @windows.each { |window| release_window(window) }
       @windows = []
-      @controllers.each { |controller| controller.teardown }
+      @controllers.each { |controller| controller.unload }
       @controllers = []
       @root.removeEventListener("focusin", @on_focus)
       @root.removeEventListener("focusout", @on_focus_out)

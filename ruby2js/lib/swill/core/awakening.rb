@@ -114,7 +114,7 @@ module Swill
     # into descendants and is idempotent, so document order is fine.
     sig { params(node: Element).void }
     def detach(node)
-      controllers_within(node).each { |controller| controller.teardown }
+      controllers_within(node).each { |controller| controller.unload }
     end
 
     sig { params(element: T.nilable(Element)).returns(T.nilable(View)) }

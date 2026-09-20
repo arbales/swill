@@ -33,12 +33,6 @@ module Swill
       nil
     end
 
-    sig { void }
-    def initialize
-      super()
-      @teardowns = T.let([], T::Array[T.proc.void])
-    end
-
     sig { params(element: Element).returns(Controller) }
     def attach(element)
       @view = View.of(element) || View.new(element)
@@ -79,20 +73,15 @@ module Swill
       parent || application
     end
 
-    sig { params(dispose: T.proc.void).void }
-    def register_teardown(dispose)
-      @teardowns << dispose
-    end
-
     # Observe a notification for as long as this controller is loaded.
     sig { params(name: String, callback: T.proc.params(notification: Notification).void).void }
     def observe_notification(name, callback)
-      register_teardown(NotificationCenter.default.observe(name, callback))
+      retain(NotificationCenter.default.add_observer(name, callback))
     end
 
-    # Releases this controller's listeners and observers, then its descendants,
-    # exactly once. The element keeps its View, so the region can be awakened
-    # again later.
+    # Releases this controller's bindings, everything it retained, and its own
+    # observation state, then its descendants, exactly once. The element keeps
+    # its View, so the region can be awakened again later.
     # A controller can be first responder when its view has something to
     # focus; becoming and resigning move DOM focus accordingly.
     sig { override.returns(T::Boolean) }
@@ -115,15 +104,13 @@ module Swill
     end
 
     sig { void }
-    def teardown
+    def unload
       return if @view.controller_value != self
       view_will_disappear
       application.release_first_responder(@view.element)
-      @teardowns.each { |dispose| dispose.() }
-      @teardowns = []
       unbind_all
-      dispose
-      child_controllers.each { |child| child.teardown }
+      dealloc
+      child_controllers.each { |child| child.unload }
       # Plain outlet views are released too; re-awakening adopts them again.
       @view.subviews.each { |subview| @view.release_subview(subview) }
       @view.remove_from_superview

@@ -69,7 +69,7 @@ module Swill
     end
 
     sig { params(callback: T.proc.void).void }
-    def observe(callback)
+    def start_observing(callback)
       browser = @browser
       return unless browser && available?
       on_change = ->(_event) { callback.() }
@@ -79,7 +79,7 @@ module Swill
     end
 
     sig { void }
-    def release
+    def stop_observing
       on_change = @on_change
       browser = @browser
       return unless on_change && browser

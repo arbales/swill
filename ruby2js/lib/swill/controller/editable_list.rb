@@ -67,7 +67,7 @@ module Swill
     sig { override.void }
     def awake_from_dom
       super
-      register_teardown(->() { close_editor })
+      retain(->() { close_editor })
     end
 
     # Whether the editor opened. An edit in progress is committed first; a

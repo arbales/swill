@@ -48,8 +48,17 @@ module Swill
     sig { params(object: T.untyped, name: T.any(Symbol, String), callback: T.proc.params(value: T.untyped).void).returns(T.proc.void) }
     def self.observe(object, name, callback); end
 
+    sig { params(object: T.untyped, disposer: T.proc.void).returns(T.proc.void) }
+    def self.retain(object, disposer); end
+
+    sig { params(object: T.untyped, disposer: T.proc.void).void }
+    def self.release(object, disposer); end
+
     sig { params(object: T.untyped).void }
-    def self.dispose(object); end
+    def self.dealloc(object); end
+
+    sig { params(object: T.untyped).void }
+    def self.disconnect(object); end
 
     sig { params(object: T.untyped, name: T.any(Symbol, String)).returns(T::Boolean) }
     def self.isAttribute(object, name); end

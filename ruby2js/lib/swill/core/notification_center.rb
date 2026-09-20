@@ -32,8 +32,10 @@ module Swill
   end
 
   # NSNotificationCenter analog: observers by name, each observation returning
-  # the callable that ends it, the same token shape as Observable#observe. A
-  # controller observes through observe_notification, which ends at teardown.
+  # the callable that ends it, the same token shape as Observable#observe.
+  # Named as Cocoa names it, because observing a notification is not observing
+  # a property. A controller goes through observe_notification, which retains
+  # the token so the observation ends at unload.
   class NotificationCenter < Swill::Object
     extend T::Sig
 
@@ -52,7 +54,7 @@ module Swill
     end
 
     sig { params(name: String, callback: T.proc.params(notification: Notification).void).returns(T.proc.void) }
-    def observe(name, callback)
+    def add_observer(name, callback)
       list = @observers[name]
       unless list
         list = []

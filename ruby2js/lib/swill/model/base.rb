@@ -19,6 +19,10 @@ module Swill
     #   await menu.save                   # PATCH with the dirty attributes
     #   menu.recipes                      # what it has; the read starts the request
     #   await menu.load_recipes           # the same, for code that must wait
+    #
+    # A view binds to +recipes+ and fills in when the request lands;
+    # +recipes_loading+, +recipes_loaded+, and +recipes_error+ are the rest of
+    # the relationship's key-value loading state, and are bindable too.
     class Base < Swill::Object
       extend T::Sig
       include Attributes
@@ -28,15 +32,6 @@ module Swill
       include Identity
 
       attribute :id, type: T.nilable(String), default: nil
-
-      sig { void }
-      def initialize
-        super()
-        @loaded_relationships = T.let([], T::Array[String])
-        # A relationship whose own load failed is not retried on every read;
-        # reload_<name> is how an application asks again.
-        @unloadable_relationships = T.let([], T::Array[String])
-      end
 
       # ---- reading ----
 
@@ -183,19 +178,20 @@ module Swill
 
       sig { params(name: String).returns(T::Boolean) }
       def relationship_loaded?(name)
-        @loaded_relationships.include?(name)
+        Swill::Runtime.read(self, "#{name}_loaded") == true
       end
 
-      # A relationship's value, assigned here or hydrated from a document;
-      # loading it asks the server only when it has not been.
+      # A relationship's value, assigned here or hydrated from a document.
+      # Assignment is a load: whatever the value came from, the relationship
+      # is loaded and has no failure to report.
       sig { params(name: String, value: T.untyped).void }
       def assign_relationship(name, value)
         Swill::Runtime.write(self, name, value)
-        @loaded_relationships << name unless relationship_loaded?(name)
+        Swill::Runtime.write(self, "#{name}_error", nil)
+        Swill::Runtime.write(self, "#{name}_loaded", true)
       end
 
-      # The relationship's records, from the server the first time. The
-      # <name>_loading property is true while the request is out.
+      # The relationship's records, from the server the first time.
       sig { params(name: String).returns(T.untyped) }
       async def load_relationship(name)
         return Swill::Runtime.read(self, name) if relationship_loaded?(name)
@@ -205,38 +201,40 @@ module Swill
       # Cocoa's -willAccessValueForKey:. A relationship nobody prefetched
       # loads itself when it is first read: the value answers what it has,
       # and fills in when the request lands. The guard is what keeps a
-      # re-render from re-requesting.
+      # re-render from re-requesting, and a remembered failure is part of it;
+      # reload_<name> is how an application asks again.
       sig { params(name: String).void }
       def property_will_access(name)
         super(name)
         return if id == nil
         return unless self.class.model_relationships[name]
         return if relationship_loaded?(name)
-        return if @unloadable_relationships.include?(name)
         return if Swill::Runtime.read(self, "#{name}_loading") == true
-        load_relationship_in_background(name)
+        return if Swill::Runtime.read(self, "#{name}_error") != nil
+        # Nothing awaits this: the value fills in, and every state it passes
+        # through is a property something can bind to.
+        reload_relationship(name)
       end
 
-      sig { params(name: String).void }
-      async def load_relationship_in_background(name)
-        begin
-          await reload_relationship(name)
-        rescue => failure
-          @unloadable_relationships << name
-          Swill::Runtime.warn("#{name} did not load: #{failure.message}")
-        end
-      end
-
+      # Asks the server, whatever the relationship already holds. Like
+      # Dataset#reload it reports a failure rather than raising it, so the
+      # states a UI shows are the ones it binds to and no caller has to
+      # rescue.
       sig { params(name: String).returns(T.untyped) }
       async def reload_relationship(name)
-        descriptor = relationship(name)
-        model_class = descriptor.model_class
-        value = T.let(nil, T.untyped)
         Swill::Runtime.write(self, "#{name}_loading", true)
+        Swill::Runtime.write(self, "#{name}_error", nil)
+        value = T.let(nil, T.untyped)
         begin
+          descriptor = relationship(name)
+          model_class = descriptor.model_class
           payload = await Wire.default.get_json(descriptor.url_for(self), {})
           value = descriptor.many? ? model_class.parse_many(payload) : model_class.parse_one(payload)
           assign_relationship(name, value)
+        rescue => failure
+          Swill::Runtime.write(self, "#{name}_error", failure.message)
+          Swill::Runtime.warn("#{name} did not load: #{failure.message}")
+          value = Swill::Runtime.read(self, name)
         ensure
           Swill::Runtime.write(self, "#{name}_loading", false)
         end

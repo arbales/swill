@@ -143,7 +143,7 @@ A class or mixin body may contain only:
 
 | Statement | Handling |
 | --- | --- |
-| `def name(positional, args)` | Collected as a method. Names match `/\A[a-z_]\w*[!?=]?\z/`; `method_missing` is rejected; `initialize` compiles to `constructor` |
+| `def name(positional, args)` | Collected as a method. Names match `/\A[a-z_]\w*[!?=]?\z/`; `method_missing` is rejected; `initialize` compiles to `constructor`. Arguments are positional; optional ones are contiguous and compile per [Optional positional arguments](#optional-positional-arguments) |
 | `sig { ... }` | Parameter and return types are recorded for lowering, then erased |
 | `extend T::Sig` | Erased |
 | `include A, B` / `include A` | Recorded; targets must be previously defined mixins |
@@ -226,7 +226,7 @@ The framework's own macros:
 | `attribute :name, type:, default:, key:` | A property marked as an attribute, and the same declaration as data in `model_attributes` |
 | `outlet :field, type:, optional:` | A stored, nilable, observable property with `outlet` and `optional` metadata. Declared on `Swill::Controller`, so only a controller can call it. The type names the connected value: a framework class for a view or child controller, `T::Hash[...]` or `T::Array[...]` for decoded JSON, `T.untyped` for anything. Awakening checks a typed outlet's value against the type shallowly, as `T.cast` does, so a JSON script that decodes to the wrong shape fails by outlet name |
 | `restorable :path, key: :k` | A dotted property path the application keeps in the URL fragment. The leaf's declared type is recorded when every segment is statically typed. Declared on `Swill::Controller` |
-| `has_many :name, type:, key:, url:, will_access:` | Two properties (`name`, of `T::Array[Type]` defaulting to `[]`, and `name_loading`), a `model_relationships` entry, and `load_name` / `reload_name` as real typed methods. `:id` in `url:` stands for the owner's id |
+| `has_many :name, type:, key:, url:, will_access:` | The value property (`T::Array[Type]`, defaulting to `[]`), its key-value loading state as three more properties (`name_loading`, `name_loaded`, `name_error`), a `model_relationships` entry, and `load_name` / `reload_name` as real typed methods. `:id` in `url:` stands for the owner's id |
 | `has_one :name, ...` | The same, with `T.nilable(Type)` defaulting to `nil` |
 
 A relationship, or an outlet, may name a class defined later by writing its
@@ -272,6 +272,35 @@ A mixin's `module ClassMethods` may contain:
 | `def name(positional)` | Compiled as a class-side method; inside it `self` is the class, so bare calls reach static methods, other `ClassMethods` methods, registries, and settings |
 | `macro def name(...)` | A declaration macro. It runs when a class body calls it and is never emitted, so its body may use the full declaration vocabulary |
 | `extend T::Sig`, `sig { ... }` | Read for parameter and return types, never emitted |
+
+### Optional positional arguments
+
+JavaScript has no leading optional parameter — `function m(a = null, b, c)`
+binds left to right, so a two-argument call fills `a` and `b` rather than `b`
+and `c`. Rather than reshape the Ruby around that, a method with optional
+arguments compiles the way Cocoa spells an overload: **one method per arity,
+named for the optionals it takes.**
+
+```ruby
+sig { params(greeting: String, name: String).returns(String) }
+def greet(greeting = "Hello", name)
+  "#{greeting}, #{name}"
+end
+```
+
+```js
+greetWithGreeting(greeting, name) { return `${greeting}, ${name}`; }
+greet(name) { return this.greetWithGreeting("Hello", name); }
+```
+
+| Rule | Detail |
+| --- | --- |
+| Naming | The variant taking no optionals keeps the plain name. Each wider one is `name_with_` followed by the optionals it takes, joined by `_and_`: `greet` / `greet_with_greeting`; `span` / `span_with_b` / `span_with_b_and_c` |
+| Body | The widest variant carries the body. Every shorter one hands it the defaults in the positions Ruby's own binding would fill: required arguments first, optionals absorbing what is left |
+| Metadata | Each variant is its own entry with a fixed arity; the wider ones carry `family`, which is how `Runtime.invoke`, `read`, and `performAction` resolve a name and an argument count to one method |
+| Call sites | A send to a typed receiver emits the variant whose arity is the argument count, and the signature's parameter types follow the parameters, so a lambda passed to a shorter variant is still typed |
+| `super` | Reaches the parent's variant of the same width, so an override keeps its own defaults |
+| Rejected | Keyword, splat, and block parameters; non-contiguous optionals; a predicate, bang, or writer with an optional; optionals on a static or `ClassMethods` method; a block with an optional, since whatever yields to it calls at a fixed arity; an override that does not take the same optionals, which would shadow only part of the family. A signature must name the method's parameters in the same order |
 
 ### Pragmas
 
@@ -460,7 +489,7 @@ the runtime is reached only where a fact is genuinely unavailable.
 | `==`, `!=`, `!` | `T::Boolean` |
 | Parameter | Its `sig` parameter type |
 | Local variable | Inferred when its assignments' types merge (the same class or core type, nilable when any is nil, an empty `[]` or `{}` fitting a typed collection) and its first assignment is a statement, in the body or in a branch, loop, or block, that precedes every read; an assignment may refer to the variable itself; an assigned parameter loses its signature type |
-| Instance variable | `T.nilable(Class)` when every assignment anywhere in the class has a static type and the non-nil ones name one framework class; otherwise none |
+| Instance variable | `T.nilable(Class)` when every assignment anywhere in the class has a static type and the non-nil ones name one framework class; otherwise none. Inferred from the class's own AST, so a computed property's block, which is converted on its own, types its instance variables the same way a method does |
 | `left \|\| right` | The right's type when both sides name the same class, nilable or not on the left: a nil left yields the right |
 | `Const.member(...)` | The `sig` return type of the static method, or of the method, registry, or setting an included `ClassMethods` provides; registries and settings are `T.untyped`. `T.attached_class` and `T.self_type` in the type stand for the receiving class |
 | `self.class`, `receiver.class` for a framework-class receiver, `self` in a class method | `T.class_of(Class)` |
@@ -543,7 +572,7 @@ For `receiver.name(args)` where the receiver is not `self`:
 | Unknown or `T.untyped` | Operators, indexing, `new`, unary operators, or a send with an `array`/`hash`/`string` pragma | Left to the converter and the Pragma filter |
 | Unknown or `T.untyped` | No arguments | `Runtime.read(receiver, "name")` |
 | Unknown or `T.untyped` | `name = value` | `Runtime.write(receiver, "name", value)` |
-| Unknown or `T.untyped` | Arguments | `Runtime.invoke(receiver, "name", args)`, arity-checked against metadata |
+| Unknown or `T.untyped` | Arguments | `Runtime.invoke(receiver, "name", args)`, resolved against metadata by name and argument count |
 | Unknown or `T.untyped` | Any block | Rejected: collected methods take no blocks, so only a collection can receive one, and its type must be declared |
 | Any other type | Anything | Pragma filter if it applies, else an explicit call |
 
@@ -689,19 +718,19 @@ registered from JavaScript, which the compiler never sees.
 
 | Function | Behavior |
 | --- | --- |
-| `read(object, name)` | On a null receiver, `nil?`, `blank?`, `present?`, `to_s`, `to_i`, and `to_f` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. A plain object is a Hash: its entry by key, `null` when absent, then the value readers, as key-value coding treats a dictionary; entries are not observable. Otherwise a declared property, then an arity-0 collected method, then `valueRead` for the value reader names. Error: `Unknown reader` |
+| `read(object, name)` | On a null receiver, `nil?`, `blank?`, `present?`, `to_s`, `to_i`, and `to_f` answer for nil and every other name yields `null`. Primitives go straight to `valueRead`. A plain object is a Hash: its entry by key, `null` when absent, then the value readers, as key-value coding treats a dictionary; entries are not observable. Otherwise a declared property, then a collected method that takes no arguments, then `valueRead` for the value reader names. Error: `Unknown reader` |
 | `write(object, name, value)` | A declared stored property through the property protocol, or a collected `name=` accessor. A plain object is a Hash: an entry it already has is set, as key-value coding does for a dictionary. Errors: `Cannot write ... on nil`, `Read-only property`, `Unknown writer`, `Unknown key` |
 | `readPath(object, "a.b.c")` | Folds `read` over the segments; a null intermediate yields `null`; the empty path is the object itself |
 | `writePath(object, path, value)` / `assertWritablePath(object, path)` | Resolves the owner with `read` and requires a stored property, or an existing key of a Hash owner, at the end. A missing intermediate owner makes the write a no-op, since the owner may appear later. Errors: `Read-only binding` when the leaf is computed, not a property, or the path is empty; `Unknown key` for a Hash owner without the key |
-| `invoke(object, name, ...args)` | Calls a collected method with an exact arity match; the dynamic call compiled for an untyped receiver. Errors: `Cannot call ... on nil`, `Unknown method or wrong arity` |
+| `invoke(object, name, ...args)` | Calls the member of the named method's family whose arity is the argument count; the dynamic call compiled for an untyped receiver. Errors: `Cannot call ... on nil`, `Unknown method or wrong arity` |
 | `respondsTo(object, name)` | Ruby `respond_to?` over metadata: a declared property, its writer when stored, a collected method, or a value reader on nil and plain values. The JavaScript object shape is never consulted. The responder chain uses it to decide which responder handles an action |
 | `outlets(object)` | The property descriptors declared with `outlet`, including inherited ones; awakening connects them |
 | `restorations(object)` | The `restorable` declarations, including inherited ones, as `{path, key, type}` |
 | `decodeFragment(type, text)` / `encodeFragment(value)` | Fragment values are strings; a declared `Integer` or `T::Boolean` leaf decodes, anything else stays text, and an undecodable value is `undefined`. Encoding maps nil and `""` to removal |
 | `warn(message)` | The one console boundary, for wrong untrusted URL input |
 | `isAttribute(object, name)` | Whether `name` is a declared `attribute` on the object's class |
-| `validateAttribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. The MRI adapter implements the same convention with `respond_to?` |
-| `performAction(object, name, sender, event)` | Calls a collected method of arity 0, 1, or 2 with `sender` and `event` sliced to fit. Same error |
+| `validateAttribute(object, name, value, previous)` | Runs a collected `validate_<name>(value, previous)` method for a declared attribute, else returns the value. A `validate_<name>` that cannot take both throws rather than silently never running. The MRI host implements the same convention with `respond_to?` |
+| `performAction(object, name, sender, event)` | Calls the widest member of the named method's family that takes at most two arguments, with `sender` and `event` sliced to fit. Same error |
 | `nameOf(object)` | The installed name of the object's nearest installed class, or `null` |
 | `valueRead(value, name)` / `valueInvoke(value, name, args)` | Ruby's core methods on plain values, reached by `read` and `invoke` when the receiver has no declared member of that name: the predicates, `size`, `length`, `strip`, `upcase`, `downcase`, `capitalize`, `dup`, `first`, `last`, `compact`, `uniq`, `reverse`, `sum`, `min`, `max`, `to_s`, `to_sym`, `to_i`, `to_f`, and with arguments `index`, `take`, `drop`, `include?`. `dup` copies an array or hash; on an object with declared properties, `read` answers `dup` with a new instance carrying the stored properties, written through the property protocol; array methods refuse other values. Errors: `Unknown value reader`, `Unknown value method` |
 
@@ -732,9 +761,12 @@ registered from JavaScript, which the compiler never sees.
 
 | Function | Behavior |
 | --- | --- |
-| `observe(object, name, callback)` | Subscribes to a declared property; the callback receives `(value, previous)`. Observing a computed property computes it first so its dependencies exist. Returns a disposer. Error: `Unknown observable property` |
+| `observe(object, name, callback)` | Subscribes to a declared property; the callback receives `(value, previous)`. Observing a computed property computes it first so its dependencies exist. Returns a disposer. `Swill::Observable#observe` retains it on the observer, so framework plumbing whose disposer belongs to something else — a wired region, a list row — calls this primitive instead. Error: `Unknown observable property` |
 | `observePath(object, path, callback)` | Subscribes along every observable segment, rehooks the subtree before invoking the callback when an intermediate changes, and passes the new path value. Returns a disposer that also stops any in-flight rehook |
-| `dispose(object)` | Releases computed dependency subscriptions, observers, and dependents. Stored values are kept, so the object remains usable and lazily recomputes |
+| `retain(object, disposer)` | The object claims the disposer and is responsible for letting it go, as Cocoa's retain claims an object. Answers the disposer |
+| `release(object, disposer)` | Gives up a claim before the object goes away, ending the disposer. One never retained still ends |
+| `dealloc(object)` | End of life: releases everything the object retained, then disconnects it. Draining first means nothing an observer does can re-enter |
+| `disconnect(object)` | Releases computed dependency subscriptions, observers, and dependents. Stored values are kept, so the object remains usable and lazily recomputes |
 
 ### Attributes and class configuration
 
@@ -773,10 +805,27 @@ an accessor:
 `property_will_access` runs only for a property declared `will_access:`, so an
 ordinary read costs nothing. `Swill::Model::Base` overrides it to load a
 relationship nobody prefetched: reading `recipe.ingredients` answers what it
-has and fills in when the request lands. The guard — the record has an id, the
-relationship is neither loaded nor loading, and its last load did not fail — is
-what keeps a re-render from re-requesting. `reload_<name>` is how an
+has and fills in when the request lands. The guard — the record has an id and
+`ingredients_loaded`, `ingredients_loading`, and `ingredients_error` are all
+clear — is what keeps a re-render from re-requesting; `reload_<name>` is how an
 application asks again.
+
+Those four properties are the whole of a relationship's key-value loading
+state, in AVFoundation's sense, and every one of them is observable. A spinner,
+an empty state, and a failure are bindings; like `Dataset#reload`,
+`reload_<name>` records a failure rather than raising it, so nothing has to be
+wrapped in a rescue to show it:
+
+```ruby
+property :menu_recipes, type: T::Array[MenuRecipe] do
+  menu = selected_menu
+  menu ? menu.recipes : []
+end
+```
+
+Reading `menu.recipes` inside the computed both registers the dependency and
+starts the request, so selecting a menu fills the list and nothing calls a
+loader.
 
 `notify` runs, in order: dependents of the property (computed invalidation),
 the `name_did_change(previous, value)` method if the class collected one, then

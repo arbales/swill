@@ -25,7 +25,7 @@ module Swill
       disposers = T.let([], T::Array[T.proc.void])
       wire_properties(controller, prefix, root, disposers)
       wire_region(controller, prefix, root, disposers)
-      controller.register_teardown(release(disposers))
+      controller.retain(releasing(disposers))
       controller
     end
 
@@ -42,7 +42,7 @@ module Swill
         wire_properties(object, nil, element, disposers)
         wire_region(object, nil, element, disposers)
       end
-      release(disposers)
+      releasing(disposers)
     end
 
     sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: Element, disposers: T::Array[T.proc.void]).void }
@@ -65,8 +65,10 @@ module Swill
       end
     end
 
+    # One disposer that releases all of these, for a caller that retains a
+    # wired region as a whole.
     sig { params(disposers: T::Array[T.proc.void]).returns(T.proc.void) }
-    def release(disposers)
+    def releasing(disposers)
       ->() { disposers.each { |dispose| dispose.() } }
     end
 
@@ -146,7 +148,10 @@ module Swill
       end
       render.(nil)
       release_render = Runtime.observePath(object, path, render)
-      release_input = control.observe("value", ->(value) do
+      # The runtime primitive, not the Ruby observe: this disposer belongs to
+      # whatever wired the region — a controller, or a list row released and
+      # rewired on every render — not to the control being watched.
+      release_input = Runtime.observe(control, "value", ->(value) do
         Runtime.writePath(object, path, transformer ? transformer.parse(value) : value)
       end)
       ->() do

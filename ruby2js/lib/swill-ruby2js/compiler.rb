@@ -154,7 +154,7 @@ module Swill
             mixin = entry["kind"] == "mixin"
             parent = mixin ? "Superclass" : (entry["parent"] ? reference(entry["parent"], scope) : "Object")
             class_name = mixin ? "#{id}_Layer" : id
-            source = with_forwarded_methods(entry["node"].loc.expression.source, entry)
+            source = with_generated_methods(entry["node"].loc.expression.source, entry)
             js = begin
               convert(source, entry, compiled_class: class_name, compiled_parent: parent)
             rescue CompileError => error
@@ -220,11 +220,12 @@ module Swill
             entry["restorations"].each do |restoration|
               restoration["type"] = restoration_type(entry, restoration["path"].split("."))
             end
+            check_overrides!(entry, parent_name)
             resolve_outlet_types(entry)
             resolve_relationship_types(entry)
             canonicalize_signatures(entry)
             members = entry["properties"].map { |p| [p["js"], p["name"]] } +
-              entry["methods"].map { |m| [m["js"], m["name"]] }
+              entry["methods"].flat_map { |m| Knowledge.variants(m).map { |v| [v["js"], v["name"]] } }
             raise CompileError, "colliding members in #{entry['name']}" unless members.map(&:first).uniq.length == members.length
             # A method with a property's name would be lowered as a property read.
             if entry["methods"].any? { |method| inherited_properties(entry).include?(method["name"]) }
@@ -234,6 +235,20 @@ module Swill
           end
         end
         public :validate!
+
+        # A method with optional parameters is several JavaScript methods, so
+        # an override declaring different ones would shadow only part of what
+        # it means to override.
+        def check_overrides!(entry, parent_name)
+          return unless parent_name
+          entry["methods"].each do |method|
+            inherited = knowledge.method_entry(parent_name, method["name"])
+            next unless inherited
+            next if (inherited["optionals"] || []) == (method["optionals"] || [])
+            raise CompileError,
+              "#{entry['name']}##{method['name']} must take the same optional arguments as the method it overrides"
+          end
+        end
 
         # Signature types are written in the entry's own scope (View inside
         # module Swill). An importing build resolves them from elsewhere, so
@@ -314,19 +329,45 @@ module Swill
           type
         end
 
-        # A macro's forwarded methods are real methods on the class. They are
-        # written back as Ruby and compiled with the body they belong to,
-        # rather than substituted into generated JavaScript.
-        def with_forwarded_methods(source, entry)
-          forwards = entry["methods"].select { |method| method["to"] }
-          return source if forwards.empty?
-          body = forwards.map do |method|
-            call = "#{method['to']}(#{method['with'].map(&:to_json).join(', ')})"
-            "#{method['async'] ? "async def #{method['name']}\nawait " : "def #{method['name']}\n"}#{call}\nend"
-          end.join("\n")
+        # Methods the compiler writes rather than the author: a macro's
+        # forwards, and the shorter arities of a method with optional
+        # parameters. Both are written back as Ruby and compiled with the body
+        # they belong to, rather than substituted into generated JavaScript.
+        def with_generated_methods(source, entry)
+          body = (forwarded_methods(entry) + variant_methods(entry)).join("\n")
+          return source if body.empty?
           stripped = source.rstrip
           raise CompileError, "class body must end with end" unless stripped.end_with?("end")
           "#{stripped[0...-3]}\n#{body}\nend\n"
+        end
+
+        def forwarded_methods(entry)
+          entry["methods"].select { |method| method["to"] }.map do |method|
+            call = "#{method['to']}(#{method['with'].map(&:to_json).join(', ')})"
+            "#{method['async'] ? "async def #{method['name']}\nawait " : "def #{method['name']}\n"}#{call}\nend"
+          end
+        end
+
+        # The widest variant carries the body; every shorter one hands it the
+        # defaults, which is where Ruby's own argument binding is written down.
+        def variant_methods(entry)
+          entry["methods"].flat_map do |method|
+            next [] unless method["formals"]
+            variants = Knowledge.variants(method)
+            widest = variants.last
+            variants[0...-1].map do |variant|
+              seen = 0
+              arguments = method["formals"].map do |formal|
+                next formal["name"] unless formal["default"]
+                seen += 1
+                seen <= variant["taken"] ? formal["name"] : formal["default"]
+              end
+              parameters = Knowledge.variant_formals(method, variant["taken"]).map { |formal| formal["name"] }
+              call = "#{widest['name']}(#{arguments.join(', ')})"
+              header = "def #{variant['name']}(#{parameters.join(', ')})"
+              method["async"] ? "async #{header}\nawait #{call}\nend" : "#{header}\n#{call}\nend"
+            end
+          end
         end
 
         def reference(name, scope)

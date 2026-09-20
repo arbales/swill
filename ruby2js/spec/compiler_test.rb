@@ -316,13 +316,16 @@ class CompilerTest < Minitest::Test
         sig { params(element: Element).returns(T.nilable(Widget)) }
         def self.of(element); element.__widget__; end
       end
-      class Holder
+      class Holder < Swill::Object
         extend T::Sig
         sig { params(element: Element).void }
         def initialize(element)
           super()
           @widget = Widget.new
           @element = element
+        end
+        property :tally, type: Integer do
+          @widget.tally
         end
         sig { params(other: Widget, node: Element).returns(T.untyped) }
         def go(other, node)
@@ -341,6 +344,9 @@ class CompilerTest < Minitest::Test
     assert_includes js, "found.count,", "a declared property reads"
     assert_includes js, "      node.parentElement,\n      node.tally(),\n      node.tally,\n", "a listed DOM member reads; an unlisted one follows the parentheses"
     assert_includes js, "other.nextWidget()", "a member the class does not declare falls back to an explicit call"
+    # A computed block is converted on its own, so its instance variables are
+    # typed from the class it belongs to, not from the source handed over.
+    assert_includes js, "computeTally() {\n            return this._widget.tally();", "an ivar is typed inside a computed block too"
   end
 
   # async and await are reserved forms: async def marks a method
@@ -674,6 +680,126 @@ class CompilerTest < Minitest::Test
   # A macro's keywords are Ruby's own: whatever its definition requires is
   # required, and the rejection is the one Ruby gives, with the file and line
   # the declaration is written on.
+  # JavaScript has no leading optional parameter, so a Ruby method with
+  # optional arguments compiles the way Cocoa spells an overload: one method
+  # per arity, named for the optionals it takes.
+  def test_optional_arguments_compile_to_one_method_per_arity
+    compiler = compiler_with_test_object.add(<<~'RUBY')
+      class Greeter < TestObject
+        extend T::Sig
+        sig { params(greeting: String, name: String).returns(String) }
+        def greet(greeting = "Hello", name)
+          "#{greeting}, #{name}"
+        end
+        sig { params(a: Integer, b: Integer, c: Integer).returns(Integer) }
+        def span(a, b = 2, c = 3)
+          a + b + c
+        end
+        sig { returns(T::Array[T.untyped]) }
+        def calls
+          [greet("Ada"), greet("Hi", "Grace"), span(1), span(1, 9), span(1, 9, 9)]
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    # The widest variant carries the body; the shorter ones hand it the defaults.
+    assert_includes js, "greetWithGreeting(greeting, name) {"
+    assert_includes js, "greet(name) {\n    return this.greetWithGreeting(\"Hello\", name);"
+    assert_includes js, "spanWithBAndC(a, b, c) {"
+    assert_includes js, "span(a) {\n    return this.spanWithBAndC(a, 2, 3);"
+    assert_includes js, "spanWithB(a, b) {\n    return this.spanWithBAndC(a, b, 3);"
+    # The argument count says which member of the family a send means.
+    assert_includes js, 'this.greet("Ada")'
+    assert_includes js, 'this.greetWithGreeting("Hi", "Grace")'
+    assert_includes js, 'this.spanWithB(1, 9)'
+    assert_includes js, '"family": "greet"'
+    assert_equal ["Hello, Ada", "Hi, Grace", 6, 13, 19], execute(js + <<~JS)
+      console.log(JSON.stringify(new (Runtime.resolve("Greeter"))().calls()));
+    JS
+    # And through metadata, where the count resolves the family.
+    assert_equal ["Hello, Ada", "Hi, Grace"], execute(js + <<~JS)
+      const greeter = new (Runtime.resolve("Greeter"))();
+      console.log(JSON.stringify([Runtime.invoke(greeter, "greet", "Ada"),
+        Runtime.invoke(greeter, "greet", "Hi", "Grace")]));
+    JS
+  end
+
+  # An override is the same family, so super reaches the parent's variant of
+  # the same width and the subclass keeps its own default.
+  def test_super_from_a_variant_reaches_the_same_variant
+    js = compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../lib/swill/runtime.mjs")
+      class Greeter < TestObject
+        extend T::Sig
+        sig { params(greeting: String, name: String).returns(String) }
+        def greet(greeting = "Hello", name)
+          "#{greeting}, #{name}"
+        end
+      end
+      class Loud < Greeter
+        extend T::Sig
+        sig { params(greeting: String, name: String).returns(String) }
+        def greet(greeting = "Hey", name)
+          super.upcase
+        end
+      end
+    RUBY
+    assert_includes js, "return Runtime.upcase(super.greetWithGreeting(greeting, name));"
+    assert_includes js, "greet(name) {\n    return this.greetWithGreeting(\"Hey\", name);"
+    assert_equal ["Hello, Ada", "HEY, ADA", "HI, ADA"], execute(js + <<~JS)
+      const loud = new (Runtime.resolve("Loud"))();
+      const plain = new (Runtime.resolve("Greeter"))();
+      console.log(JSON.stringify([plain.greet("Ada"), loud.greet("Ada"), loud.greetWithGreeting("Hi", "Ada")]));
+    JS
+  end
+
+  # The types a signature declares follow the parameters, not the argument
+  # positions, so a lambda passed to a shorter variant is still typed.
+  def test_a_lambda_passed_to_a_shorter_variant_keeps_its_declared_types
+    js = compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../lib/swill/runtime.mjs")
+      class Runner < TestObject
+        extend T::Sig
+        sig { params(label: String, block: T.proc.params(text: String).returns(String)).returns(String) }
+        def run(label = "job", block)
+          block.call(label)
+        end
+        sig { returns(String) }
+        def go
+          run(->(text) { text.strip })
+        end
+      end
+    RUBY
+    assert_includes js, "Runtime.strip(text)", "the lambda's parameter is typed from the parameter it lands on"
+  end
+
+  def test_optional_arguments_are_rejected_where_they_cannot_be_ported
+    [
+      ["class Example < TestObject\ndef go(a, *rest); a; end\nend", "arguments are positional"],
+      ["class Example < TestObject\ndef go(a, b: 1); a; end\nend", "arguments are positional"],
+      ["class Example < TestObject\ndef self.go(a, b = 1); a; end\nend", "arguments are positional and required"],
+      ["class Example < TestObject\ndef go?(a = 1); a; end\nend", "a predicate, bang, or writer takes required arguments only"],
+      ["class Example < TestObject\nextend T::Sig\nsig { params(b: Integer, a: Integer).returns(Integer) }\ndef go(a, b); a; end\nend",
+       "signature parameters must match go's parameters in order"],
+      ["class Example < TestObject\ndef go(items); items.each { |a, b = 1| a }; end\nend", "a block takes required arguments only"]
+    ].each do |body, message|
+      error = assert_raises(Swill::Ruby2JS::CompileError, body) do
+        compiler_with_test_object.add(body).javascript(runtime: "../lib/swill/runtime.mjs")
+      end
+      assert_includes error.message, message
+    end
+    # An override that drops the optional would shadow only the shorter arity.
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../lib/swill/runtime.mjs")
+        class Greeter < TestObject
+          def greet(greeting = "Hello", name); name; end
+        end
+        class Loud < Greeter
+          def greet(name); name; end
+        end
+      RUBY
+    end
+    assert_includes error.message, "Loud#greet must take the same optional arguments"
+  end
+
   def test_a_macros_required_keyword_is_required
     error = assert_raises(Swill::Ruby2JS::CompileError) do
       compiler_with_test_object.add(<<~RUBY)

@@ -41,7 +41,7 @@ module Demo
     def awake_from_dom
       # Required outlets are connected by now, and view_did_load set a person.
       T.must(person).name = T.must(seed).fetch("name")
-      bind(:badge_count, to: T.must(badge), key_path: "count")
+      bind :badge_count, to: T.must(badge), key_path: "count"
       self.people = T.must(roster) if roster
       # Start with the name field focused; the field is a View, so it accepts.
       application.make_first_responder(T.must(name_field))

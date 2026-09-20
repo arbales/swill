@@ -317,7 +317,7 @@ module Swill
       # Capture, so the selection is current before a row's own action runs.
       stop_click = @view.listen("click", ->(event) { row_clicked(event) }, true)
       stop_double_click = @view.listen("dblclick", ->(event) { row_double_clicked(event) }, false)
-      register_teardown(->() do
+      retain(->() do
         stop_mouse_down.()
         stop_click.()
         stop_double_click.()

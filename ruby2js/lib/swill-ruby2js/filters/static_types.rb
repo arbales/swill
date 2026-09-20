@@ -165,7 +165,7 @@ module Swill
         # assignment may refer to the variable itself (@items = @items.select
         # { ... }), so the first pass is optimistic about assignments it
         # cannot type yet and later passes insist on every assignment.
-        def infer_ivar_types(_class_node)
+        def infer_ivar_types(_node)
           sites = []
           entries_with_ivars(@entry).each do |entry|
             # An imported entry describes an interface, not source.

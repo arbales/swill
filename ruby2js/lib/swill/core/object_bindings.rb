@@ -7,6 +7,13 @@ module Swill
   # the runtime's path observation and metadata-checked writes, so a target
   # must be a declared property or generated writer. One binding per target;
   # rebinding disposes the previous observation first.
+  #
+  # null_placeholder: is Cocoa's NSNullPlaceholderBindingOption — what the
+  # target receives when the path has no value, so a path that runs through a
+  # nilable object can feed a property that is not one:
+  #
+  #   bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
+  #        null_placeholder: [])
   module ObjectBindings
     extend T::Sig
 
@@ -15,7 +22,10 @@ module Swill
       unbind(target)
       source = options[:to]
       path = options[:key_path]
-      sync = ->(value) { Runtime.write(self, target, value) }
+      # One value serves every fall-back, so a placeholder is treated as
+      # immutable, as Cocoa's is. Not giving one is giving nil.
+      placeholder = options.fetch(:null_placeholder, nil)
+      sync = ->(value) { Runtime.write(self, target, value == nil ? placeholder : value) }
       sync.(Runtime.readPath(source, path))
       object_bindings << {target: target, dispose: Runtime.observePath(source, path, sync)}
       self

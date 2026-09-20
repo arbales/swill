@@ -168,7 +168,8 @@ The initial kernel and DOM-boundary spike is complete and verified:
   PATCH, the answer applied, the record pooled), `delete`, `reload`,
   `validate`, datasets (`records`/`loading`/`error`), `has_many`/`has_one`
   with `:id` URL patterns, loading on first read, `load_<name>`/`reload_<name>`
-  for code that must wait, and a `<name>_loading` property, and `Swill::Wire.default` as the fetch boundary. The compiler
+  for code that must wait, and key-value loading state
+  (`<name>_loading`/`_loaded`/`_error`) as observable properties, and `Swill::Wire.default` as the fetch boundary. The compiler
   types class objects (`self.class`, `T.class_of`, class methods'
   `self`), awaited values (an async signature names the value), bare
   browser globals (`fetch`), and rescued errors; JSON:API parsing and dirty
@@ -362,10 +363,15 @@ Recorded so they are fixed deliberately rather than rediscovered:
 - The core value type tables (`filters/core_types.rb`) cover common methods
   and blocks; a method outside them is a build error. Grow the tables as
   real code needs them, each entry with its MRI comparison.
-- Methods take positional required arguments only (September 2026): no
-  optional or keyword arguments, so the model API is spelled `find(id)`,
-  `where(params)`, `fetch_all(url, params)` rather than options hashes. Add
-  optional positional arguments when a real signature needs them.
+- Methods take positional arguments only (September 2026): optional ones are
+  supported and compile to one JavaScript method per arity, named for the
+  optionals they take (`observe` / `observe_with_object`), so the model API is
+  still spelled `find(id)`, `where(params)`, `fetch_all(url, params)` rather
+  than options hashes. Keyword and rest arguments remain out; so do optionals
+  on a static or `ClassMethods` method, a block with an optional, and a
+  hand-registered JavaScript class declaring its own wider variants. A leading
+  optional cannot carry a runtime signature, because sorbet-runtime refuses to
+  wrap one — `T::Sig::WithoutRuntime.sig` types it for Sorbet alone.
 - Relationships load on read (September 2026): a relationship nobody
   prefetched starts its request when it is first read, answers what it has,
   and fills in when the request lands, as the TypeScript original did.

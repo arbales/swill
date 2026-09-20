@@ -3,6 +3,33 @@ import {declarations, hasInstalledMetadata} from "./metadata.mjs";
 import {subscribe, writeProperty} from "./properties.mjs";
 import {valueRead, valueInvoke, isPlainObject, NIL_READERS, VALUE_READERS, VALUE_METHODS} from "./values.mjs";
 
+// A Ruby method with optional parameters compiles to one JavaScript method
+// per arity — `observe` and `observeWithObject` — so a name and an argument
+// count name exactly one of them. The shortest variant keeps the plain name;
+// the wider ones carry `family`. A name with no plain variant has no family.
+export function resolveMethod(methods, name, count) {
+  const base = methods.get(name);
+  if (!base) return null;
+  if (base.arity === count) return base;
+  for (const method of methods.values()) {
+    if (method.family === name && method.arity === count) return method;
+  }
+  return null;
+}
+
+// The widest variant that fits, for a caller with a fixed supply of
+// arguments: Ruby fills optionals from the left when arguments are there.
+function widestMethod(methods, name, limit) {
+  const base = methods.get(name);
+  if (!base) return null;
+  let found = base.arity <= limit ? base : null;
+  for (const method of methods.values()) {
+    if (method.family !== name || method.arity > limit) continue;
+    if (!found || method.arity > found.arity) found = method;
+  }
+  return found;
+}
+
 export function read(object, name) {
   if (object == null) {
     return NIL_READERS.includes(name) ? valueRead(object, name) : null;
@@ -22,8 +49,8 @@ export function read(object, name) {
   const property = declarations(object.constructor, "properties").get(name);
   if (property) return object[property.js];
 
-  const method = declarations(object.constructor, "methods").get(name);
-  if (method?.arity === 0) return object[method.js]();
+  const method = resolveMethod(declarations(object.constructor, "methods"), name, 0);
+  if (method) return object[method.js]();
   if (name === "dup" && hasInstalledMetadata(object.constructor)) return duplicateObject(object);
   if (VALUE_READERS.includes(name)) return valueRead(object, name);
 
@@ -74,8 +101,8 @@ export function write(object, name, value) {
     return writeProperty(object, property, value);
   }
 
-  const method = declarations(object.constructor, "methods").get(`${name}=`);
-  if (method?.arity === 1) {
+  const method = resolveMethod(declarations(object.constructor, "methods"), `${name}=`, 1);
+  if (method) {
     object[name] = value;
     return value;
   }
@@ -181,9 +208,11 @@ export function invoke(object, name, ...args) {
     throw new Error(`Cannot call ${name} on nil`);
   }
 
-  const method = declarations(object.constructor, "methods").get(name);
-  if (!method && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
-  if (!method || method.arity !== args.length) {
+  const methods = declarations(object.constructor, "methods");
+  if (!methods.has(name) && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
+
+  const method = resolveMethod(methods, name, args.length);
+  if (!method) {
     throw new Error(`Unknown method or wrong arity: ${name}`);
   }
 
@@ -191,8 +220,10 @@ export function invoke(object, name, ...args) {
 }
 
 export function performAction(object, name, sender, event) {
-  const method = declarations(object.constructor, "methods").get(name);
-  if (!method || method.arity > 2) {
+  // The runtime has a sender and an event to give, and gives as many of them
+  // as the widest variant will take.
+  const method = widestMethod(declarations(object.constructor, "methods"), name, 2);
+  if (!method) {
     throw new Error(`Unknown action or wrong arity: ${name}`);
   }
 

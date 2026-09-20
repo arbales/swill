@@ -98,7 +98,8 @@ classes. The runtime dispatches `name_did_change` from a class's installed
 method table, and `Swill.register` fills that table only from `static
 actions`, so a `nameDidChange` method on a registered class is never called.
 Observe the property instead: `this.observe("name", (value, previous) => ...)`
-in `viewDidLoad`. Closing the gap means registering hook methods in the
+in `viewDidLoad`, or `this.observeWithObject(other, "name", ...)` for another
+object's; both are released at `unload`. Closing the gap means registering hook methods in the
 table; their names already match, since compiled members are camelCase.
 
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
@@ -128,7 +129,7 @@ CHROME_BIN=/path/to/chrome BUNDLE_PATH=vendor/bundle bundle exec rake browser
 The check uses Chrome's DevTools protocol with a temporary profile. It exercises
 both compiled Ruby and plain JavaScript applications, including class lookup,
 manual startup, input events, computed rendering, nested controller ownership,
-actions through the responder chain, and listener teardown.
+actions through the responder chain, and listener release.
 
 For manual inspection:
 
@@ -224,9 +225,9 @@ raise; `optional: true` outlets may be absent. Binding and action
 scans stop at nested `[controller]` boundaries, so each element is wired by its
 direct owner only. Awakening runs `view_did_load`, wiring, and `awake_from_dom`
 for each controller children first, then `controller_did_load`, then the
-appearance hooks. Teardown runs `view_will_disappear`, the controller's own
-disposers and observable state, its descendants, and `view_did_disappear`,
-exactly once.
+appearance hooks. `unload` runs `view_will_disappear`, the controller's
+bindings, everything it retained, its own observation state, its descendants,
+and `view_did_disappear`, exactly once.
 
 `Swill::Application` is the top of the responder chain for one launched region.
 It records itself on its root element, so a root controller finds it by walking
@@ -259,7 +260,19 @@ so a fragment awakened later must be present under its parent before the
 parent awakens or be bound by the parent explicitly. `bind-*` on that root
 belongs to the child. `bind(:target, to: source, key_path: "a.b")` keeps a declared
 property equal to a path on another object until `unbind`, `unbind_all`, or
-teardown.
+teardown; `null_placeholder:` is what the target receives when the path has no
+value, so a path through a nilable object can feed a property that is not one.
+`observe(name, callback)` observes the receiver's own property and
+`observe(object, name, callback)` another object's; either way the receiver is
+the observer, so either way it retains the observation and lets it go at
+`unload`. For one of its own properties a `name_did_change` hook needs no
+observation at all. `retain(disposer)` claims any other disposer the same way,
+as Cocoa's retain claims an object, `release(disposer)` gives one up before
+then, and `observe_notification` is a retain over
+`NotificationCenter.default.add_observer`. An object ends by itself with
+`dealloc`, which releases everything it retained and then leaves the
+observation graph; `disconnect` leaves the graph without ending, keeping stored
+values so computed properties resubscribe on the next read.
 
 The application owns the first responder. `make_first_responder` follows
 Cocoa: a responder must accept, the current one may refuse to resign, and a
@@ -365,9 +378,11 @@ property equal to the path both ways, so `<div klass="Swill::Control::CustomSele
 bind="choice">` edits `choice` and follows it.
 
 `Swill::NotificationCenter.default` is the NSNotificationCenter analog:
-`post(name, object, user_info)` and `observe(name, callback)`, which returns
-the callable that ends the observation; a controller's `observe_notification`
-ends with its teardown. The application posts `first_responder_did_change`
+`post(name, object, user_info)` and `add_observer(name, callback)`, which
+returns the callable that ends the observation, named as Cocoa names it because
+observing a notification is not observing a property; a controller's
+`observe_notification` retains that callable, so the observation ends at
+`unload`. The application posts `first_responder_did_change`
 with the new responder as user info. `Swill::Runtime.nameOf(object)` gives an
 object's installed class name.
 
@@ -407,9 +422,11 @@ Class methods: `find`, `fetch` (always the server's), `find_all`,
 observable `records`/`loading`/`error` triple), `get`/`put`/`remove`/`clear`
 on the pool, `parse_one`/`parse_many`. Instance methods: `save`, `delete`,
 `reload`, `validate` (a message refuses the save), `serialize(dirty_only)`,
-`draft`/`apply_draft`, and, per relationship, a `<name>_loading` property and
-`load_<name>`/`reload_<name>` for code that must wait on what a read would
-have started anyway.
+`draft`/`apply_draft`, and, per relationship, its key-value loading state as
+observable properties (`<name>_loading`, `<name>_loaded`, `<name>_error`) plus
+`load_<name>`/`reload_<name>` for code that must wait on what a read would have
+started anyway. A spinner, an empty state, and a failure are bindings on those
+properties, not a controller method with a rescue.
 Persistence is `async`; awaiting it yields the record.
 
 JSON:API is the default codec: a document's `included` resources are pooled
@@ -509,7 +526,7 @@ The implementation covers:
 - compiled object, responder, view, controller, ownership, bindings, actions,
   and awakening framework slices;
 - nested controllers with a sparse view tree, direct-owner wiring, responder
-  chain actions, children-first lifecycle, and recursive teardown;
+  chain actions, children-first lifecycle, and recursive unload;
 - a markup-declared application that launches on `DOMContentLoaded`, tops the
   responder chain, and terminates on unload;
 - managed elements: `klass` views, plain outlet views, declared outlets

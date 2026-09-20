@@ -86,6 +86,31 @@ class SharedTest < Minitest::Test
     File.write("build/mri-dirty.json", JSON.pretty_generate("steps" => steps, "changes" => changes) + "\n")
   end
 
+  # The same ownership contract as the browser's: the receiver is the
+  # observer, and what it retains ends when it deallocs.
+  def test_an_object_retains_what_it_observes_until_it_deallocs
+    watcher = Demo::Person.new
+    watched = Demo::SpecialPerson.new
+    seen = []
+    watcher.observe(watched, "name", ->(value) { seen << value })
+    watcher.observe("name", ->(value) { seen << "mine #{value}" })
+    watched.name = "Ada"
+    watcher.name = "Grace"
+    assert_equal ["Ada", "mine Grace"], seen
+
+    watcher.dealloc
+    watched.name = "Hopper"
+    watcher.name = "Lovelace"
+    assert_equal ["Ada", "mine Grace"], seen, "dealloc releases what the object retained"
+
+    early = []
+    owner = Demo::Person.new
+    disposer = owner.retain(-> { early << :released })
+    owner.release(disposer)
+    owner.dealloc
+    assert_equal [:released], early, "release gives one up early, and dealloc has nothing left"
+  end
+
   def test_from_attributes_materializes_a_model_from_a_wire_hash
     person = Demo::SpecialPerson.from_attributes("name" => "Ada", "job" => " lead ")
     assert_instance_of Demo::SpecialPerson, person

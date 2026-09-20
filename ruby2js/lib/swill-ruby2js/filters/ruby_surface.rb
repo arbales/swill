@@ -25,7 +25,11 @@ module Swill
           @compiled_parent = options[:compiled_parent]
           @entry = options.fetch(:entry)
           @local_types = {}
+          # From the entry's own AST, not the source being converted: a
+          # computed property's block is converted on its own, and an
+          # instance variable means the same thing there as in a method.
           @ivar_types = {}
+          infer_ivar_types(nil) if @entry["node"]
         end
 
         def on_class(node)
@@ -33,7 +37,6 @@ module Swill
           # resolve in Ruby's source scope, not against implementation-local names.
           # Declarations have already been collected. Keep the original source and
           # locations so Pragma sees comments, including those on the final line.
-          infer_ivar_types(node)
           body = @knowledge.statements(node.children.last).select do |statement|
             class_body_statement?(statement)
           end.map { |statement| process(statement) }
@@ -64,13 +67,38 @@ module Swill
           @in_async = method ? method["async"] == true : false
           @in_class_method = static
           local_types_for(method, body)
+          js, args = variant_definition(method, name, args)
           # Ruby2JS's explicit method node preserves source locations for filters.
-          super(node.updated(:defm, [Knowledge.member(name).to_sym, args, body]))
+          super(node.updated(:defm, [js.to_sym, args, body]))
         ensure
           @local_types = previous
           @current_method = previous_method
           @in_async = previous_async
           @in_class_method = previous_static
+        end
+
+        # A method with optional parameters compiles to one JavaScript method
+        # per arity. The definition carrying the defaults is the widest one;
+        # a generated shim, which has no defaults, is the variant its own
+        # parameter count names.
+        def variant_definition(method, name, args)
+          return [Knowledge.member(name), args] unless method && method["formals"]
+          variant = if args.children.any? { |arg| arg.type == :optarg }
+            Knowledge.variants(method).last
+          else
+            Knowledge.variant_for(method, args.children.length)
+          end
+          required = args.updated(nil, args.children.map do |arg|
+            arg.type == :optarg ? arg.updated(:arg, [arg.children.first]) : arg
+          end)
+          [variant ? variant["js"] : Knowledge.member(name), required]
+        end
+
+        # The argument count says which member of a method's family a send
+        # means, and which of its parameters the arguments land on.
+        def dispatched(entry, args)
+          variant = Knowledge.variant_for(entry, args.length) || Knowledge.variants(entry).first
+          [variant["js"].to_sym, *typed_arguments(entry, args, variant["taken"])]
         end
 
         def on_const(node)
@@ -113,6 +141,11 @@ module Swill
         # take no blocks, so only a collection can receive one, and its type
         # must be declared.
         def on_block(node)
+          # A block is called at a fixed arity by whatever yields to it, so an
+          # optional parameter would only ever take its default.
+          if node.children[1].children.any? { |arg| arg.type == :optarg }
+            raise CompileError, "a block takes required arguments only"
+          end
           previous_async = @in_async
           # A block or lambda is its own function: no await inside it.
           @in_async = false
@@ -222,7 +255,7 @@ module Swill
           # configuration its ClassMethods provide.
           if @in_class_method && !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
              (entry = @knowledge.class_member_entry(@entry["name"], method))
-            return s(:call, receiver ? process(receiver) : s(:self), entry["js"].to_sym, *typed_arguments(entry, args))
+            return s(:call, receiver ? process(receiver) : s(:self), *dispatched(entry, args))
           end
           if @properties.include?(method.to_s) && args.empty?
             return s(:attr, receiver ? process(receiver) : s(:self), Knowledge.member(method).to_sym)
@@ -234,7 +267,7 @@ module Swill
           # passed to it.
           if !@in_class_method && !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
              (entry = @knowledge.method_entry(@entry["name"], method))
-            return s(:call, receiver ? process(receiver) : s(:self), entry["js"].to_sym, *typed_arguments(entry, args))
+            return s(:call, receiver ? process(receiver) : s(:self), *dispatched(entry, args))
           end
           # A browser function called bare, as Kernel's are.
           if receiver.nil? && DOM::GLOBALS.key?(method.to_s) && !NATIVE_SENDS.include?(method)
@@ -276,7 +309,7 @@ module Swill
           if (owner = class_of_type(type))
             return nil if method == :new
             if (entry = @knowledge.class_member_entry(owner, name))
-              return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
+              return s(:call, process(receiver), *dispatched(entry, args))
             end
             return nil
           end
@@ -294,13 +327,13 @@ module Swill
               return s(:send, process(receiver), Knowledge.member(method).to_sym, process(args.first))
             end
             if (entry = @knowledge.method_entry(klass, name))
-              return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
+              return s(:call, process(receiver), *dispatched(entry, args))
             end
             return nil
           end
           if receiver.type == :const && (constant_class = swill_class(@knowledge.constant(receiver))) &&
              (entry = @knowledge.class_member_entry(constant_class, name))
-            return s(:call, process(receiver), entry["js"].to_sym, *typed_arguments(entry, args))
+            return s(:call, process(receiver), *dispatched(entry, args))
           end
           if receiver.type == :const && method == :new && DOM.native?(@knowledge.constant(receiver))
             constant = @knowledge.constant(receiver)
@@ -368,8 +401,13 @@ module Swill
         # Arguments to a collected method. A lambda literal passed where the
         # signature says T.proc.params(...) gets those parameter types, so
         # its body lowers as the callee will call it.
-        def typed_arguments(entry, args)
-          types = entry.fetch("parameters", {}).values
+        def typed_arguments(entry, args, taken = nil)
+          declared = entry.fetch("parameters", {})
+          types = if taken && entry["formals"]
+            Knowledge.variant_formals(entry, taken).map { |formal| declared[formal["name"]] }
+          else
+            declared.values
+          end
           args.each_with_index.map do |arg, index|
             if lambda_literal?(arg)
               process_lambda(arg, proc_parameter_types(types[index]))

@@ -95,17 +95,25 @@ module Swill
               unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :method_missing
                 raise CompileError, "unsupported method definition #{method}"
               end
-              unless args.children.all? { |arg| arg.type == :arg }
-                raise CompileError, "only positional required method arguments are supported"
+              formals = collect_parameters(args, optional: true)
+              optionals = formals.select { |formal| formal["default"] }
+              if optionals.any? && method.to_s.match?(/[?!=]\z/)
+                raise CompileError, "a predicate, bang, or writer takes required arguments only"
               end
+              check_signature_parameters!(method, formals, pending_signature)
               validate_expression!(child.children.last)
-              entry["methods"] << {
+              collected = {
                 "name" => method.to_s, "js" => self.class.member(method),
-                "arity" => args.children.length,
+                "arity" => formals.length - optionals.length,
                 "parameters" => signature_parameters(pending_signature),
                 "returns" => signature_return(pending_signature),
                 "async" => async
               }
+              if optionals.any?
+                collected["optionals"] = optionals.map { |formal| formal["name"] }
+                collected["formals"] = formals
+              end
+              entry["methods"] << collected
               pending_signature = nil
             elsif signature?(child)
               # Sorbet checks these; executable definitions omit annotations.
@@ -158,6 +166,40 @@ module Swill
           entries << entry
         end
 
+        # A method's parameters. Positional only: a keyword, a splat, or a
+        # block parameter has no place in a metadata-dispatched protocol.
+        # Optionals must be contiguous, as Ruby requires, so a variant is
+        # named by how many of them it takes.
+        def collect_parameters(args, optional:, subject: "method")
+          formals = args.children.map do |arg|
+            case arg.type
+            when :arg then {"name" => arg.children.first.to_s}
+            when :optarg
+              unless optional
+                raise CompileError, "#{subject} arguments are positional and required"
+              end
+              {"name" => arg.children.first.to_s, "default" => arg.children[1].loc.expression.source}
+            else
+              raise CompileError, "#{subject} arguments are positional#{optional ? '' : ' and required'}"
+            end
+          end
+          defaults = formals.each_index.select { |index| formals[index]["default"] }
+          unless defaults.empty? || defaults == (defaults.first..defaults.last).to_a
+            raise CompileError, "optional arguments must be contiguous"
+          end
+          formals
+        end
+
+        # The signature names the parameters the definition does, in order.
+        # Nothing checked this before; with optionals in play a mismatch would
+        # silently type the wrong argument at every call site.
+        def check_signature_parameters!(name, formals, signature)
+          return unless signature
+          declared = signature_parameters(signature).keys
+          return if declared.empty? || declared == formals.map { |formal| formal["name"] }
+          raise CompileError, "signature parameters must match #{name}'s parameters in order"
+        end
+
         # Whether a class-body statement is a declaration: the property
         # primitive, a macro an ancestor marked, or a setting an included
         # ClassMethods declares.
@@ -196,9 +238,8 @@ module Swill
           unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :new
             raise CompileError, "unsupported method definition self.#{method}"
           end
-          unless args.children.all? { |arg| arg.type == :arg }
-            raise CompileError, "only positional required method arguments are supported"
-          end
+          formals = collect_parameters(args, optional: false)
+          check_signature_parameters!(method, formals, signature)
           validate_expression!(body)
           entry["static_methods"] << {
             "name" => method.to_s, "js" => self.class.member(method), "arity" => args.children.length,
@@ -246,9 +287,7 @@ module Swill
               next
             elsif statement.type == :def
               method, args, = statement.children
-              unless args.children.all? { |arg| arg.type == :arg }
-                raise CompileError, "class methods support only positional required arguments"
-              end
+              collect_parameters(args, optional: false, subject: "class method")
               validate_expression!(statement.children.last)
               entry["class_methods"] << statement
               entry["class_method_entries"] << {

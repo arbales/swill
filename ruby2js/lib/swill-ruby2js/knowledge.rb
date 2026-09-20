@@ -19,6 +19,39 @@ module Swill
         Names.member(name)
       end
 
+      # A method with optional parameters is one JavaScript method per arity,
+      # the way Cocoa spells an overload as a selector: observe and
+      # observeWithObject. The shortest variant keeps the plain name; the rest
+      # are named for the optionals they take and carry the family, which is
+      # how the runtime resolves a name and an argument count to one method.
+      def self.variants(method)
+        optionals = method["optionals"] || []
+        (0..optionals.length).map do |taken|
+          if taken.zero?
+            {"name" => method["name"], "js" => method["js"], "arity" => method["arity"], "taken" => 0}
+          else
+            name = "#{method['name']}_with_#{optionals.first(taken).join('_and_')}"
+            {"name" => name, "js" => member(name), "arity" => method["arity"] + taken,
+             "taken" => taken, "family" => method["name"]}
+          end
+        end
+      end
+
+      def self.variant_for(method, count)
+        variants(method).find { |variant| variant["arity"] == count }
+      end
+
+      # The parameters a variant receives, in declaration order: every
+      # required one, and the first +taken+ optionals, as Ruby binds them.
+      def self.variant_formals(method, taken)
+        seen = 0
+        (method["formals"] || []).select do |formal|
+          next true unless formal["default"]
+          seen += 1
+          seen <= taken
+        end
+      end
+
         attr_reader :loader
 
         def initialize(imports = [], loader:)
@@ -93,6 +126,11 @@ module Swill
           entry = entries.find { |candidate| candidate["name"] == type }
           return nil unless entry
           found = entry["methods"].find { |candidate| candidate["name"] == method.to_s }
+          return found if found
+          # A generated shim calls the widest variant by its own name.
+          found = entry["methods"].find do |candidate|
+            candidate["optionals"] && Knowledge.variants(candidate).any? { |variant| variant["name"] == method.to_s }
+          end
           return found if found
           entry["includes"].reverse_each do |name|
             found = method_entry(resolve(name, entry["scope"]), method)

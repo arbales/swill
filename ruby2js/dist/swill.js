@@ -372,7 +372,8 @@
         values: /* @__PURE__ */ new Map(),
         computed: /* @__PURE__ */ new Map(),
         observers: /* @__PURE__ */ new Map(),
-        dependents: /* @__PURE__ */ new Map()
+        dependents: /* @__PURE__ */ new Map(),
+        retained: []
       };
       states.set(object, current);
       for (const descriptor of declarations(object.constructor, "properties").values()) {
@@ -430,7 +431,7 @@
     if (slot.running) {
       throw new Error(`Computed cycle: ${descriptor.name}`);
     }
-    slot.disposers.splice(0).forEach((dispose2) => dispose2());
+    slot.disposers.splice(0).forEach((dispose) => dispose());
     const frame = /* @__PURE__ */ new Map();
     slot.running = true;
     captures.push(frame);
@@ -490,11 +491,26 @@
   function observe(object, name, callback) {
     return subscribe(object, name, callback, "observers");
   }
-  function dispose(object) {
+  function retain(object, disposer) {
+    state(object).retained.push(disposer);
+    return disposer;
+  }
+  function release(object, disposer) {
+    const retained = states.get(object)?.retained;
+    const index = retained ? retained.indexOf(disposer) : -1;
+    if (index >= 0) retained.splice(index, 1);
+    disposer();
+  }
+  function dealloc(object) {
+    const current = states.get(object);
+    if (current) current.retained.splice(0).forEach((disposer) => disposer());
+    disconnect(object);
+  }
+  function disconnect(object) {
     const current = states.get(object);
     if (!current) return;
     for (const slot of current.computed.values()) {
-      slot.disposers.splice(0).forEach((dispose2) => dispose2());
+      slot.disposers.splice(0).forEach((dispose) => dispose());
     }
     current.computed.clear();
     current.observers.clear();
@@ -719,6 +735,25 @@
   }
 
   // lib/swill/runtime/paths.mjs
+  function resolveMethod(methods, name, count) {
+    const base = methods.get(name);
+    if (!base) return null;
+    if (base.arity === count) return base;
+    for (const method of methods.values()) {
+      if (method.family === name && method.arity === count) return method;
+    }
+    return null;
+  }
+  function widestMethod(methods, name, limit) {
+    const base = methods.get(name);
+    if (!base) return null;
+    let found = base.arity <= limit ? base : null;
+    for (const method of methods.values()) {
+      if (method.family !== name || method.arity > limit) continue;
+      if (!found || method.arity > found.arity) found = method;
+    }
+    return found;
+  }
   function read(object, name) {
     if (object == null) {
       return NIL_READERS.includes(name) ? valueRead(object, name) : null;
@@ -732,8 +767,8 @@
     }
     const property = declarations(object.constructor, "properties").get(name);
     if (property) return object[property.js];
-    const method = declarations(object.constructor, "methods").get(name);
-    if (method?.arity === 0) return object[method.js]();
+    const method = resolveMethod(declarations(object.constructor, "methods"), name, 0);
+    if (method) return object[method.js]();
     if (name === "dup" && hasInstalledMetadata(object.constructor)) return duplicateObject(object);
     if (VALUE_READERS.includes(name)) return valueRead(object, name);
     throw new Error(`Unknown reader: ${name}`);
@@ -768,8 +803,8 @@
       }
       return writeProperty(object, property, value);
     }
-    const method = declarations(object.constructor, "methods").get(`${name}=`);
-    if (method?.arity === 1) {
+    const method = resolveMethod(declarations(object.constructor, "methods"), `${name}=`, 1);
+    if (method) {
       object[name] = value;
       return value;
     }
@@ -806,7 +841,7 @@
     let disposers = [];
     let active = true;
     const rehook = () => {
-      disposers.splice(0).forEach((dispose2) => dispose2());
+      disposers.splice(0).forEach((dispose) => dispose());
       let owner = object;
       for (const name of segments(path)) {
         if (owner == null) break;
@@ -825,7 +860,7 @@
     rehook();
     return () => {
       active = false;
-      disposers.splice(0).forEach((dispose2) => dispose2());
+      disposers.splice(0).forEach((dispose) => dispose());
     };
   }
   function respondsTo(object, name) {
@@ -848,16 +883,17 @@
     if (object == null) {
       throw new Error(`Cannot call ${name} on nil`);
     }
-    const method = declarations(object.constructor, "methods").get(name);
-    if (!method && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
-    if (!method || method.arity !== args.length) {
+    const methods = declarations(object.constructor, "methods");
+    if (!methods.has(name) && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
+    const method = resolveMethod(methods, name, args.length);
+    if (!method) {
       throw new Error(`Unknown method or wrong arity: ${name}`);
     }
     return object[method.js](...args);
   }
   function performAction(object, name, sender, event) {
-    const method = declarations(object.constructor, "methods").get(name);
-    if (!method || method.arity > 2) {
+    const method = widestMethod(declarations(object.constructor, "methods"), name, 2);
+    if (!method) {
       throw new Error(`Unknown action or wrong arity: ${name}`);
     }
     return object[method.js](...[sender, event].slice(0, method.arity));
@@ -917,8 +953,13 @@
   }
   function validateAttribute(object, name, value, previous) {
     if (!isAttribute(object, name)) return value;
-    const validator = declarations(object.constructor, "methods").get(`validate_${name}`);
-    return validator && validator.arity === 2 ? object[validator.js](value, previous) : value;
+    const methods = declarations(object.constructor, "methods");
+    const validator = resolveMethod(methods, `validate_${name}`, 2);
+    if (validator) return object[validator.js](value, previous);
+    if (methods.has(`validate_${name}`)) {
+      throw new Error(`Validator must take a value and a previous value: validate_${name}`);
+    }
+    return value;
   }
   function restorations(object) {
     return declarations(object.constructor, "restorations");
@@ -1025,7 +1066,10 @@
     // Observation
     observe,
     observePath,
-    dispose,
+    retain,
+    release,
+    dealloc,
+    disconnect,
     // Declarations
     isAttribute,
     validateAttribute,
@@ -1093,11 +1137,37 @@
   // build/framework.classes.mjs
   function Swill__Observable(Superclass) {
     class Swill__Observable_Layer extends Superclass {
-      observe(name, callback) {
-        return Runtime.observe(this, name, callback);
+      // I observe a property: my own, or another object's. Either way the
+      // receiver is the observer, so either way it retains the observation and
+      // lets it go when it deallocs.
+      // sorbet-runtime will not wrap a method whose optional parameter comes
+      // first, so this signature is static only.
+      observeWithObject(object, name, callback) {
+        return this.retain(Runtime.observe(
+          object == null ? this : object,
+          name,
+          callback
+        ));
       }
-      dispose() {
-        return Runtime.dispose(this);
+      // Cocoa's retain: I claim this disposer and am responsible for letting it
+      // go. Every disposer with my lifetime goes through here — an observation,
+      // a notification, a DOM listener, a binding's release.
+      retain(disposer) {
+        return Runtime.retain(this, disposer);
+      }
+      // Cocoa's release, the counterpart of retain: give one up before I go.
+      release(disposer) {
+        return Runtime.release(this, disposer);
+      }
+      // End of life: release everything retained, then leave the observation
+      // graph.
+      dealloc() {
+        return Runtime.dealloc(this);
+      }
+      // Leave the observation graph without ending: stored values are kept and
+      // computed properties resubscribe on the next read.
+      disconnect() {
+        return Runtime.disconnect(this);
       }
       coercePropertyValue(name, value, previous) {
         return value;
@@ -1110,6 +1180,9 @@
       // before the read resolves, so the value can load itself.
       propertyWillAccess(name) {
         return null;
+      }
+      observe(name, callback) {
+        return this.observeWithObject(null, name, callback);
       }
     }
     return Swill__Observable_Layer;
@@ -1150,7 +1223,8 @@
         this.unbind(target);
         let source = options.to;
         let path = options.key_path;
-        let sync = (value) => Runtime.write(this, target, value);
+        let placeholder = Runtime.fetch(options, "null_placeholder", null);
+        let sync = (value) => Runtime.write(this, target, value == null ? placeholder : value);
         sync(Runtime.readPath(source, path));
         Runtime.append(
           this.objectBindings(),
@@ -1216,7 +1290,7 @@
         "T::Hash[String, T::Array[T.proc.params(notification:Notification).void]]"
       );
     }
-    observe(name, callback) {
+    addObserver(name, callback) {
       let list = this._observers[name];
       if (!list) {
         list = [];
@@ -1883,10 +1957,6 @@
     bindingRoot() {
       return null;
     }
-    constructor() {
-      super();
-      this._teardowns = Runtime.cast([], "T::Array[T.proc.void]");
-    }
     attach(element) {
       this._view = Swill__View.of(element) || new Swill__View(element);
       this._view.controller = this;
@@ -1915,19 +1985,16 @@
     nextResponder() {
       return this.parent() || this.application();
     }
-    registerTeardown(dispose2) {
-      return Runtime.append(this._teardowns, dispose2);
-    }
     // Observe a notification for as long as this controller is loaded.
     observeNotification(name, callback) {
-      return this.registerTeardown(Swill__NotificationCenter.default().observe(
+      return this.retain(Swill__NotificationCenter.default().addObserver(
         name,
         callback
       ));
     }
-    // Releases this controller's listeners and observers, then its descendants,
-    // exactly once. The element keeps its View, so the region can be awakened
-    // again later.
+    // Releases this controller's bindings, everything it retained, and its own
+    // observation state, then its descendants, exactly once. The element keeps
+    // its View, so the region can be awakened again later.
     // A controller can be first responder when its view has something to
     // focus; becoming and resigning move DOM focus accordingly.
     acceptsFirstResponder() {
@@ -1943,15 +2010,13 @@
       this._view.blurElement();
       return true;
     }
-    teardown() {
+    unload() {
       if (this._view.controllerValue() !== this) return;
       this.viewWillDisappear();
       this.application().releaseFirstResponder(this._view.element());
-      this._teardowns.forEach((dispose2) => dispose2());
-      this._teardowns = [];
       this.unbindAll();
-      this.dispose();
-      this.childControllers().forEach((child) => child.teardown());
+      this.dealloc();
+      this.childControllers().forEach((child) => child.unload());
       this._view.subviews().forEach((subview) => this._view.releaseSubview(subview));
       this._view.removeFromSuperview();
       this._view.controller = null;
@@ -2006,7 +2071,7 @@
       let disposers = Runtime.cast([], "T::Array[T.proc.void]");
       this.wireProperties(controller, prefix, root, disposers);
       this.wireRegion(controller, prefix, root, disposers);
-      controller.registerTeardown(this.release(disposers));
+      controller.retain(this.releasing(disposers));
       return controller;
     }
     // A region owned by an object rather than a controller: paths resolve
@@ -2025,7 +2090,7 @@
         this.wireRegion(object, null, element, disposers);
       }
       ;
-      return this.release(disposers);
+      return this.releasing(disposers);
     }
     wireRegion(object, prefix, element, disposers) {
       return this.eachChild(element, (child) => {
@@ -2052,8 +2117,10 @@
         ));
       });
     }
-    release(disposers) {
-      return () => disposers.forEach((dispose2) => dispose2());
+    // One disposer that releases all of these, for a caller that retains a
+    // wired region as a whole.
+    releasing(disposers) {
+      return () => disposers.forEach((dispose) => dispose());
     }
     resolvePath(prefix, path) {
       if (path[0] === "@") {
@@ -2114,7 +2181,7 @@
         }
       };
       render(null);
-      let dispose2 = Runtime.observePath(object, path, render);
+      let dispose = Runtime.observePath(object, path, render);
       let event_name = element.matches("select") || checkbox ? "change" : "input";
       let handler = (event) => {
         let value = checkbox ? element.checked : element.value;
@@ -2126,7 +2193,7 @@
       };
       if (Runtime.isTruthy(writable)) element.addEventListener(event_name, handler);
       return () => {
-        dispose2();
+        dispose();
         if (Runtime.isTruthy(writable)) {
           return element.removeEventListener(event_name, handler);
         }
@@ -2143,7 +2210,7 @@
       );
       render(null);
       let release_render = Runtime.observePath(object, path, render);
-      let release_input = control.observe("value", (value) => Runtime.writePath(
+      let release_input = Runtime.observe(control, "value", (value) => Runtime.writePath(
         object,
         path,
         transformer ? transformer.parse(value) : value
@@ -2200,7 +2267,7 @@
   };
   var Swill__Actions = class extends Swill__Object {
     wire(controller) {
-      controller.registerTeardown(this.wireInto(
+      controller.retain(this.wireInto(
         controller,
         controller.view().element()
       ));
@@ -2211,7 +2278,7 @@
     // are left to their owner.
     wireInto(controller, element) {
       let disposers = this.ownedMatching(element, "[data-action]").map((target) => this.wireElement(controller, target));
-      return () => disposers.forEach((dispose2) => dispose2());
+      return () => disposers.forEach((dispose) => dispose());
     }
     // data-action="name" on click, or "event:name".
     wireElement(controller, element) {
@@ -2432,7 +2499,7 @@
     // The counterpart of wire for a subtree being removed. Teardown recurses
     // into descendants and is idempotent, so document order is fine.
     detach(node) {
-      return this.controllersWithin(node).forEach((controller) => controller.teardown());
+      return this.controllersWithin(node).forEach((controller) => controller.unload());
     }
     nearestView(element) {
       if (!element) return null;
@@ -2501,7 +2568,7 @@
         this._suspended = false;
       }
     }
-    observe(callback) {
+    startObserving(callback) {
       let browser = this._browser;
       if (!Runtime.isTruthy(browser && this.isAvailable())) return;
       let on_change = (_event) => callback();
@@ -2509,7 +2576,7 @@
       browser.addEventListener("popstate", on_change);
       return browser.addEventListener("hashchange", on_change);
     }
-    release() {
+    stopObserving() {
       let on_change = this._on_change;
       let browser = this._browser;
       if (!Runtime.isTruthy(Runtime.logicalAnd(on_change, () => browser))) return;
@@ -2559,7 +2626,7 @@
       let keys = this._restoration_keys;
       this._restoration_disposers = [];
       this._restoration_keys = [];
-      disposers.forEach((dispose2) => dispose2());
+      disposers.forEach((dispose) => dispose());
       return keys;
     }
     name() {
@@ -2667,7 +2734,7 @@
       this.registerWindowContainers();
       this.restoreLaunchedWindows();
       awakening.finish(this._controllers);
-      this._fragments.observe(() => this.applyFragment());
+      this._fragments.startObserving(() => this.applyFragment());
       this.watch(root);
       this.applicationDidLaunch();
       return this;
@@ -2691,12 +2758,12 @@
       }
       ;
       this.applicationWillTerminate();
-      this._fragments.release();
+      this._fragments.stopObserving();
       let observer = this._observer;
       if (observer) observer.disconnect();
       this._windows.forEach((window) => this.releaseWindow(window));
       this._windows = [];
-      this._controllers.forEach((controller) => Runtime.read(controller, "teardown"));
+      this._controllers.forEach((controller) => Runtime.read(controller, "unload"));
       this._controllers = [];
       this._root.removeEventListener("focusin", this._on_focus);
       this._root.removeEventListener("focusout", this._on_focus_out);
@@ -3386,9 +3453,9 @@
     }
     releaseRow(element) {
       Swill__Awakening.detach(element);
-      let release = element.__swill_row__;
-      if (release) {
-        release.call();
+      let release2 = element.__swill_row__;
+      if (release2) {
+        release2.call();
         element.__swill_row__ = null;
       }
       ;
@@ -3423,7 +3490,7 @@
         (event) => this.rowDoubleClicked(event),
         false
       );
-      return this.registerTeardown(() => {
+      return this.retain(() => {
         stop_mouse_down();
         stop_click();
         stop_double_click();
@@ -3694,7 +3761,7 @@
     // Teardown closes an open editor without committing.
     awakeFromDOM() {
       super.awakeFromDOM();
-      return this.registerTeardown(() => this.closeEditor());
+      return this.retain(() => this.closeEditor());
     }
     // Whether the editor opened. An edit in progress is committed first; a
     // refused commit keeps that editor.
@@ -4303,11 +4370,6 @@
     }
   };
   var Swill__Model__Base = class extends Swill__Object {
-    constructor() {
-      super();
-      this._loaded_relationships = Runtime.cast([], "T::Array[String]");
-      this._unloadable_relationships = Runtime.cast([], "T::Array[String]");
-    }
     static classForType(type) {
       return Runtime.classWithSetting("resource_type", type);
     }
@@ -4428,15 +4490,15 @@
       ));
     }
     isRelationshipLoaded(name) {
-      return this._loaded_relationships.includes(name);
+      return Runtime.read(this, `${name}_loaded`) === true;
     }
-    // A relationship's value, assigned here or hydrated from a document;
-    // loading it asks the server only when it has not been.
+    // A relationship's value, assigned here or hydrated from a document.
+    // Assignment is a load: whatever the value came from, the relationship
+    // is loaded and has no failure to report.
     assignRelationship(name, value) {
       Runtime.write(this, name, value);
-      if (!this.isRelationshipLoaded(name)) {
-        return Runtime.append(this._loaded_relationships, name);
-      }
+      Runtime.write(this, `${name}_error`, null);
+      return Runtime.write(this, `${name}_loaded`, true);
     }
     async loadRelationship(name) {
       if (this.isRelationshipLoaded(name)) return Runtime.read(this, name);
@@ -4445,36 +4507,34 @@
     // Cocoa's -willAccessValueForKey:. A relationship nobody prefetched
     // loads itself when it is first read: the value answers what it has,
     // and fills in when the request lands. The guard is what keeps a
-    // re-render from re-requesting.
+    // re-render from re-requesting, and a remembered failure is part of it;
+    // reload_<name> is how an application asks again.
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
       if (this.id == null) return;
       if (!Runtime.isTruthy(this.constructor.modelRelationships()[name])) return;
       if (this.isRelationshipLoaded(name)) return;
-      if (this._unloadable_relationships.includes(name)) return;
       if (Runtime.read(this, `${name}_loading`) === true) return;
-      return this.loadRelationshipInBackground(name);
-    }
-    async loadRelationshipInBackground(name) {
-      try {
-        return await this.reloadRelationship(name);
-      } catch (failure) {
-        Runtime.append(this._unloadable_relationships, name);
-        return Runtime.warn(`${name} did not load: ${failure.message}`);
-      }
+      if (Runtime.read(this, `${name}_error`) != null) return;
+      return this.reloadRelationship(name);
     }
     async reloadRelationship(name) {
-      let descriptor = this.relationship(name);
-      let model_class = descriptor.modelClass();
-      let value = null;
       Runtime.write(this, `${name}_loading`, true);
+      Runtime.write(this, `${name}_error`, null);
+      let value = null;
       try {
+        let descriptor = this.relationship(name);
+        let model_class = descriptor.modelClass();
         let payload = await Swill__Wire.default().getJSON(
           descriptor.urlFor(this),
           {}
         );
         value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
         this.assignRelationship(name, value);
+      } catch (failure) {
+        Runtime.write(this, `${name}_error`, failure.message);
+        Runtime.warn(`${name} did not load: ${failure.message}`);
+        value = Runtime.read(this, name);
       } finally {
         Runtime.write(this, `${name}_loading`, false);
       }
@@ -4492,7 +4552,21 @@
           "observe": {
             "arity": 2
           },
-          "dispose": {
+          "observe_with_object": {
+            "arity": 3,
+            "js": "observeWithObject",
+            "family": "observe"
+          },
+          "retain": {
+            "arity": 1
+          },
+          "release": {
+            "arity": 1
+          },
+          "dealloc": {
+            "arity": 0
+          },
+          "disconnect": {
             "arity": 0
           },
           "coerce_property_value": {
@@ -4651,8 +4725,9 @@
           "initialize": {
             "arity": 0
           },
-          "observe": {
-            "arity": 2
+          "add_observer": {
+            "arity": 2,
+            "js": "addObserver"
           },
           "post": {
             "arity": 3
@@ -5095,9 +5170,6 @@
             "arity": 0,
             "js": "bindingRoot"
           },
-          "initialize": {
-            "arity": 0
-          },
           "attach": {
             "arity": 1
           },
@@ -5118,10 +5190,6 @@
             "arity": 0,
             "js": "nextResponder"
           },
-          "register_teardown": {
-            "arity": 1,
-            "js": "registerTeardown"
-          },
           "observe_notification": {
             "arity": 2,
             "js": "observeNotification"
@@ -5138,7 +5206,7 @@
             "arity": 1,
             "js": "resignFirstResponder"
           },
-          "teardown": {
+          "unload": {
             "arity": 0
           },
           "decode_outlet_data": {
@@ -5203,7 +5271,7 @@
             "arity": 4,
             "js": "wireProperties"
           },
-          "release": {
+          "releasing": {
             "arity": 1
           },
           "resolve_path": {
@@ -5352,11 +5420,13 @@
           "suspended": {
             "arity": 1
           },
-          "observe": {
-            "arity": 1
+          "start_observing": {
+            "arity": 1,
+            "js": "startObserving"
           },
-          "release": {
-            "arity": 0
+          "stop_observing": {
+            "arity": 0,
+            "js": "stopObserving"
           }
         }
       },
@@ -6259,9 +6329,6 @@
           modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null } }
         },
         methods: {
-          "initialize": {
-            "arity": 0
-          },
           "validate": {
             "arity": 0
           },
@@ -6298,10 +6365,6 @@
           "property_will_access": {
             "arity": 1,
             "js": "propertyWillAccess"
-          },
-          "load_relationship_in_background": {
-            "arity": 1,
-            "js": "loadRelationshipInBackground"
           },
           "reload_relationship": {
             "arity": 1,

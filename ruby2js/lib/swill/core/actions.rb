@@ -8,7 +8,7 @@ module Swill
 
     sig { params(controller: Controller).returns(Controller) }
     def wire(controller)
-      controller.register_teardown(wire_into(controller, controller.view().element()))
+      controller.retain(wire_into(controller, controller.view().element()))
       controller
     end
 

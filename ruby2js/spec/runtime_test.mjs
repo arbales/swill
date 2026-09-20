@@ -403,12 +403,12 @@ test("disposing computed state releases dependencies without erasing stored valu
   controller.person = person;
   const values = [];
   controller.observe("title", value => values.push(value));
-  controller.dispose();
+  controller.disconnect();
   person.name = "Grace";
   assert.deepEqual(values, []);
   assert.equal(controller.person, person);
   assert.equal(controller.title, "Hello Grace");
-  controller.dispose();
+  controller.disconnect();
 });
 
 test("remaining runtime semantic helpers preserve Ruby values", () => {
@@ -516,7 +516,7 @@ test("a did_change hook runs for stored properties and keeps a computed property
   tally.count = 2;
   assert.equal(tally.seen.length, 2, "an equal write is not a change");
   assert.equal(tally.total, 4);
-  tally.dispose();
+  tally.disconnect();
   tally.count = 3;
   assert.deepEqual(tally.seen.slice(2), [["count", 2, 3]], "a disposed object's computed hooks are released");
 });
@@ -674,6 +674,85 @@ test("unhandled child actions continue through the responder chain", () => {
   assert.throws(() => new Wide().performAction("wide", null, null), /Unknown action or wrong arity: wide/);
 });
 
+test("an object retains what it observes and lets it go when it deallocs", () => {
+  const watcher = new (Runtime.resolve("Demo::Badge"))();
+  const watched = new Person();
+  const seen = [];
+
+  // Three arguments: I observe another object, and own the observation.
+  watcher.observeWithObject(watched, "name", value => seen.push(value));
+  // Two arguments: I observe my own property, and own that too.
+  watcher.observe("count", value => seen.push(`count ${value}`));
+  watched.name = "Ada";
+  watcher.count = 1;
+  assert.deepEqual(seen, ["Ada", "count 1"]);
+
+  watcher.dealloc();
+  watched.name = "Grace";
+  watcher.count = 2;
+  assert.deepEqual(seen, ["Ada", "count 1"], "dealloc releases what the object retained");
+  watcher.dealloc();
+  watched.name = "Hopper";
+  assert.deepEqual(seen, ["Ada", "count 1"], "a second dealloc is a no-op");
+
+  // A disposer with no observation of its own is retained the same way.
+  let released = 0;
+  const other = new (Runtime.resolve("Demo::Badge"))();
+  other.retain(() => { released += 1; });
+  other.dealloc();
+  other.dealloc();
+  assert.equal(released, 1, "a retained disposer is called once");
+
+  // release gives one up early, so dealloc has nothing left to give up.
+  let early = 0;
+  const owner = new (Runtime.resolve("Demo::Badge"))();
+  const disposer = owner.retain(() => { early += 1; });
+  owner.release(disposer);
+  assert.equal(early, 1, "release ends the disposer");
+  owner.dealloc();
+  assert.equal(early, 1, "and takes it out of what dealloc would release");
+});
+
+test("a method family resolves by argument count", () => {
+  class Family extends SwillObject {
+    tally() { return 1; }
+    tallyWithScale(scale) { return scale; }
+    greet(name) { return `Hello ${name}`; }
+    greetWithGreeting(greeting, name) { return `${greeting} ${name}`; }
+    clicked(sender) { return ["one", sender]; }
+    clickedWithEvent(sender, event) { return ["two", sender, event]; }
+    validateTag(value) { return value; }
+  }
+  Runtime.install({classes: {"Test::Family": {constructor: Family,
+    properties: {tag: {type: "String", attribute: true, key: "tag", defaultValue() { return ""; }}},
+    methods: {
+      tally: {arity: 0},
+      tally_with_scale: {arity: 1, js: "tallyWithScale", family: "tally"},
+      greet: {arity: 1},
+      greet_with_greeting: {arity: 2, js: "greetWithGreeting", family: "greet"},
+      clicked: {arity: 1},
+      clicked_with_event: {arity: 2, js: "clickedWithEvent", family: "clicked"},
+      validate_tag: {arity: 1, js: "validateTag"}
+    }}}});
+  const family = new Family();
+
+  assert.equal(Runtime.invoke(family, "greet", "Ada"), "Hello Ada");
+  assert.equal(Runtime.invoke(family, "greet", "Hi", "Ada"), "Hi Ada", "a wider variant answers the same name");
+  assert.throws(() => Runtime.invoke(family, "greet", "a", "b", "c"), /wrong arity/);
+  assert.equal(Runtime.read(family, "tally"), 1, "a reader is the variant that takes nothing");
+
+  // The runtime has a sender and an event, and gives as many as the widest
+  // variant will take.
+  assert.deepEqual(Runtime.performAction(family, "clicked", "s", "e"), ["two", "s", "e"]);
+  assert.equal(Runtime.performAction(family, "tally", "s", "e"), "s",
+    "the widest variant that fits takes the sender, though the plain one takes nothing");
+
+  // A validator that cannot take the value and the previous one would never
+  // run; saying so beats passing the value through unvalidated.
+  assert.throws(() => Runtime.validateAttribute(family, "tag", "x", ""),
+    /Validator must take a value and a previous value: validate_tag/);
+});
+
 test("awakening a later fragment adopts it into the nearest live owner", () => {
   const f = nestedFixture();
   const lateTitle = element("p", {bind: "title"});
@@ -687,11 +766,11 @@ test("awakening a later fragment adopts it into the nearest live owner", () => {
   assert.deepEqual(Array.from(new Awakening().wire(f.document)), [], "an awakened tree yields no new controllers");
 });
 
-test("tearing down the parent releases every descendant exactly once", () => {
+test("unloading the parent releases every descendant exactly once", () => {
   const f = nestedFixture();
   f.parent.person.name = "Ada";
   f.log.length = 0;
-  f.parent.teardown();
+  f.parent.unload();
   assert.deepEqual(f.log, [
     "parent:viewWillDisappear", "child:viewWillDisappear",
     "grandchild:viewWillDisappear", "grandchild:viewDidDisappear",
@@ -708,9 +787,9 @@ test("tearing down the parent releases every descendant exactly once", () => {
   assert.equal(f.parentTitle.textContent, "Hello Ada", "parent observers are gone");
   f.child.count = 5;
   assert.equal(f.childTitle.textContent, "Badge 0", "child observers are gone");
-  f.parent.teardown();
-  f.child.teardown();
-  assert.equal(f.log.length, 6, "a second teardown is a no-op");
+  f.parent.unload();
+  f.child.unload();
+  assert.equal(f.log.length, 6, "a second unload is a no-op");
   const [again] = new Awakening().wire(f.parentRoot);
   assert.notEqual(again, f.parent);
   assert.equal(again.childControllers().length, 1);
@@ -1027,7 +1106,7 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   assert.throws(() => Runtime.isEmpty(42), /requires a string, array, or hash/);
 });
 
-test("object bindings keep a target equal to a source path and release on teardown", () => {
+test("object bindings keep a target equal to a source path and release on unload", () => {
   const f = nestedFixture();
   assert.equal(f.parent.badgeCount, 0);
   f.childBump.click();
@@ -1044,10 +1123,21 @@ test("object bindings keep a target equal to a source path and release on teardo
   f.parent.unbind("badge_count");
   other.count = 9;
   assert.equal(f.parent.badgeCount, 8);
+  // Cocoa's NSNullPlaceholderBindingOption, so a path that can have no value
+  // can feed a property that must have one.
+  f.parent.bind("badge_count", {to: other, key_path: "count", null_placeholder: -1});
+  other.count = null;
+  assert.equal(f.parent.badgeCount, -1, "no value on the path is the placeholder");
+  other.count = 3;
+  assert.equal(f.parent.badgeCount, 3, "a value replaces it again");
   f.parent.bind("badge_count", {to: other, key_path: "count"});
-  f.parent.teardown();
+  other.count = null;
+  assert.equal(f.parent.badgeCount, null, "without a placeholder the target takes the nil");
+  other.count = 9;
+  f.parent.bind("badge_count", {to: other, key_path: "count"});
+  f.parent.unload();
   other.count = 10;
-  assert.equal(f.parent.badgeCount, 9, "teardown unbinds object bindings");
+  assert.equal(f.parent.badgeCount, 9, "unload unbinds object bindings");
 });
 
 // ---- first responder and key routing ----
@@ -1117,7 +1207,7 @@ test("key events route from the first responder up the chain", () => {
   f.nameInput.dispatchEvent(keyEvent("keydown", "Tab"));
   f.nameInput.dispatchEvent(keyEvent("keyup", "Tab"));
   assert.deepEqual(seen, ["enter:Enter", "tab", "up:Tab"]);
-  parent.teardown();
+  parent.unload();
   assert.equal(application.firstResponder(), application, "tearing down the region releases its first responder");
   application.terminate();
   f.resetButton.focus();
@@ -1479,7 +1569,7 @@ test("row actions dispatch from the list knowing their row, and activation reach
   assert.equal(f.controller.actionTarget("activate_selection"), f.controller);
   assert.equal(f.parent.actionTarget("activate_selection"), f.parent);
   assert.equal(f.controller.actionTarget("vanish"), null);
-  f.controller.teardown();
+  f.controller.unload();
   assert.equal(f.rowsOf().length, 0, "teardown removes the rows");
   assert.equal(f.controller.rows.subviews().length, 0);
   f.parent.people = [ada];
@@ -1558,7 +1648,7 @@ test("a controller inside a row belongs to the list and is fed the row's object"
   assert.equal(f.controller.childControllers().length, 1);
   assert.equal(f.controller.childControllers()[0].representedObject, ada);
   assert.deepEqual(Array.from(new Awakening().wire(f.rowsOf()[0])), [], "the observer finds nothing new in a rendered row");
-  f.controller.teardown();
+  f.controller.unload();
   assert.deepEqual([f.rowsOf().length, f.controller.childControllers().length], [0, 0]);
 });
 
@@ -1698,7 +1788,7 @@ test("Enter edits the selected row through a draft: Enter commits it into the pe
   f.controller.beginEditing(0);
   assert.equal(grace.name, "G", "beginning another edit commits the current one");
   assert.equal(f.controller.editedObject.name, "Ada");
-  f.controller.teardown();
+  f.controller.unload();
   assert.equal(f.controller.isEditing(), false);
 });
 
@@ -1893,12 +1983,12 @@ test("a custom select builds its chrome, follows the keyboard and pointer, and r
 
 // ---- notifications and control bindings ----
 
-test("the notification center observes by name until the observation ends, and controllers observe until teardown", () => {
+test("the notification center observes by name until the observation ends, and controllers observe until unload", () => {
   const NotificationCenter = Runtime.resolve("Swill::NotificationCenter");
   const center = NotificationCenter.default();
   assert.equal(NotificationCenter.default(), center, "one default center");
   const seen = [];
-  const stop = center.observe("ping", notification => seen.push([notification.name(), notification.object(), notification.userInfo()]));
+  const stop = center.addObserver("ping", notification => seen.push([notification.name(), notification.object(), notification.userInfo()]));
   const posted = center.post("ping", "poster", {count: 1});
   assert.deepEqual(seen, [["ping", "poster", {count: 1}]]);
   assert.equal(posted.name(), "ping");
@@ -1909,7 +1999,7 @@ test("the notification center observes by name until the observation ends, and c
   const f = peoplePage();
   f.parent.observeNotification("ping", notification => seen.push(notification.userInfo()));
   center.post("ping", null, "alive");
-  f.parent.teardown();
+  f.parent.unload();
   center.post("ping", null, "gone");
   assert.deepEqual(seen.slice(1), ["alive"], "teardown ends a controller's observation");
 });
@@ -1917,7 +2007,7 @@ test("the notification center observes by name until the observation ends, and c
 test("first responder changes are posted as notifications", () => {
   const f = peoplePage();
   const changes = [];
-  const stop = Runtime.resolve("Swill::NotificationCenter").default().observe("first_responder_did_change", notification => {
+  const stop = Runtime.resolve("Swill::NotificationCenter").default().addObserver("first_responder_did_change", notification => {
     changes.push([notification.object() === f.application, notification.userInfo()]);
   });
   f.application.makeFirstResponder(f.controller);
@@ -1948,7 +2038,7 @@ test("bind on a control keeps the control's value equal to the path both ways", 
   field.value = "typed";
   field.dispatchEvent(new Event("input"));
   assert.deepEqual([host.choice, control.value], ["typed", "typed"], "typing in the text field writes the path too");
-  host.teardown();
+  host.unload();
   host.choice = "c";
   assert.equal(control.value, "typed", "teardown releases the binding");
 });
@@ -2081,6 +2171,37 @@ test("relationships load from their URL with a loading flag, and reload refreshe
   assert.deepEqual(plain([ada.name, ada.isDirty]), ["Ada", false]);
   assert.throws(() => ada.relationship("title"), /title is not a relationship/);
   await assert.rejects(new Author().reload(), /reload requires an id/);
+});
+
+test("a relationship that cannot load says so on a property, and is not asked again", async () => {
+  const requests = fakeServer({
+    "GET /api/authors/2": {data: {id: "2", type: "authors", attributes: {name: "Grace"}}}
+  });
+  const grace = await Author.find("2");
+  const states = [];
+  grace.observe("books_error", value => states.push(["error", value]));
+  grace.observe("books_loading", value => states.push(["loading", value]));
+
+  // Reading starts the request; the failure lands on a property a binding
+  // can show, not in a rescue a controller has to write.
+  assert.deepEqual(plain([grace.books, grace.booksLoading, grace.booksError]), [[], true, null]);
+  await settle();
+  assert.deepEqual(plain([grace.booksLoading, grace.isRelationshipLoaded("books"), grace.books]), [false, false, []]);
+  assert.match(grace.booksError, /\/api\/authors\/2\/books/);
+  assert.deepEqual(states.map(([name]) => name), ["loading", "error", "loading"]);
+
+  // A remembered failure is what keeps a re-render from re-requesting.
+  grace.books;
+  grace.books;
+  await settle();
+  assert.equal(requests.length, 2, "one request for the record, one for the relationship");
+
+  // An explicit reload always asks again, and clears the failure first.
+  requests.length = 0;
+  const pending = grace.reloadBooks();
+  assert.deepEqual(plain([grace.booksError, grace.booksLoading]), [null, true]);
+  assert.deepEqual(plain(await pending), [], "a failed reload answers what the relationship holds");
+  assert.equal(requests.length, 1);
 });
 
 test("plain JSON codec, datasets, query parameters, and the wire's base URL", async () => {

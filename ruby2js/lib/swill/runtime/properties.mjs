@@ -12,7 +12,8 @@ function state(object) {
       values: new Map(),
       computed: new Map(),
       observers: new Map(),
-      dependents: new Map()
+      dependents: new Map(),
+      retained: []
     };
 
     states.set(object, current);
@@ -166,7 +167,34 @@ export function observe(object, name, callback) {
   return subscribe(object, name, callback, "observers");
 }
 
-export function dispose(object) {
+// Cocoa's retain: the object claims the disposer and is responsible for
+// letting it go, which it does when it deallocs.
+export function retain(object, disposer) {
+  state(object).retained.push(disposer);
+  return disposer;
+}
+
+// Cocoa's release: give up a claim before the object goes away. A disposer
+// never retained here still ends, as calling it directly would.
+export function release(object, disposer) {
+  const retained = states.get(object)?.retained;
+  const index = retained ? retained.indexOf(disposer) : -1;
+  if (index >= 0) retained.splice(index, 1);
+  disposer();
+}
+
+// End of life: release everything retained, then leave the observation
+// graph. Draining first means nothing an observer does can re-enter.
+export function dealloc(object) {
+  const current = states.get(object);
+  if (current) current.retained.splice(0).forEach(disposer => disposer());
+  disconnect(object);
+}
+
+// Leave the observation graph in both directions: the subscriptions this
+// object's computed properties hold on others, and everything watching this
+// object. Stored values are kept, so the object remains usable.
+export function disconnect(object) {
   const current = states.get(object);
   if (!current) return;
 

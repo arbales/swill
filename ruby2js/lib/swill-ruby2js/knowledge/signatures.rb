@@ -7,8 +7,15 @@ module Swill
     class Knowledge
       private
 
+        # sig { ... }, or T::Sig::WithoutRuntime.sig { ... }, which is the
+        # only way to type a method whose optional parameters come first:
+        # sorbet-runtime refuses to wrap one, though Sorbet checks it.
         def signature?(node)
-          node.type == :block && node.children.first.children[0..1] == [nil, :sig]
+          return false unless node.type == :block
+          call = node.children.first
+          return false unless call.type == :send && call.children[1] == :sig
+          receiver = call.children.first
+          receiver.nil? || (receiver.type == :const && constant(receiver) == "T::Sig::WithoutRuntime")
         end
 
         def signature_parameters(signature)

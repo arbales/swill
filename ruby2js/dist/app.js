@@ -646,6 +646,22 @@
             defaultValue() {
               return false;
             }
+          },
+          "author_loaded": {
+            js: "authorLoaded",
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "author_error": {
+            js: "authorError",
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
           }
         },
         registries: {
@@ -697,6 +713,22 @@
             attribute: false,
             defaultValue() {
               return false;
+            }
+          },
+          "books_loaded": {
+            js: "booksLoaded",
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "books_error": {
+            js: "booksError",
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue() {
+              return null;
             }
           }
         },

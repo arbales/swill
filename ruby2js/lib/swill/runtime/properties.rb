@@ -50,7 +50,7 @@ module Swill
       def state(object)
         current = object.instance_variable_get(:@__swill_state__)
         return current if current
-        current = {values: {}, computed: {}, observers: {}, dependents: {}}
+        current = {values: {}, computed: {}, observers: {}, dependents: {}, retained: []}
         object.instance_variable_set(:@__swill_state__, current)
         # Hooked computed properties stay current.
         declarations(object.class, "properties").each_value do |descriptor|
@@ -163,7 +163,31 @@ module Swill
         subscribe(object, name, callback, :observers)
       end
 
-      def dispose(object)
+      # Cocoa's retain: the object claims the disposer and is responsible for
+      # letting it go, which it does when it deallocs.
+      def retain(object, disposer)
+        state(object)[:retained] << disposer
+        disposer
+      end
+
+      # Cocoa's release: give up a claim before the object goes away.
+      def release(object, disposer)
+        current = object.instance_variable_get(:@__swill_state__)
+        current[:retained].delete(disposer) if current
+        disposer.call
+      end
+
+      # End of life: release everything retained, then leave the observation
+      # graph.
+      def dealloc(object)
+        current = object.instance_variable_get(:@__swill_state__)
+        current[:retained].slice!(0..).each(&:call) if current
+        disconnect(object)
+      end
+
+      # Leave the observation graph in both directions. Stored values are
+      # kept, so the object remains usable.
+      def disconnect(object)
         current = object.instance_variable_get(:@__swill_state__)
         return unless current
         current[:computed].each_value { |slot| slot[:disposers].slice!(0..).each(&:call) }

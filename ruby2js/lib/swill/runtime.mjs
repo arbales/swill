@@ -10,7 +10,7 @@ import {
   resolve,
   nameOf
 } from "./runtime/install.mjs";
-import {observe, dispose} from "./runtime/properties.mjs";
+import {observe, retain, release, dealloc, disconnect} from "./runtime/properties.mjs";
 import {
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate,
   isBlank, isPresent, isEmpty,
@@ -62,7 +62,7 @@ export const Runtime = {
   respondsTo, invoke, performAction,
 
   // Observation
-  observe, observePath, dispose,
+  observe, observePath, retain, release, dealloc, disconnect,
 
   // Declarations
   isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
