@@ -129,7 +129,7 @@ The initial kernel and DOM-boundary spike is complete and verified:
   `Control::CustomSelect` as a stylable listbox control, and the inline
   editor as delegate of its controls, so a refused commit keeps focus in
   the control;
-- the static example (16 September 2026, item 7.1): `examples/static` ports
+- the static example (16 September 2026, item 7.1): `examples/rb/static` ports
   the Opal static example (`examples/opal/static/app.rb`) in full but for its
   backend search, on top of
   `Swill::NotificationCenter` (post, `add_observer`, a controller's
@@ -208,7 +208,7 @@ compiles a Ruby application. The binary comes first; gem packaging later.
   statement blocks yielding their last expression, arithmetic typing, and
   the build validating the framework interface it hands an application.
 
-- the gem (20 September 2026): `swill-ruby2js.gemspec` ships the compiler,
+- the gem (20 September 2026): `swill.gemspec` ships the compiler,
   the framework's Ruby, the JavaScript runtime, a prebuilt `swill.js`, the
   handwritten runtime RBI, and the `swill` command, so an application builds
   and typechecks with no checkout of this repository. `swill types` writes
@@ -339,7 +339,7 @@ For every roadmap item:
 
 8. Regenerate and review both readable and minified artifacts, including source
    maps and bundle-size output.
-9. Update `ruby2js/docs/compiler.md` when the supported boundary changes.
+9. Update `docs/compiler.md` when the supported boundary changes.
 
 ## Decision Checkpoints
 

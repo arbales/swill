@@ -9,3 +9,10 @@ __pycache__/
 .zed/
 tmp/
 custom_template_idea.swib
+/.bundle/
+/vendor/
+/build/
+/sorbet/rbi/generated.rbi
+/sorbet/rbi/dom.rbi
+/sorbet/checks/
+/*.gem

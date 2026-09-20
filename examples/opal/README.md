@@ -14,7 +14,7 @@ dropped with it.
 | `static/app.rb` (327 lines) | The UI surface with no backend: panes, bindings, controls, editing, notifications |
 | `giraffic/app.rb` (436 lines) | The backend-backed flow: JSON:API models, datasets, persistence, relationships |
 
-`static/` is already ported, as `ruby2js/examples/static.rb`. `giraffic/` is not,
+`static/` is already ported, as `examples/rb/static.rb`. `giraffic/` is not,
 and PLAN.md names a Giraffic flow as a target, so its Ruby is the closest thing
 to a specification for that work.
 

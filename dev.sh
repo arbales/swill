@@ -31,7 +31,7 @@ echo "$$" > "$PIDFILE"
 
 # Safety net: kill orphan watchers that match our cmdline pattern, in case
 # a previous run was killed with -9 and left no pidfile to clean up.
-ORPHANS="$(pgrep -f 'esbuild .*examples/movies/index.ts examples/giraffic/giraffic.ts examples/breweries/breweries.ts.* --watch=forever' || true)"
+ORPHANS="$(pgrep -f 'esbuild .*examples/ts/movies/index.ts examples/ts/giraffic/giraffic.ts examples/ts/breweries/breweries.ts.* --watch=forever' || true)"
 if [ -n "$ORPHANS" ]; then
   echo "killing orphan esbuild watchers: $ORPHANS"
   echo "$ORPHANS" | xargs kill -9 2>/dev/null || true
@@ -46,10 +46,10 @@ if [ -n "$PYTHON_ORPHANS" ]; then
 fi
 
 # Initial build so the first browser hit doesn't 404 if it beats --watch.
-./build.sh
+./ts/build.sh
 
 # Watch in the background; foreground the static/proxy server for visible logs.
-./build.sh --watch &
+./ts/build.sh --watch &
 ESBUILD_PID=$!
 echo "$ESBUILD_PID" > "$ESBUILD_PIDFILE"
 
@@ -68,10 +68,10 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 echo
-echo "  http://localhost:$PORT/examples/movies/demo.html    (Movies)"
-echo "  http://localhost:$PORT/examples/giraffic/giraffic.html    (Giraffic)"
-echo "  http://localhost:$PORT/examples/breweries/breweries.html    (Breweries)"
-echo "  http://localhost:$PORT/examples/static/static.html    (Static)"
+echo "  http://localhost:$PORT/examples/ts/movies/demo.html    (Movies)"
+echo "  http://localhost:$PORT/examples/ts/giraffic/giraffic.html    (Giraffic)"
+echo "  http://localhost:$PORT/examples/ts/breweries/breweries.html    (Breweries)"
+echo "  http://localhost:$PORT/examples/ts/static/static.html    (Static)"
 echo "  dev coordinator pid: $$  (recorded in $PIDFILE)"
 echo "  esbuild --watch pid: $ESBUILD_PID  (recorded in $ESBUILD_PIDFILE)"
 echo "  python dev server pid: $PYTHON_PID  (recorded in $PYTHON_PIDFILE)"

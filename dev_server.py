@@ -36,7 +36,7 @@ class SketchesHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         if self.path in ("/", "/breweries"):
-            self.redirect("/examples/breweries/breweries.html")
+            self.redirect("/examples/ts/breweries/breweries.html")
             return
         super().do_HEAD()
 
@@ -57,7 +57,7 @@ class SketchesHandler(SimpleHTTPRequestHandler):
             self.proxy_giraffic()
             return
         if self.path in ("/", "/breweries"):
-            self.redirect("/examples/breweries/breweries.html")
+            self.redirect("/examples/ts/breweries/breweries.html")
             return
         super().do_GET()
 

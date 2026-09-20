@@ -1,0 +1,73 @@
+# Swill
+
+A weird Cocoa-inspired highly object-oriented library that likely "seems bad."
+
+You can see the [brewery demo app on heroku.](https://secret-escarpment-65845-6e3cf8eddee5.herokuapp.com/) I still use and appreciate Heroku.
+
+Current version: see `../VERSION`. This is not an npm package.
+
+## Usage
+
+1. clone this
+2. open `../examples/ts/static/static.html` to use pre-built swill.
+3. run `../dev.sh` from the repository root
+5. navigate to `localhost:3000/examples/ts/breweries/breweries.html`
+
+The other examples probably won't work for you. 
+
+### Dependencies
+
+* `esbuild` is required. you can brew install it or whatever
+* You need python3 to run the python proxy server.
+* `tsc` is useful for typechecking.
+
+## Interesting...
+
+I don't enjoy Javascript at all anymore, and this project might be evidence of that.
+I also don't enjoy passing HTML fragments around, because I've tried that and its confusing.
+Nor do I want my side projects to smell, taste or have a hint of anything React.
+There will be no NPM packages, no dependencies. There will be files and objects.
+And, there will be things on String that String should have. 
+
+Performance you ask?! Yes, Swill performs -- with majesty.
+
+Maybe I should try Pheonix LiveView? Maybe.
+But I'm going to continue writing Ruby without Rails things.
+
+I regret using Typescript for this, there's so much mumbo jumbo in Typescript.
+The active experiment is now the [Ruby2JS implementation](../README.md), which
+lives in `rb/` while this one lives in `ts/`. It compiles
+the Ruby-authored framework without shipping a Ruby runtime, and its browser
+bundle can also be used directly from plain JavaScript with no build step.
+
+### But there's been so much progress since the mid 2010s!?!
+
+And yet, you still cant camelize a string in JavaScript. 
+
+### "This is bad, but at least you vibe-coded it, so it's not really your fault."
+
+IT IS my fault. I would like to take credit for many the decisions you object to; 
+but you should credit the agents for the code they wrote. 
+
+## Usage
+
+Put a script tag in your layout that loads the framework.
+Write markup on pages and load them from a server.
+Load other things on the side if you want.
+
+## Stuff
+
+### Bindings
+### Computed Properties
+### The Responder Chain
+
+## Framework Docs
+
+These documents describe the TypeScript implementation. See the
+[Ruby2JS README](../README.md) for the active implementation's current
+surface, plain JavaScript API, setup, and checks.
+
+- [Awakening, Hydration, and Templates](docs/awakening.md)
+- [Bindings](docs/bindings.md)
+- [Lifecycle](docs/lifecycle.md)
+- [Models and Relationships](docs/models.md)

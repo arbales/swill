@@ -1,13 +1,23 @@
 AllCops:
+  SuggestExtensions: false
   TargetRubyVersion: 3.4
   NewCops: enable
   Exclude:
-    - ruby2js/sorbet/**/*
+    - sorbet/**/*
+    - spec/**/*
+    - vendor/**/*
+    - benchmark/**/*
+    - tmp/**/*
+    - example/**/*
 Metrics:
   Enabled: false
 Lint/UnderscorePrefixedVariableName:
   Enabled: false
 Lint/AssignmentInCondition:
+  Enabled: false
+Style/OneClassPerFile:
+  Enabled: false
+Style/StringLiterals:
   Enabled: false
 Style/BlockDelimiters:
   Enabled: false
