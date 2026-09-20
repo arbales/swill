@@ -200,6 +200,19 @@ module Swill
       # Indexed collections: value[index] yields this element type.
       INDEXED = {"HTMLCollection" => "Element", "NodeList" => "Element"}.freeze
 
+      # Members called on the class rather than an instance:
+      # [result type, parameters]. Promise's combinators are the ones
+      # framework and application code reach for.
+      STATICS = {
+        "Promise" => {
+          "all" => ["Promise[T::Array[T.untyped]]", "values: T::Array[T.untyped]"],
+          "allSettled" => ["Promise[T::Array[T.untyped]]", "values: T::Array[T.untyped]"],
+          "race" => ["Promise[T.untyped]", "values: T::Array[T.untyped]"],
+          "resolve" => ["Promise[T.untyped]", "value?: T.untyped"],
+          "reject" => ["Promise[T.untyped]", "reason?: T.untyped"]
+        }
+      }.freeze
+
       # Browser functions called bare, as Kernel methods are: [result, params].
       # A class that defines a method of the same name keeps its own.
       GLOBALS = {
@@ -229,6 +242,11 @@ module Swill
 
       def self.native?(name)
         CLASSES.key?(name)
+      end
+
+      # A class-level member's [type, params], or nil.
+      def self.static_member(klass, name)
+        STATICS.dig(klass.to_s, name.to_s)
       end
 
       # The member's [kind, type] along the class chain, or nil.
@@ -263,6 +281,10 @@ module Swill
           if (element = INDEXED[name])
             lines << "  sig { params(index: Integer).returns(#{element}) }"
             lines << "  def [](index); end"
+          end
+          STATICS.fetch(name, {}).each do |member, (type, params)|
+            lines << "  sig { #{signature(params, rbi_type(type))} }"
+            lines << "  def self.#{member}(#{parameters(params)}); end"
           end
           members.each do |member, (kind, type, params)|
             case kind

@@ -208,17 +208,33 @@ compiles a Ruby application. The binary comes first; gem packaging later.
   statement blocks yielding their last expression, arithmetic typing, and
   the build validating the framework interface it hands an application.
 
-## Immediate Next Slice: Gem Packaging and Consumer Typing
+- the gem (20 September 2026): `swill-ruby2js.gemspec` ships the compiler,
+  the framework's Ruby, the JavaScript runtime, a prebuilt `swill.js`, the
+  handwritten runtime RBI, and the `swill` command, so an application builds
+  and typechecks with no checkout of this repository. `swill types` writes
+  the Sorbet artifacts beside an application's entry — the framework's RBI,
+  the DOM's, the runtime's, the application's own accessors, its declaration
+  checks, and a config if none exists — and the bar port typechecks clean
+  through it. The framework interface is compiled on demand rather than
+  shipped precomputed: 0.16s against a 0.25s build, so precomputing would buy
+  nothing and could go stale.
 
-The bar frontend is ported (item 7.2). Next: the gem. It must carry the
-built `swill.js`, the precomputed framework interface, and the generated
-RBIs with a `sorbet/config` template, so an application typechecks and
-builds without the framework checkout. Questions the port raised, to
-decide then: short markup aliases for framework controllers
-(`controller="List"`), and whether `@` in a nested controller's region
-should ever reach the page (the port answered with `@parent.`, and the
-strict rule stands). The static example's brewery search comes back with
-the dataset step.
+## Immediate Next Slice: Undecided
+
+The gem is packaged and both application checkpoints are answered, so the
+next slice is a choice rather than a queue. Candidates, none started:
+
+- publish: Ruby2JS must release the Pragma filter this compiler extends
+  before the gem can depend on a published `ruby2js`, and a CDN needs a
+  versioned `swill.js`;
+- the three designs the Opal port had and this one does not: a typed command
+  boundary, `html_attribute`, and `EditableList::Persistence`;
+- the questions the bar port raised: short markup aliases for framework
+  controllers (`controller="List"`), and whether `@` in a nested controller's
+  region should ever reach the page (the port answered with `@parent.`, and
+  the strict rule stands);
+- the static example's brewery search, deferred to the dataset step and now
+  unblocked.
 
 ## Ordered Roadmap
 
@@ -386,11 +402,19 @@ Recorded so they are fixed deliberately rather than rediscovered:
   method table, which registration fills only from `static actions`. Fix by
   registering hook methods; compiled members are camelCase, so the names
   already match (September 2026).
-- Safe navigation (`&.`) is rejected on the shared surface (September 2026):
-  the send lowerings would keep the call and drop the guard, and JavaScript's
-  `?.` yields `undefined` where Ruby yields `nil`. Lower it to a guarded form
-  that yields `null` once a use appears; a DOM-typed receiver keeps native
-  `?.`.
+- Safe navigation (`&.`) is lowered on a receiver whose member the compiler
+  resolves statically (20 September 2026): a declared property reads, a
+  collected method is called, and each hop guards the next. A core value type
+  and an untyped receiver are still rejected, because both lower through
+  helpers that take the receiver as an argument, which `?.` cannot guard.
+  Two pipeline facts shaped it. A node comparing equal by value to the source
+  node is replaced by that original, whose location then decides whether the
+  converter renders a call or a property read, so a lowering that changes only
+  the location silently loses; wrapping the result keeps it distinct. And
+  `?.` answers `undefined` where Ruby answers `nil`, so the result passes
+  through `Runtime.nilable`, which is also a node type autoreturn accepts,
+  where `:nullish` is not. A DOM receiver keeps plain `?.`: those are
+  JavaScript values, and the compiler already types them as such.
 - The core value type tables (`filters/core_types.rb`) cover common methods
   and blocks; a method outside them is a build error. Grow the tables as
   real code needs them, each entry with its MRI comparison.

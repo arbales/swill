@@ -12,7 +12,7 @@ import {
 } from "./runtime/install.mjs";
 import {observe, retain, release, dealloc, disconnect} from "./runtime/properties.mjs";
 import {
-  isTruthy, logicalAnd, logicalOr, isEqual, duplicate,
+  isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase,
   valueRead, NIL_READERS, VALUE_READERS,
@@ -41,7 +41,7 @@ export const Runtime = {
   inheritableRegistry, classSetting, classWithSetting, identityStore, resolve, nameOf,
 
   // Values
-  isTruthy, logicalAnd, logicalOr, isEqual, duplicate,
+  isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase, valueRead,
   decodeFragment, encodeFragment, NIL_READERS, VALUE_READERS,

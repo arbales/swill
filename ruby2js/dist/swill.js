@@ -55,8 +55,12 @@
   function logicalOr(left, right) {
     return isTruthy(left) ? left : right();
   }
+  function nilable(value) {
+    return value === void 0 ? null : value;
+  }
   function isEqual(left, right) {
     if (left === right) return true;
+    if (left == null && right == null) return true;
     return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => isEqual(value, right[index]));
   }
   function isPlainObject(value) {
@@ -928,8 +932,8 @@
     throw new TypeError(`T.absurd reached with ${describe(value)}`);
   }
   function conforms(value, type) {
-    const nilable = /^T\.nilable\((.+)\)$/.exec(type);
-    if (nilable) return value == null || conforms(value, nilable[1]);
+    const nilable2 = /^T\.nilable\((.+)\)$/.exec(type);
+    if (nilable2) return value == null || conforms(value, nilable2[1]);
     if (type.startsWith("T.proc")) return typeof value === "function";
     switch (type) {
       case "T.untyped":
@@ -1024,6 +1028,7 @@
     logicalOr,
     isEqual,
     duplicate,
+    nilable,
     isBlank,
     isPresent,
     isEmpty,
@@ -1470,8 +1475,7 @@
     // TODO: It's unclear to me that this is the right place to handle this bubbling.
     actionTarget(name) {
       if (Runtime.isTruthy(Runtime.respondsTo(this, name))) return this;
-      let target = this.nextResponder();
-      return target ? target.actionTarget(name) : null;
+      return Runtime.nilable(this.nextResponder()?.actionTarget(name));
     }
     acceptsFirstResponder() {
       return false;
@@ -1546,8 +1550,7 @@
     owner() {
       let own = this._controller;
       if (own) return own;
-      let superview = this._superview;
-      return superview ? superview.owner() : null;
+      return Runtime.nilable(this._superview?.owner());
     }
     adoptSubview(child) {
       let previous = child.superview();
@@ -1985,8 +1988,7 @@
     }
     // Ownership is derived from the sparse view tree and never stored twice.
     parent() {
-      let superview = this._view.superview();
-      return superview ? superview.owner() : null;
+      return Runtime.nilable(this._view.superview()?.owner());
     }
     // Direct child controllers in tree order.
     childControllers() {
@@ -3389,8 +3391,7 @@
     }
     // Where rows mount.
     container() {
-      let mount = this.rows;
-      return mount ? mount.element() : this._view.element();
+      return Runtime.nilable(this.rows?.element()) || this._view.element();
     }
     containerView() {
       let mount = this.rows;

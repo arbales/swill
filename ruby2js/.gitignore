@@ -5,3 +5,4 @@
 /sorbet/rbi/generated.rbi
 /sorbet/checks/
 /sorbet/rbi/dom.rbi
+/*.gem

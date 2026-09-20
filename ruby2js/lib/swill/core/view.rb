@@ -50,8 +50,7 @@ module Swill
     def owner
       own = @controller
       return own if own
-      superview = @superview
-      superview ? superview.owner() : nil
+      @superview&.owner
     end
 
     sig { params(child: View).returns(View) }

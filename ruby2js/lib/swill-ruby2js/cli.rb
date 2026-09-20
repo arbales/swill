@@ -13,11 +13,18 @@ module Swill
         Usage:
           swill build [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
+          swill types [ENTRY] [--into DIR]
 
         ENTRY is a Ruby file, or a directory holding app.rb (default: .).
         The entry's require_relative lines name the sources, in order.
         Output defaults to dist/app.js beside the entry; --with-framework
         copies swill.js next to it for pages that do not load it from a CDN.
+
+        `types` writes the Sorbet artifacts an application needs to typecheck
+        itself — the framework's RBI, the DOM's, the runtime's, its own
+        declared accessors, and the checks for its declaration expressions —
+        into sorbet/ beside the entry, with a sorbet/config if none exists.
+        Run `srb tc` from that directory afterwards.
       TEXT
 
       def self.start(argv)
@@ -32,6 +39,7 @@ module Swill
           opts.on("--minify") { options[:minify] = true }
           opts.on("--with-framework") { options[:framework] = true }
           opts.on("--interval SECONDS", Float) { |seconds| options[:interval] = seconds }
+          opts.on("--into DIR") { |dir| options[:into] = dir }
         end
         arguments = parser.parse(rest)
         case command
@@ -40,6 +48,9 @@ module Swill
           0
         when "watch"
           watch(arguments.first || ".", options)
+          0
+        when "types"
+          types(arguments.first || ".", options)
           0
         else
           $stderr.puts USAGE
@@ -58,6 +69,15 @@ module Swill
         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
         puts format("swill: built %s (%d sources, %.1fs)", output, build.sources.length, elapsed)
         build
+      end
+
+      def types(entry, options)
+        build = Build.new(entry)
+        written = build.types(options[:into])
+        root = File.dirname(written.first)
+        puts format("swill: wrote %d Sorbet files under %s", written.length, File.dirname(root))
+        puts "swill: run `srb tc` from #{File.dirname(File.dirname(root))}"
+        written
       end
 
       # Polls the sources' modification times; no dependency on a file

@@ -7,3 +7,7 @@ gem "sorbet"
 gem "sorbet-runtime"
 gem "rake"
 gem "minitest"
+group :development do
+  gem "ruby-lsp"
+  gem "rubocop"
+end

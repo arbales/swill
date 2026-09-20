@@ -324,6 +324,10 @@ module Swill
             receiver, method, *call_args = call.children
             return nil unless receiver && call_args.empty?
             core_block_result_type(static_type(receiver), method)
+          when :csend
+            # Safe navigation answers nil when the receiver is, so whatever
+            # the member yields, the expression is nilable.
+            nilable_of(static_type(node.updated(:send)))
           when :send
             return sorbet_operation_type(node) if SorbetOperations.operation?(node)
             receiver, method, *args = node.children
@@ -336,7 +340,10 @@ module Swill
             if receiver&.type == :const
               constant = @knowledge.constant(receiver)
               if DOM.native?(constant) || JS_INTRINSICS.include?(constant)
-                return method == :new ? constant : native_member_type(constant, method)
+                return constant if method == :new
+                static = DOM.static_member(constant, method)
+                return static[0] if static
+                return native_member_type(constant, method)
               end
               klass = swill_class(constant)
               return klass if klass && method == :new

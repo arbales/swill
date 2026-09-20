@@ -194,8 +194,7 @@ module Swill
     # Where rows mount.
     sig { returns(Element) }
     def container
-      mount = self.rows
-      mount ? mount.element : @view.element
+      self.rows&.element || @view.element
     end
 
     sig { returns(View) }

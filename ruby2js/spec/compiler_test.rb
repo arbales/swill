@@ -662,16 +662,81 @@ class CompilerTest < Minitest::Test
     assert_includes js, 'Runtime.read(Runtime.must(node), "size")', "an untyped receiver stays dynamic after T.must"
   end
 
-  # On a Ruby receiver a csend would reach the send lowerings and come out
-  # as a plain call; on a DOM receiver ?. is JavaScript's own.
-  def test_safe_navigation_is_rejected_on_ruby_receivers_and_native_on_dom_ones
-    error = assert_raises(Swill::Ruby2JS::CompileError) do
-      javascript("extend T::Sig\nproperty :other, type: T.nilable(Example), default: nil\nsig { returns(T.untyped) }\ndef go; other&.go; end")
+  # Safe navigation is JavaScript's own ?. wherever the compiler resolves the
+  # member statically: a declared property, a collected method, a DOM member.
+  # A property reads and a method is called, as they are without the guard.
+  def test_safe_navigation_guards_statically_resolved_members
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Leaf < TestObject
+        extend T::Sig
+        property :tag, type: String, default: "leaf"
+        property :other, type: T.nilable(Leaf), default: nil
+        sig { returns(String) }
+        def label; tag.upcase; end
+      end
+      class Holder < TestObject
+        extend T::Sig
+        property :leaf, type: T.nilable(Leaf), default: nil
+        sig { void }
+        def initialize
+          super()
+          @held = T.let(nil, T.nilable(Leaf))
+        end
+        sig { params(leaf: T.nilable(Leaf)).void }
+        def hold(leaf); @held = leaf; end
+        sig { returns(T.nilable(String)) }
+        def property_of_property; leaf&.tag; end
+        sig { returns(T.nilable(String)) }
+        def method_of_property; leaf&.label; end
+        sig { returns(T.nilable(String)) }
+        def property_of_ivar; @held&.tag; end
+        sig { returns(T.nilable(String)) }
+        def method_of_ivar; @held&.label; end
+        sig { returns(T.nilable(String)) }
+        def chained; @held&.other&.tag; end
+        sig { returns(String) }
+        def title; @held&.label || "none"; end
+        sig { params(element: T.nilable(Element)).void }
+        def detach(element); element&.remove(); end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "return Runtime.nilable(this.leaf?.tag);", "a property of a property"
+    assert_includes js, "return Runtime.nilable(this.leaf?.label());", "a method of a property"
+    assert_includes js, "return Runtime.nilable(this._held?.tag);", "a property of an instance variable"
+    assert_includes js, "return Runtime.nilable(this._held?.label());", "a method of an instance variable"
+    assert_includes js, "return Runtime.nilable(this._held?.other?.tag);", "each hop guards the next, normalized once"
+    assert_includes js, "element?.remove()", "a DOM member"
+    assert_equal [[nil, nil, nil, nil, nil, "none"], ["leaf", "LEAF", "leaf", "LEAF", nil, "LEAF"],
+                  ["leaf", "LEAF", "leaf", "LEAF", "deep", "LEAF"]], execute(js + <<~JS)
+      const read = holder => [holder.propertyOfProperty(), holder.methodOfProperty(),
+        holder.propertyOfIvar(), holder.methodOfIvar(), holder.chained(), holder.title()];
+      const holder = new Holder();
+      const empty = read(holder);
+      const leaf = new Leaf();
+      holder.leaf = leaf;
+      holder.hold(leaf);
+      const held = read(holder);
+      const deep = new Leaf();
+      deep.tag = "deep";
+      leaf.other = deep;
+      console.log(JSON.stringify([empty, held, read(holder)]));
+    JS
+    # nil answers nil to everything that asks, whatever JavaScript calls it.
+    assert_equal [true, true, false, true], execute(js + <<~JS)
+      const value = new Holder().methodOfIvar();
+      console.log(JSON.stringify([value == null, Runtime.isEqual(value, null),
+        Runtime.isTruthy(value), Runtime.read(value, "nil?")]));
+    JS
+    [
+      ["sig { params(other: T.untyped).returns(T.untyped) }\ndef go(other); other&.go; end",
+       "not lowered on an untyped receiver"],
+      ["sig { params(text: T.nilable(String)).returns(T.untyped) }\ndef go(text); text&.upcase; end",
+       "not lowered on a T.nilable(String) receiver"]
+    ].each do |body, message|
+      error = assert_raises(Swill::Ruby2JS::CompileError, body) { javascript("extend T::Sig\n#{body}") }
+      assert_includes error.message, message
     end
-    assert_includes error.message, "safe navigation (&.) is not lowered on a Ruby receiver"
-    compiler = Swill::Ruby2JS::Compiler.new
-    compiler.add("class Leaf\nextend T::Sig\nsig { params(other: T.nilable(Element)).void }\ndef go(other); other&.remove(); end\nend")
-    assert_includes compiler.javascript(runtime: "../lib/swill/runtime.mjs"), "other?.remove()"
   end
 
   def test_other_sorbet_constructs_and_uncheckable_types_are_rejected

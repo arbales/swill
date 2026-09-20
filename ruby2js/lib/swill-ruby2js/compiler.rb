@@ -4,7 +4,19 @@
 require "json"
 require "open3"
 require "ruby2js"
-require "ruby2js/filter/pragma"
+begin
+  require "ruby2js/filter/pragma"
+rescue LoadError
+  # Ruby2JS 5.1.2 as published does not carry the Pragma filter this compiler
+  # extends; the version on master does, under the same version number. Say so
+  # here rather than failing later on an uninitialized constant.
+  raise LoadError, <<~MESSAGE
+    swill needs the Pragma filter, which is not in any released ruby2js.
+    Add the git source to your Gemfile alongside the gem:
+
+      gem "ruby2js", git: "https://github.com/ruby2js/ruby2js.git", branch: "master"
+  MESSAGE
+end
 require "ruby2js/filter/return"
 require_relative "names"
 require_relative "knowledge"

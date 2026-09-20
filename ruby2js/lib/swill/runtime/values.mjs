@@ -18,8 +18,19 @@ export function logicalOr(left, right) {
 }
 
 // Arrays compare recursively; framework objects retain identity.
+// Optional chaining yields undefined where Ruby yields nil, so a safe
+// navigation's result passes through here. Nothing else in the framework
+// answers undefined, and JSON.stringify drops it where it keeps null.
+export function nilable(value) {
+  return value === undefined ? null : value;
+}
+
 export function isEqual(left, right) {
   if (left === right) return true;
+  // An unset expando (__swill_view__ on an element the framework has not
+  // touched) reads as undefined where the rest of the runtime says null.
+  // Both spell nothing.
+  if (left == null && right == null) return true;
 
   return Array.isArray(left) &&
     Array.isArray(right) &&

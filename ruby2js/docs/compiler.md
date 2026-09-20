@@ -521,6 +521,7 @@ the runtime is reached only where a fact is genuinely unavailable.
 | `T.must(expression)` | The expression's type without `T.nilable`; none when the expression is `nil` or untyped |
 | `T.cast(expression, Type)`, `T.let(expression, Type)`, `T.assert_type!(expression, Type)` | `Type`, as written |
 | `T.unsafe(expression)` | `T.untyped`, so sends on it are dynamic |
+| `receiver&.member` | What the member yields, made nilable: the expression is nil when the receiver is |
 
 Nilable wrappers are unwrapped where the rule says "class type". Anything not
 listed has no static type.
@@ -572,6 +573,10 @@ For `receiver.name(args)` where the receiver is not `self`:
 | A class object | `new(args)` | `new receiver(args)` |
 | A JavaScript intrinsic or DOM class named as the receiver (`JSON`, `Promise`, `Math`) | Anything but `new` | Native; `JSON.generate` is `JSON.stringify` |
 | Any | `is_a?(Array)`, `kind_of?(Array)`, `instance_of?(Array)` | `Array.isArray(receiver)`, so an array from another realm (a page's JSON) counts |
+| Framework class | `receiver&.name` for a declared property | `Runtime.nilable(receiver?.name)` |
+| Framework class | `receiver&.name(args)` for a collected method | `Runtime.nilable(receiver?.name(args))` |
+| DOM class | `receiver&.name` | `receiver?.name`, JavaScript's own, since a DOM value is a JavaScript value |
+| Core value type, unknown, or `T.untyped` | `receiver&.name` | Rejected: these lower through helpers that take the receiver as an argument, which `?.` cannot guard |
 | Core collection | A block of several statements | The block's last expression is its value, as in Ruby: the body compiles with an explicit return (the converter alone returns only single-expression bodies) |
 | DOM class or untyped JavaScript value | Anything | Native, per [Native types](#native-types) |
 | Any | `nil?` | `receiver == null` |
@@ -696,6 +701,23 @@ and `raise variable` are rejected. `begin`/`rescue => error`/`ensure` is the
 converter's `try`/`catch`/`finally`; the rescued variable is typed `Error`,
 so `error.message` is a native read. Rescuing a named class is outside the
 boundary: a thrown value is whatever JavaScript threw.
+
+### Safe navigation
+
+`receiver&.member` is lowered wherever the compiler resolves the member
+statically: a declared property reads, a collected method is called, and each
+hop guards the next, so `recipe&.detail&.glassware` is one expression. A core
+value type and an untyped receiver are rejected, because both lower through
+helpers that take the receiver as an argument, and `?.` cannot guard an
+argument.
+
+Two things about the output are deliberate. The result passes through
+`Runtime.nilable`, because JavaScript's optional chaining answers `undefined`
+where Ruby answers `nil`, and `undefined` is a second spelling of nothing that
+would leak to application JavaScript and disappear from `JSON.stringify`. A
+chain normalizes once, at the end. And a DOM receiver keeps plain `?.`
+without that wrapper: those are JavaScript values, which the compiler already
+types as such.
 
 ## Runtime reference
 

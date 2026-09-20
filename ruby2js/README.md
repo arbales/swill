@@ -487,6 +487,67 @@ output) before `app.js`, and names its application with
 `<body application="...">`. `esbuild` must be on the path; a source map is
 written beside the output.
 
+### Installing as a gem
+
+The gem carries the compiler, the framework's Ruby, the JavaScript runtime,
+a prebuilt `swill.js`, and the `swill` command, so an application needs no
+checkout of this repository. Install it from the repository with Bundler:
+
+```ruby
+# Gemfile
+gem "swill-ruby2js", github: "arbales/swill", glob: "ruby2js/*.gemspec"
+gem "ruby2js", git: "https://github.com/ruby2js/ruby2js.git", branch: "master"
+```
+
+The `glob` is needed only while the gemspec sits in `ruby2js/` rather than at
+the repository root, which it will eventually move to.
+
+Both lines are required. This compiler extends Ruby2JS's Pragma filter, which
+no released `ruby2js` carries: 5.1.2 on rubygems does not have it, and the
+version on master reports that same number. The gem declares the dependency,
+but only the consumer's Gemfile can point it at the git source, so a Gemfile
+with the first line alone resolves to a `ruby2js` that cannot work. Loading
+the compiler without the filter raises a `LoadError` saying so. For the same
+reason the gem cannot go to rubygems.org, and its `allowed_push_host` is set
+to refuse a push until that changes.
+
+To build and install it by hand instead:
+
+```sh
+gem build swill-ruby2js.gemspec
+gem install ./swill-ruby2js-0.0.1.gem
+```
+
+The framework's interface is compiled from its sources on demand rather than
+shipped prebuilt: it costs about 0.16s per process, against a whole
+application build of roughly 0.25s, so precomputing it would buy nothing and
+could go stale.
+
+### Typing an application
+
+`swill types` writes the Sorbet artifacts an application needs to check
+itself:
+
+```sh
+swill types frontend        # writes frontend/sorbet/, then run srb tc there
+```
+
+| File | What it carries |
+| --- | --- |
+| `sorbet/rbi/application.rbi` | The accessors the application's own declarations create |
+| `sorbet/rbi/swill.rbi` | The same for the framework's classes |
+| `sorbet/rbi/swill-dom.rbi` | The DOM and the browser globals, from `knowledge/dom.rb` |
+| `sorbet/rbi/swill-runtime.rbi` | The runtime and declaration-macro boundary, handwritten |
+| `sorbet/checks/declarations.rb` | Each declaration expression as a typed method, so defaults and computed blocks are checked |
+| `sorbet/config` | Written only if absent; an existing one is the application's own |
+
+The config lists the application's sources, the framework's Ruby (where its
+methods and macros are declared), and the generated RBIs. The framework's MRI
+host is described by `swill-runtime.rbi` rather than checked as source, since
+checking both would declare the declaration macros twice. Because the config
+names absolute paths into the installed gem, it is regenerated rather than
+committed.
+
 ### Application ports
 
 The "bar" application (`~/Workspace/bar`, a Roda API with a TypeScript

@@ -45,19 +45,30 @@ module Swill
         found
       end
 
-      # The framework's interface, compiled from its sources once per process.
-      def self.framework
-        @framework ||= begin
+      # The framework, compiled from its sources once per process. Validation
+      # spells every signature type out in full, which an application compiled
+      # elsewhere depends on.
+      def self.framework_compiler
+        @framework_compiler ||= begin
           compiler = Compiler.new(loader: Loader.framework)
           FRAMEWORK_SOURCES.each do |path|
             file = File.join(ROOT, path)
             compiler.add(File.read(file), file: file)
           end
-          # Validation spells every signature type out in full, which an
-          # application compiled elsewhere depends on.
           compiler.validate!
-          compiler.knowledge.interface
+          compiler
         end
+      end
+
+      # The framework's interface: what an application compiles against.
+      def self.framework
+        @framework ||= framework_compiler.knowledge.interface
+      end
+
+      # The handwritten RBI for the runtime and declaration boundary, shipped
+      # with the gem.
+      def self.runtime_rbi
+        File.join(ROOT, "sorbet", "rbi", "runtime.rbi")
       end
 
       # The framework bundle shipped with this build of the compiler.
@@ -82,7 +93,61 @@ module Swill
         out
       end
 
+      # Sorbet artifacts for the application, written beside the entry so a
+      # consumer can `srb tc` their own sources without the framework
+      # checkout. The framework's RBI is regenerated rather than shipped
+      # prebuilt: it costs a fraction of a second and cannot go stale.
+      def types(directory = nil)
+        root = File.expand_path(directory || File.dirname(entry))
+        framework = self.class.framework_compiler
+        application = Compiler.new(imports: framework.knowledge.interface)
+        sources.each { |file| application.add(File.read(file), file: file) }
+        application.validate!
+
+        rbi = File.join(root, "sorbet", "rbi")
+        checks = File.join(root, "sorbet", "checks")
+        FileUtils.mkdir_p(rbi)
+        FileUtils.mkdir_p(checks)
+        written = {
+          File.join(rbi, "swill.rbi") => framework.rbi,
+          File.join(rbi, "swill-dom.rbi") => DOM.rbi,
+          File.join(rbi, "swill-runtime.rbi") => File.read(self.class.runtime_rbi),
+          File.join(rbi, "application.rbi") => application.rbi,
+          File.join(checks, "declarations.rb") => application.type_probes
+        }
+        written.each { |file, source| File.write(file, source) }
+        config = File.join(root, "sorbet", "config")
+        unless File.file?(config)
+          File.write(config, sorbet_config(root))
+          written[config] = nil
+        end
+        written.keys
+      end
+
     private
+
+      # The application's own sources, the artifacts written beside them, and
+      # the framework's Ruby, which is where its methods and declaration
+      # macros are declared. Files are listed one by one rather than by
+      # directory, so nothing is read twice: a directory covering the project
+      # would also cover sorbet/rbi.
+      def sorbet_config(root)
+        relative = lambda do |path|
+          path.start_with?("#{root}/") ? path.delete_prefix("#{root}/") : path
+        end
+        [
+          *sources.map { |file| relative.(file) },
+          # The framework's MRI host is described by swill-runtime.rbi
+          # instead, so checking both would declare its macros twice.
+          *FRAMEWORK_SOURCES.map { |path| File.join(ROOT, path) },
+          "--dir=sorbet/rbi",
+          "--dir=sorbet/checks",
+          "--silence-dev-message",
+          # Model and controller concerns declare requires_ancestor.
+          "--enable-experimental-requires-ancestor",
+          ""
+        ].join("\n")
+      end
 
       # Every framework identifier the application may import, read from the
       # page's installed framework.

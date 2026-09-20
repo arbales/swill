@@ -21,8 +21,7 @@ module Swill
     sig { params(name: String).returns(T.nilable(Responder)) }
     def action_target(name)
       return self if Runtime.respondsTo(self, name)
-      target = next_responder
-      target ? target.action_target(name) : nil
+      next_responder&.action_target(name)
     end
 
     sig { returns(T::Boolean) }

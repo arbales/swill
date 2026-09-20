@@ -229,8 +229,14 @@ module Swill
           return s(:send, s(:self), :new, *process_all(args)) if bare_new?(receiver, method)
           # The lowerings below would keep the call and drop the nil guard, and
           # JavaScript's ?. yields undefined where Ruby yields nil.
-          if node.type == :csend && !native_type?(static_type(receiver))
-            raise CompileError, "safe navigation (&.) is not lowered on a Ruby receiver; guard #{receiver.loc.expression.source} with a local"
+          # Safe navigation reaches a member the compiler resolves statically:
+          # a DOM member, or a declared property or collected method of a
+          # framework class. A core value type lowers through a helper taking
+          # the receiver as an argument, and an untyped receiver through
+          # Runtime.read; neither is something ?. can guard.
+          if node.type == :csend && !safe_navigable?(receiver)
+            raise CompileError, "safe navigation (&.) is not lowered on #{describe_receiver(receiver)}; " \
+              "guard #{receiver.loc.expression.source} with a local"
           end
           return lower_async(node) if Knowledge.async_wrapper?(node)
           return lower_await(args) if receiver.nil? && method == :await
@@ -283,6 +289,37 @@ module Swill
 
     private
 
+        # Optional chaining answers undefined where Ruby answers nil, so the
+        # result passes through the runtime. The wrapper is also what keeps
+        # the lowered node distinct from the source node: nodes comparing
+        # equal by value are replaced by the original, whose location would
+        # then decide rendering.
+        def safely(node)
+          s(:call, s(:const, nil, :Runtime), :nilable, node)
+        end
+
+        # A guarded hop onto a guarded hop needs only the outer normalization:
+        # ?. answers undefined for nil and for undefined alike, so the inner
+        # wrapper cannot change the result. Keeps a chain readable.
+        def guarded(receiver)
+          lowered = process(receiver)
+          return lowered unless lowered.type == :call && lowered.children[1] == :nilable &&
+            lowered.children[0] == s(:const, nil, :Runtime)
+          lowered.children[2]
+        end
+
+        # ?. guards a member the compiler resolves statically.
+        def safe_navigable?(receiver)
+          type = static_type(receiver)
+          native_type?(type) || !swill_class(type).nil?
+        end
+
+        def describe_receiver(receiver)
+          type = static_type(receiver)
+          return "an untyped receiver" if type.nil? || type == "T.untyped"
+          "a #{type} receiver"
+        end
+
         # Static facts choose the operation. A receiver whose class is known gets
         # direct property access or a direct call; a core value type goes
         # through its lowering table; a receiver with no static type is dynamic
@@ -326,12 +363,19 @@ module Swill
               return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, "dup"))
             end
             if args.empty? && @knowledge.property_entry(klass, name)
-              return s(:attr, process(receiver), Knowledge.member(method).to_sym)
+              member = Knowledge.member(method).to_sym
+              return safely(s(:cattr, guarded(receiver), member)) if node.type == :csend
+              return s(:attr, process(receiver), member)
             end
             if setter && (@knowledge.property_entry(klass, base) || @knowledge.method_entry(klass, name))
               return s(:send, process(receiver), Knowledge.member(method).to_sym, process(args.first))
             end
             if (entry = @knowledge.method_entry(klass, name))
+              # A location-less node is a call to the converter, whatever the
+              # source's parentheses: a collected method is always called.
+              if node.type == :csend
+                return safely(s(:csend, guarded(receiver), *dispatched(entry, args)))
+              end
               return s(:call, process(receiver), *dispatched(entry, args))
             end
             return nil

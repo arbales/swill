@@ -48,8 +48,7 @@ module Swill
     # Ownership is derived from the sparse view tree and never stored twice.
     sig { returns(T.nilable(Controller)) }
     def parent
-      superview = @view.superview
-      superview ? superview.owner() : nil
+      @view.superview&.owner
     end
 
     # Direct child controllers in tree order.
