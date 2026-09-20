@@ -23,7 +23,7 @@ void Select;
 void StatusField;
 void Typeahead;
 
-modelConfig.baseUrl = "http://arb-mini.arbales.net:9292";
+modelConfig.baseUrl = "http://movies.arb-mini.arbales.net";
 
 document.addEventListener("DOMContentLoaded", () => {
   Application.shared.start(document.body);

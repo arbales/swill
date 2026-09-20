@@ -3566,7 +3566,7 @@ Typeahead = __decorateElement(_init16, 0, "Typeahead", _Typeahead_decorators, Ty
 __runInitializers(_init16, 1, Typeahead);
 
 // ../examples/ts/movies/index.ts
-config.baseUrl = "http://arb-mini.arbales.net:9292";
+config.baseUrl = "http://movies.arb-mini.arbales.net";
 document.addEventListener("DOMContentLoaded", () => {
   Application.shared.start(document.body);
   const listEl = document.querySelector('[controller="MovieList"]');
