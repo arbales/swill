@@ -7,6 +7,89 @@ module Swill
     class Knowledge
       private
 
+        # Reject unsupported source structure and method expressions before a
+        # class body runs. Declaration calls are known from prior entries and
+        # from macro/setting definitions anywhere in this source.
+        def preflight_scope!(nodes, declarations)
+          nodes.each do |node|
+            if node.type == :module
+              name, body = node.children
+              children = statements(body)
+              nested = children.select { |child| namespace_declaration?(child) }
+              preflight_entry!(node, "mixin", declarations) if children.empty? || nested.length != children.length
+              preflight_scope!(nested, declarations)
+            elsif node.type == :class
+              preflight_entry!(node, "class", declarations)
+            elsif node.type == :send && node.children[0].nil? && %i[require require_relative].include?(node.children[1])
+              next
+            else
+              raise CompileError, "unsupported top-level #{node.type}: #{node.loc.expression.source}"
+            end
+          end
+        end
+
+        def preflight_entry!(node, kind, declarations)
+          statements(node.children.last).each do |statement|
+            next if self.class.macro_wrapper?(statement)
+            async = self.class.async_wrapper?(statement)
+            child = async ? statement.children[2] : statement
+            if child.type == :def
+              validate_expression!(child.children.last)
+            elsif child.type == :defs
+              # An included hook contains declaration calls whose type
+              # arguments are data, and is checked structurally after load.
+              validate_expression!(child.children.last) unless kind == "mixin" && child.children[1] == :included
+            elsif signature?(child)
+              next
+            elsif child.type == :send && child.children.first.nil? && %i[extend include].include?(child.children[1])
+              next
+            elsif child.type == :module && kind == "mixin" && constant(child.children.first) == "ClassMethods"
+              preflight_class_methods!(child, declarations)
+            elsif kind == "mixin" && namespace_declaration?(child)
+              next
+            else
+              call = child.type == :block ? child.children.first : child
+              name = call.children[1].to_s if call&.type == :send && call.children.first.nil?
+              next if name && declarations.include?(name)
+              raise CompileError, "unsupported class body: #{child.loc.expression.source}"
+            end
+          end
+        end
+
+        def preflight_class_methods!(node, declarations)
+          statements(node.children.last).each do |statement|
+            next if self.class.macro_wrapper?(statement) || signature?(statement)
+            if statement.type == :def
+              validate_expression!(statement.children.last)
+            elsif statement.type == :send && statement.children.first.nil? &&
+                  %i[extend inheritable_registry class_setting].include?(statement.children[1])
+              next
+            else
+              raise CompileError, "unsupported ClassMethods body: #{statement.loc.expression.source}"
+            end
+          end
+        end
+
+        def declaration_names(ast)
+          names = ["property", "declare_restoration"]
+          entries.each do |entry|
+            names.concat(entry.fetch("macros", []), entry.fetch("settings", []))
+          end
+          visit = lambda do |node|
+            next unless node.respond_to?(:type)
+            if self.class.macro_wrapper?(node)
+              definition = node.children[2]
+              names << definition.children[definition.type == :defs ? 1 : 0].to_s
+            elsif node.type == :send && node.children.first.nil? && node.children[1] == :class_setting &&
+                  node.children[2]&.type == :sym
+              names << node.children[2].children.first.to_s
+            end
+            node.children.each { |child| visit.(child) }
+          end
+          visit.(ast)
+          names.uniq
+        end
+
         def collect_scope(nodes, scope)
           nodes.each do |node|
             if node.type == :module

@@ -3,6 +3,24 @@ import {declarations, hasInstalledMetadata} from "./metadata.mjs";
 import {subscribe, writeProperty} from "./properties.mjs";
 import {valueRead, valueInvoke, isPlainObject, NIL_READERS, VALUE_READERS, VALUE_METHODS} from "./values.mjs";
 
+// Installed method maps are immutable. Index each one once by Ruby family
+// name and arity so optional dispatch stays constant-time as classes grow.
+const methodIndexes = new WeakMap();
+
+function methodIndex(methods) {
+  let index = methodIndexes.get(methods);
+  if (index) return index;
+
+  index = new Map();
+  for (const method of methods.values()) {
+    const name = method.family ?? method.name;
+    if (!index.has(name)) index.set(name, new Map());
+    index.get(name).set(method.arity, method);
+  }
+  methodIndexes.set(methods, index);
+  return index;
+}
+
 // A Ruby method with optional parameters compiles to one JavaScript method
 // per arity — `observe` and `observeWithObject` — so a name and an argument
 // count name exactly one of them. The shortest variant keeps the plain name;
@@ -11,23 +29,18 @@ export function resolveMethod(methods, name, count) {
   const base = methods.get(name);
   if (!base) return null;
   if (base.arity === count) return base;
-  for (const method of methods.values()) {
-    if (method.family === name && method.arity === count) return method;
-  }
-  return null;
+  return methodIndex(methods).get(name)?.get(count) ?? null;
 }
 
 // The widest variant that fits, for a caller with a fixed supply of
 // arguments: Ruby fills optionals from the left when arguments are there.
 function widestMethod(methods, name, limit) {
-  const base = methods.get(name);
-  if (!base) return null;
-  let found = base.arity <= limit ? base : null;
-  for (const method of methods.values()) {
-    if (method.family !== name || method.arity > limit) continue;
-    if (!found || method.arity > found.arity) found = method;
+  const family = methodIndex(methods).get(name);
+  if (!family) return null;
+  for (let count = limit; count >= 0; count -= 1) {
+    if (family.has(count)) return family.get(count);
   }
-  return found;
+  return null;
 }
 
 export function read(object, name) {

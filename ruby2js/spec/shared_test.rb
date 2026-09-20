@@ -16,6 +16,17 @@ require_relative "../examples/models"
 require_relative "../examples/records"
 require_relative "../examples/concerns"
 
+class DisconnectSource < Swill::Object
+  property :count, type: Integer, default: 1
+end
+
+class DisconnectDependent < Swill::Object
+  property :source, type: T.nilable(DisconnectSource), default: nil
+  property :doubled, type: Integer do
+    T.must(source).count * 2
+  end
+end
+
 class SharedTest < Minitest::Test
   def test_model_attribute_registry_on_mri
     result = {
@@ -109,6 +120,18 @@ class SharedTest < Minitest::Test
     owner.release(disposer)
     owner.dealloc
     assert_equal [:released], early, "release gives one up early, and dealloc has nothing left"
+  end
+
+  def test_disconnect_invalidates_computations_on_other_objects
+    source = DisconnectSource.new
+    dependent = DisconnectDependent.new
+    dependent.source = source
+    assert_equal 2, dependent.doubled
+    source.disconnect
+    source.count = 2
+    assert_equal 4, dependent.doubled
+    source.count = 3
+    assert_equal 6, dependent.doubled
   end
 
   def test_from_attributes_materializes_a_model_from_a_wire_hash

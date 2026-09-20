@@ -29,7 +29,7 @@ The initial kernel and DOM-boundary spike is complete and verified:
 - `Swill::Object`, `Responder`, `View`, `Controller`, `Bindings`, `Actions`, and
   `Awakening` are Ruby-authored framework classes;
 - value bindings cover text, form controls, selects, checkboxes, readonly
-  controls, nested observable paths, and teardown;
+  controls, nested observable paths, and unload;
 - actions support `data-action="name"` and `data-action="event:name"`;
 - modules may act as both mixins and namespaces without losing nested classes;
 - generated RBIs, readable bundles, minified bundles, and source maps are
@@ -37,7 +37,7 @@ The initial kernel and DOM-boundary spike is complete and verified:
 - nested controllers own a sparse `View` tree: parent and child ownership is
   derived from it, binding and action scans stop at controller boundaries,
   unhandled actions continue up the responder chain, the lifecycle runs
-  children first per phase, and teardown releases descendants exactly once;
+  children first per phase, and unload releases descendants exactly once;
 - the compiler lowers receivers from static types, compiles `raise` to
   `Error`, invokes callables correctly, and builds under both Ruby2JS parsers;
 - `<body application="...">` launches a `Swill::Application` on
@@ -59,7 +59,7 @@ The initial kernel and DOM-boundary spike is complete and verified:
   accept/resign/become protocol, `focusin` reconciliation with refusal
   restoring focus, and `keydown`/`keyup` routing through the responder chain
   with Escape, Enter, and Tab as `cancel_operation`, `insert_newline`, and
-  `complete`; teardown releases a first responder inside the region;
+  `complete`; unload releases a first responder inside the region;
 - model step 1: `validate_<name>(value, previous)` resolved from metadata (the
   MRI adapter uses `respond_to?`), and `Swill::Model::DirtyTracking` with
   observable `dirty_attributes` and computed `dirty?`, baseline-aware
@@ -130,7 +130,7 @@ The initial kernel and DOM-boundary spike is complete and verified:
   the control;
 - the static example (16 September 2026, item 7.1): `examples/static` ports
   the Opal static example in full but for its backend search, on top of
-  `Swill::NotificationCenter` (post, observe, a controller's
+  `Swill::NotificationCenter` (post, `add_observer`, a controller's
   `observe_notification`), the application's `first_responder_did_change`
   notification, `bind` on a control's `value`, `Runtime.nameOf`, and `dup`
   of framework objects; the browser check drives all three panes, the
@@ -229,7 +229,7 @@ the dataset step.
 - Outlets connect to their direct owning controller; `application/json`
   outlets decode through `decode_outlet_data`.
 - Awakening order, ownership, duplicate and unresolved outlet failures, and
-  teardown are tested.
+  unload is tested.
 
 ### 2. Binding Parity (done)
 
@@ -289,7 +289,7 @@ browser.
 Use two increasingly demanding proofs:
 
 1. Port the static example to exercise nested controllers, outlets, bindings,
-   actions, focus, templates, controls, and teardown (done).
+   actions, focus, templates, controls, and unload (done).
 2. Port one backend-backed Giraffic flow covering dataset loading, selection,
    detached editing, persistence, restoration, and a relationship.
 
@@ -365,7 +365,7 @@ Recorded so they are fixed deliberately rather than rediscovered:
   real code needs them, each entry with its MRI comparison.
 - Methods take positional arguments only (September 2026): optional ones are
   supported and compile to one JavaScript method per arity, named for the
-  optionals they take (`observe` / `observe_with_object`), so the model API is
+  optionals they take (`add_observer` / `add_observer_with_object`), so the model API is
   still spelled `find(id)`, `where(params)`, `fetch_all(url, params)` rather
   than options hashes. Keyword and rest arguments remain out; so do optionals
   on a static or `ClassMethods` method, a block with an optional, and a
@@ -379,8 +379,10 @@ Recorded so they are fixed deliberately rather than rediscovered:
   relationship is neither loaded nor loading, and its last load did not fail —
   is what keeps a re-render from re-requesting. `will_access: false` opts a
   relationship out, and `load_<name>`/`reload_<name>` are how code that must
-  await asks. Watch for a computed property that reads a relationship and is
-  recomputed by that relationship's arrival.
+  await asks. Explicit loads reject after recording an error; automatic reads
+  catch and warn. Concurrent callers share one request. Watch for a computed
+  property that reads a relationship and is recomputed by that relationship's
+  arrival.
 - `await` is a command call: `T.cast(await x, Type)` parses as
   `await(x, Type)` and is rejected for the extra argument. Await into a
   local first (September 2026).

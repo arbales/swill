@@ -1,5 +1,6 @@
 require "minitest/autorun"
 require "open3"
+require "tmpdir"
 require_relative "../lib/swill-ruby2js/compiler"
 
 class CompilerTest < Minitest::Test
@@ -494,11 +495,59 @@ class CompilerTest < Minitest::Test
       assert_includes error.message, message
     end
     error = assert_raises(Swill::Ruby2JS::CompileError) { javascript('endpoint "/api/x"') }
-    assert_includes error.message, "undefined method 'endpoint'", "a setting nothing declares is not a macro"
+    assert_includes error.message, 'unsupported class body: endpoint "/api/x"', "a setting nothing declares is not a macro"
     error = assert_raises(Swill::Ruby2JS::CompileError) do
       compiler_with_test_object.add("module M\nhas_many :x, type: TestObject\nend").javascript(runtime: "../lib/swill/runtime.mjs")
     end
-    assert_includes error.message, "undefined method 'has_many' for module M", "a module declares nothing a class does"
+    assert_includes error.message, "unsupported class body: has_many :x, type: TestObject",
+      "a module declares nothing a class does"
+  end
+
+  def test_registries_install_exact_snapshots_and_plain_class_keys_are_data
+    compiler = compiler_with_test_object.add(<<~'RUBY')
+      module RegistryFeature
+        def self.included(base); base.extend(ClassMethods); end
+        module ClassMethods
+          extend Swill::Declarations
+          inheritable_registry :items, :array
+          inheritable_registry :metadata
+          macro def configure(items_value, metadata_value)
+            items.replace(items_value)
+            metadata.clear
+            metadata.merge!(metadata_value)
+          end
+        end
+      end
+      class RegistryParent < TestObject
+        include RegistryFeature
+        configure ["a", "b", "b"], {
+          "parent_only" => true,
+          "plain" => {"class" => "label"},
+          "target" => TestObject
+        }
+      end
+      class RegistryChild < RegistryParent
+        configure ["b", "a", "b"], {
+          "plain" => {"class" => "child label"},
+          "target" => TestObject
+        }
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, '"plain": { "class": "child label" }'
+    assert_equal [
+      ["a", "b", "b"], ["b", "a", "b"],
+      {"class" => "label"}, {"class" => "child label"},
+      true, false
+    ], execute(js + <<~JS)
+      const parent = Runtime.resolve("RegistryParent");
+      const child = Runtime.resolve("RegistryChild");
+      console.log(JSON.stringify([
+        parent.items(), child.items(), parent.metadata().plain, child.metadata().plain,
+        child.metadata().target === Runtime.resolve("TestObject"),
+        Object.hasOwn(child.metadata(), "parent_only")
+      ]));
+    JS
   end
 
   # A class object is a typed receiver: self.class, x.class, a T.class_of
@@ -797,7 +846,72 @@ class CompilerTest < Minitest::Test
         end
       RUBY
     end
-    assert_includes error.message, "Loud#greet must take the same optional arguments"
+    assert_includes error.message, "Loud#greet must accept the same arities"
+
+    # Accepted arities, rather than only optional names, define a family.
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../lib/swill/runtime.mjs")
+        class Greeter < TestObject
+          def greet(greeting = "Hello", name); name; end
+        end
+        class Loud < Greeter
+          def greet(prefix, greeting = "Hey", name); name; end
+        end
+      RUBY
+    end
+    assert_includes error.message, "Loud#greet must accept the same arities"
+
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../lib/swill/runtime.mjs")
+        module Greeting
+          def greet(greeting = "Hello", name); name; end
+        end
+        class Loud < TestObject
+          include Greeting
+          def greet(name); name; end
+        end
+      RUBY
+    end
+    assert_includes error.message, "Loud#greet must accept the same arities"
+
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../lib/swill/runtime.mjs")
+        class Greeter < TestObject
+          def greet(greeting = "Hello", name); name; end
+          def broken; greet("one", "two", "three"); end
+        end
+      RUBY
+    end
+    assert_includes error.message, "wrong number of arguments for greet: 3"
+  end
+
+  def test_a_forward_passes_declared_parameters_and_generates_the_same_rbi
+    compiler = compiler_with_test_object.add(<<~'RUBY')
+      module Delegating
+        def self.included(base); base.extend(ClassMethods); end
+        module ClassMethods
+          extend Swill::Declarations
+          inheritable_registry :delegations
+          macro def prefixer
+            forward :prefixed, to: :join, with: ["fixed"],
+                    parameters: {suffix: String}, returns: String
+          end
+        end
+      end
+      class Example < TestObject
+        include Delegating
+        prefixer
+        def join(prefix, suffix); "#{prefix}:#{suffix}"; end
+      end
+    RUBY
+
+    js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+    assert_includes js, "prefixed(suffix) {"
+    assert_includes js, 'return this.join("fixed", suffix);'
+    assert_includes compiler.rbi, "sig { params(suffix: String).returns(String) }\n  def prefixed(suffix); end"
+    assert_equal "fixed:value", execute(js + <<~JS)
+      console.log(JSON.stringify(new (Runtime.resolve("Example"))().prefixed("value")));
+    JS
   end
 
   def test_a_macros_required_keyword_is_required
@@ -827,6 +941,46 @@ class CompilerTest < Minitest::Test
     assert_raises(Swill::Ruby2JS::CompileError) { javascript("include Missing") }
     compiler = compile("")
     assert_raises(Swill::Ruby2JS::CompileError) { compiler.add("class Example < TestObject; end") }
+  end
+
+  def test_source_is_preflighted_and_failed_evaluation_can_be_retried
+    $swill_preflight_marker = false
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~'RUBY')
+        class Unsupported < TestObject
+          $swill_preflight_marker = true
+        end
+      RUBY
+    end
+    assert_includes error.message, "unsupported class body"
+    assert_equal false, $swill_preflight_marker, "unsupported class-body code never runs"
+
+    Dir.mktmpdir do |directory|
+      file = File.join(directory, "retry.rb")
+      File.write(file, "# compiler fixture\n")
+      compiler = compiler_with_test_object
+      assert_raises(Swill::Ruby2JS::CompileError) do
+        compiler.add("class Retriable < TestObject\nproperty :name, type: String, default: \"\", nonsense: true\nend", file: file)
+      end
+      assert_nil compiler.loader.constant("Retriable"), "a failed evaluation removes partial constants"
+      compiler.add("class Retriable < TestObject\nproperty :name, type: String, default: \"ready\"\nend", file: file)
+      js = compiler.javascript(runtime: "../lib/swill/runtime.mjs")
+      assert_equal "ready", execute(js + <<~JS)
+        console.log(JSON.stringify(new (Runtime.resolve("Retriable"))().name));
+      JS
+    end
+  ensure
+    $swill_preflight_marker = nil
+  end
+
+  def test_an_application_cannot_declare_inside_an_imported_namespace
+    imports = [{"name" => "Swill::Object"}]
+    compiler = Swill::Ruby2JS::Compiler.new(imports: imports)
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler.add("module Swill\nclass Extension < Object; end\nend")
+    end
+    assert_includes error.message, "application cannot declare inside imported namespace Swill::Extension"
+    assert_nil compiler.loader.constant("Swill::Extension")
   end
 
   def test_included_hooks_reject_dynamic_code_and_colliding_declarations

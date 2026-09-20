@@ -104,3 +104,17 @@ task browser: :build do
 end
 
 task default: %i[test optimize]
+
+desc "Report non-gating runtime and warm compiler medians"
+task benchmark: :build do
+  Dir.chdir(ROOT) do
+    warm_builds = 3.times.map do
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      compile_spike
+      (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1_000
+    end
+    median = warm_builds.sort[warm_builds.length / 2]
+    puts format("warm build: %.2f ms median (%d samples)", median, warm_builds.length)
+    sh "node", "benchmark/runtime.mjs"
+  end
+end

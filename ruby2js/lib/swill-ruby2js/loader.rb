@@ -90,17 +90,26 @@ module Swill
       # so a compiler that names the framework's own sources shares the
       # framework's container instead of defining everything a second time; a
       # source with no file of its own gets a key of its own.
-      def evaluate(source, path)
+      def evaluate(source, path, declared: [])
         key = File.expand_path(path)
         unless File.file?(key)
           @anonymous = (@anonymous || 0) + 1
           key = "#{key}:#{@anonymous}" if @anonymous > 1
         end
-        return key if @evaluated.include?(key)
-        @evaluated << key
+        if @evaluated.include?(key)
+          yield key if block_given?
+          return key
+        end
+        constants = constant_snapshot(declared)
         begin
           @container.module_eval(source, key, 1)
+          yield key if block_given?
+          @evaluated << key
+        rescue CompileError
+          restore_constants(constants)
+          raise
         rescue ::Exception => error # rubocop:disable Lint/RescueException
+          restore_constants(constants)
           raise CompileError, "#{location(error, key)}: #{self.class.strip_prefix(error.message.to_s)}"
         ensure
           # A failed class body leaves a sig half-declared; the next one must
@@ -127,6 +136,38 @@ module Swill
       end
 
       private
+
+        MISSING = ::Object.new
+
+        # Every prefix matters: a failed `module Demo; class Item; ...` must
+        # remove Item and, when this source created it, the empty Demo too.
+        def constant_snapshot(names)
+          paths = names.flat_map do |name|
+            parts = name.split("::")
+            (1..parts.length).map { |length| parts.first(length) }
+          end.uniq
+          paths.to_h do |parts|
+            [parts, constant_at(parts, inherit: false) || MISSING]
+          end
+        end
+
+        def constant_at(parts, inherit: true)
+          parts.reduce(@container) do |owner, name|
+            return nil unless owner.is_a?(::Module) && owner.const_defined?(name, inherit)
+            owner.const_get(name, inherit)
+          end
+        end
+
+        def restore_constants(snapshot)
+          snapshot.keys.sort_by(&:length).reverse_each do |parts|
+            previous = snapshot.fetch(parts)
+            parent = parts.length == 1 ? @container : constant_at(parts[0...-1], inherit: false)
+            next unless parent.is_a?(::Module)
+            name = parts.last
+            parent.send(:remove_const, name) if parent.const_defined?(name, false)
+            parent.const_set(name, previous) unless previous.equal?(MISSING)
+          end
+        end
 
         def location(error, path)
           frame = error.backtrace_locations&.find { |candidate| candidate.path == path }

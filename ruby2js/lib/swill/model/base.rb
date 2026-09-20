@@ -33,6 +33,12 @@ module Swill
 
       attribute :id, type: T.nilable(String), default: nil
 
+      sig { void }
+      def initialize
+        super()
+        @relationship_requests = T.let({}, T::Hash[String, T.untyped])
+      end
+
       # ---- reading ----
 
       # The model class declaring a JSON:API resource type, or nil.
@@ -195,6 +201,11 @@ module Swill
       sig { params(name: String).returns(T.untyped) }
       async def load_relationship(name)
         return Swill::Runtime.read(self, name) if relationship_loaded?(name)
+        pending = @relationship_requests[name]
+        if pending
+          await pending
+          return Swill::Runtime.read(self, name)
+        end
         await reload_relationship(name)
       end
 
@@ -211,34 +222,50 @@ module Swill
         return if relationship_loaded?(name)
         return if Swill::Runtime.read(self, "#{name}_loading") == true
         return if Swill::Runtime.read(self, "#{name}_error") != nil
-        # Nothing awaits this: the value fills in, and every state it passes
-        # through is a property something can bind to.
-        reload_relationship(name)
+        load_relationship_in_background(name)
       end
 
-      # Asks the server, whatever the relationship already holds. Like
-      # Dataset#reload it reports a failure rather than raising it, so the
-      # states a UI shows are the ones it binds to and no caller has to
-      # rescue.
+      # A read has no caller to receive a rejection. The same explicit load
+      # updates every bindable state; this wrapper only catches and reports it.
+      sig { params(name: String).void }
+      async def load_relationship_in_background(name)
+        begin
+          await load_relationship(name)
+        rescue => failure
+          Swill::Runtime.warn("#{name} did not load: #{failure.message}")
+        end
+      end
+
+      # Asks the server, whatever the relationship already holds. Concurrent
+      # callers share one request; explicit callers receive its rejection
+      # after the bindable error state has been updated.
       sig { params(name: String).returns(T.untyped) }
       async def reload_relationship(name)
+        pending = @relationship_requests[name]
+        if pending
+          await pending
+          return Swill::Runtime.read(self, name)
+        end
+
         Swill::Runtime.write(self, "#{name}_loading", true)
         Swill::Runtime.write(self, "#{name}_error", nil)
-        value = T.let(nil, T.untyped)
+        request = T.let(nil, T.untyped)
         begin
           descriptor = relationship(name)
           model_class = descriptor.model_class
-          payload = await Wire.default.get_json(descriptor.url_for(self), {})
+          request = Wire.default.get_json(descriptor.url_for(self), {})
+          @relationship_requests[name] = request
+          payload = await request
           value = descriptor.many? ? model_class.parse_many(payload) : model_class.parse_one(payload)
           assign_relationship(name, value)
         rescue => failure
           Swill::Runtime.write(self, "#{name}_error", failure.message)
-          Swill::Runtime.warn("#{name} did not load: #{failure.message}")
-          value = Swill::Runtime.read(self, name)
+          raise "#{failure.message}"
         ensure
+          @relationship_requests.delete(name) if @relationship_requests[name] == request
           Swill::Runtime.write(self, "#{name}_loading", false)
         end
-        value
+        Swill::Runtime.read(self, name)
       end
     end
   end

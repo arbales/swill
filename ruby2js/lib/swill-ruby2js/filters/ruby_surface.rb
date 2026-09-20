@@ -97,7 +97,12 @@ module Swill
         # The argument count says which member of a method's family a send
         # means, and which of its parameters the arguments land on.
         def dispatched(entry, args)
-          variant = Knowledge.variant_for(entry, args.length) || Knowledge.variants(entry).first
+          variant = Knowledge.variant_for(entry, args.length)
+          unless variant
+            accepted = Knowledge.variants(entry).map { |candidate| candidate["arity"] }.join(", ")
+            raise CompileError,
+              "wrong number of arguments for #{entry['name']}: #{args.length} (accepts #{accepted})"
+          end
           [variant["js"].to_sym, *typed_arguments(entry, args, variant["taken"])]
         end
 

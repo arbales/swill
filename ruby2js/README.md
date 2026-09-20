@@ -27,6 +27,7 @@ BUNDLE_PATH=vendor/bundle bundle exec rake
 
 The default task builds, type-checks, tests on MRI and Node, minifies, and reports
 artifact sizes. Individual tasks are `build`, `typecheck`, `test`, and `optimize`.
+`benchmark` reports non-gating runtime and warm compiler medians.
 
 `build/` is disposable. `dist/` contains checked-in browser output. Regenerate it
 with `rake build`; do not edit generated files.
@@ -260,7 +261,7 @@ so a fragment awakened later must be present under its parent before the
 parent awakens or be bound by the parent explicitly. `bind-*` on that root
 belongs to the child. `bind(:target, to: source, key_path: "a.b")` keeps a declared
 property equal to a path on another object until `unbind`, `unbind_all`, or
-teardown; `null_placeholder:` is what the target receives when the path has no
+`unload`; `null_placeholder:` is what the target receives when the path has no
 value, so a path through a nilable object can feed a property that is not one.
 `observe(name, callback)` observes the receiver's own property and
 `observe(object, name, callback)` another object's; either way the receiver is
@@ -425,8 +426,10 @@ on the pool, `parse_one`/`parse_many`. Instance methods: `save`, `delete`,
 `draft`/`apply_draft`, and, per relationship, its key-value loading state as
 observable properties (`<name>_loading`, `<name>_loaded`, `<name>_error`) plus
 `load_<name>`/`reload_<name>` for code that must wait on what a read would have
-started anyway. A spinner, an empty state, and a failure are bindings on those
-properties, not a controller method with a rescue.
+started anyway. Concurrent calls share the in-flight request. Explicit loads
+reject on failure after updating `<name>_error`; the automatic load started by
+a read catches and warns, since no caller is waiting for it. A spinner, an
+empty state, and a failure are bindings on those properties.
 Persistence is `async`; awaiting it yields the record.
 
 JSON:API is the default codec: a document's `included` resources are pooled

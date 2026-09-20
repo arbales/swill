@@ -198,6 +198,12 @@ export function disconnect(object) {
   const current = states.get(object);
   if (!current) return;
 
+  // Keep the invalidations before dropping their sets. Once the old graph is
+  // gone, an eagerly observed computation may read this object and attach a
+  // fresh subscription; an unobserved one stays invalid until its next read.
+  const dependents = [...current.dependents.values()]
+    .flatMap(callbacks => [...callbacks]);
+
   for (const slot of current.computed.values()) {
     slot.disposers.splice(0).forEach(dispose => dispose());
   }
@@ -205,4 +211,5 @@ export function disconnect(object) {
   current.computed.clear();
   current.observers.clear();
   current.dependents.clear();
+  dependents.forEach(callback => callback());
 }

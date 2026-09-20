@@ -10,6 +10,7 @@ module Swill
     # source knows it.
     class Knowledge
       module Reflection
+        ClassReference = ::Struct.new(:name)
         module_function
 
         # Whether a receiverless call in a class body is a declaration: the
@@ -55,6 +56,7 @@ module Swill
         end
 
         def fill_class(entry, klass, blocks)
+          entry["macros"] = marks(klass, :swill_macros).map(&:to_s).uniq
           entry["properties"] = own_properties(klass).map { |descriptor| property(descriptor, blocks) }
           entry["restorations"] = own_restorations(klass).map do |restoration|
             {"path" => restoration["path"], "key" => restoration["key"]}
@@ -68,6 +70,7 @@ module Swill
         # read from a class that includes it and nothing else.
         def fill_mixin(entry, mod)
           class_methods = mod.const_defined?(:ClassMethods, false) ? mod.const_get(:ClassMethods, false) : nil
+          entry["macros"] = class_methods&.respond_to?(:swill_macros) ? class_methods.swill_macros.map(&:to_s) : []
           entry["registries"] = class_methods&.respond_to?(:swill_registries) ? class_methods.swill_registries : []
           entry["settings"] = class_methods&.respond_to?(:swill_settings) ? class_methods.swill_settings : []
         end
@@ -122,23 +125,15 @@ module Swill
           end
         end
 
-        # What this class put in a registry, not what it inherited: the class
-        # copies its parent's contents on first touch, so the difference is
-        # the declaration.
+        # The registry exactly as declaration-time Ruby left it. A class owns
+        # a copied collection, so replacing that copy at installation preserves
+        # deletion, ordering, prepending, and duplicate array entries.
         def registry_values(klass)
           marks(klass, :swill_registries).each_with_object({}) do |registry, result|
             name = registry["name"]
             ivar = :"@#{name}"
             next unless klass.instance_variable_defined?(ivar)
-            own = klass.instance_variable_get(ivar)
-            parent = klass.respond_to?(:superclass) && klass.superclass.respond_to?(name) ?
-              klass.superclass.public_send(name) : nil
-            declared = if own.is_a?(::Array)
-              parent ? own - parent : own
-            else
-              parent ? own.reject { |key, value| parent[key] == value } : own
-            end
-            result[name] = value(declared) unless declared.empty?
+            result[name] = value(klass.instance_variable_get(ivar))
           end
         end
 
@@ -154,7 +149,7 @@ module Swill
         # arrays, and a class as a tagged reference the emitter resolves.
         def value(item)
           case item
-          when ::Class, ::Module then {"class" => text(item.name.to_s)}
+          when ::Class, ::Module then ClassReference.new(text(item.name.to_s))
           when ::Hash then item.to_h { |key, entry| [text(key.to_s), value(entry)] }
           when ::Array then item.map { |entry| value(entry) }
           when ::String then text(item)

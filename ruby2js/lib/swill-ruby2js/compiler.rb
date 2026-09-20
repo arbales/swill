@@ -240,14 +240,24 @@ module Swill
         # an override declaring different ones would shadow only part of what
         # it means to override.
         def check_overrides!(entry, parent_name)
-          return unless parent_name
           entry["methods"].each do |method|
-            inherited = knowledge.method_entry(parent_name, method["name"])
+            inherited = inherited_method_entry(entry, parent_name, method["name"])
             next unless inherited
-            next if (inherited["optionals"] || []) == (method["optionals"] || [])
+            inherited_family = Knowledge.variants(inherited).map { |variant| variant.values_at("name", "arity") }
+            own_family = Knowledge.variants(method).map { |variant| variant.values_at("name", "arity") }
+            next if inherited_family == own_family
             raise CompileError,
-              "#{entry['name']}##{method['name']} must take the same optional arguments as the method it overrides"
+              "#{entry['name']}##{method['name']} must accept the same arities as the method it overrides"
           end
+        end
+
+        def inherited_method_entry(entry, parent_name, name)
+          entry["includes"].reverse_each do |mixin_name|
+            resolved = knowledge.resolve(mixin_name, entry["scope"])
+            found = knowledge.method_entry(resolved, name)
+            return found if found
+          end
+          parent_name && knowledge.method_entry(parent_name, name)
         end
 
         # Signature types are written in the entry's own scope (View inside
@@ -343,8 +353,11 @@ module Swill
 
         def forwarded_methods(entry)
           entry["methods"].select { |method| method["to"] }.map do |method|
-            call = "#{method['to']}(#{method['with'].map(&:to_json).join(', ')})"
-            "#{method['async'] ? "async def #{method['name']}\nawait " : "def #{method['name']}\n"}#{call}\nend"
+            parameters = method["parameters"].keys
+            arguments = method["with"].map(&:to_json) + parameters
+            call = "#{method['to']}(#{arguments.join(', ')})"
+            header = "def #{method['name']}(#{parameters.join(', ')})"
+            "#{method['async'] ? "async #{header}\nawait " : "#{header}\n"}#{call}\nend"
           end
         end
 

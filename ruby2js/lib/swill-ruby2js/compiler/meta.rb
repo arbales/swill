@@ -66,8 +66,9 @@ module Swill
         # macro may put in a registry or a setting.
         def serialize_value(value, entry)
           case value
+          when Knowledge::Reflection::ClassReference
+            reference(value.name, entry["scope"])
           when ::Hash
-            return reference(value["class"], entry["scope"]) if value.keys == ["class"]
             pairs = value.map { |key, item| "#{object_key(key.to_s)}: #{serialize_value(item, entry)}" }
             "{#{pairs.join(', ')}}"
           when ::Array

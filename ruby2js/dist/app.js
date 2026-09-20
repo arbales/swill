@@ -576,7 +576,7 @@
           }
         },
         registries: {
-          modelAttributes: { "name": { "name": "name", "key": "name", "type": "String", "default": "" } }
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "name": { "name": "name", "key": "name", "type": "String", "default": "" } }
         },
         methods: {
           "normalize": {
@@ -611,7 +611,7 @@
           }
         },
         registries: {
-          modelAttributes: { "role": { "name": "role", "key": "job", "type": "String", "default": "editor" } }
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "name": { "name": "name", "key": "name", "type": "String", "default": "" }, "role": { "name": "role", "key": "job", "type": "String", "default": "editor" } }
         },
         methods: {
           "validate_role": {
@@ -666,7 +666,7 @@
         },
         registries: {
           modelRelationships: { "author": { "name": "author", "key": "author", "kind": "one", "type": "Demo::Author", "url": null } },
-          modelAttributes: { "title": { "name": "title", "key": "title", "type": "String", "default": "" } }
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "title": { "name": "title", "key": "title", "type": "String", "default": "" } }
         },
         settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "resource_type", js: "resourceType", value: "books" }],
         methods: {
@@ -734,7 +734,7 @@
         },
         registries: {
           modelRelationships: { "books": { "name": "books", "key": "books", "kind": "many", "type": "Demo::Book", "url": "/api/authors/:id/books" } },
-          modelAttributes: { "name": { "name": "name", "key": "name", "type": "String", "default": "" }, "born": { "name": "born", "key": "born", "type": "T.nilable(Integer)", "default": null } }
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "name": { "name": "name", "key": "name", "type": "String", "default": "" }, "born": { "name": "born", "key": "born", "type": "T.nilable(Integer)", "default": null } }
         },
         settings: [{ name: "endpoint", js: "endpoint", value: "/api/authors" }, { name: "resource_type", js: "resourceType", value: "authors" }],
         methods: {
@@ -764,7 +764,7 @@
           }
         },
         registries: {
-          modelAttributes: { "body": { "name": "body", "key": "body", "type": "String", "default": "" } }
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "body": { "name": "body", "key": "body", "type": "String", "default": "" } }
         },
         settings: [{ name: "endpoint", js: "endpoint", value: "/api/notes" }, { name: "codec", js: "codec", value: Swill__Model__PlainJSON }],
         methods: {}
@@ -1126,7 +1126,7 @@
           }
         },
         registries: {
-          modelAttributes: { "name": { "name": "name", "key": "name", "type": "String", "default": "world" }, "email": { "name": "email", "key": "email_address", "type": "String", "default": "" } }
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "name": { "name": "name", "key": "name", "type": "String", "default": "world" }, "email": { "name": "email", "key": "email_address", "type": "String", "default": "" } }
         },
         methods: {
           "validate_email": {

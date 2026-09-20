@@ -232,16 +232,20 @@ export function installClass(klass, name, properties, methods, registries = {}, 
     klass[setting.js](setting.value);
   }
 
-  // Registry values a macro declared: data, applied to the class's own copy
-  // of the registry. The runtime never learns what any of it means.
+  // A declaration-time registry snapshot replaces the class's inherited
+  // copy exactly. The runtime never learns what any of its values mean.
   for (const [registryName, values] of Object.entries(registries ?? {})) {
     if (typeof klass[registryName] !== "function") {
       throw new Error(`Missing registry declaration: ${registryName}`);
     }
 
     const registry = klass[registryName]();
-    if (Array.isArray(registry)) registry.push(...Object.values(values));
-    else Object.assign(registry, values);
+    if (Array.isArray(registry)) {
+      registry.splice(0, registry.length, ...values);
+    } else {
+      for (const key of Object.keys(registry)) delete registry[key];
+      Object.assign(registry, values);
+    }
   }
 
   for (const descriptor of properties) {

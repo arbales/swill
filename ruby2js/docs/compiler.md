@@ -104,7 +104,7 @@ An entry holds:
 | `class_methods` | AST | A mixin's `ClassMethods` bodies, compiled as written |
 | `properties` | class | One descriptor per `property`, in declaration order, however it was declared |
 | `registries`, `settings` | class | What a mixin's `ClassMethods` declares |
-| `registry_values`, `setting_values` | class | What this class put in a registry, and what it set a setting to |
+| `registry_values`, `setting_values` | class | The class's exact registry snapshots, and what it set a setting to |
 | `restorations` | class | Bindable paths kept in the URL fragment |
 | `included_properties` | class | What a mixin's `self.included` hook declares, read from a class that includes it |
 
@@ -119,9 +119,18 @@ hands the sources over in it.
 
 The framework's container is built once per process. Each application's
 container is given the framework's own constants, so an application resolves
-`Swill::Controller`, subclasses the same class object, keeps its own
-declarations, and leaves the framework's untouched. A watch rebuild evaluates
-only the application's files.
+`Swill::Controller` and subclasses the same class object. An application may
+not declare anything below an imported root such as `Swill`; its declarations
+remain in its own namespaces. A watch rebuild evaluates only the application's
+files.
+
+Before Ruby evaluates a source, the collector checks its class and module
+bodies against the declaration vocabulary known for the whole source. Loading
+is transactional: evaluation and collection either both finish, or newly
+defined constants, entries, and blocks are restored. Corrected source at the
+same path can therefore be tried again after a failed build. Application and
+plugin source is trusted Ruby; the preflight exists to make compiler behavior
+deterministic, not as a security boundary.
 
 Sigs and declarations may name a DOM class, so a stub for every entry in
 `knowledge/dom.rb` is defined in the container first, parents before children.
@@ -249,7 +258,8 @@ ancestor's, declares. The value is emitted as `settings` in the meta object and
 applied through the setting method at installation, and is stored under the
 Ruby name so `Runtime.classWithSetting` can look a class up by it. Reading a
 setting in a class body says nothing and is rejected; a name nothing declares
-is an undefined method, with the file and line it was written on.
+is rejected as an unsupported class-body statement, with the file and line it
+was written on.
 
 ### Included hooks
 
@@ -267,7 +277,7 @@ A mixin's `module ClassMethods` may contain:
 | Statement | Result |
 | --- | --- |
 | `extend Swill::Declarations` | Accepted and erased: the browser gets the declarations' result, not the primitives |
-| `inheritable_registry :name` / `:name, :array` | A per-class registry that copies its parent's contents on first access. What a class put in it travels in the meta object as `registries` and is applied at installation |
+| `inheritable_registry :name` / `:name, :array` | A per-class registry that copies its parent's contents on first access. Its exact declaration-time contents travel in the meta object as `registries` and replace the runtime copy at installation |
 | `class_setting :name` | A per-class value that falls back to the parent's; a class body sets it with a literal (see [Class settings](#class-settings)), and the value is stored under the Ruby name so `Runtime.classWithSetting` can look a class up by it |
 | `def name(positional)` | Compiled as a class-side method; inside it `self` is the class, so bare calls reach static methods, other `ClassMethods` methods, registries, and settings |
 | `macro def name(...)` | A declaration macro. It runs when a class body calls it and is never emitted, so its body may use the full declaration vocabulary |
@@ -300,7 +310,7 @@ greet(name) { return this.greetWithGreeting("Hello", name); }
 | Metadata | Each variant is its own entry with a fixed arity; the wider ones carry `family`, which is how `Runtime.invoke`, `read`, and `performAction` resolve a name and an argument count to one method |
 | Call sites | A send to a typed receiver emits the variant whose arity is the argument count, and the signature's parameter types follow the parameters, so a lambda passed to a shorter variant is still typed |
 | `super` | Reaches the parent's variant of the same width, so an override keeps its own defaults |
-| Rejected | Keyword, splat, and block parameters; non-contiguous optionals; a predicate, bang, or writer with an optional; optionals on a static or `ClassMethods` method; a block with an optional, since whatever yields to it calls at a fixed arity; an override that does not take the same optionals, which would shadow only part of the family. A signature must name the method's parameters in the same order |
+| Rejected | Keyword, splat, and block parameters; non-contiguous optionals; a predicate, bang, or writer with an optional; optionals on a static or `ClassMethods` method; a block with an optional, since whatever yields to it calls at a fixed arity; an override whose accepted arities differ from the inherited family, which would shadow only part of it; and a statically resolved call with no matching arity. A signature must name the method's parameters in the same order |
 
 ### Pragmas
 
@@ -699,7 +709,7 @@ prototypes it did not create, and provides no universal dynamic send.
 | --- | --- |
 | `install(meta)` | Validates every entry first, then installs classes superclass-first regardless of key order. Errors: `Duplicate class`, `Missing constructor`, `Unknown mixin for`, `Duplicate constructor in meta`, `Mixin factory must be a function`, `ClassMethods factory must be a function`, `Unresolvable superclass order in meta` |
 | `include(klass, mixins, incoming)` | Rewires `klass` and `klass.prototype` through the mixin layers once, before instances exist, and copies `ClassMethods` helpers onto the constructor. Error: `Mixins must be attached before class installation` |
-| `installClass(klass, name, properties, methods, registries, restorations, settings)` | Records metadata, applies settings and registry values, defines accessors on the prototype, and registers the name. Errors: `Duplicate class`, `Setter method for declared property`, `Restorable path must start with a declared property`, `Duplicate restorable key`, `Missing registry declaration`, `Missing setting declaration` |
+| `installClass(klass, name, properties, methods, registries, restorations, settings)` | Records metadata, applies settings and exact registry snapshots, defines accessors on the prototype, and registers the name. Errors: `Duplicate class`, `Setter method for declared property`, `Restorable path must start with a declared property`, `Duplicate restorable key`, `Missing registry declaration`, `Missing setting declaration` |
 | `resolve(name)` | Returns the registered constructor for a Ruby name. Fails closed with `Unknown class`; markup cannot reach globals or prototypes |
 
 Metadata is inherited: a class's property and method tables start from its
@@ -766,7 +776,7 @@ registered from JavaScript, which the compiler never sees.
 | `retain(object, disposer)` | The object claims the disposer and is responsible for letting it go, as Cocoa's retain claims an object. Answers the disposer |
 | `release(object, disposer)` | Gives up a claim before the object goes away, ending the disposer. One never retained still ends |
 | `dealloc(object)` | End of life: releases everything the object retained, then disconnects it. Draining first means nothing an observer does can re-enter |
-| `disconnect(object)` | Releases computed dependency subscriptions, observers, and dependents. Stored values are kept, so the object remains usable and lazily recomputes |
+| `disconnect(object)` | Releases computed dependency subscriptions and observers, invalidates outside computed values that depended on the object, and keeps stored values. A later or eagerly observed read builds a fresh dependency graph |
 
 ### Attributes and class configuration
 
@@ -808,13 +818,15 @@ relationship nobody prefetched: reading `recipe.ingredients` answers what it
 has and fills in when the request lands. The guard — the record has an id and
 `ingredients_loaded`, `ingredients_loading`, and `ingredients_error` are all
 clear — is what keeps a re-render from re-requesting; `reload_<name>` is how an
-application asks again.
+application asks again. Reads and explicit callers share the same in-flight
+request.
 
 Those four properties are the whole of a relationship's key-value loading
 state, in AVFoundation's sense, and every one of them is observable. A spinner,
-an empty state, and a failure are bindings; like `Dataset#reload`,
-`reload_<name>` records a failure rather than raising it, so nothing has to be
-wrapped in a rescue to show it:
+an empty state, and a failure are bindings. An explicit `load_<name>` or
+`reload_<name>` rejects after recording the error, so a caller that chose to
+await it handles the failure normally. The automatic load started by a read
+catches and warns after recording the same error:
 
 ```ruby
 property :menu_recipes, type: T::Array[MenuRecipe] do

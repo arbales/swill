@@ -29,8 +29,12 @@ module Swill
               end
               # A macro's forwarded methods are real, typed members.
               entry["methods"].select { |method| method["to"] }.each do |method|
-                lines << "  sig { returns(#{method['returns']}) }"
-                lines << "  def #{method['name']}; end"
+                parameters = method["parameters"].map { |name, type| "#{name}: #{type}" }.join(", ")
+                signature = parameters.empty? ? "" : "params(#{parameters})."
+                arguments = method["parameters"].keys.join(", ")
+                lines << "  sig { #{signature}returns(#{method['returns']}) }"
+                definition = arguments.empty? ? method["name"] : "#{method['name']}(#{arguments})"
+                lines << "  def #{definition}; end"
               end
               lines << "end"
             end

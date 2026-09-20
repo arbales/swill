@@ -411,6 +411,29 @@ test("disposing computed state releases dependencies without erasing stored valu
   controller.disconnect();
 });
 
+test("disconnect invalidates computations on other objects before severing the graph", () => {
+  class Source extends SwillObject {}
+  class Dependent extends SwillObject {}
+  Runtime.install({classes: {
+    "Test::DisconnectSource": {constructor: Source, properties: {
+      count: {type: "Integer", defaultValue() { return 1; }}
+    }},
+    "Test::DisconnectDependent": {constructor: Dependent, properties: {
+      source: {type: "Test::DisconnectSource", defaultValue() { return null; }},
+      doubled: {type: "Integer", compute() { return this.source.count * 2; }}
+    }}
+  }});
+  const source = new Source();
+  const dependent = new Dependent();
+  dependent.source = source;
+  assert.equal(dependent.doubled, 2);
+  source.disconnect();
+  source.count = 2;
+  assert.equal(dependent.doubled, 4, "the next read resubscribes to a disconnected source");
+  source.count = 3;
+  assert.equal(dependent.doubled, 6, "the fresh subscription remains live");
+});
+
 test("remaining runtime semantic helpers preserve Ruby values", () => {
   assert.equal(Runtime.isTruthy(0), true);
   assert.equal(Runtime.isTruthy(""), true);
@@ -751,6 +774,26 @@ test("a method family resolves by argument count", () => {
   // run; saying so beats passing the value through unvalidated.
   assert.throws(() => Runtime.validateAttribute(family, "tag", "x", ""),
     /Validator must take a value and a previous value: validate_tag/);
+});
+
+test("method-family lookup does not scan unrelated methods", () => {
+  class Indexed extends SwillObject {
+    target(sender) { return sender; }
+    targetWithEvent(sender, event) { return [sender, event]; }
+  }
+  const methods = {
+    target: {arity: 1},
+    target_with_event: {arity: 2, js: "targetWithEvent", family: "target"}
+  };
+  for (let index = 0; index < 100; index += 1) {
+    const name = `unrelated_${index}`;
+    Indexed.prototype[name] = value => value;
+    methods[name] = {arity: 1};
+  }
+  Runtime.install({classes: {"Test::Indexed": {constructor: Indexed, methods}}});
+  const indexed = new Indexed();
+  assert.equal(Runtime.invoke(indexed, "target", "sender"), "sender");
+  assert.deepEqual(Runtime.performAction(indexed, "target", "sender", "event"), ["sender", "event"]);
 });
 
 test("awakening a later fragment adopts it into the nearest live owner", () => {
@@ -2153,7 +2196,8 @@ test("relationships load from their URL with a loading flag, and reload refreshe
   // answers what it has, and fills in when the request lands.
   assert.deepEqual(plain([ada.name, ada.born, ada.isRelationshipLoaded("books"), ada.books]), ["Ada", 1816, false, []]);
   assert.equal(ada.booksLoading, true, "the read started the request");
-  await settle();
+  const sameLoad = ada.loadRelationship("books");
+  await sameLoad;
   const books = ada.books;
   assert.deepEqual(plain([books.map(book => book.title), ada.isRelationshipLoaded("books"), flags]),
     [["Notes"], true, [true, false]]);
@@ -2162,6 +2206,11 @@ test("relationships load from their URL with a loading flag, and reload refreshe
   assert.equal(requests.length, 2, "a loaded relationship is not requested again on a second read");
   assert.ok((await ada.loadRelationship("books")) === books, "a loaded relationship is not requested again");
   assert.equal(requests.length, 2);
+  const firstReload = ada.reloadBooks();
+  const secondReload = ada.reloadBooks();
+  const [firstReloaded, secondReloaded] = await Promise.all([firstReload, secondReload]);
+  assert.ok(firstReloaded === secondReloaded, "both callers receive the installed relationship value");
+  assert.equal(requests.length, 3, "concurrent reloads share one request");
   const book = books[0];
   assert.equal(book.relationship("author").urlFor(book), "/api/books/10/author", "without a pattern, the owner's URL is followed by the key");
   assert.equal(ada.relationship("books").urlFor(ada), "/api/authors/1/books", ":id in a pattern is the owner's id");
@@ -2200,7 +2249,9 @@ test("a relationship that cannot load says so on a property, and is not asked ag
   requests.length = 0;
   const pending = grace.reloadBooks();
   assert.deepEqual(plain([grace.booksError, grace.booksLoading]), [null, true]);
-  assert.deepEqual(plain(await pending), [], "a failed reload answers what the relationship holds");
+  await assert.rejects(pending, /\/api\/authors\/2\/books/);
+  assert.deepEqual(plain([grace.books, grace.booksError != null]), [[], true],
+    "a failed reload preserves data and exposes its error");
   assert.equal(requests.length, 1);
 });
 

@@ -76,14 +76,31 @@ module Swill
           # Three passes: what the source declares, so a class the compiler
           # already knows cannot be reopened; the evaluation; then the
           # entries, read from the classes it defined.
-          declared_names(statements(ast), []).each do |name|
+          names = declared_names(statements(ast), [])
+          names.each do |name|
             raise CompileError, "reopened/duplicate constant #{name}" if entries.any? { |e| e["name"] == name }
           end
-          # The path the evaluation used is the one a computed block's
-          # Proc#source_location reports, so the index is keyed by it.
-          index_blocks(ast, loader.evaluate(source, file))
-          collect_scope(statements(ast), [])
+          imported_roots = entries.select { |entry| entry["imported"] }
+            .map { |entry| entry["name"].split("::").first }.uniq
+          protected = names.find do |name|
+            imported_roots.any? { |root| name == root || name.start_with?("#{root}::") }
+          end
+          raise CompileError, "application cannot declare inside imported namespace #{protected}" if protected
+
+          preflight_scope!(statements(ast), declaration_names(ast))
+          entry_count = entries.length
+          previous_blocks = @blocks.dup
+          loader.evaluate(source, file, declared: names) do |evaluated_file|
+            # Proc#source_location uses the evaluation path, so blocks are
+            # indexed only inside the transaction that will collect them.
+            index_blocks(ast, evaluated_file)
+            collect_scope(statements(ast), [])
+          end
           self
+        rescue ::Exception # Keep the compiler reusable after any failed source.
+          entries.slice!(entry_count..) if entry_count && entries.length > entry_count
+          @blocks = previous_blocks if previous_blocks
+          raise
         end
 
         def local

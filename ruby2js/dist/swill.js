@@ -509,12 +509,14 @@
   function disconnect(object) {
     const current = states.get(object);
     if (!current) return;
+    const dependents = [...current.dependents.values()].flatMap((callbacks) => [...callbacks]);
     for (const slot of current.computed.values()) {
       slot.disposers.splice(0).forEach((dispose) => dispose());
     }
     current.computed.clear();
     current.observers.clear();
     current.dependents.clear();
+    dependents.forEach((callback) => callback());
   }
 
   // lib/swill/runtime/install.mjs
@@ -696,8 +698,12 @@
         throw new Error(`Missing registry declaration: ${registryName}`);
       }
       const registry = klass[registryName]();
-      if (Array.isArray(registry)) registry.push(...Object.values(values));
-      else Object.assign(registry, values);
+      if (Array.isArray(registry)) {
+        registry.splice(0, registry.length, ...values);
+      } else {
+        for (const key of Object.keys(registry)) delete registry[key];
+        Object.assign(registry, values);
+      }
     }
     for (const descriptor of properties) {
       Object.defineProperty(klass.prototype, descriptor.js, {
@@ -735,24 +741,32 @@
   }
 
   // lib/swill/runtime/paths.mjs
+  var methodIndexes = /* @__PURE__ */ new WeakMap();
+  function methodIndex(methods) {
+    let index = methodIndexes.get(methods);
+    if (index) return index;
+    index = /* @__PURE__ */ new Map();
+    for (const method of methods.values()) {
+      const name = method.family ?? method.name;
+      if (!index.has(name)) index.set(name, /* @__PURE__ */ new Map());
+      index.get(name).set(method.arity, method);
+    }
+    methodIndexes.set(methods, index);
+    return index;
+  }
   function resolveMethod(methods, name, count) {
     const base = methods.get(name);
     if (!base) return null;
     if (base.arity === count) return base;
-    for (const method of methods.values()) {
-      if (method.family === name && method.arity === count) return method;
-    }
-    return null;
+    return methodIndex(methods).get(name)?.get(count) ?? null;
   }
   function widestMethod(methods, name, limit) {
-    const base = methods.get(name);
-    if (!base) return null;
-    let found = base.arity <= limit ? base : null;
-    for (const method of methods.values()) {
-      if (method.family !== name || method.arity > limit) continue;
-      if (!found || method.arity > found.arity) found = method;
+    const family = methodIndex(methods).get(name);
+    if (!family) return null;
+    for (let count = limit; count >= 0; count -= 1) {
+      if (family.has(count)) return family.get(count);
     }
-    return found;
+    return null;
   }
   function read(object, name) {
     if (object == null) {
@@ -4370,6 +4384,13 @@
     }
   };
   var Swill__Model__Base = class extends Swill__Object {
+    constructor() {
+      super();
+      this._relationship_requests = Runtime.cast(
+        {},
+        "T::Hash[String, T.untyped]"
+      );
+    }
     static classForType(type) {
       return Runtime.classWithSetting("resource_type", type);
     }
@@ -4502,6 +4523,12 @@
     }
     async loadRelationship(name) {
       if (this.isRelationshipLoaded(name)) return Runtime.read(this, name);
+      let pending = this._relationship_requests[name];
+      if (Runtime.isTruthy(pending)) {
+        await pending;
+        return Runtime.read(this, name);
+      }
+      ;
       return await this.reloadRelationship(name);
     }
     // Cocoa's -willAccessValueForKey:. A relationship nobody prefetched
@@ -4516,30 +4543,45 @@
       if (this.isRelationshipLoaded(name)) return;
       if (Runtime.read(this, `${name}_loading`) === true) return;
       if (Runtime.read(this, `${name}_error`) != null) return;
-      return this.reloadRelationship(name);
+      return this.loadRelationshipInBackground(name);
+    }
+    async loadRelationshipInBackground(name) {
+      try {
+        return await this.loadRelationship(name);
+      } catch (failure) {
+        return Runtime.warn(`${name} did not load: ${failure.message}`);
+      }
     }
     async reloadRelationship(name) {
+      let pending = this._relationship_requests[name];
+      if (Runtime.isTruthy(pending)) {
+        await pending;
+        return Runtime.read(this, name);
+      }
+      ;
       Runtime.write(this, `${name}_loading`, true);
       Runtime.write(this, `${name}_error`, null);
-      let value = null;
+      let request = null;
       try {
         let descriptor = this.relationship(name);
         let model_class = descriptor.modelClass();
-        let payload = await Swill__Wire.default().getJSON(
-          descriptor.urlFor(this),
-          {}
-        );
-        value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
+        request = Swill__Wire.default().getJSON(descriptor.urlFor(this), {});
+        this._relationship_requests[name] = request;
+        let payload = await request;
+        let value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
         this.assignRelationship(name, value);
       } catch (failure) {
         Runtime.write(this, `${name}_error`, failure.message);
-        Runtime.warn(`${name} did not load: ${failure.message}`);
-        value = Runtime.read(this, name);
+        throw new Error(`${failure.message}`);
       } finally {
+        if (Runtime.isEqual(this._relationship_requests[name], request)) {
+          Runtime.deleteKey(this._relationship_requests, name);
+        }
+        ;
         Runtime.write(this, `${name}_loading`, false);
       }
       ;
-      return value;
+      return Runtime.read(this, name);
     }
   };
 
@@ -6329,6 +6371,9 @@
           modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null } }
         },
         methods: {
+          "initialize": {
+            "arity": 0
+          },
           "validate": {
             "arity": 0
           },
@@ -6365,6 +6410,10 @@
           "property_will_access": {
             "arity": 1,
             "js": "propertyWillAccess"
+          },
+          "load_relationship_in_background": {
+            "arity": 1,
+            "js": "loadRelationshipInBackground"
           },
           "reload_relationship": {
             "arity": 1,

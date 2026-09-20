@@ -190,10 +190,12 @@ module Swill
       def disconnect(object)
         current = object.instance_variable_get(:@__swill_state__)
         return unless current
+        dependents = current[:dependents].values.flatten.dup
         current[:computed].each_value { |slot| slot[:disposers].slice!(0..).each(&:call) }
         current[:computed].clear
         current[:observers].clear
         current[:dependents].clear
+        dependents.each(&:call)
       end
     end
   end
