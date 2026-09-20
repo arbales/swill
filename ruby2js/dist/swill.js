@@ -3979,8 +3979,7 @@
       // marks off the property descriptor. The registry is the same
       // declaration as data, for code that asks the class rather than an
       // instance.
-      // Materialize an instance from a wire hash keyed by attribute keys,
-      // as Opal's Base.new(values) does.
+      // Materialize an instance from a wire hash keyed by attribute keys.
       // Attribute values by wire key.
       collectAttributes() {
         return Runtime.collectAttributes(this);

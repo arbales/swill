@@ -7,8 +7,9 @@ to small, understandable browser JavaScript without shipping a Ruby runtime.
 
 The target is not general Ruby compatibility. The target is the finite Swill
 surface needed by real applications, with unsupported Ruby rejected at build
-time. Product behavior is defined by the root documentation; the Opal port is a
-useful reference for Ruby-native APIs and intentional divergences.
+time. Product behavior is defined by the root documentation. The Opal port, which
+shipped the Ruby runtime to the browser, was retired on 20 September 2026; its
+two example applications are kept as reference in `examples/opal/`.
 
 ## Current Baseline
 
@@ -51,7 +52,7 @@ The initial kernel and DOM-boundary spike is complete and verified:
 - binding parity: `binding_root` and `@` roots, `bind-*` property bindings,
   `present?`/`empty?`/`nil?` readers that answer for nil intermediates,
   child-controller `represented_object` fed by the parent's `bind` (nil
-  included, an intentional divergence from Opal, which skips nil), writes
+  included, an intentional divergence from the Opal port, which skipped nil), writes
   through a missing owner dropped, and object-to-object bindings as a
   Ruby-authored `ObjectBindings` mixin over the runtime's existing path
   observation and metadata-checked writes, with no new compiler metadata;
@@ -129,7 +130,8 @@ The initial kernel and DOM-boundary spike is complete and verified:
   editor as delegate of its controls, so a refused commit keeps focus in
   the control;
 - the static example (16 September 2026, item 7.1): `examples/static` ports
-  the Opal static example in full but for its backend search, on top of
+  the Opal static example (`examples/opal/static/app.rb`) in full but for its
+  backend search, on top of
   `Swill::NotificationCenter` (post, `add_observer`, a controller's
   `observe_notification`), the application's `first_responder_did_change`
   notification, `bind` on a control's `value`, `Runtime.nameOf`, and `dup`
@@ -320,27 +322,41 @@ For every roadmap item:
 
 ## Decision Checkpoints
 
-### UI Kernel Checkpoint
+### UI Kernel Checkpoint (passed, 20 September 2026)
 
-After nested ownership, outlets, richer bindings, responder routing, and the
-static example work, compare Ruby2JS with the Opal implementation:
+The checkpoint asked whether avoiding the Ruby runtime produced a materially
+smaller and simpler system, or merely moved Ruby's complexity into custom
+filters. Measured against the Opal port at its final commit, `c142e4f`:
 
-- authoring clarity;
-- compiler complexity and rejection quality;
-- browser debugging and source maps;
-- bundle size and startup behavior;
-- amount of handwritten runtime code.
+| | Opal | Ruby2JS |
+| --- | --- | --- |
+| Framework bundle, gzip | 111,747 bytes | 26,365 bytes |
+| Framework bundle, minified | 414,654 bytes | 100,464 bytes |
+| Framework Ruby authored | 4,789 lines | 4,280 lines |
+| Handwritten runtime | none (shipped Opal's) | 1,403 lines JavaScript, 587 Ruby (MRI host) |
+| Compiler | none | 4,005 lines, build-time only |
 
-Continue only if avoiding the Ruby runtime still produces a materially smaller
-and simpler system rather than moving Ruby's complexity into custom filters.
+The shipped artifact is a quarter the size for comparable authoring, and the
+compiler's cost is paid once at build rather than by every page load. Against
+that, 4,005 lines of compiler is real complexity, and the honest reading is
+that some of it is Ruby's complexity relocated. The decision was to continue
+with Ruby2JS and retire Opal, on the grounds that the relocated complexity is
+inspectable, rejects unsupported forms with a file and line, and never reaches
+the browser. Three designs that existed only in the Opal port are to be
+re-implemented independently rather than translated: a typed command boundary
+(`Sig` and `CommandDispatcher`), `html_attribute` for declarative
+attribute-to-property mapping, and `EditableList::Persistence` for
+save-on-commit.
 
 ### Application Checkpoint
 
 After the model vertical slice and one Giraffic flow, decide whether to:
 
-- continue toward broader Swill parity;
-- keep Ruby2JS as a constrained client framework for selected applications; or
-- stop and retain Opal as the Ruby implementation.
+- continue toward broader Swill parity; or
+- keep Ruby2JS as a constrained client framework for selected applications.
+
+Retaining Opal is no longer an option: that port was retired at the UI Kernel
+Checkpoint.
 
 Stop or narrow the experiment if production features repeatedly require
 application-specific lowering, general reflection, runtime source

@@ -175,7 +175,7 @@ Commit `Gemfile.lock` after verification.
 | `lib/swill/runtime.mjs`, `lib/swill/runtime/` | The runtime surface and its modules: metadata, properties, values, paths, installation, attributes |
 | `lib/swill/browser_api.mjs` | Plain JavaScript declarations, friendly class aliases, and manual startup |
 | `lib/swill-ruby2js/` | Compiler: knowledge collection, filters, emission, and Sorbet artifacts |
-| `spec/mri_adapter.rb` | MRI adapter to the Opal observable implementation |
+| `spec/mri_host.rb` | The MRI host: declarations and the model subset, for the shared examples |
 | `spec/` | Compiler, MRI, runtime, bundle, and browser checks |
 | `examples/` | Browser example and application source |
 | `sorbet/rbi/runtime.rbi` | Types for runtime and DSL boundaries |
@@ -504,7 +504,8 @@ chooses while loading (a field focused in `controller_did_load`) stands.
 ### The static example
 
 `examples/static/index.html` with `examples/static.rb` is the full proof of
-the UI surface, ported from the Opal static example: a toolbar that switches
+the UI surface, ported from the retired Opal port's static example
+(`../examples/opal/static/app.rb`): a toolbar that switches
 the main window between a bindings pane (key-path bindings, computed model
 predicates, a draft editor, a nested card with a binding root, a nested
 counter posting notifications, and a first-responder readout), a controls

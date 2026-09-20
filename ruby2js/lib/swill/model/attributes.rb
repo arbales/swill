@@ -32,8 +32,7 @@ module Swill
           property name, type: type, default: default, attribute: true, key: key
         end
 
-        # Materialize an instance from a wire hash keyed by attribute keys,
-        # as Opal's Base.new(values) does.
+        # Materialize an instance from a wire hash keyed by attribute keys.
         def from_attributes(source)
           self.new.apply_attributes(source)
         end
