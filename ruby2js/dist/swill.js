@@ -990,13 +990,17 @@
     }
     return result;
   }
+  var admitsNil = (type) => !type || type === "T.untyped" || type === "NilClass" || type.startsWith("T.nilable(");
+  function applied(descriptor, value) {
+    return value == null && !admitsNil(descriptor.type) ? descriptor.defaultValue() : value;
+  }
   function applyAttributes(object, source) {
     for (const descriptor of declarations(object.constructor, "properties").values()) {
       if (!descriptor.attribute || descriptor.computed) continue;
       if (Object.hasOwn(source, descriptor.key)) {
-        object[descriptor.js] = source[descriptor.key];
+        object[descriptor.js] = applied(descriptor, source[descriptor.key]);
       } else if (Object.hasOwn(source, descriptor.name)) {
-        object[descriptor.js] = source[descriptor.name];
+        object[descriptor.js] = applied(descriptor, source[descriptor.name]);
       }
     }
     return object;
@@ -3127,7 +3131,7 @@
       ;
       if (!controller) return;
       let params = this._fragments.params();
-      let applied = 0;
+      let applied2 = 0;
       this._fragments.suspended(() => declarations2.forEach((declaration) => {
         let text = params[window.scopedKey(Runtime.read(declaration, "key"))];
         if (text == null) return;
@@ -3141,10 +3145,10 @@
           Runtime.read(declaration, "path"),
           value
         );
-        return ++applied;
+        return ++applied2;
       }));
       if (!Runtime.isEmpty(declarations2)) {
-        controller.controllerDidRestore(applied > 0);
+        controller.controllerDidRestore(applied2 > 0);
       }
       ;
       return declarations2.forEach((declaration) => {

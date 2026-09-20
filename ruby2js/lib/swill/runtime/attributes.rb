@@ -41,9 +41,27 @@ module Swill
           next unless descriptor["attribute"] && !descriptor["computed"]
           candidates = [descriptor["key"], descriptor["name"]].flat_map { |key| [key, key.to_sym] }
           found = candidates.find { |key| source.key?(key) }
-          object.public_send("#{descriptor['name']}=", source[found]) if found
+          object.public_send("#{descriptor['name']}=", applied(descriptor, source[found])) if found
         end
         object
+      end
+
+      # A document's nil for an attribute whose declaration does not admit nil
+      # is an absent value, not a value: the declared default stands, so a
+      # reader the compiler types String really holds a String. Nilable and
+      # untyped attributes keep the nil.
+      def applied(descriptor, value)
+        return value unless value.nil?
+        admits_nil?(descriptor["type"]) ? value : descriptor["default_value"].call
+      end
+
+      # On MRI a descriptor's type is the declared object — a class, or a
+      # sorbet type — where the browser reads the text the compiler
+      # serialized. Both spell themselves the same way.
+      def admits_nil?(type)
+        return true if type.nil?
+        text = type.to_s
+        text == "T.untyped" || text == "NilClass" || text.start_with?("T.nilable(")
       end
     end
   end

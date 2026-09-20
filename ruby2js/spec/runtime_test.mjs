@@ -2321,6 +2321,21 @@ test("codecs agree with MRI", async () => {
   assert.deepEqual(plain(result), JSON.parse(readFileSync("build/mri-models.json")));
 });
 
+test("a document's nil for an attribute that is not nilable leaves the declared default", async () => {
+  // Real servers send null for empty columns. The declaration says what the
+  // attribute is, and the compiler types its reader from that, so a nil for a
+  // String attribute is an absent value and the default stands.
+  fakeServer({"GET /api/authors": {data: [{id: "1", type: "authors", attributes: {name: null, born: null}}]}});
+  const [author] = await Author.findAll();
+  assert.deepEqual(plain([author.name, author.born]), ["", null], "String keeps its default; T.nilable(Integer) keeps the nil");
+  assert.equal(author.isDirty, false, "a document applies cleanly");
+  author.name = "Ada";
+  author.applyAttributes({name: null, born: 1815});
+  assert.deepEqual(plain([author.name, author.born]), ["", 1815], "a direct apply follows the same rule");
+  const note = Note.parseOne({id: 5, body: null});
+  assert.equal(note.body, "", "the plain JSON codec applies it too");
+});
+
 test("transform= formats and parses through value transformers; predicate readers end bind-* paths", () => {
   const author = new Author();
   author.born = 1815;

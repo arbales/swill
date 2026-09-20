@@ -292,8 +292,13 @@ Use two increasingly demanding proofs:
 
 1. Port the static example to exercise nested controllers, outlets, bindings,
    actions, focus, templates, controls, and unload (done).
-2. Port one backend-backed Giraffic flow covering dataset loading, selection,
-   detached editing, persistence, restoration, and a relationship.
+2. Port one backend-backed flow covering dataset loading, selection, detached
+   editing, persistence, restoration, and a relationship (done, 20 September
+   2026). The bar application (`~/Workspace/bar/frontend-ruby`) is that flow
+   rather than Giraffic: `frontend-ruby/spec/browser_check.mjs` drives it in
+   headless Chrome against fixtures, and `backend_check.mjs` drives it against
+   the live API. Giraffic's Ruby is kept at `examples/opal/giraffic/app.rb` if
+   a second flow is ever wanted.
 
 Do not claim parity from isolated unit fixtures alone.
 
@@ -350,7 +355,17 @@ save-on-commit.
 
 ### Application Checkpoint
 
-After the model vertical slice and one Giraffic flow, decide whether to:
+The evidence is in as of 20 September 2026: the model slice is complete and the
+bar application runs against its real backend in headless Chrome, through
+dataset loading, selection, search, sorting, relationship loading on access,
+detached editing, persistence, and URL restoration, with no exceptions, console
+errors, or framework warnings. The run found one framework defect, recorded
+above: a server nil landing in an attribute declared `String`. It found nothing
+requiring application-specific lowering, general reflection, runtime source
+interpretation, or a duplicated framework protocol, which are the conditions
+this checkpoint says should stop or narrow the experiment.
+
+The choice itself remains open. Decide whether to:
 
 - continue toward broader Swill parity; or
 - keep Ruby2JS as a constrained client framework for selected applications.
@@ -402,10 +417,15 @@ Recorded so they are fixed deliberately rather than rediscovered:
 - `await` is a command call: `T.cast(await x, Type)` parses as
   `await(x, Type)` and is rejected for the extra argument. Await into a
   local first (September 2026).
-- Attribute values are not checked against their declared types when a
-  document applies them: a server's `null` lands in a `String` attribute.
-  Readers that format such values stringify first. Decide whether
-  `apply_attributes` should coerce or refuse (September 2026).
+- A document's nil for an attribute whose declaration does not admit nil is
+  an absent value, not a value (20 September 2026): `apply_attributes` leaves
+  the declared default, so a reader the compiler types `String` really holds a
+  String. `T.nilable` and `T.untyped` attributes keep the nil, which is what
+  declaring them nilable asks for. Decided when the live Drinks API sent
+  `"description": null` for an attribute declared `String` and a computed
+  property calling `downcase` on it threw; the alternative, refusing, would
+  break a page over one column. Values of the wrong non-nil type are still
+  stored as given: there is no runtime type check beyond nil.
 
 ## Explicitly Deferred
 

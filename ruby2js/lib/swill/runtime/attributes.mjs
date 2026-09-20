@@ -40,13 +40,25 @@ export function collectAttributes(object, only = null) {
   return result;
 }
 
+// Whether a declared type admits nil at all.
+const admitsNil = type =>
+  !type || type === "T.untyped" || type === "NilClass" || type.startsWith("T.nilable(");
+
+// A document's null for an attribute whose declaration does not admit nil is
+// an absent value, not a value: the declared default stands, so a reader the
+// compiler types String really holds a String. Nilable and untyped attributes
+// keep the nil, which is what declaring them nilable asks for.
+function applied(descriptor, value) {
+  return value == null && !admitsNil(descriptor.type) ? descriptor.defaultValue() : value;
+}
+
 export function applyAttributes(object, source) {
   for (const descriptor of declarations(object.constructor, "properties").values()) {
     if (!descriptor.attribute || descriptor.computed) continue;
     if (Object.hasOwn(source, descriptor.key)) {
-      object[descriptor.js] = source[descriptor.key];
+      object[descriptor.js] = applied(descriptor, source[descriptor.key]);
     } else if (Object.hasOwn(source, descriptor.name)) {
-      object[descriptor.js] = source[descriptor.name];
+      object[descriptor.js] = applied(descriptor, source[descriptor.name]);
     }
   }
   return object;

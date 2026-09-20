@@ -192,6 +192,19 @@ class SharedModelTest < Minitest::Test
     ]
   }.freeze
 
+  def test_a_nil_for_a_non_nilable_attribute_leaves_the_declared_default_on_mri
+    author = Demo::Author.parse_one({
+      "data" => {"id" => "9", "type" => "authors", "attributes" => {"name" => nil, "born" => nil}}
+    })
+    assert_equal ["", nil], [author.name, author.born]
+    refute author.dirty?, "a document applies cleanly"
+    author.name = "Ada"
+    author.apply_attributes({"name" => nil, "born" => 1815})
+    assert_equal ["", 1815], [author.name, author.born]
+    note = Demo::Note.parse_one({"id" => 5, "body" => nil})
+    assert_equal "", note.body
+  end
+
   def test_json_api_and_plain_json_codecs_on_mri
     authors = Demo::Author.parse_many(DOCUMENT)
     ada = T.must(authors.first)
