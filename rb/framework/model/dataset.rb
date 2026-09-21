@@ -36,7 +36,7 @@ module Swill
         self.loading = true
         self.error = nil
         begin
-          self.records = @model_class.parse_many(await Wire.default.get_json(@url, @params))
+          self.records = @model_class.parse_many(await Wire.default.get_json(@url, params: @params))
         rescue => failure
           self.error = failure.message
         ensure

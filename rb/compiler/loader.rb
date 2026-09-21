@@ -57,6 +57,7 @@ module Swill
       attr_reader :container
 
       def initialize(parent: nil)
+        @parent = parent
         # Only real files are shared: a source with no file of its own is
         # this container's, whatever another container called its own.
         @evaluated = parent ? parent.evaluated.select { |path| File.file?(path) } : []
@@ -77,6 +78,10 @@ module Swill
         return if parent
         install_dom_stubs
         HOST_SOURCES.each { |path| load_file(File.join(ROOT, path)) }
+      end
+
+      def fresh
+        self.class.new(parent: @parent)
       end
 
       attr_reader :evaluated

@@ -866,6 +866,23 @@ class CompilerTest < Minitest::Test
     JS
   end
 
+  def test_optional_class_methods_use_the_same_arity_variants
+    js = compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../rb/runtime/runtime.mjs")
+      class Labels < TestObject
+        def self.make(prefix = "Hello", name)
+          "#{prefix}, #{name}"
+        end
+        def self.calls
+          [make("Ada"), make("Hi", "Grace")]
+        end
+      end
+    RUBY
+    assert_includes js, "static makeWithPrefix(prefix, name)"
+    assert_equal ["Hello, Ada", "Hi, Grace"], execute(js + <<~JS)
+      console.log(JSON.stringify(Runtime.resolve("Labels").calls()));
+    JS
+  end
+
   # The types a signature declares follow the parameters, not the argument
   # positions, so a lambda passed to a shorter variant is still typed.
   def test_a_lambda_passed_to_a_shorter_variant_keeps_its_declared_types
@@ -887,10 +904,8 @@ class CompilerTest < Minitest::Test
 
   def test_optional_arguments_are_rejected_where_they_cannot_be_ported
     [
-      ["class Example < TestObject\ndef go(a, *rest); a; end\nend", "arguments are positional"],
-      ["class Example < TestObject\ndef go(a, b: 1); a; end\nend", "arguments are positional"],
-      ["class Example < TestObject\ndef self.go(a, b = 1); a; end\nend", "arguments are positional and required"],
-      ["class Example < TestObject\ndef go?(a = 1); a; end\nend", "a predicate, bang, or writer takes required arguments only"],
+      ["class Example < TestObject\ndef go(*); nil; end\nend", "anonymous method parameters"],
+      ["class Example < TestObject\ndef go(**nil); nil; end\nend", "unsupported method parameter form"],
       ["class Example < TestObject\nextend T::Sig\nsig { params(b: Integer, a: Integer).returns(Integer) }\ndef go(a, b); a; end\nend",
        "signature parameters must match go's parameters in order"],
       ["class Example < TestObject\ndef go(items); items.each { |a, b = 1| a }; end\nend", "a block takes required arguments only"]
@@ -950,6 +965,101 @@ class CompilerTest < Minitest::Test
     assert_includes error.message, "wrong number of arguments for greet: 3"
   end
 
+  def test_rest_keywords_and_blocks_preserve_ruby_call_semantics
+    source = <<~'RUBY'
+      class Flexible < TestObject
+        def arrange(prefix = "P", *middle, tail, flag:, mark: "!", **extra, &block)
+          [prefix, middle, tail, flag, mark, extra, block_given?, block.call(prefix)]
+        end
+
+        def calls
+          first = arrange("A", "B", "C", flag: 4, note: 5) { |value| value }
+          callback = ->(value) { value }
+          second = arrange("Z", flag: 6, mark: nil, &callback)
+          values = ["D", "E", "F"]
+          options = {flag: 7, note: 8}
+          third = arrange(*values, **options, &callback)
+          [first, second, third, separate({flag: 9}),
+           around("Y") { |value| value }, around("N")]
+        end
+
+        def separate(value, **options)
+          [value, options]
+        end
+
+        def around(value)
+          return "none" unless block_given?
+          yield value
+        end
+      end
+    RUBY
+    ruby = [["A", ["B"], "C", 4, "!", {"note" => 5}, true, "A"],
+            ["P", [], "Z", 6, nil, {}, true, "P"],
+            ["D", ["E"], "F", 7, "!", {"note" => 8}, true, "D"],
+            [{"flag" => 9}, {}], "Y", "none"]
+    js = compiler_with_test_object.add(source).javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_includes js, "...__swill_arguments"
+    assert_includes js, "Runtime.keywordArguments"
+    assert_includes js, "Runtime.blockArgument"
+    assert_equal ruby, execute(js + <<~JS)
+      console.log(JSON.stringify(new (Runtime.resolve("Flexible"))().calls()));
+    JS
+  end
+
+  def test_complex_methods_keep_implicit_returns_and_typed_block_parameters
+    js = compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../rb/runtime/runtime.mjs")
+      class Walker < TestObject
+        extend T::Sig
+
+        sig { params(element: Element, block: T.proc.params(child: Element).void).returns(String) }
+        def walk(element, &block)
+          yield element
+          result = element.tagName
+          result
+        end
+
+        sig { params(element: Element).returns(String) }
+        def label(element)
+          found = ""
+          walk(element) { |child| found = child.tagName }
+          found
+        end
+      end
+    RUBY
+    assert_includes js, "return result;"
+    assert_includes js, "child.tagName", "the carried block is not reprocessed without its parameter type"
+    refute_includes js, "child.tagName()"
+    assert_equal ["SECTION", "SECTION"], execute(js + <<~JS)
+      const element = {tagName: "SECTION"};
+      const walker = new (Runtime.resolve("Walker"))();
+      console.log(JSON.stringify([walker.walk(element, Runtime.blockArgument(() => {})), walker.label(element)]));
+    JS
+  end
+
+  def test_mixin_class_methods_bind_optional_and_keyword_arguments
+    js = compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../rb/runtime/runtime.mjs")
+      module Naming
+        def self.included(base)
+          base.extend(ClassMethods)
+        end
+        module ClassMethods
+          def label(prefix = "x", suffix:)
+            [prefix, suffix]
+          end
+        end
+      end
+      class Named < TestObject
+        include Naming
+        def self.calls
+          [label(suffix: "y"), label("a", suffix: "b")]
+        end
+      end
+    RUBY
+    assert_equal [["x", "y"], ["a", "b"]], execute(js + <<~JS)
+      console.log(JSON.stringify(Runtime.resolve("Named").calls()));
+    JS
+  end
+
   def test_a_forward_passes_declared_parameters_and_generates_the_same_rbi
     compiler = compiler_with_test_object.add(<<~'RUBY')
       module Delegating
@@ -1002,10 +1112,56 @@ class CompilerTest < Minitest::Test
     assert_includes error.message, "missing keyword: :default"
   end
 
-  def test_missing_include_and_reopened_class_are_rejected
+  def test_missing_include_is_rejected_and_local_classes_can_be_reopened
     assert_raises(Swill::Ruby2JS::CompileError) { javascript("include Missing") }
-    compiler = compile("")
-    assert_raises(Swill::Ruby2JS::CompileError) { compiler.add("class Example < TestObject; end") }
+    compiler = compiler_with_test_object
+    compiler.add(<<~RUBY, file: "generated.rb")
+      class Example < TestObject
+        property :name, type: String, default: "Ada"
+        def label; "generated"; end
+      end
+    RUBY
+    compiler.add(<<~'RUBY', file: "client.rb")
+      class Example
+        property :title, type: String, default: "Engineer"
+        def label; "handwritten"; end
+        def description; "#{name}: #{title}"; end
+      end
+    RUBY
+
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    combined = compiler_with_test_object.add(<<~'RUBY').javascript(runtime: "../rb/runtime/runtime.mjs")
+      class Example < TestObject
+        property :name, type: String, default: "Ada"
+        property :title, type: String, default: "Engineer"
+        def label; "handwritten"; end
+        def description; "#{name}: #{title}"; end
+      end
+    RUBY
+    assert_equal 1, compiler.knowledge.local.count { |entry| entry["name"] == "Example" }
+    assert_equal 1, js.scan("class Example extends").length
+    refute_includes js, 'return "generated"'
+    assert_equal combined, js, "reopening adds no JavaScript indirection or duplicate methods"
+    assert_equal ["handwritten", "Ada: Engineer"], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.label(), object.description()]));
+    JS
+  end
+
+  def test_failed_reopening_restores_the_last_accepted_class
+    compiler = compiler_with_test_object
+      .add("class Other < TestObject; end")
+      .add("class Example < TestObject\ndef label; \"accepted\"; end\nend")
+
+    assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler.add("class Example < Other\ndef label; \"rejected\"; end\nend")
+    end
+    compiler.add("class Example\ndef extra; \"ready\"; end\nend")
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_equal ["accepted", "ready"], execute(js + <<~JS)
+      const object = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify([object.label(), object.extra()]));
+    JS
   end
 
   def test_source_is_preflighted_and_failed_evaluation_can_be_retried
@@ -1975,6 +2131,8 @@ class CompilerTest < Minitest::Test
       .add(File.read("rb/framework/model/drafts.rb"))
       .add(File.read("rb/framework/model/store.rb"))
       .add(File.read("rb/framework/model/identity.rb"))
+      .add(File.read("rb/framework/model/collection.rb"))
+      .add(File.read("rb/framework/model/remote_data.rb"))
       .add(File.read("rb/framework/model/relationship.rb"))
       .add(File.read("rb/framework/model/codec.rb"))
       .add(File.read("rb/framework/model/dataset.rb"))

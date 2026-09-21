@@ -17,17 +17,21 @@ module Swill
   module ObjectBindings
     extend T::Sig
 
-    sig { params(target: Symbol, options: T::Hash[Symbol, T.untyped]).returns(T.untyped) }
-    def bind(target, options)
+    sig do
+      params(
+        target: Symbol,
+        to: Swill::Object,
+        key_path: String,
+        null_placeholder: T.untyped
+      ).returns(T.untyped)
+    end
+    def bind(target, to:, key_path:, null_placeholder: nil)
       unbind(target)
-      source = options[:to]
-      path = options[:key_path]
       # One value serves every fall-back, so a placeholder is treated as
       # immutable, as Cocoa's is. Not giving one is giving nil.
-      placeholder = options.fetch(:null_placeholder, nil)
-      sync = ->(value) { Runtime.write(self, target, value == nil ? placeholder : value) }
-      sync.(Runtime.readPath(source, path))
-      object_bindings << {target: target, dispose: Runtime.observePath(source, path, sync)}
+      sync = ->(value) { Runtime.write(self, target, value == nil ? null_placeholder : value) }
+      sync.(Runtime.readPath(to, key_path))
+      object_bindings << {target: target, dispose: Runtime.observePath(to, key_path, sync)}
       self
     end
 

@@ -736,6 +736,28 @@ test("an object retains what it observes and lets it go when it deallocs", () =>
   assert.equal(early, 1, "and takes it out of what dealloc would release");
 });
 
+test("complex calls keep positional hashes separate and enforce keywords", () => {
+  const signature = {
+    positional: [{name: "value", kind: "req"}],
+    keywords: [{name: "required", kind: "keyreq"}, {name: "optional", kind: "key"}],
+    keywordRest: null, block: "block"
+  };
+  const positional = {required: "positional"};
+  const bound = Runtime.bindArguments(
+    [positional, Runtime.keywordArguments({required: 1})], signature
+  );
+  assert.equal(Runtime.argument(bound, "value"), positional);
+  assert.equal(Runtime.argument(bound, "required"), 1);
+  assert.equal(Runtime.isOmittedArgument(Runtime.argument(bound, "optional")), true);
+  assert.throws(() => Runtime.bindArguments([positional], signature), /missing keyword: required/);
+  assert.throws(
+    () => Runtime.bindArguments(
+      [positional, Runtime.keywordArguments({required: 1, unknown: 2})], signature
+    ),
+    /unknown keyword: unknown/
+  );
+});
+
 test("a method family resolves by argument count", () => {
   class Family extends SwillObject {
     tally() { return 1; }
@@ -1156,28 +1178,28 @@ test("object bindings keep a target equal to a source path and release on unload
   assert.equal(f.parent.badgeCount, 1, "awake_from_dom bound badge_count to the badge outlet");
   const other = new Badge();
   other.count = 7;
-  f.parent.bind("badge_count", {to: other, key_path: "count"});
+  f.parent.bind("badge_count", Runtime.keywordArguments({to: other, key_path: "count"}));
   assert.equal(f.parent.badgeCount, 7, "rebinding replaces the previous source");
   f.childBump.click();
   assert.equal(f.parent.badgeCount, 7);
   other.count = 8;
   assert.equal(f.parent.badgeCount, 8);
-  assert.throws(() => f.parent.bind("nonexistent", {to: other, key_path: "count"}), /Unknown writer: nonexistent/);
+  assert.throws(() => f.parent.bind("nonexistent", Runtime.keywordArguments({to: other, key_path: "count"})), /Unknown writer: nonexistent/);
   f.parent.unbind("badge_count");
   other.count = 9;
   assert.equal(f.parent.badgeCount, 8);
   // Cocoa's NSNullPlaceholderBindingOption, so a path that can have no value
   // can feed a property that must have one.
-  f.parent.bind("badge_count", {to: other, key_path: "count", null_placeholder: -1});
+  f.parent.bind("badge_count", Runtime.keywordArguments({to: other, key_path: "count", null_placeholder: -1}));
   other.count = null;
   assert.equal(f.parent.badgeCount, -1, "no value on the path is the placeholder");
   other.count = 3;
   assert.equal(f.parent.badgeCount, 3, "a value replaces it again");
-  f.parent.bind("badge_count", {to: other, key_path: "count"});
+  f.parent.bind("badge_count", Runtime.keywordArguments({to: other, key_path: "count"}));
   other.count = null;
   assert.equal(f.parent.badgeCount, null, "without a placeholder the target takes the nil");
   other.count = 9;
-  f.parent.bind("badge_count", {to: other, key_path: "count"});
+  f.parent.bind("badge_count", Runtime.keywordArguments({to: other, key_path: "count"}));
   f.parent.unload();
   other.count = 10;
   assert.equal(f.parent.badgeCount, 9, "unload unbinds object bindings");
@@ -1366,8 +1388,8 @@ test("show_window presents a dialog whose dismissal restores the first responder
   assert.equal(f.body.children.length, before, "a rejected window leaves nothing in the page");
   const host = element("div", {});
   f.body.append(host);
-  const hosted = f.application.showWindowIn("palette", host);
-  assert.equal(hosted.root().parentElement, host, "show_window_in presents into a chosen element");
+  const hosted = f.application.showWindow("palette", Runtime.keywordArguments({into: host}));
+  assert.equal(hosted.root().parentElement, host, "show_window into: presents into a chosen element");
   f.application.dismiss(hosted.controller());
   assert.equal(host.children.length, 0);
 });
@@ -2280,7 +2302,7 @@ test("plain JSON codec, datasets, query parameters, and the wire's base URL", as
     await failing.reload();
     assert.match(failing.error, /GET https:\/\/example.test\/api\/nowhere -> 404/);
     assert.equal(failing.loading, false);
-    assert.equal(await Wire.default().requestJSON("GET", "/api/missing", null), null, "204 yields nil");
+    assert.equal(await Wire.default().requestJSON("GET", "/api/missing"), null, "204 yields nil");
   } finally {
     Wire.default().baseURL = "";
   }
@@ -2289,13 +2311,13 @@ test("plain JSON codec, datasets, query parameters, and the wire's base URL", as
 test("the wire encodes forms, resolves relative URLs against its base, and reports failures", async () => {
   const requests = fakeServer({"POST /api/login": {ok: 1}});
   const wire = new Wire();
-  const answer = await wire.requestFormJSON("POST", "/api/login", {user: "ada", token: null, n: 2});
+  const answer = await wire.requestFormJSON("POST", "/api/login", Runtime.keywordArguments({body: {user: "ada", token: null, n: 2}}));
   assert.deepEqual(plain([answer, requests[0].body, requests[0].headers["Content-Type"]]), [{ok: 1}, "user=ada&n=2", "application/x-www-form-urlencoded"]);
   assert.equal(requests[0].headers.Accept, "application/vnd.api+json, application/json");
   wire.baseURL = "https://api.test";
   assert.deepEqual(plain([wire.resolveURL("api/x"), wire.resolveURL("/api/x"), wire.resolveURL("https://other.test/y")]),
     ["https://api.test/api/x", "https://api.test/api/x", "https://other.test/y"]);
-  await assert.rejects(wire.getJSON("/api/nowhere", {}), /GET https:\/\/api.test\/api\/nowhere -> 404/);
+  await assert.rejects(wire.getJSON("/api/nowhere"), /GET https:\/\/api.test\/api\/nowhere -> 404/);
   assert.equal(Wire.urlWithParams("/a?x=1", {y: "2 3"}), "/a?x=1&y=2+3");
   assert.equal(Wire.resourceURL("/api/notes", "a/b"), "/api/notes/a%2Fb");
 });

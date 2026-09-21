@@ -6,6 +6,12 @@ module Swill
   module Runtime
     extend T::Sig
 
+    sig { returns(T.untyped) }
+    def self.omitted_argument; end
+
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.omitted_argument?(value); end
+
     sig { params(receiver: T.untyped, name: String).returns(T::Boolean) }
     def self.respondsTo(receiver, name); end
 
@@ -104,6 +110,36 @@ module Swill
 
     sig { params(object: T.untyped, source: T.untyped).returns(T.untyped) }
     def self.apply_attributes(object, source); end
+
+    sig { params(object: T.untyped, name: String).void }
+    def self.data_field_will_access(object, name); end
+
+    sig { params(object: T.untyped).void }
+    def self.initialize_remote_data(object); end
+
+    sig { void }
+    def self.close_data; end
+
+    sig { params(object: T.untyped, name: String).returns(T::Boolean) }
+    def self.data_field_loaded(object, name); end
+
+    sig { params(object: T.untyped, name: String).returns(T::Boolean) }
+    def self.data_field_loading(object, name); end
+
+    sig { params(object: T.untyped, name: String).returns(T.nilable(String)) }
+    def self.data_field_error(object, name); end
+
+    sig { params(object: T.untyped, name: String, reload: T::Boolean).returns(T.untyped) }
+    def self.load_data_field(object, name, reload); end
+
+    sig { params(model: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
+    def self.data_query(model, name, arguments, keywords); end
+
+    sig { params(model: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
+    def self.data_resolve(model, name, arguments, keywords); end
+
+    sig { params(object: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
+    def self.data_command(object, name, arguments, keywords); end
 
     # Declaration-time helpers. These run while a class body is evaluated on
     # MRI and are never compiled into the browser.

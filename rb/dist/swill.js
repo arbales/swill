@@ -555,11 +555,11 @@
         }
       }
     }
-    const pending = new Map(entries.map(([name, descriptor]) => [
+    const pending2 = new Map(entries.map(([name, descriptor]) => [
       descriptor.constructor,
       { name, descriptor }
     ]));
-    if (pending.size !== entries.length) {
+    if (pending2.size !== entries.length) {
       throw new Error("Duplicate constructor in meta");
     }
     const methods = (descriptors) => Object.entries(descriptors ?? {}).map(([name, descriptor]) => ({ name, js: name, ...descriptor }));
@@ -573,10 +573,10 @@
       mixinMetadata.set(mixin.factory, methods(mixin.methods));
       if (mixin.classFactory) mixinClassFactories.set(mixin.factory, mixin.classFactory);
     }
-    while (pending.size) {
+    while (pending2.size) {
       let progress = false;
-      for (const [klass, { name, descriptor }] of pending) {
-        if (pending.has(Object.getPrototypeOf(klass))) continue;
+      for (const [klass, { name, descriptor }] of pending2) {
+        if (pending2.has(Object.getPrototypeOf(klass))) continue;
         if (descriptor.mixins?.length) include(klass, descriptor.mixins, incoming);
         const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({
           name: name2,
@@ -593,7 +593,7 @@
           descriptor.restorations ?? [],
           descriptor.settings ?? []
         );
-        pending.delete(klass);
+        pending2.delete(klass);
         progress = true;
       }
       if (!progress) {
@@ -743,6 +743,86 @@
     return classes.get(name);
   }
 
+  // rb/runtime/arguments.mjs
+  var KEYWORDS = /* @__PURE__ */ Symbol("Swill keywords");
+  var BLOCK = /* @__PURE__ */ Symbol("Swill block");
+  var OMITTED = Object.freeze({});
+  function keywordArguments(value) {
+    return { [KEYWORDS]: true, value };
+  }
+  function blockArgument(value) {
+    return { [BLOCK]: true, value };
+  }
+  function omittedArgument() {
+    return OMITTED;
+  }
+  function isOmittedArgument(value) {
+    return value === OMITTED;
+  }
+  function isKeywordArguments(value) {
+    return value != null && value[KEYWORDS] === true;
+  }
+  function isBlockArgument(value) {
+    return value != null && value[BLOCK] === true;
+  }
+  function positionalArgumentCount(values) {
+    let count = values.length;
+    if (count > 0 && isBlockArgument(values[count - 1])) count -= 1;
+    if (count > 0 && isKeywordArguments(values[count - 1])) count -= 1;
+    return count;
+  }
+  function bindArguments(values, signature) {
+    const supplied = values.slice();
+    const blockCarrier = isBlockArgument(supplied.at(-1)) ? supplied.pop() : null;
+    const keywordCarrier = isKeywordArguments(supplied.at(-1)) ? supplied.pop() : null;
+    const keywords = keywordCarrier?.value ?? {};
+    const bound = /* @__PURE__ */ Object.create(null);
+    const positional = signature.positional;
+    const restIndex = positional.findIndex((parameter) => parameter.kind === "rest");
+    const optionalIndexes = positional.flatMap((parameter, index) => parameter.kind === "opt" ? [index] : []);
+    const required = positional.length - optionalIndexes.length - (restIndex >= 0 ? 1 : 0);
+    const maximum = restIndex >= 0 ? Infinity : positional.length;
+    if (supplied.length < required || supplied.length > maximum) {
+      throw new Error(`wrong number of arguments (given ${supplied.length}, expected ${required}${maximum === Infinity ? "+" : required === maximum ? "" : `..${maximum}`})`);
+    }
+    const beforeRest = restIndex >= 0 ? positional.slice(0, restIndex) : positional;
+    const afterRest = restIndex >= 0 ? positional.slice(restIndex + 1) : [];
+    const firstOptional = beforeRest.findIndex((parameter) => parameter.kind === "opt");
+    const prefix = firstOptional >= 0 ? beforeRest.slice(0, firstOptional) : beforeRest;
+    const tail = firstOptional >= 0 ? beforeRest.slice(firstOptional) : [];
+    const optionals = tail.filter((parameter) => parameter.kind === "opt");
+    const post = [...tail.filter((parameter) => parameter.kind === "req"), ...afterRest];
+    let front = 0;
+    let back = supplied.length;
+    for (const parameter of prefix) bound[parameter.name] = supplied[front++];
+    for (let index = post.length - 1; index >= 0; index -= 1) bound[post[index].name] = supplied[--back];
+    for (const parameter of optionals) {
+      bound[parameter.name] = front < back ? supplied[front++] : OMITTED;
+    }
+    if (restIndex >= 0) bound[positional[restIndex].name] = supplied.slice(front, back);
+    const known = new Set(signature.keywords.map((parameter) => parameter.name));
+    for (const parameter of signature.keywords) {
+      if (Object.hasOwn(keywords, parameter.name)) bound[parameter.name] = keywords[parameter.name];
+      else if (parameter.kind === "keyreq") throw new Error(`missing keyword: ${parameter.name}`);
+      else bound[parameter.name] = OMITTED;
+    }
+    const extras = Object.keys(keywords).filter((name) => !known.has(name));
+    if (signature.keywordRest) {
+      bound[signature.keywordRest] = Object.fromEntries(extras.map((name) => [name, keywords[name]]));
+    } else if (extras.length > 0) {
+      throw new Error(`unknown keyword${extras.length === 1 ? "" : "s"}: ${extras.join(", ")}`);
+    }
+    bound[signature.block ?? "__swill_block"] = blockCarrier?.value ?? null;
+    return bound;
+  }
+  function argument(bound, name) {
+    return bound[name];
+  }
+  function yieldBlock(block, ...values) {
+    if (block == null) throw new Error("no block given");
+    return block(...values);
+  }
+
   // rb/runtime/paths.mjs
   var methodIndexes = /* @__PURE__ */ new WeakMap();
   function methodIndex(methods) {
@@ -760,6 +840,7 @@
   function resolveMethod(methods, name, count) {
     const base = methods.get(name);
     if (!base) return null;
+    if (base.minimum != null && count >= base.minimum && (base.maximum == null || count <= base.maximum)) return base;
     if (base.arity === count) return base;
     return methodIndex(methods).get(name)?.get(count) ?? null;
   }
@@ -902,9 +983,15 @@
     }
     const methods = declarations(object.constructor, "methods");
     if (!methods.has(name) && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
-    const method = resolveMethod(methods, name, args.length);
+    const method = resolveMethod(methods, name, positionalArgumentCount(args));
     if (!method) {
       throw new Error(`Unknown method or wrong arity: ${name}`);
+    }
+    if (method.minimum == null && args.some(isKeywordArguments)) {
+      throw new Error(`Unknown method or wrong keywords: ${name}`);
+    }
+    if (method.minimum == null && args.some(isBlockArgument)) {
+      throw new Error(`Method does not accept a block: ${name}`);
     }
     return object[method.js](...args);
   }
@@ -1009,6 +1096,520 @@
     return object;
   }
 
+  // rb/runtime/message_pack.mjs
+  var encoder = new TextEncoder();
+  var decoder = new TextDecoder();
+  var Writer = class {
+    constructor() {
+      this.bytes = [];
+    }
+    byte(value) {
+      this.bytes.push(value & 255);
+    }
+    integer(value, bytes) {
+      for (let shift = (bytes - 1) * 8; shift >= 0; shift -= 8) this.byte(value / 2 ** shift);
+    }
+    integer64(value) {
+      const bytes = new Uint8Array(8);
+      new DataView(bytes.buffer).setBigInt64(0, BigInt(value));
+      this.raw(bytes);
+    }
+    raw(values) {
+      this.bytes.push(...values);
+    }
+    result() {
+      return Uint8Array.from(this.bytes);
+    }
+  };
+  function writeString(writer, value) {
+    const bytes = encoder.encode(value);
+    if (bytes.length < 32) writer.byte(160 | bytes.length);
+    else if (bytes.length < 256) {
+      writer.byte(217);
+      writer.byte(bytes.length);
+    } else if (bytes.length < 65536) {
+      writer.byte(218);
+      writer.integer(bytes.length, 2);
+    } else {
+      writer.byte(219);
+      writer.integer(bytes.length, 4);
+    }
+    writer.raw(bytes);
+  }
+  function writeValue(writer, value) {
+    if (value == null) return writer.byte(192);
+    if (value === false) return writer.byte(194);
+    if (value === true) return writer.byte(195);
+    if (typeof value === "string") return writeString(writer, value);
+    if (typeof value === "number" && Number.isInteger(value)) {
+      if (value >= 0 && value < 128) return writer.byte(value);
+      if (value >= -32 && value < 0) return writer.byte(256 + value);
+      if (value >= 0 && value < 256) {
+        writer.byte(204);
+        return writer.byte(value);
+      }
+      if (value >= 0 && value < 65536) {
+        writer.byte(205);
+        return writer.integer(value, 2);
+      }
+      if (value >= 0 && value <= 4294967295) {
+        writer.byte(206);
+        return writer.integer(value, 4);
+      }
+      if (value >= -128 && value < 0) {
+        writer.byte(208);
+        return writer.byte(value);
+      }
+      if (value >= -32768 && value < 0) {
+        writer.byte(209);
+        return writer.integer(65536 + value, 2);
+      }
+      if (value >= -2147483648 && value < 0) {
+        writer.byte(210);
+        return writer.integer(4294967296 + value, 4);
+      }
+      if (Number.isSafeInteger(value)) {
+        writer.byte(value >= 0 ? 207 : 211);
+        return writer.integer64(value);
+      }
+    }
+    if (typeof value === "number") {
+      writer.byte(203);
+      const bytes = new Uint8Array(8);
+      new DataView(bytes.buffer).setFloat64(0, value);
+      return writer.raw(bytes);
+    }
+    if (Array.isArray(value)) {
+      if (value.length < 16) writer.byte(144 | value.length);
+      else {
+        writer.byte(220);
+        writer.integer(value.length, 2);
+      }
+      value.forEach((item) => writeValue(writer, item));
+      return;
+    }
+    if (value instanceof Uint8Array) {
+      writer.byte(198);
+      writer.integer(value.length, 4);
+      writer.raw(value);
+      return;
+    }
+    const entries = Object.entries(value);
+    if (entries.length < 16) writer.byte(128 | entries.length);
+    else {
+      writer.byte(222);
+      writer.integer(entries.length, 2);
+    }
+    for (const [key, item] of entries) {
+      writeString(writer, key);
+      writeValue(writer, item);
+    }
+  }
+  var Reader = class {
+    constructor(bytes) {
+      this.bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      this.offset = 0;
+    }
+    byte() {
+      return this.bytes[this.offset++];
+    }
+    integer(length2) {
+      let value = 0;
+      for (let index = 0; index < length2; index += 1) value = value * 256 + this.byte();
+      return value;
+    }
+    string(length2) {
+      const value = decoder.decode(this.bytes.subarray(this.offset, this.offset + length2));
+      this.offset += length2;
+      return value;
+    }
+    value() {
+      const tag = this.byte();
+      if (tag <= 127) return tag;
+      if (tag >= 224) return tag - 256;
+      if ((tag & 224) === 160) return this.string(tag & 31);
+      if ((tag & 240) === 144) return this.array(tag & 15);
+      if ((tag & 240) === 128) return this.map(tag & 15);
+      switch (tag) {
+        case 192:
+          return null;
+        case 194:
+          return false;
+        case 195:
+          return true;
+        case 204:
+          return this.byte();
+        case 205:
+          return this.integer(2);
+        case 206:
+          return this.integer(4);
+        case 207:
+          return this.bigInteger(false);
+        case 208: {
+          const value = this.byte();
+          return value > 127 ? value - 256 : value;
+        }
+        case 209: {
+          const value = this.integer(2);
+          return value > 32767 ? value - 65536 : value;
+        }
+        case 210: {
+          const value = this.integer(4);
+          return value > 2147483647 ? value - 4294967296 : value;
+        }
+        case 211:
+          return this.bigInteger(true);
+        case 203: {
+          const view = new DataView(this.bytes.buffer, this.bytes.byteOffset + this.offset, 8);
+          this.offset += 8;
+          return view.getFloat64(0);
+        }
+        case 217:
+          return this.string(this.byte());
+        case 218:
+          return this.string(this.integer(2));
+        case 219:
+          return this.string(this.integer(4));
+        case 220:
+          return this.array(this.integer(2));
+        case 221:
+          return this.array(this.integer(4));
+        case 222:
+          return this.map(this.integer(2));
+        case 223:
+          return this.map(this.integer(4));
+        case 196:
+          return this.binary(this.byte());
+        case 197:
+          return this.binary(this.integer(2));
+        case 198:
+          return this.binary(this.integer(4));
+        default:
+          throw new Error(`Unsupported MessagePack tag: 0x${tag.toString(16)}`);
+      }
+    }
+    array(length2) {
+      return Array.from({ length: length2 }, () => this.value());
+    }
+    map(length2) {
+      const value = {};
+      for (let index = 0; index < length2; index += 1) {
+        const key = this.value();
+        const item = this.value();
+        Object.defineProperty(value, key, { value: item, enumerable: true, configurable: true, writable: true });
+      }
+      return value;
+    }
+    bigInteger(signed) {
+      const view = new DataView(this.bytes.buffer, this.bytes.byteOffset + this.offset, 8);
+      const value = signed ? view.getBigInt64(0) : view.getBigUint64(0);
+      this.offset += 8;
+      const number = Number(value);
+      if (!Number.isSafeInteger(number)) throw new Error("MessagePack integer exceeds JavaScript's safe range");
+      return number;
+    }
+    binary(length2) {
+      const value = this.bytes.slice(this.offset, this.offset + length2);
+      this.offset += length2;
+      return value;
+    }
+  };
+  function pack(value) {
+    const writer = new Writer();
+    writeValue(writer, value);
+    return writer.result();
+  }
+  function unpack(bytes) {
+    const reader = new Reader(bytes);
+    const value = reader.value();
+    if (reader.offset !== reader.bytes.length) throw new Error("Trailing MessagePack data");
+    return value;
+  }
+
+  // rb/runtime/data_client.mjs
+  var objectStates = /* @__PURE__ */ new WeakMap();
+  var stores = /* @__PURE__ */ new Map();
+  var configuration2 = null;
+  var socket = null;
+  var connecting = null;
+  var actorScope = null;
+  var sequence = 0;
+  var generation = 0;
+  var pending = /* @__PURE__ */ new Map();
+  var queuedDemands = /* @__PURE__ */ new Map();
+  var demandScheduled = false;
+  function state2(object) {
+    if (!objectStates.has(object)) {
+      objectStates.set(object, { fields: /* @__PURE__ */ new Map() });
+    }
+    return objectStates.get(object);
+  }
+  function fieldState(object, name) {
+    const fields = state2(object).fields;
+    if (!fields.has(name)) fields.set(name, { status: "unknown", error: null, generation: -1 });
+    return fields.get(name);
+  }
+  function modelStore(name) {
+    if (!stores.has(name)) stores.set(name, /* @__PURE__ */ new Map());
+    return stores.get(name);
+  }
+  function canonical(name, id) {
+    const key = String(id);
+    const store = modelStore(name);
+    if (store.has(key)) return store.get(key);
+    const object = new (resolve(name))();
+    write(object, "id", key);
+    fieldState(object, "id").status = "present";
+    store.set(key, object);
+    return object;
+  }
+  function decodeValue(value) {
+    if (Array.isArray(value)) return value.map(decodeValue);
+    if (value && typeof value === "object") {
+      if (Object.keys(value).length === 1 && value.$ref) return canonical(value.$ref[0], value.$ref[1]);
+      if (Object.keys(value).length === 1 && value.$time) return new Date(value.$time);
+      if (Object.keys(value).length === 1 && value.$date) return value.$date;
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decodeValue(item)]));
+    }
+    return value;
+  }
+  function encodeValue(value) {
+    if (Array.isArray(value)) return value.map(encodeValue);
+    if (value instanceof Date) return { $time: value.toISOString() };
+    if (value && typeof value === "object") {
+      const name = value.constructor.remoteModelName?.();
+      if (name && value.id != null) return { $ref: [name, String(value.id)] };
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encodeValue(item)]));
+    }
+    return value;
+  }
+  function applyPatch(patch) {
+    const object = canonical(patch.model, patch.id);
+    for (const [name, encoded] of Object.entries(patch.fields ?? {})) {
+      const slot = fieldState(object, name);
+      if (patch.generation < slot.generation) continue;
+      slot.generation = patch.generation;
+      slot.status = "present";
+      slot.error = null;
+      const value = decodeValue(encoded);
+      const current = object[name];
+      if (current && typeof current.replace === "function" && Array.isArray(value)) current.replace(value);
+      else write(object, name, value);
+    }
+    return object;
+  }
+  function applyEnvelope(message) {
+    for (const patch of message.patches ?? []) applyPatch(patch);
+    return decodeValue(message.value);
+  }
+  function clearState() {
+    for (const store of stores.values()) {
+      for (const object of store.values()) {
+        disconnect(object);
+        objectStates.delete(object);
+      }
+    }
+    stores.clear();
+    queuedDemands.clear();
+  }
+  function openSocket() {
+    if (!configuration2) return Promise.reject(new Error("Swill data transport is not configured"));
+    if (socket?.readyState === WebSocket.OPEN) return Promise.resolve(socket);
+    if (connecting) return connecting;
+    connecting = new Promise((resolveConnection, rejectConnection) => {
+      const next = configuration2.webSocketFactory(configuration2.url);
+      next.binaryType = "arraybuffer";
+      next.addEventListener("open", () => {
+        socket = next;
+        sendRaw({ type: "HELLO", protocol_version: 1, schema_hash: configuration2.schemaHash }).then((message) => {
+          if (actorScope !== null && actorScope !== message.actor_scope) clearState();
+          actorScope = message.actor_scope;
+          resolveConnection(next);
+          if (queuedDemands.size && !demandScheduled) {
+            demandScheduled = true;
+            queueMicrotask(flushDemands);
+          }
+        }, rejectConnection).finally(() => {
+          connecting = null;
+        });
+      });
+      next.addEventListener("message", async (event) => {
+        const bytes = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : new Uint8Array(event.data);
+        const message = unpack(bytes);
+        const waiter = pending.get(message.request_id ?? "HELLO");
+        if (!waiter) return;
+        pending.delete(message.request_id ?? "HELLO");
+        if (message.type === "ERROR") waiter.reject(remoteError(message.error));
+        else waiter.resolve(message);
+      });
+      next.addEventListener("close", () => {
+        if (socket === next) socket = null;
+        for (const waiter of pending.values()) waiter.reject(new Error("Swill data connection closed"));
+        pending.clear();
+      });
+      next.addEventListener("error", () => {
+        if (socket === next) socket = null;
+        connecting = null;
+        const waiter = pending.get("HELLO");
+        if (waiter) {
+          pending.delete("HELLO");
+          waiter.reject(new Error("Swill data connection failed"));
+        }
+        rejectConnection(new Error("Swill data connection failed"));
+      });
+    });
+    return connecting;
+  }
+  function remoteError(error) {
+    const result = new Error(error?.message ?? "Remote operation failed");
+    result.code = error?.code;
+    result.details = error?.details;
+    return result;
+  }
+  function sendRaw(message) {
+    const key = message.type === "HELLO" ? "HELLO" : message.request_id;
+    return new Promise((resolveMessage, rejectMessage) => {
+      pending.set(key, { resolve: resolveMessage, reject: rejectMessage });
+      socket.send(pack(message));
+    });
+  }
+  async function request(type, contents) {
+    await openSocket();
+    const request_id = ++sequence;
+    const operationGeneration = ++generation;
+    const response = await sendRaw({ type, request_id, generation: operationGeneration, ...contents });
+    return applyEnvelope(response);
+  }
+  function modelName(target) {
+    const declared = typeof target === "function" ? target.remoteModelName?.() : target.constructor.remoteModelName?.();
+    return declared ?? nameOf(target);
+  }
+  function configureData(url, schemaHash, webSocketFactory = (value) => new WebSocket(value)) {
+    if (configuration2 && (configuration2.url !== url || configuration2.schemaHash !== schemaHash)) closeData();
+    configuration2 = { url, schemaHash, webSocketFactory };
+  }
+  function closeData() {
+    const current = socket;
+    socket = null;
+    connecting = null;
+    actorScope = null;
+    clearState();
+    for (const waiter of pending.values()) waiter.reject(new Error("Swill data connection closed"));
+    pending.clear();
+    current?.close();
+  }
+  function initializeRemoteData(object) {
+    for (const [field, descriptor] of Object.entries(object.constructor.remoteFields?.() ?? {})) {
+      if (descriptor.kind === "many") write(object, field, new (resolve("Swill::Model::Collection"))());
+    }
+  }
+  function dataQuery(klass, name, args, keywords) {
+    return request("QUERY", {
+      model: modelName(klass),
+      name,
+      arguments: encodeArguments(args),
+      keywords: encodeKeywords(keywords)
+    }).then((value) => {
+      if (!Array.isArray(value)) return value;
+      const result = new (resolve("Swill::Model::ResultSet"))();
+      result.replace(value);
+      return result;
+    });
+  }
+  function dataResolve(klass, name, args, keywords) {
+    return request("RESOLVE", {
+      model: modelName(klass),
+      name,
+      arguments: encodeArguments(args),
+      keywords: encodeKeywords(keywords)
+    });
+  }
+  function dataCommand(object, name, args, keywords) {
+    return request("COMMAND", {
+      model: modelName(object),
+      id: object.id,
+      name,
+      arguments: encodeArguments(args),
+      keywords: encodeKeywords(keywords)
+    });
+  }
+  function encodeArguments(args) {
+    const encoded = [];
+    for (const value of args) if (!isOmittedArgument(value)) encoded.push(encodeValue(value));
+    return encoded;
+  }
+  function encodeKeywords(keywords) {
+    const encoded = {};
+    for (const [name, value] of Object.entries(keywords)) {
+      if (!isOmittedArgument(value)) encoded[name] = encodeValue(value);
+    }
+    return encoded;
+  }
+  function dataFieldWillAccess(object, name) {
+    const slot = fieldState(object, name);
+    if (slot.status !== "unknown" || object.id == null) return;
+    slot.status = "loading";
+    const key = `${modelName(object)}:${object.id}`;
+    if (!queuedDemands.has(key)) queuedDemands.set(key, { object, fields: /* @__PURE__ */ new Set() });
+    queuedDemands.get(key).fields.add(name);
+    if (!demandScheduled) {
+      demandScheduled = true;
+      queueMicrotask(flushDemands);
+    }
+  }
+  async function flushDemands() {
+    demandScheduled = false;
+    const batch = [...queuedDemands.values()];
+    queuedDemands.clear();
+    if (!batch.length) return;
+    try {
+      await request("GET", { demands: batch.map((item) => ({
+        model: modelName(item.object),
+        id: item.object.id,
+        fields: [...item.fields]
+      })) });
+    } catch (error) {
+      if (!socket) {
+        for (const item of batch) {
+          const key = `${modelName(item.object)}:${item.object.id}`;
+          if (!queuedDemands.has(key)) queuedDemands.set(key, { object: item.object, fields: /* @__PURE__ */ new Set() });
+          for (const field of item.fields) queuedDemands.get(key).fields.add(field);
+        }
+      }
+      for (const { object, fields } of batch) {
+        for (const name of fields) {
+          const slot = fieldState(object, name);
+          slot.status = "failed";
+          slot.error = error.message;
+        }
+      }
+      console.warn(`[Swill] data did not load: ${error.message}`);
+    }
+  }
+  function dataFieldLoaded(object, name) {
+    return fieldState(object, name).status === "present";
+  }
+  function dataFieldLoading(object, name) {
+    return fieldState(object, name).status === "loading";
+  }
+  function dataFieldError(object, name) {
+    return fieldState(object, name).error;
+  }
+  async function loadDataField(object, name, reload) {
+    const slot = fieldState(object, name);
+    if (!reload && slot.status === "present") return object[name];
+    slot.status = "loading";
+    slot.error = null;
+    try {
+      await request("GET", { demands: [{ model: modelName(object), id: object.id, fields: [name] }] });
+      return object[name];
+    } catch (error) {
+      slot.status = "failed";
+      slot.error = error.message;
+      throw error;
+    }
+  }
+
   // rb/runtime/runtime.mjs
   var Runtime = {
     // Classes
@@ -1099,6 +1700,26 @@
     outlets,
     collectAttributes,
     applyAttributes,
+    // Remote data
+    configureData,
+    closeData,
+    initializeRemoteData,
+    dataQuery,
+    dataResolve,
+    dataCommand,
+    dataFieldWillAccess,
+    dataFieldLoaded,
+    dataFieldLoading,
+    dataFieldError,
+    loadDataField,
+    // Ruby complex calls
+    keywordArguments,
+    blockArgument,
+    omittedArgument,
+    isOmittedArgument,
+    bindArguments,
+    argument,
+    yieldBlock,
     // Invalid URL input is reported, not raised.
     warn(message) {
       console.warn(`[Swill] ${message}`);
@@ -1129,6 +1750,7 @@
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
     Swill__Model__Base: () => Swill__Model__Base,
     Swill__Model__Codec: () => Swill__Model__Codec,
+    Swill__Model__Collection: () => Swill__Model__Collection,
     Swill__Model__Dataset: () => Swill__Model__Dataset,
     Swill__Model__DirtyTracking: () => Swill__Model__DirtyTracking,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
@@ -1139,6 +1761,9 @@
     Swill__Model__Relationship: () => Swill__Model__Relationship,
     Swill__Model__Relationships: () => Swill__Model__Relationships,
     Swill__Model__Relationships_ClassMethods: () => Swill__Model__Relationships_ClassMethods,
+    Swill__Model__RemoteData: () => Swill__Model__RemoteData,
+    Swill__Model__RemoteData_ClassMethods: () => Swill__Model__RemoteData_ClassMethods,
+    Swill__Model__ResultSet: () => Swill__Model__ResultSet,
     Swill__Model__Store: () => Swill__Model__Store,
     Swill__Notification: () => Swill__Notification,
     Swill__NotificationCenter: () => Swill__NotificationCenter,
@@ -1241,16 +1866,34 @@
   }
   function Swill__ObjectBindings(Superclass) {
     class Swill__ObjectBindings_Layer extends Superclass {
-      bind(target, options) {
+      bind(...__swill_arguments) {
+        let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+          positional: [{ name: "target", kind: "req" }],
+          keywords: [
+            { name: "to", kind: "keyreq" },
+            { name: "key_path", kind: "keyreq" },
+            { name: "null_placeholder", kind: "key" }
+          ],
+          keywordRest: null,
+          block: "__swill_block"
+        });
+        let target = Runtime.argument(__swill_bound, "target");
+        let to = Runtime.argument(__swill_bound, "to");
+        let key_path = Runtime.argument(__swill_bound, "key_path");
+        let null_placeholder = Runtime.argument(
+          __swill_bound,
+          "null_placeholder"
+        );
+        if (Runtime.isTruthy(Runtime.isOmittedArgument(null_placeholder))) {
+          null_placeholder = null;
+        }
+        ;
         this.unbind(target);
-        let source = options.to;
-        let path = options.key_path;
-        let placeholder = Runtime.fetch(options, "null_placeholder", null);
-        let sync = (value) => Runtime.write(this, target, value == null ? placeholder : value);
-        sync(Runtime.readPath(source, path));
+        let sync = (value) => Runtime.write(this, target, value == null ? null_placeholder : value);
+        sync(Runtime.readPath(to, key_path));
         Runtime.append(
           this.objectBindings(),
-          { target, dispose: Runtime.observePath(source, path, sync) }
+          { target, dispose: Runtime.observePath(to, key_path, sync) }
         );
         return this;
       }
@@ -1346,31 +1989,80 @@
       );
       return Runtime.must(this._default);
     }
-    async getJSON(url, params) {
+    async getJSON(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [{ name: "url", kind: "req" }],
+        keywords: [{ name: "params", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let url = Runtime.argument(__swill_bound, "url");
+      let params = Runtime.argument(__swill_bound, "params");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(params))) params = {};
       return await this.request(
         "GET",
-        _Swill__Wire.urlWithParams(url, params),
-        null,
-        null
+        _Swill__Wire.urlWithParams(url, params)
       );
     }
-    async requestJSON(method, url, body) {
-      return await this.request(
-        method,
-        url,
+    async requestJSON(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "method", kind: "req" },
+          { name: "url", kind: "req" }
+        ],
+        keywords: [{ name: "body", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let method = Runtime.argument(__swill_bound, "method");
+      let url = Runtime.argument(__swill_bound, "url");
+      let body = Runtime.argument(__swill_bound, "body");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(body))) body = null;
+      return await this.request(method, url, Runtime.keywordArguments({
         body,
-        "application/vnd.api+json"
-      );
+        content_type: "application/vnd.api+json"
+      }));
     }
-    async requestFormJSON(method, url, body) {
-      return await this.request(
-        method,
-        url,
-        _Swill__Wire.encodeParams(body),
-        "application/x-www-form-urlencoded"
-      );
+    async requestFormJSON(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "method", kind: "req" },
+          { name: "url", kind: "req" }
+        ],
+        keywords: [{ name: "body", kind: "keyreq" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let method = Runtime.argument(__swill_bound, "method");
+      let url = Runtime.argument(__swill_bound, "url");
+      let body = Runtime.argument(__swill_bound, "body");
+      return await this.request(method, url, Runtime.keywordArguments({
+        body: _Swill__Wire.encodeParams(body),
+        content_type: "application/x-www-form-urlencoded"
+      }));
     }
-    async request(method, url, body, content_type) {
+    async request(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "method", kind: "req" },
+          { name: "url", kind: "req" }
+        ],
+        keywords: [
+          { name: "body", kind: "key" },
+          { name: "content_type", kind: "key" }
+        ],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let method = Runtime.argument(__swill_bound, "method");
+      let url = Runtime.argument(__swill_bound, "url");
+      let body = Runtime.argument(__swill_bound, "body");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(body))) body = null;
+      let content_type = Runtime.argument(__swill_bound, "content_type");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(content_type))) {
+        content_type = null;
+      }
+      ;
       let request_url = this.resolveURL(url);
       let headers = Runtime.cast(
         { Accept: "application/vnd.api+json, application/json" },
@@ -1636,7 +2328,20 @@
     }
     // An event listener on this view's element; the returned callable
     // removes it.
-    listen(type, handler, capture) {
+    listen(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "type", kind: "req" },
+          { name: "handler", kind: "req" }
+        ],
+        keywords: [{ name: "capture", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let type = Runtime.argument(__swill_bound, "type");
+      let handler = Runtime.argument(__swill_bound, "handler");
+      let capture = Runtime.argument(__swill_bound, "capture");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(capture))) capture = false;
       this._element.addEventListener(type, handler, capture);
       return () => this._element.removeEventListener(type, handler, capture);
     }
@@ -2556,7 +3261,19 @@
     }
     // :push adds a history entry, :replace rewrites the current one, :none is
     // a no-op. Writes are also dropped while fragment state is being applied.
-    write(key, value, history) {
+    write(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "key", kind: "req" },
+          { name: "value", kind: "req" }
+        ],
+        keywords: [{ name: "history", kind: "keyreq" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let key = Runtime.argument(__swill_bound, "key");
+      let value = Runtime.argument(__swill_bound, "value");
+      let history = Runtime.argument(__swill_bound, "history");
       if (history === "none" || this._suspended) return;
       let browser = this._browser;
       if (!Runtime.isTruthy(browser && this.isAvailable())) return;
@@ -2577,12 +3294,18 @@
         next_url
       ) : browser.history.replaceState(null, "", next_url);
     }
-    // Run callback with writes suppressed, so observers fired by applying
+    // Run a block with writes suppressed, so observers fired by applying
     // fragment values do not write back mid-application.
-    suspended(callback) {
+    suspended(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(
+        __swill_arguments,
+        { positional: [], keywords: [], keywordRest: null, block: "block" }
+      );
+      let block = Runtime.argument(__swill_bound, "block");
+      let _implicitBlockYield = block;
       this._suspended = true;
       try {
-        return callback();
+        return Runtime.yieldBlock(_implicitBlockYield);
       } finally {
         this._suspended = false;
       }
@@ -2802,12 +3525,22 @@
     // pre-rendered content, awaken it, record the content in the URL fragment
     // as a history entry, restore the new controller's state, and hand the
     // first responder to it. Returns that controller.
-    loadWindowContent(window_name, content_name) {
-      return this.loadWindowContentWith(window_name, content_name, "push");
-    }
     // history is :push for navigation, :replace to rewrite the entry, or :none
     // when the fragment itself asked for the content (Back/Forward).
-    loadWindowContentWith(window_name, content_name, history) {
+    loadWindowContent(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "window_name", kind: "req" },
+          { name: "content_name", kind: "req" }
+        ],
+        keywords: [{ name: "history", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let window_name = Runtime.argument(__swill_bound, "window_name");
+      let content_name = Runtime.argument(__swill_bound, "content_name");
+      let history = Runtime.argument(__swill_bound, "history");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(history))) history = "push";
       let window = this.windowNamed(window_name);
       if (!window) throw new Error(`No window container: ${window_name}`);
       let container = window.root();
@@ -2819,12 +3552,15 @@
       container.setAttribute("name", content_name);
       let controllers = awakening.awaken(container);
       window.assignContent(content_name, this.topControllerIn(container));
-      this._fragments.write(window.name(), content_name, history);
-      this.restoreWindowState(
-        window,
-        history !== "none",
-        history !== "none"
+      this._fragments.write(
+        window.name(),
+        content_name,
+        Runtime.keywordArguments({ history })
       );
+      this.restoreWindowState(window, Runtime.keywordArguments({
+        prune_stale: history !== "none",
+        write_content: history !== "none"
+      }));
       awakening.finish(controllers);
       let controller = window.controller();
       if (controller) {
@@ -2840,10 +3576,16 @@
     // Present a template as a window appended to the root. A <dialog> root is
     // shown. Dismiss it with dismiss(controller); the window's closed promise
     // resolves then.
-    showWindow(name) {
-      return this.showWindowIn(name, this._root);
-    }
-    showWindowIn(name, into) {
+    showWindow(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [{ name: "name", kind: "req" }],
+        keywords: [{ name: "into", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let name = Runtime.argument(__swill_bound, "name");
+      let into = Runtime.argument(__swill_bound, "into");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
       let node = this.cloneWindowContent(name);
       into.appendChild(node);
       let awakening = new Swill__Awakening();
@@ -2860,7 +3602,10 @@
       window.assignContent(name, controller);
       window.saveFirstResponder(this.firstResponder());
       Runtime.append(this._windows, window);
-      this.restoreWindowState(window, false, false);
+      this.restoreWindowState(
+        window,
+        Runtime.keywordArguments({ prune_stale: false, write_content: false })
+      );
       awakening.finish(controllers);
       if (!this.isResponderWithin(this.firstResponder(), node)) {
         this.makeFirstResponder(controller);
@@ -3111,7 +3856,19 @@
     // observed and written exactly as bind paths are. Runs after the load
     // phase and before controller_did_load, so restored values are in place
     // for it.
-    restoreWindowState(window, prune_stale, write_content) {
+    restoreWindowState(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [{ name: "window", kind: "req" }],
+        keywords: [
+          { name: "prune_stale", kind: "keyreq" },
+          { name: "write_content", kind: "keyreq" }
+        ],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let window = Runtime.argument(__swill_bound, "window");
+      let prune_stale = Runtime.argument(__swill_bound, "prune_stale");
+      let write_content = Runtime.argument(__swill_bound, "write_content");
       let stale = window.disposeRestoration();
       let controller = window.controller();
       let declarations2 = Runtime.cast(
@@ -3121,19 +3878,29 @@
       let keys = declarations2.map((declaration) => window.scopedKey(Runtime.read(declaration, "key")));
       let content = window.contentName();
       if (Runtime.isTruthy(write_content && content)) {
-        this._fragments.write(window.name(), content, "replace");
+        this._fragments.write(
+          window.name(),
+          content,
+          Runtime.keywordArguments({ history: "replace" })
+        );
       }
       ;
       if (prune_stale) {
         stale.forEach((key) => {
-          if (!keys.includes(key)) this._fragments.write(key, null, "replace");
+          if (!keys.includes(key)) {
+            this._fragments.write(
+              key,
+              null,
+              Runtime.keywordArguments({ history: "replace" })
+            );
+          }
         });
       }
       ;
       if (!controller) return;
       let params = this._fragments.params();
       let applied2 = 0;
-      this._fragments.suspended(() => declarations2.forEach((declaration) => {
+      this._fragments.suspended(Runtime.blockArgument(() => declarations2.forEach((declaration) => {
         let text = params[window.scopedKey(Runtime.read(declaration, "key"))];
         if (text == null) return;
         let value = Runtime.decodeFragment(
@@ -3147,7 +3914,7 @@
           value
         );
         return ++applied2;
-      }));
+      })));
       if (!Runtime.isEmpty(declarations2)) {
         controller.controllerDidRestore(applied2 > 0);
       }
@@ -3165,7 +3932,10 @@
       });
     }
     restoreLaunchedWindows() {
-      return this._windows.forEach((window) => this.restoreWindowState(window, false, true));
+      return this._windows.forEach((window) => this.restoreWindowState(
+        window,
+        Runtime.keywordArguments({ prune_stale: false, write_content: true })
+      ));
     }
     // Push the controller's current restorable state into the fragment.
     writeWindowState(window) {
@@ -3182,7 +3952,7 @@
         return this._fragments.write(
           window.scopedKey(Runtime.read(declaration, "key")),
           value,
-          "replace"
+          Runtime.keywordArguments({ history: "replace" })
         );
       });
     }
@@ -3196,13 +3966,16 @@
       if (!window.isContainer()) return;
       let requested = params[window.name()];
       if (Runtime.isTruthy(requested != null && requested !== window.contentName())) {
-        return this.isWindowContent(requested) ? this.loadWindowContentWith(
+        return this.isWindowContent(requested) ? this.loadWindowContent(
           window.name(),
           requested,
-          "none"
+          Runtime.keywordArguments({ history: "none" })
         ) : Runtime.warn(`window "${window.name()}" requested unknown content "${requested}"`);
       } else {
-        return this.restoreWindowState(window, false, false);
+        return this.restoreWindowState(
+          window,
+          Runtime.keywordArguments({ prune_stale: false, write_content: false })
+        );
       }
     }
     // Code-created content awakens through the same path as markup: the
@@ -3337,13 +4110,13 @@
     selectedObjectsDidChange(_previous, objects) {
       this.syncSelectedRows();
       if (this._syncing_selection) return;
-      return this.syncingSelection(() => this.selectedObjectId = this.identifierFor(this.leading(objects)));
+      return this.syncingSelection(Runtime.blockArgument(() => this.selectedObjectId = this.identifierFor(this.leading(objects))));
     }
     // An id nobody carries clears the selection and stays pending.
     selectedObjectIdDidChange(_previous, identifier) {
       if (this._syncing_selection) return;
       let object = this.objectWithId(identifier);
-      return this.syncingSelection(() => this.selectedObjects = Runtime.isTruthy(object) ? [object] : []);
+      return this.syncingSelection(Runtime.blockArgument(() => this.selectedObjects = Runtime.isTruthy(object) ? [object] : []));
     }
     // ---- keyboard ----
     // Taking the keyboard selects the first row when nothing is selected.
@@ -3495,18 +4268,16 @@
     installSelection() {
       let stop_mouse_down = this._view.listen(
         "mousedown",
-        (event) => this.rowMouseDown(event),
-        false
+        (event) => this.rowMouseDown(event)
       );
       let stop_click = this._view.listen(
         "click",
         (event) => this.rowClicked(event),
-        true
+        Runtime.keywordArguments({ capture: true })
       );
       let stop_double_click = this._view.listen(
         "dblclick",
-        (event) => this.rowDoubleClicked(event),
-        false
+        (event) => this.rowDoubleClicked(event)
       );
       return this.retain(() => {
         stop_mouse_down();
@@ -3583,14 +4354,20 @@
         if (Runtime.isTruthy(requested)) survivors = [requested];
       }
       ;
-      return this.syncingSelection(() => this.selectedObjects = survivors);
+      return this.syncingSelection(Runtime.blockArgument(() => this.selectedObjects = survivors));
     }
     // A write from one side of the selection to the other is marked so the
     // other side's hook does not write back.
-    syncingSelection(callback) {
+    syncingSelection(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(
+        __swill_arguments,
+        { positional: [], keywords: [], keywordRest: null, block: "block" }
+      );
+      let block = Runtime.argument(__swill_bound, "block");
+      let _implicitBlockYield = block;
       this._syncing_selection = true;
       try {
-        return callback();
+        return Runtime.yieldBlock(_implicitBlockYield);
       } finally {
         this._syncing_selection = false;
       }
@@ -3921,7 +4698,7 @@
       let editor = this.awakenEditor(node);
       editor.bind(
         "represented_object",
-        { to: this, key_path: "edited_object" }
+        Runtime.keywordArguments({ to: this, key_path: "edited_object" })
       );
       editor.view().subviews().forEach((subview) => {
         if (subview instanceof Swill__Control) {
@@ -4171,6 +4948,70 @@
     Object.setPrototypeOf(Swill__Model__Identity_ClassMethods_Layer.prototype, Superclass);
     return Swill__Model__Identity_ClassMethods_Layer.prototype;
   }
+  var Swill__Model__Collection = class extends Swill__Object {
+    replace(records) {
+      this.records = records;
+      this.error = null;
+      this.loaded = true;
+      this.loading = false;
+      return this;
+    }
+    first() {
+      return this.records[0];
+    }
+    last() {
+      return this.records.at(-1);
+    }
+    size() {
+      return this.records.length;
+    }
+    isEmpty() {
+      return Runtime.isEmpty(this.records);
+    }
+    isLoaded() {
+      return this.loaded;
+    }
+    isLoading() {
+      return this.loading;
+    }
+    at(index) {
+      return this.records[index];
+    }
+  };
+  var Swill__Model__ResultSet = class extends Swill__Model__Collection {
+  };
+  function Swill__Model__RemoteData(Superclass) {
+    class Swill__Model__RemoteData_Layer extends Superclass {
+      isFieldLoaded(name) {
+        return Runtime.dataFieldLoaded(this, name);
+      }
+      isFieldLoading(name) {
+        return Runtime.dataFieldLoading(this, name);
+      }
+      fieldError(name) {
+        return Runtime.dataFieldError(this, name);
+      }
+      loadField(name) {
+        return Runtime.loadDataField(this, name, false);
+      }
+      reloadField(name) {
+        return Runtime.loadDataField(this, name, true);
+      }
+    }
+    return Swill__Model__RemoteData_Layer;
+  }
+  function Swill__Model__RemoteData_ClassMethods(Superclass) {
+    class Swill__Model__RemoteData_ClassMethods_Layer extends Object {
+      remoteFields() {
+        return Runtime.inheritableRegistry(this, "remoteFields", "hash");
+      }
+      remoteModelName(...values) {
+        return Runtime.classSetting(this, "remote_model_name", values);
+      }
+    }
+    Object.setPrototypeOf(Swill__Model__RemoteData_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Model__RemoteData_ClassMethods_Layer.prototype;
+  }
   var Swill__Model__Relationship = class extends Swill__Object {
     constructor(descriptor) {
       super();
@@ -4375,7 +5216,7 @@
       try {
         this.records = this._model_class.parseMany(await Swill__Wire.default().getJSON(
           this._url,
-          this._params
+          Runtime.keywordArguments({ params: this._params })
         ));
       } catch (failure) {
         this.error = failure.message;
@@ -4393,6 +5234,7 @@
         {},
         "T::Hash[String, T.untyped]"
       );
+      Runtime.initializeRemoteData(this);
     }
     static classForType(type) {
       return Runtime.classWithSetting("resource_type", type);
@@ -4421,10 +5263,7 @@
     }
     static async fetch(id) {
       let url = this.resourceURL(id);
-      let record2 = this.parseOne(await Swill__Wire.default().getJSON(
-        url,
-        {}
-      ));
+      let record2 = this.parseOne(await Swill__Wire.default().getJSON(url));
       if (!record2) throw new Error(`no record at ${url}`);
       return record2;
     }
@@ -4437,7 +5276,7 @@
     static async fetchAll(url, params) {
       return this.parseMany(await Swill__Wire.default().getJSON(
         url,
-        params
+        Runtime.keywordArguments({ params })
       ));
     }
     static dataset(url, params) {
@@ -4462,7 +5301,7 @@
       let response = await Swill__Wire.default().requestJSON(
         method,
         url,
-        this.serialize(!creating)
+        Runtime.keywordArguments({ body: this.serialize(!creating) })
       );
       let persisted = this.constructor.parseOne(response);
       if (!persisted) throw new Error(`${method} ${url} returned no record`);
@@ -4481,8 +5320,7 @@
       if (identifier == null) return this;
       await Swill__Wire.default().requestJSON(
         "DELETE",
-        this.constructor.resourceURL(identifier),
-        null
+        this.constructor.resourceURL(identifier)
       );
       this.constructor.remove(identifier);
       return this;
@@ -4526,9 +5364,9 @@
     }
     async loadRelationship(name) {
       if (this.isRelationshipLoaded(name)) return Runtime.read(this, name);
-      let pending = this._relationship_requests[name];
-      if (Runtime.isTruthy(pending)) {
-        await pending;
+      let pending2 = this._relationship_requests[name];
+      if (Runtime.isTruthy(pending2)) {
+        await pending2;
         return Runtime.read(this, name);
       }
       ;
@@ -4541,6 +5379,11 @@
     // reload_<name> is how an application asks again.
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
+      if (Object.hasOwn(this.constructor.remoteFields(), name)) {
+        Runtime.dataFieldWillAccess(this, name);
+        return;
+      }
+      ;
       if (this.id == null) return;
       if (!Runtime.isTruthy(this.constructor.modelRelationships()[name])) return;
       if (this.isRelationshipLoaded(name)) return;
@@ -4556,28 +5399,28 @@
       }
     }
     async reloadRelationship(name) {
-      let pending = this._relationship_requests[name];
-      if (Runtime.isTruthy(pending)) {
-        await pending;
+      let pending2 = this._relationship_requests[name];
+      if (Runtime.isTruthy(pending2)) {
+        await pending2;
         return Runtime.read(this, name);
       }
       ;
       Runtime.write(this, `${name}_loading`, true);
       Runtime.write(this, `${name}_error`, null);
-      let request = null;
+      let request2 = null;
       try {
         let descriptor = this.relationship(name);
         let model_class = descriptor.modelClass();
-        request = Swill__Wire.default().getJSON(descriptor.urlFor(this), {});
-        this._relationship_requests[name] = request;
-        let payload = await request;
+        request2 = Swill__Wire.default().getJSON(descriptor.urlFor(this));
+        this._relationship_requests[name] = request2;
+        let payload = await request2;
         let value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
         this.assignRelationship(name, value);
       } catch (failure) {
         Runtime.write(this, `${name}_error`, failure.message);
         throw new Error(`${failure.message}`);
       } finally {
-        if (Runtime.isEqual(this._relationship_requests[name], request)) {
+        if (Runtime.isEqual(this._relationship_requests[name], request2)) {
           Runtime.deleteKey(this._relationship_requests, name);
         }
         ;
@@ -4649,7 +5492,9 @@
         factory: Swill__ObjectBindings,
         methods: {
           "bind": {
-            "arity": 2
+            "arity": 1,
+            "minimum": 1,
+            "maximum": 1
           },
           "unbind": {
             "arity": 1
@@ -4735,6 +5580,32 @@
         factory: Swill__Model__Identity,
         classFactory: Swill__Model__Identity_ClassMethods,
         methods: {}
+      },
+      "Swill::Model::RemoteData": {
+        factory: Swill__Model__RemoteData,
+        classFactory: Swill__Model__RemoteData_ClassMethods,
+        methods: {
+          "field_loaded?": {
+            "arity": 1,
+            "js": "isFieldLoaded"
+          },
+          "field_loading?": {
+            "arity": 1,
+            "js": "isFieldLoading"
+          },
+          "field_error": {
+            "arity": 1,
+            "js": "fieldError"
+          },
+          "load_field": {
+            "arity": 1,
+            "js": "loadField"
+          },
+          "reload_field": {
+            "arity": 1,
+            "js": "reloadField"
+          }
+        }
       }
     },
     classes: {
@@ -4793,19 +5664,27 @@
         },
         methods: {
           "get_json": {
-            "arity": 2,
+            "arity": 1,
+            "minimum": 1,
+            "maximum": 1,
             "js": "getJSON"
           },
           "request_json": {
-            "arity": 3,
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2,
             "js": "requestJSON"
           },
           "request_form_json": {
-            "arity": 3,
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2,
             "js": "requestFormJSON"
           },
           "request": {
-            "arity": 4
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2
           },
           "resolve_url": {
             "arity": 1,
@@ -4986,7 +5865,9 @@
             "js": "clearTextSelection"
           },
           "listen": {
-            "arity": 3
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2
           },
           "focusable_selector": {
             "arity": 0,
@@ -5460,10 +6341,14 @@
             "arity": 0
           },
           "write": {
-            "arity": 3
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2
           },
           "suspended": {
-            "arity": 1
+            "arity": 0,
+            "minimum": 0,
+            "maximum": 0
           },
           "start_observing": {
             "arity": 1,
@@ -5568,19 +6453,15 @@
           },
           "load_window_content": {
             "arity": 2,
+            "minimum": 2,
+            "maximum": 2,
             "js": "loadWindowContent"
-          },
-          "load_window_content_with": {
-            "arity": 3,
-            "js": "loadWindowContentWith"
           },
           "show_window": {
             "arity": 1,
+            "minimum": 1,
+            "maximum": 1,
             "js": "showWindow"
-          },
-          "show_window_in": {
-            "arity": 2,
-            "js": "showWindowIn"
           },
           "dismiss": {
             "arity": 1
@@ -5702,7 +6583,9 @@
             "js": "releaseWindow"
           },
           "restore_window_state": {
-            "arity": 3,
+            "arity": 1,
+            "minimum": 1,
+            "maximum": 1,
             "js": "restoreWindowState"
           },
           "restore_launched_windows": {
@@ -5960,7 +6843,9 @@
             "js": "reconcileSelection"
           },
           "syncing_selection": {
-            "arity": 1,
+            "arity": 0,
+            "minimum": 0,
+            "maximum": 0,
             "js": "syncingSelection"
           },
           "leading": {
@@ -6259,6 +7144,73 @@
           }
         }
       },
+      "Swill::Model::Collection": {
+        constructor: Swill__Model__Collection,
+        properties: {
+          "records": {
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "loading": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "loaded": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "error": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "replace": {
+            "arity": 1
+          },
+          "first": {
+            "arity": 0
+          },
+          "last": {
+            "arity": 0
+          },
+          "size": {
+            "arity": 0
+          },
+          "empty?": {
+            "arity": 0,
+            "js": "isEmpty"
+          },
+          "loaded?": {
+            "arity": 0,
+            "js": "isLoaded"
+          },
+          "loading?": {
+            "arity": 0,
+            "js": "isLoading"
+          },
+          "at": {
+            "arity": 1
+          }
+        }
+      },
+      "Swill::Model::ResultSet": {
+        constructor: Swill__Model__ResultSet,
+        properties: {},
+        methods: {}
+      },
       "Swill::Model::Relationship": {
         constructor: Swill__Model__Relationship,
         properties: {},
@@ -6343,7 +7295,7 @@
       },
       "Swill::Model::Base": {
         constructor: Swill__Model__Base,
-        mixins: [Swill__Model__Attributes, Swill__Model__Relationships, Swill__Model__DirtyTracking, Swill__Model__Drafts, Swill__Model__Identity],
+        mixins: [Swill__Model__Attributes, Swill__Model__Relationships, Swill__Model__DirtyTracking, Swill__Model__Drafts, Swill__Model__Identity, Swill__Model__RemoteData],
         properties: {
           "dirty_attributes": {
             js: "dirtyAttributes",

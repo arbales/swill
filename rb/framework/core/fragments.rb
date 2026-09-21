@@ -35,7 +35,7 @@ module Swill
     # :push adds a history entry, :replace rewrites the current one, :none is
     # a no-op. Writes are also dropped while fragment state is being applied.
     sig { params(key: String, value: T.nilable(String), history: Symbol).void }
-    def write(key, value, history)
+    def write(key, value, history:)
       return if history == :none || @suspended
       browser = @browser
       return unless browser && available?
@@ -56,13 +56,13 @@ module Swill
       end
     end
 
-    # Run callback with writes suppressed, so observers fired by applying
+    # Run a block with writes suppressed, so observers fired by applying
     # fragment values do not write back mid-application.
-    sig { params(callback: T.proc.void).void }
-    def suspended(callback)
+    sig { params(block: T.proc.void).void }
+    def suspended(&block)
       @suspended = true
       begin
-        callback.()
+        yield
       ensure
         @suspended = false
       end

@@ -20,23 +20,23 @@ module Swill
     end
 
     sig { params(url: String, params: T::Hash[String, T.untyped]).returns(T.untyped) }
-    async def get_json(url, params)
-      await request("GET", Wire.url_with_params(url, params), nil, nil)
+    async def get_json(url, params: {})
+      await request("GET", Wire.url_with_params(url, params))
     end
 
     sig { params(method: String, url: String, body: T.untyped).returns(T.untyped) }
-    async def request_json(method, url, body)
-      await request(method, url, body, "application/vnd.api+json")
+    async def request_json(method, url, body: nil)
+      await request(method, url, body: body, content_type: "application/vnd.api+json")
     end
 
     sig { params(method: String, url: String, body: T::Hash[String, T.untyped]).returns(T.untyped) }
-    async def request_form_json(method, url, body)
-      await request(method, url, Wire.encode_params(body), "application/x-www-form-urlencoded")
+    async def request_form_json(method, url, body:)
+      await request(method, url, body: Wire.encode_params(body), content_type: "application/x-www-form-urlencoded")
     end
 
     # The decoded JSON a request answers with; nil for no content.
     sig { params(method: String, url: String, body: T.untyped, content_type: T.nilable(String)).returns(T.untyped) }
-    async def request(method, url, body, content_type)
+    async def request(method, url, body: nil, content_type: nil)
       request_url = resolve_url(url)
       headers = T.let({"Accept" => "application/vnd.api+json, application/json"}, T::Hash[String, String])
       init = T.let({"method" => method, "headers" => headers}, T::Hash[String, T.untyped])

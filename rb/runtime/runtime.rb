@@ -22,6 +22,15 @@ require_relative "values"
 
 module Swill
   module Runtime
+    OMITTED_ARGUMENT = Object.new.freeze
+
+    def self.omitted_argument
+      OMITTED_ARGUMENT
+    end
+
+    def self.omitted_argument?(value)
+      value.equal?(OMITTED_ARGUMENT)
+    end
     class << self
       def read(object, name)
         object.public_send(name)
@@ -84,6 +93,28 @@ module Swill
       def warn(message)
         Kernel.warn("[Swill] #{message}")
       end
+
+      # Remote transport is a browser concern. These state readers make
+      # generated models safe to load and inspect on MRI during generation.
+      def data_field_loaded(_object, _name) = false
+      def data_field_loading(_object, _name) = false
+      def data_field_error(_object, _name) = nil
+
+      def initialize_remote_data(object)
+        return unless object.class.respond_to?(:remote_fields)
+
+        object.class.remote_fields.each do |name, descriptor|
+          write(object, name, Swill::Model::Collection.new) if descriptor["kind"] == "many"
+        end
+      end
+
+      def load_data_field(_object, _name, _reload)
+        raise "remote data is available only in the browser runtime"
+      end
+
+      def data_query(*) = raise("remote data is available only in the browser runtime")
+      def data_resolve(*) = raise("remote data is available only in the browser runtime")
+      def data_command(*) = raise("remote data is available only in the browser runtime")
     end
   end
 end

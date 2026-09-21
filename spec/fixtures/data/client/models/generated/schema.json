@@ -1,0 +1,360 @@
+{
+  "protocol_version": 1,
+  "models": {
+    "DataFixture::Comment": {
+      "name": "DataFixture::Comment",
+      "primary_key": [
+        "id"
+      ],
+      "fields": {
+        "author_id": {
+          "name": "author_id",
+          "type": {
+            "kind": "primitive",
+            "name": "Integer"
+          }
+        },
+        "body": {
+          "name": "body",
+          "type": {
+            "kind": "primitive",
+            "name": "String"
+          }
+        },
+        "id": {
+          "name": "id",
+          "type": {
+            "kind": "primitive",
+            "name": "Integer"
+          }
+        },
+        "post_id": {
+          "name": "post_id",
+          "type": {
+            "kind": "primitive",
+            "name": "Integer"
+          }
+        }
+      },
+      "relationships": {
+        "author": {
+          "name": "author",
+          "kind": "one",
+          "model": "DataFixture::User"
+        },
+        "post": {
+          "name": "post",
+          "kind": "one",
+          "model": "DataFixture::Post"
+        }
+      },
+      "operations": {}
+    },
+    "DataFixture::Post": {
+      "name": "DataFixture::Post",
+      "primary_key": [
+        "id"
+      ],
+      "fields": {
+        "author_id": {
+          "name": "author_id",
+          "type": {
+            "kind": "primitive",
+            "name": "Integer"
+          }
+        },
+        "body": {
+          "name": "body",
+          "type": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "primitive",
+                "name": "String"
+              }
+            ]
+          }
+        },
+        "excerpt": {
+          "name": "excerpt",
+          "type": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "primitive",
+                "name": "String"
+              }
+            ]
+          }
+        },
+        "id": {
+          "name": "id",
+          "type": {
+            "kind": "primitive",
+            "name": "Integer"
+          }
+        },
+        "published": {
+          "name": "published",
+          "type": {
+            "kind": "primitive",
+            "name": "Boolean"
+          }
+        },
+        "published_at": {
+          "name": "published_at",
+          "type": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "primitive",
+                "name": "Time"
+              }
+            ]
+          }
+        },
+        "title": {
+          "name": "title",
+          "type": {
+            "kind": "primitive",
+            "name": "String"
+          }
+        }
+      },
+      "relationships": {
+        "author": {
+          "name": "author",
+          "kind": "one",
+          "model": "DataFixture::User"
+        },
+        "comments": {
+          "name": "comments",
+          "kind": "many",
+          "model": "DataFixture::Comment"
+        }
+      },
+      "operations": {
+        "invalid_publish!": {
+          "kind": "command",
+          "name": "invalid_publish!",
+          "returns": {
+            "kind": "primitive",
+            "name": "Boolean"
+          },
+          "projection": [
+            "published"
+          ],
+          "parameters": []
+        },
+        "publish!": {
+          "kind": "command",
+          "name": "publish!",
+          "returns": {
+            "kind": "primitive",
+            "name": "Boolean"
+          },
+          "projection": [
+            "published",
+            "published_at"
+          ],
+          "parameters": []
+        },
+        "search": {
+          "kind": "query",
+          "name": "search",
+          "returns": {
+            "kind": "result_set",
+            "members": [
+              {
+                "kind": "model",
+                "name": "DataFixture::Post"
+              }
+            ]
+          },
+          "projection": [
+            "title",
+            "excerpt",
+            {
+              "author": [
+                "name",
+                "avatar"
+              ]
+            }
+          ],
+          "parameters": [
+            {
+              "name": "text",
+              "kind": "req",
+              "type": {
+                "kind": "primitive",
+                "name": "String"
+              }
+            },
+            {
+              "name": "published",
+              "kind": "opt",
+              "type": {
+                "kind": "optional",
+                "members": [
+                  {
+                    "kind": "primitive",
+                    "name": "Boolean"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "DataFixture::User": {
+      "name": "DataFixture::User",
+      "primary_key": [
+        "id"
+      ],
+      "fields": {
+        "avatar": {
+          "name": "avatar",
+          "type": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "primitive",
+                "name": "String"
+              }
+            ]
+          }
+        },
+        "email": {
+          "name": "email",
+          "type": {
+            "kind": "primitive",
+            "name": "String"
+          }
+        },
+        "id": {
+          "name": "id",
+          "type": {
+            "kind": "primitive",
+            "name": "Integer"
+          }
+        },
+        "name": {
+          "name": "name",
+          "type": {
+            "kind": "primitive",
+            "name": "String"
+          }
+        }
+      },
+      "relationships": {
+        "comments": {
+          "name": "comments",
+          "kind": "many",
+          "model": "DataFixture::Comment"
+        },
+        "posts": {
+          "name": "posts",
+          "kind": "many",
+          "model": "DataFixture::Post"
+        }
+      },
+      "operations": {
+        "current_user": {
+          "kind": "resolver",
+          "name": "current_user",
+          "returns": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "model",
+                "name": "DataFixture::User"
+              }
+            ]
+          },
+          "projection": [
+            "name",
+            "avatar"
+          ],
+          "parameters": []
+        },
+        "first_by_email": {
+          "kind": "resolver",
+          "name": "first_by_email",
+          "returns": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "model",
+                "name": "DataFixture::User"
+              }
+            ]
+          },
+          "projection": [
+            "name"
+          ],
+          "parameters": [
+            {
+              "name": "email",
+              "kind": "req",
+              "type": {
+                "kind": "primitive",
+                "name": "String"
+              }
+            }
+          ]
+        },
+        "lookup": {
+          "kind": "resolver",
+          "name": "lookup",
+          "returns": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "model",
+                "name": "DataFixture::User"
+              }
+            ]
+          },
+          "projection": [
+            "name"
+          ],
+          "parameters": [
+            {
+              "name": "emails",
+              "kind": "rest",
+              "type": {
+                "kind": "primitive",
+                "name": "String"
+              }
+            },
+            {
+              "name": "exact",
+              "kind": "keyreq",
+              "type": {
+                "kind": "primitive",
+                "name": "Boolean"
+              }
+            },
+            {
+              "name": "limit",
+              "kind": "key",
+              "type": {
+                "kind": "primitive",
+                "name": "Integer"
+              }
+            },
+            {
+              "name": "options",
+              "kind": "keyrest",
+              "type": {
+                "kind": "dynamic"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "schema_hash": "1be96ccefac16321d369ecf1ac397d231a304dbdb214c34baa947a0527ac345d"
+}

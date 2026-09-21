@@ -67,7 +67,12 @@ module Swill
           @in_async = method ? method["async"] == true : false
           @in_class_method = static
           local_types_for(method, body)
-          js, args = variant_definition(method, name, args)
+          if method && method["complex"]
+            args, body = complex_definition(method, args, body)
+            js = Knowledge.member(name)
+          else
+            js, args = variant_definition(method, name, args)
+          end
           # Ruby2JS's explicit method node preserves source locations for filters.
           super(node.updated(:defm, [js.to_sym, args, body]))
         ensure
@@ -97,6 +102,9 @@ module Swill
         # The argument count says which member of a method's family a send
         # means, and which of its parameters the arguments land on.
         def dispatched(entry, args)
+          if entry["complex"]
+            return [entry["js"].to_sym, *complex_call_arguments(entry, args)]
+          end
           variant = Knowledge.variant_for(entry, args.length)
           unless variant
             accepted = Knowledge.variants(entry).map { |candidate| candidate["arity"] }.join(", ")
@@ -142,9 +150,8 @@ module Swill
 
         # A block on a typed array or hash lowers through the core type
         # tables, with block parameters typed from the element or entry types.
-        # A block on an untyped receiver has no lowering: collected methods
-        # take no blocks, so only a collection can receive one, and its type
-        # must be declared.
+        # A block on an untyped receiver has no lowering: only a statically
+        # resolved collected method or typed collection can define its call shape.
         def on_block(node)
           # A block is called at a fixed arity by whatever yields to it, so an
           # optional parameter would only ever take its default.
@@ -154,6 +161,14 @@ module Swill
           previous_async = @in_async
           # A block or lambda is its own function: no await inside it.
           @in_async = false
+          call, block_args, body = node.children
+          if call.type == :send && (entry = collected_call_entry(call)) && entry["complex"]
+            block_formal = entry.fetch("formals", []).find { |formal| formal["kind"] == "block" }
+            type = block_formal && entry.fetch("parameters", {})[block_formal["name"]]
+            callback = process_lambda(s(:block, s(:send, nil, :lambda), block_args, body), proc_parameter_types(type))
+            carrier = s(:call, s(:const, nil, :Runtime), :blockArgument, callback)
+            return process(call.updated(nil, [*call.children, carrier]))
+          end
           lower_block(node)
         ensure
           @in_async = previous_async
@@ -201,8 +216,8 @@ module Swill
         end
 
         def on_defs(node)
-          _, name, _, body = node.children
-          method = @entry["static_methods"].find { |candidate| candidate["name"] == name.to_s }
+          receiver, name, args, body = node.children
+          method = @knowledge.static_method_entry(@entry["name"], name)
           previous = @local_types
           previous_method = @current_method
           previous_async = @in_async
@@ -211,7 +226,15 @@ module Swill
           @in_async = method ? method["async"] == true : false
           @in_class_method = true
           local_types_for(method, body)
-          lower_defs(node)
+          if method && method["complex"]
+            args, body = complex_definition(method, args, body)
+            super_defs(s(:defs, receiver, Knowledge.member(name).to_sym, args, body))
+          elsif method && method["formals"]
+            js, args = variant_definition(method, name, args)
+            super_defs(s(:defs, receiver, js.to_sym, args, body))
+          else
+            lower_defs(node)
+          end
         ensure
           @local_types = previous
           @current_method = previous_method
@@ -245,6 +268,11 @@ module Swill
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
           return lower_warn(args) if warn_call?(receiver, method)
           return lower_respond_to(receiver, args) if method == :respond_to?
+          if receiver.nil? && method == :block_given? && args.empty? && @current_method
+            block = @current_method.fetch("formals", []).find { |formal| formal["kind"] == "block" }
+            name = block ? block["name"] : "_implicitBlockYield"
+            return s(:send, s(:lvar, name.to_sym), :!=, s(:nil))
+          end
           if receiver&.type == :self && method == :class && args.empty?
             return s(:attr, s(:self), :constructor)
           end
@@ -287,7 +315,121 @@ module Swill
           super
         end
 
+        def on_yield(node)
+          s(:call, s(:const, nil, :Runtime), :yieldBlock,
+            s(:lvar, :_implicitBlockYield), *process_all(node.children))
+        end
+
     private
+
+        def complex_call_arguments(entry, args)
+          values = args.dup
+          carried_block = values.pop if runtime_carrier?(values.last, :blockArgument)
+          block = values.pop if values.last&.type == :block_pass
+          keywords = if values.last&.type == :hash && !values.last.loc.expression.source.lstrip.start_with?("{")
+            values.pop
+          end
+          processed = typed_arguments(entry, values)
+          if keywords
+            processed << s(:call, s(:const, nil, :Runtime), :keywordArguments, process(keywords))
+          end
+          if block
+            value = block.children.first
+            processed << s(:call, s(:const, nil, :Runtime), :blockArgument, process(value))
+          end
+          # on_block has already lowered and typed this carrier. Processing it
+          # again would discard the block parameter types and could lower its
+          # body twice.
+          processed << carried_block if carried_block
+          processed
+        end
+
+        def dynamic_call_arguments(args)
+          complex_call_arguments({"js" => "", "parameters" => {}, "formals" => [], "complex" => true}, args)
+        end
+
+        def runtime_carrier?(node, name)
+          node&.type == :call && node.children[0] == s(:const, nil, :Runtime) && node.children[1] == name
+        end
+
+        def collected_call_entry(call)
+          receiver, method, = call.children
+          if receiver.nil? || receiver.type == :self
+            return @knowledge.class_member_entry(@entry["name"], method) if @in_class_method
+            return @knowledge.method_entry(@entry["name"], method)
+          end
+          type = static_type(receiver)
+          return @knowledge.class_member_entry(class_of_type(type), method) if class_of_type(type)
+          return @knowledge.method_entry(swill_class(type), method) if swill_class(type)
+          if receiver.type == :const
+            name = @knowledge.constant(receiver)
+            return @knowledge.class_member_entry(name, method) if @knowledge.entries.any? { |entry| entry["name"] == name }
+          end
+          nil
+        rescue CompileError
+          nil
+        end
+
+        # Methods with rest, keywords, or blocks receive one JS rest array and
+        # bind it through the runtime. Defaults remain source expressions and
+        # therefore run lazily in the method's own scope.
+        def complex_definition(method, args, body)
+          bound = :__swill_bound
+          supplied = :__swill_arguments
+          original = args.children.filter_map do |arg|
+            [arg.children.first.to_s, arg] if arg.children.first
+          end.to_h
+          statements = [
+            s(:lvasgn, bound,
+              s(:send, s(:const, s(:const, nil, :Swill), :Runtime), :bind_arguments,
+                s(:lvar, supplied), call_signature(method)))
+          ]
+          method.fetch("formals", []).each do |formal|
+            name = formal["name"].to_sym
+            statements << s(:lvasgn, name,
+              s(:send, s(:const, s(:const, nil, :Swill), :Runtime), :argument,
+                s(:lvar, bound), s(:str, formal["name"])))
+            next unless formal["default"]
+            default = original.fetch(formal["name"]).children[1]
+            omitted = s(:send, s(:const, s(:const, nil, :Swill), :Runtime), :omitted_argument?, s(:lvar, name))
+            statements << s(:if, omitted, s(:lvasgn, name, default), nil)
+          end
+          block = method.fetch("formals", []).find { |formal| formal["kind"] == "block" }
+          block_name = block ? block["name"] : "__swill_block"
+          if method["implicit_block"]
+            unless block
+              statements << s(:lvasgn, :__swill_block,
+                s(:send, s(:const, s(:const, nil, :Swill), :Runtime), :argument,
+                  s(:lvar, bound), s(:str, "__swill_block")))
+            end
+            statements << s(:lvasgn, :_implicitBlockYield, s(:lvar, block_name.to_sym))
+          end
+          # The synthetic binding statements hide the original method body
+          # from Ruby2JS's normal implicit-return pass. Mark the combined body
+          # explicitly so a final local, await, yield, conditional, or rescue
+          # keeps Ruby's return value.
+          [s(:args, s(:restarg, supplied)), s(:begin, *statements, s(:autoreturn, body))]
+        end
+
+        def call_signature(method)
+          positional = method.fetch("formals", []).select { |formal| %w[req opt rest].include?(formal["kind"]) }
+          keywords = method.fetch("formals", []).select { |formal| %w[keyreq key].include?(formal["kind"]) }
+          keyrest = method.fetch("formals", []).find { |formal| formal["kind"] == "keyrest" }
+          block = method.fetch("formals", []).find { |formal| formal["kind"] == "block" }
+          pairs = [
+            s(:pair, s(:sym, :positional), s(:array, *positional.map { |formal| parameter_literal(formal) })),
+            s(:pair, s(:sym, :keywords), s(:array, *keywords.map { |formal| parameter_literal(formal) })),
+            s(:pair, s(:sym, :keywordRest), keyrest ? s(:str, keyrest["name"]) : s(:nil)),
+            s(:pair, s(:sym, :block), s(:str, block ? block["name"] : "__swill_block"))
+          ]
+          s(:hash, *pairs)
+        end
+
+        def parameter_literal(formal)
+          s(:hash,
+            s(:pair, s(:sym, :name), s(:str, formal["name"])),
+            s(:pair, s(:sym, :kind), s(:str, formal["kind"])))
+        end
 
         # Optional chaining answers undefined where Ruby answers nil, so the
         # result passes through the runtime. The wrapper is also what keeps
@@ -489,7 +631,7 @@ module Swill
           runtime = s(:const, nil, :Runtime)
           return s(:call, runtime, :write, process(receiver), s(:str, base), process(args.first)) if setter
           return s(:call, runtime, :read, process(receiver), s(:str, name)) if args.empty?
-          s(:call, runtime, :invoke, process(receiver), s(:str, name), *process_all(args))
+          s(:call, runtime, :invoke, process(receiver), s(:str, name), *dynamic_call_arguments(args))
         end
 
         # Constants and self are never dynamic: class-level calls and implicit

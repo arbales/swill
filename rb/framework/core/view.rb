@@ -175,7 +175,7 @@ module Swill
     # An event listener on this view's element; the returned callable
     # removes it.
     sig { params(type: String, handler: T.untyped, capture: T::Boolean).returns(T.proc.void) }
-    def listen(type, handler, capture)
+    def listen(type, handler, capture: false)
       @element.addEventListener(type, handler, capture)
       ->() { @element.removeEventListener(type, handler, capture) }
     end

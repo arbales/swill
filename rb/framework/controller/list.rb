@@ -132,7 +132,7 @@ module Swill
     def selected_objects_did_change(_previous, objects)
       sync_selected_rows
       return if @syncing_selection
-      syncing_selection(->() { self.selected_object_id = identifier_for(leading(objects)) })
+      syncing_selection { self.selected_object_id = identifier_for(leading(objects)) }
     end
 
     # An id nobody carries clears the selection and stays pending.
@@ -140,7 +140,7 @@ module Swill
     def selected_object_id_did_change(_previous, identifier)
       return if @syncing_selection
       object = object_with_id(identifier)
-      syncing_selection(->() { self.selected_objects = object ? [object] : [] })
+      syncing_selection { self.selected_objects = object ? [object] : [] }
     end
 
     # ---- keyboard ----
@@ -312,10 +312,10 @@ module Swill
 
     sig { void }
     def install_selection
-      stop_mouse_down = @view.listen("mousedown", ->(event) { row_mouse_down(event) }, false)
+      stop_mouse_down = @view.listen("mousedown", ->(event) { row_mouse_down(event) })
       # Capture, so the selection is current before a row's own action runs.
-      stop_click = @view.listen("click", ->(event) { row_clicked(event) }, true)
-      stop_double_click = @view.listen("dblclick", ->(event) { row_double_clicked(event) }, false)
+      stop_click = @view.listen("click", ->(event) { row_clicked(event) }, capture: true)
+      stop_double_click = @view.listen("dblclick", ->(event) { row_double_clicked(event) })
       retain(->() do
         stop_mouse_down.()
         stop_click.()
@@ -396,16 +396,16 @@ module Swill
         requested = object_with_id(self.selected_object_id)
         survivors = [requested] if requested
       end
-      syncing_selection(->() { self.selected_objects = survivors })
+      syncing_selection { self.selected_objects = survivors }
     end
 
     # A write from one side of the selection to the other is marked so the
     # other side's hook does not write back.
-    sig { params(callback: T.proc.void).void }
-    def syncing_selection(callback)
+    sig { params(block: T.proc.void).void }
+    def syncing_selection(&block)
       @syncing_selection = true
       begin
-        callback.()
+        yield
       ensure
         @syncing_selection = false
       end

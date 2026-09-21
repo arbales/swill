@@ -25,6 +25,11 @@ module Swill
       # are named for the optionals they take and carry the family, which is
       # how the runtime resolves a name and an argument count to one method.
       def self.variants(method)
+        if method["complex"]
+          return [{"name" => method["name"], "js" => method["js"],
+                   "arity" => method["arity"], "minimum" => method["arity"],
+                   "maximum" => method["maximum"]}]
+        end
         optionals = method["optionals"] || []
         (0..optionals.length).map do |taken|
           if taken.zero?
@@ -73,13 +78,10 @@ module Swill
               end
             end
           end
-          # Three passes: what the source declares, so a class the compiler
-          # already knows cannot be reopened; the evaluation; then the
-          # entries, read from the classes it defined.
+          # Three passes: what the source declares, so imported constants stay
+          # closed; the evaluation; then entries read from the classes it
+          # defined or reopened.
           names = declared_names(statements(ast), [])
-          names.each do |name|
-            raise CompileError, "reopened/duplicate constant #{name}" if entries.any? { |e| e["name"] == name }
-          end
           imported_roots = entries.select { |entry| entry["imported"] }
             .map { |entry| entry["name"].split("::").first }.uniq
           protected = names.find do |name|
@@ -88,7 +90,7 @@ module Swill
           raise CompileError, "application cannot declare inside imported namespace #{protected}" if protected
 
           preflight_scope!(statements(ast), declaration_names(ast))
-          entry_count = entries.length
+          previous_entries = copy_entries(entries)
           previous_blocks = @blocks.dup
           loader.evaluate(source, file, declared: names) do |evaluated_file|
             # Proc#source_location uses the evaluation path, so blocks are
@@ -98,7 +100,7 @@ module Swill
           end
           self
         rescue ::Exception # Keep the compiler reusable after any failed source.
-          entries.slice!(entry_count..) if entry_count && entries.length > entry_count
+          @entries = previous_entries if previous_entries
           @blocks = previous_blocks if previous_blocks
           raise
         end
@@ -108,7 +110,17 @@ module Swill
         end
 
         def interface
-          local.map { |entry| entry.reject { |key, _| key == "node" } }
+          local.map do |entry|
+            entry.reject { |key, _| %w[node fragments source_files].include?(key) }
+          end
+        end
+
+        def copy_entries(value)
+          case value
+          when ::Hash then value.to_h { |key, item| [key, copy_entries(item)] }
+          when ::Array then value.map { |item| copy_entries(item) }
+          else value
+          end
         end
 
         def resolve(name, scope)
@@ -164,6 +176,10 @@ module Swill
           return nil unless entry
           found = entry.fetch("static_methods", []).find { |candidate| candidate["name"] == method.to_s }
           return found if found
+          found = entry.fetch("static_methods", []).find do |candidate|
+            candidate["optionals"] && Knowledge.variants(candidate).any? { |variant| variant["name"] == method.to_s }
+          end
+          return found if found
           return nil unless entry["parent"]
           static_method_entry(resolve(entry["parent"], entry["scope"]), method)
         rescue CompileError
@@ -178,6 +194,10 @@ module Swill
           return nil unless entry
           name = method.to_s
           found = entry.fetch("static_methods", []).find { |candidate| candidate["name"] == name }
+          return found if found
+          found = entry.fetch("static_methods", []).find do |candidate|
+            candidate["optionals"] && Knowledge.variants(candidate).any? { |variant| variant["name"] == name }
+          end
           return found if found
           # A mixin's own ClassMethods, while its layer compiles.
           found = entry.fetch("class_method_entries", []).find { |candidate| candidate["name"] == name }

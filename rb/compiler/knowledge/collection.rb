@@ -41,6 +41,8 @@ module Swill
               validate_expression!(child.children.last) unless kind == "mixin" && child.children[1] == :included
             elsif signature?(child)
               next
+            elsif type_member?(child)
+              next
             elsif child.type == :send && child.children.first.nil? && %i[extend include].include?(child.children[1])
               next
             elsif child.type == :module && kind == "mixin" && constant(child.children.first) == "ClassMethods"
@@ -114,9 +116,8 @@ module Swill
         end
 
         # The constants a source declares as entries, in the order a
-        # collection would record them. Read before anything is evaluated, so
-        # a file that would reopen a class the compiler already knows is
-        # rejected before it can mutate the shared framework container.
+        # collection would record them. Read before anything is evaluated so
+        # imported framework namespaces can be rejected without mutation.
         def declared_names(nodes, scope)
           nodes.each_with_object([]) do |node, names|
             if node.type == :module
@@ -151,7 +152,13 @@ module Swill
 
         def collect_entry(node, scope, kind)
           name = (scope + [constant(node.children.first)]).join("::")
-          raise CompileError, "reopened/duplicate constant #{name}" if entries.any? { |e| e["name"] == name }
+          existing = entries.find { |candidate| candidate["name"] == name }
+          if existing&.fetch("imported", false)
+            raise CompileError, "application cannot reopen imported constant #{name}"
+          end
+          if existing && existing["kind"] != kind
+            raise CompileError, "#{name} cannot be reopened as a #{kind}"
+          end
 
           entry = {
             "name" => name, "identifier" => self.class.identifier(name),
@@ -178,31 +185,36 @@ module Swill
               unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :method_missing
                 raise CompileError, "unsupported method definition #{method}"
               end
-              formals = collect_parameters(args, optional: true)
-              optionals = formals.select { |formal| formal["default"] }
-              if optionals.any? && method.to_s.match?(/[?!=]\z/)
-                raise CompileError, "a predicate, bang, or writer takes required arguments only"
-              end
+              formals = collect_parameters(args)
+              optionals = formals.select { |formal| formal["kind"] == "opt" }
               check_signature_parameters!(method, formals, pending_signature)
               validate_expression!(child.children.last)
               collected = {
                 "name" => method.to_s, "js" => self.class.member(method),
-                "arity" => formals.length - optionals.length,
+                "arity" => formals.count { |formal| formal["kind"] == "req" },
+                "maximum" => formals.any? { |formal| formal["kind"] == "rest" } ? nil :
+                  formals.count { |formal| %w[req opt].include?(formal["kind"]) },
                 "parameters" => signature_parameters(pending_signature),
                 "returns" => signature_return(pending_signature),
-                "async" => async
+                "async" => async, "formals" => formals
               }
-              if optionals.any?
+              complex = formals.any? { |formal| !%w[req opt].include?(formal["kind"]) } ||
+                implicit_block?(child.children.last)
+              collected["complex"] = true if complex
+              collected["implicit_block"] = true if implicit_block?(child.children.last)
+              if optionals.any? && !complex
                 collected["optionals"] = optionals.map { |formal| formal["name"] }
-                collected["formals"] = formals
               end
               entry["methods"] << collected
               pending_signature = nil
             elsif signature?(child)
               # Sorbet checks these; executable definitions omit annotations.
               pending_signature = child
+            elsif type_member?(child)
+              # Sorbet-only generic metadata; JavaScript has no runtime type member.
+              next
             elsif child.type == :send && child.children[0..1] == [nil, :extend] &&
-                  child.children[2..] == [::Ruby2JS.parse("T::Sig").first]
+                  [::Ruby2JS.parse("T::Sig").first, ::Ruby2JS.parse("T::Generic").first].include?(child.children[2])
               # Annotation-only extension.
             elsif child.type == :send && child.children[0..1] == [nil, :include]
               names = child.children[2..].map { |arg| constant(arg) }
@@ -246,31 +258,138 @@ module Swill
              entry["registries"].empty? && entry["settings"].empty?
             raise CompileError, "ClassMethods module is missing or empty"
           end
-          entries << entry
+          source_methods = merge_methods([], entry["methods"].reject { |method| method["to"] })
+          entry["methods"] = source_methods + entry["methods"].select { |method| method["to"] }
+          entry["static_methods"] = merge_methods([], entry["static_methods"])
+          if existing
+            merge_entry!(existing, entry, node)
+          else
+            entry["fragments"] = [node]
+            entry["source_files"] = [node.loc.expression.source_buffer.name]
+            entries << entry
+          end
+          refresh_entry_node!(existing || entry)
         end
 
-        # A method's parameters. Positional only: a keyword, a splat, or a
-        # block parameter has no place in a metadata-dispatched protocol.
-        # Optionals must be contiguous, as Ruby requires, so a variant is
-        # named by how many of them it takes.
-        def collect_parameters(args, optional:, subject: "method")
+        # Ruby class bodies run in source order. Keep one compiler entry and
+        # one emitted JavaScript class while folding later bodies into it.
+        # Method definitions replace an earlier definition with the same Ruby
+        # name; reflected declarations already describe the class's final MRI
+        # state after this fragment ran.
+        def merge_entry!(entry, fragment, node)
+          if fragment["parent"] && !same_parent?(entry, fragment)
+            raise CompileError, "superclass mismatch for class #{entry['name']}"
+          end
+
+          entry["fragments"] << node
+          entry["source_files"] << node.loc.expression.source_buffer.name
+          entry["includes"] = (entry["includes"] + fragment["includes"]).uniq
+          entry["methods"] = merge_methods(entry["methods"].reject { |method| method["to"] },
+                                             fragment["methods"].reject { |method| method["to"] }) +
+            fragment["methods"].select { |method| method["to"] }
+          entry["static_methods"] = merge_methods(entry["static_methods"], fragment["static_methods"])
+          entry["class_methods"] = merge_method_nodes(entry["class_methods"], fragment["class_methods"])
+          entry["class_method_entries"] = merge_methods(entry["class_method_entries"],
+                                                          fragment["class_method_entries"])
+          %w[macros properties restorations registries settings registry_values setting_values
+             included_properties].each do |key|
+            entry[key] = fragment[key]
+          end
+          entry["included_hook"] ||= fragment["included_hook"]
+          entry["extends_class_methods"] ||= fragment["extends_class_methods"]
+        end
+
+        def merge_methods(existing, additions)
+          additions.reduce(existing.dup) do |methods, method|
+            methods.reject { |candidate| candidate["name"] == method["name"] } << method
+          end
+        end
+
+        def same_parent?(entry, fragment)
+          existing = entry["parent"] || "Object"
+          added = fragment["parent"]
+          return true if existing == added
+          resolve(existing, entry["scope"]) == resolve(added, fragment["scope"])
+        rescue CompileError
+          false
+        end
+
+        def merge_method_nodes(existing, additions)
+          additions.reduce(existing.dup) do |methods, method|
+            name = method.children.first.to_s
+            methods.reject { |candidate| candidate.children.first.to_s == name } << method
+          end
+        end
+
+        # Filters reason about a single class AST. Reparse the concatenated
+        # bodies so type inference and emission see every fragment without
+        # producing prototype patches or a second JavaScript class.
+        def refresh_entry_node!(entry)
+          return if entry["fragments"].length == 1
+          body_statements = entry["fragments"].flat_map { |fragment| statements(fragment.children.last) }
+          last_method = {}
+          body_statements.each_with_index do |statement, index|
+            key = defined_method_key(statement)
+            last_method[key] = index if key
+          end
+          body = body_statements.each_with_index.filter_map do |statement, index|
+            key = defined_method_key(statement)
+            next if key && last_method[key] != index
+            statement.loc.expression.source
+          end.join("\n")
+          keyword = entry["kind"] == "mixin" ? "module" : "class"
+          source = "#{keyword} Reopened\n#{body}\nend\n"
+          ast, = ::Ruby2JS.parse(source, entry["source_files"].join(" + "))
+          entry["node"] = statements(ast).first
+        end
+
+        def defined_method_key(statement)
+          statement = statement.children[2] if self.class.async_wrapper?(statement)
+          case statement.type
+          when :def then ["instance", statement.children.first.to_s]
+          when :defs then ["class", statement.children[1].to_s]
+          end
+        end
+
+        def type_member?(node)
+          node.type == :casgn && node.children[2]&.type == :send &&
+            node.children[2].children[0..1] == [nil, :type_member]
+        end
+
+        # Named Ruby parameters. Anonymous forwarding forms are intentionally
+        # outside the spike: they have no stable name for signatures or wire schemas.
+        def collect_parameters(args, subject: "method")
           formals = args.children.map do |arg|
             case arg.type
-            when :arg then {"name" => arg.children.first.to_s}
+            when :arg then {"name" => arg.children.first.to_s, "kind" => "req"}
             when :optarg
-              unless optional
-                raise CompileError, "#{subject} arguments are positional and required"
-              end
-              {"name" => arg.children.first.to_s, "default" => arg.children[1].loc.expression.source}
+              {"name" => arg.children.first.to_s, "kind" => "opt", "default" => arg.children[1].loc.expression.source}
+            when :restarg then named_formal(arg, "rest", subject)
+            when :kwarg then named_formal(arg, "keyreq", subject)
+            when :kwoptarg
+              named_formal(arg, "key", subject).merge("default" => arg.children[1].loc.expression.source)
+            when :kwrestarg then named_formal(arg, "keyrest", subject)
+            when :blockarg then named_formal(arg, "block", subject)
             else
-              raise CompileError, "#{subject} arguments are positional#{optional ? '' : ' and required'}"
+              raise CompileError, "unsupported #{subject} parameter form #{arg.type}"
             end
           end
-          defaults = formals.each_index.select { |index| formals[index]["default"] }
-          unless defaults.empty? || defaults == (defaults.first..defaults.last).to_a
-            raise CompileError, "optional arguments must be contiguous"
-          end
           formals
+        end
+
+        def named_formal(arg, kind, subject)
+          name = arg.children.first
+          if name.nil? || %i[* ** &].include?(name)
+            raise CompileError, "anonymous #{subject} parameters are not supported"
+          end
+          {"name" => name.to_s, "kind" => kind}
+        end
+
+        def implicit_block?(node)
+          return false unless node.respond_to?(:type)
+          return true if node.type == :yield
+          return true if node.type == :send && node.children[0..1] == [nil, :block_given?]
+          node.children.any? { |child| implicit_block?(child) }
         end
 
         # The signature names the parameters the definition does, in order.
@@ -321,14 +440,23 @@ module Swill
           unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :new
             raise CompileError, "unsupported method definition self.#{method}"
           end
-          formals = collect_parameters(args, optional: false)
+          formals = collect_parameters(args)
           check_signature_parameters!(method, formals, signature)
           validate_expression!(body)
-          entry["static_methods"] << {
+          optionals = formals.select { |formal| formal["kind"] == "opt" }
+          collected = {
             "name" => method.to_s, "js" => self.class.member(method), "arity" => args.children.length,
+            "maximum" => formals.any? { |formal| formal["kind"] == "rest" } ? nil :
+              formals.count { |formal| %w[req opt].include?(formal["kind"]) },
             "parameters" => signature_parameters(signature), "returns" => signature_return(signature),
-            "async" => async
+            "async" => async, "formals" => formals
           }
+          collected["arity"] = formals.count { |formal| formal["kind"] == "req" }
+          complex = formals.any? { |formal| !%w[req opt].include?(formal["kind"]) } || implicit_block?(body)
+          collected["complex"] = true if complex
+          collected["implicit_block"] = true if implicit_block?(body)
+          collected["optionals"] = optionals.map { |formal| formal["name"] } if optionals.any? && !complex
+          entry["static_methods"] << collected
         end
 
         def collect_included_hook(entry, node)
@@ -370,11 +498,18 @@ module Swill
               next
             elsif statement.type == :def
               method, args, = statement.children
-              collect_parameters(args, optional: false, subject: "class method")
+              formals = collect_parameters(args, subject: "class method")
               validate_expression!(statement.children.last)
               entry["class_methods"] << statement
               entry["class_method_entries"] << {
-                "name" => method.to_s, "js" => self.class.member(method), "arity" => args.children.length,
+                "name" => method.to_s, "js" => self.class.member(method),
+                "arity" => formals.count { |formal| formal["kind"] == "req" },
+                "maximum" => formals.any? { |formal| formal["kind"] == "rest" } ? nil :
+                  formals.count { |formal| %w[req opt].include?(formal["kind"]) },
+                "formals" => formals,
+                # ClassMethods factories are emitted separately and do not get
+                # generated arity shims, so their optionals use the adapter too.
+                "complex" => formals.any? { |formal| formal["kind"] != "req" } || implicit_block?(statement.children.last),
                 "parameters" => signature_parameters(pending_signature),
                 "returns" => signature_return(pending_signature)
               }

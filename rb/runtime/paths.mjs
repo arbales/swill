@@ -2,6 +2,7 @@
 import {declarations, hasInstalledMetadata} from "./metadata.mjs";
 import {subscribe, writeProperty} from "./properties.mjs";
 import {valueRead, valueInvoke, isPlainObject, NIL_READERS, VALUE_READERS, VALUE_METHODS} from "./values.mjs";
+import {positionalArgumentCount, isKeywordArguments, isBlockArgument} from "./arguments.mjs";
 
 // Installed method maps are immutable. Index each one once by Ruby family
 // name and arity so optional dispatch stays constant-time as classes grow.
@@ -28,6 +29,8 @@ function methodIndex(methods) {
 export function resolveMethod(methods, name, count) {
   const base = methods.get(name);
   if (!base) return null;
+  if (base.minimum != null && count >= base.minimum &&
+      (base.maximum == null || count <= base.maximum)) return base;
   if (base.arity === count) return base;
   return methodIndex(methods).get(name)?.get(count) ?? null;
 }
@@ -224,9 +227,15 @@ export function invoke(object, name, ...args) {
   const methods = declarations(object.constructor, "methods");
   if (!methods.has(name) && VALUE_METHODS.includes(name)) return valueInvoke(object, name, args);
 
-  const method = resolveMethod(methods, name, args.length);
+  const method = resolveMethod(methods, name, positionalArgumentCount(args));
   if (!method) {
     throw new Error(`Unknown method or wrong arity: ${name}`);
+  }
+  if (method.minimum == null && args.some(isKeywordArguments)) {
+    throw new Error(`Unknown method or wrong keywords: ${name}`);
+  }
+  if (method.minimum == null && args.some(isBlockArgument)) {
+    throw new Error(`Method does not accept a block: ${name}`);
   }
 
   return object[method.js](...args);

@@ -1,0 +1,187 @@
+# frozen_string_literal: true
+
+require "fileutils"
+
+module Swill
+  module Data
+    # Writes the reviewable client schema, proxy Ruby, and RBI from one schema.
+    class Generator
+      attr_reader :entry, :root
+
+      def initialize(entry, root: Dir.pwd)
+        @entry = File.expand_path(entry)
+        @root = File.expand_path(root)
+      end
+
+      def schema
+        return @schema if @schema
+        raise ArgumentError, "no server entry: #{entry}" unless File.file?(entry)
+
+        require entry
+        @schema = Schema.discover
+      end
+
+      def generate
+        outputs = rendered_outputs
+        (artifact_paths - outputs.keys).each { |path| FileUtils.rm_f(path) }
+        outputs.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, source)
+        end
+        outputs.keys
+      end
+
+      def check
+        outputs = rendered_outputs
+        extra = artifact_paths - outputs.keys
+        raise ArgumentError, "obsolete generated data file: #{extra.first}" unless extra.empty?
+
+        outputs.each do |path, source|
+          raise ArgumentError, "generated data file is missing: #{path}" unless File.file?(path)
+          raise ArgumentError, "generated data file is stale: #{path}" unless File.read(path) == source
+        end
+        true
+      end
+
+      private
+
+      def artifact_paths
+        roots = [
+          File.join(root, "client", "models", "generated"),
+          File.join(root, "sorbet", "rbi", "shims", "generated")
+        ]
+        roots.flat_map { |directory| Dir.glob(File.join(directory, "**", "*")).select { |path| File.file?(path) } }
+      end
+
+      def rendered_outputs
+        generated = File.join(root, "client", "models", "generated")
+        rbi = File.join(root, "sorbet", "rbi", "shims", "generated")
+        outputs = {
+          File.join(generated, "schema.json") => "#{JSON.pretty_generate(schema.to_h)}\n"
+        }
+        schema.models.each_value do |model|
+          basename = underscore(model.fetch("name"))
+          outputs[File.join(generated, "#{basename}.rb")] = proxy_source(model)
+          outputs[File.join(rbi, "#{basename}.rbi")] = rbi_source(model)
+        end
+        outputs
+      end
+
+      def proxy_source(model)
+        body = ["remote_model #{model['name'].to_json}"]
+        model.fetch("fields").each_value do |field|
+          next if field["name"] == "id"
+
+          body << "remote_attribute :#{field['name']}, type: #{ruby_type(field['type'])}"
+        end
+        model.fetch("relationships").each_value do |relationship|
+          macro = relationship["kind"] == "many" ? "remote_has_many" : "remote_has_one"
+          body << "#{macro} :#{relationship['name']}, model: #{relationship['model'].to_json}"
+        end
+        model.fetch("operations").each_value do |operation|
+          body << ""
+          body.concat(proxy_operation(operation))
+        end
+        ["# typed: true", "# frozen_string_literal: true", "", render_class(model["name"], body), ""].join("\n")
+      end
+
+      def proxy_operation(operation)
+        parameters = operation.fetch("parameters")
+        signature = operation.fetch("parameters").map do |item|
+          "#{item['name']}: #{ruby_type(item['type'])}"
+        end.join(", ")
+        sig_params = signature.empty? ? "" : "params(#{signature})."
+        runtime = { "query" => "data_query", "resolver" => "data_resolve", "command" => "data_command" }
+                  .fetch(operation["kind"])
+        prefix = operation["kind"] == "command" ? "" : "self."
+        declaration = parameters.map { |item| parameter_declaration(item) }.join(", ")
+        positional = parameters.select { |item| %w[req opt rest].include?(item["kind"]) }
+        args = positional.map { |item| item["kind"] == "rest" ? "*#{item['name']}" : item["name"] }.join(", ")
+        keyed = parameters.select { |item| %w[keyreq key keyrest].include?(item["kind"]) }
+        keywords = keyed.map do |item|
+          item["kind"] == "keyrest" ? "**#{item['name']}" : "#{item['name']}: #{item['name']}"
+        end.join(", ")
+        [
+          "sig { #{sig_params}returns(#{ruby_type(operation['returns'])}) }",
+          "async def #{prefix}#{operation['name']}(#{declaration})",
+          "  await Swill::Runtime.#{runtime}(self, #{operation['name'].to_json}, [#{args}], {#{keywords}})",
+          "end"
+        ]
+      end
+
+      def rbi_source(model)
+        body = []
+        model.fetch("fields").each_value do |field|
+          next if field["name"] == "id"
+
+          type = ruby_type(field["type"])
+          body.push("sig { returns(#{type}) }", "def #{field['name']}; end")
+        end
+        model.fetch("operations").each_value do |operation|
+          parameters = operation["parameters"].map { |item| "#{item['name']}: #{ruby_type(item['type'])}" }.join(", ")
+          sig_params = parameters.empty? ? "" : "params(#{parameters})."
+          prefix = operation["kind"] == "command" ? "" : "self."
+          arguments = operation["parameters"].map { |item| rbi_parameter_declaration(item) }.join(", ")
+          body.push(
+            "sig { #{sig_params}returns(#{ruby_type(operation['returns'])}) }",
+            "def #{prefix}#{operation['name']}(#{arguments}); end"
+          )
+        end
+        ["# typed: true", "", render_class(model["name"], body), ""].join("\n")
+      end
+
+      def render_class(name, body)
+        parts = name.split("::")
+        namespace = parts[0...-1]
+        lines = namespace.each_with_index.map { |part, index| "#{'  ' * index}module #{part}" }
+        depth = namespace.length
+        lines << "#{'  ' * depth}class #{parts.last} < Swill::Model::Base"
+        lines.concat(body.map { |line| line.empty? ? "" : "#{'  ' * (depth + 1)}#{line}" })
+        lines << "#{'  ' * depth}end"
+        namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }
+        lines.join("\n")
+      end
+
+      def ruby_type(type)
+        members = type.fetch("members", [])
+        case type.fetch("kind")
+        when "primitive"
+          type.fetch("name") == "Boolean" ? "T::Boolean" : type.fetch("name")
+        when "model" then type.fetch("name")
+        when "optional" then "T.nilable(#{ruby_type(members.fetch(0))})"
+        when "array" then "T::Array[#{ruby_type(members.fetch(0))}]"
+        when "result_set" then "Swill::Model::ResultSet[#{ruby_type(members.fetch(0))}]"
+        else "T.untyped"
+        end
+      end
+
+      def parameter_declaration(parameter)
+        name = parameter["name"]
+        case parameter["kind"]
+        when "req" then name
+        when "opt" then "#{name} = Swill::Runtime.omitted_argument"
+        when "rest" then "*#{name}"
+        when "keyreq" then "#{name}:"
+        when "key" then "#{name}: Swill::Runtime.omitted_argument"
+        when "keyrest" then "**#{name}"
+        end
+      end
+
+      def rbi_parameter_declaration(parameter)
+        name = parameter["name"]
+        case parameter["kind"]
+        when "req" then name
+        when "opt" then "#{name} = T.unsafe(nil)"
+        when "rest" then "*#{name}"
+        when "keyreq" then "#{name}:"
+        when "key" then "#{name}: T.unsafe(nil)"
+        when "keyrest" then "**#{name}"
+        end
+      end
+
+      def underscore(name)
+        name.gsub("::", "/").gsub(/([a-z\d])([A-Z])/, '\\1_\\2').downcase
+      end
+    end
+  end
+end

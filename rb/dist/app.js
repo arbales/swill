@@ -43,6 +43,10 @@
   var Swill__Model__Store = framework.Swill__Model__Store;
   var Swill__Model__Identity = framework.Swill__Model__Identity;
   var Swill__Model__Identity_ClassMethods = framework.Swill__Model__Identity_ClassMethods;
+  var Swill__Model__Collection = framework.Swill__Model__Collection;
+  var Swill__Model__ResultSet = framework.Swill__Model__ResultSet;
+  var Swill__Model__RemoteData = framework.Swill__Model__RemoteData;
+  var Swill__Model__RemoteData_ClassMethods = framework.Swill__Model__RemoteData_ClassMethods;
   var Swill__Model__Relationship = framework.Swill__Model__Relationship;
   var Swill__Model__Codec = framework.Swill__Model__Codec;
   var Swill__Model__PlainJSON = framework.Swill__Model__PlainJSON;
@@ -168,10 +172,10 @@
         Runtime.must(this.seed),
         "name"
       );
-      this.bind(
-        "badge_count",
-        { to: Runtime.must(this.badge), key_path: "count" }
-      );
+      this.bind("badge_count", Runtime.keywordArguments({
+        to: Runtime.must(this.badge),
+        key_path: "count"
+      }));
       if (this.roster) this.people = Runtime.must(this.roster);
       return this.application().makeFirstResponder(Runtime.must(this.nameField));
     }

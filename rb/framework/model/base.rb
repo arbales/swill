@@ -30,6 +30,7 @@ module Swill
       include DirtyTracking
       include Drafts
       include Identity
+      include RemoteData
 
       attribute :id, type: T.nilable(String), default: nil
 
@@ -37,6 +38,7 @@ module Swill
       def initialize
         super()
         @relationship_requests = T.let({}, T::Hash[String, T.untyped])
+        Swill::Runtime.initialize_remote_data(self)
       end
 
       # ---- reading ----
@@ -86,7 +88,7 @@ module Swill
       sig { params(id: String).returns(T.attached_class) }
       async def self.fetch(id)
         url = resource_url(id)
-        record = parse_one(await Wire.default.get_json(url, {}))
+        record = parse_one(await Wire.default.get_json(url))
         raise "no record at #{url}" unless record
         record
       end
@@ -104,7 +106,7 @@ module Swill
       # A collection at any URL, parsed as this class.
       sig { params(url: String, params: T::Hash[String, T.untyped]).returns(T::Array[T.attached_class]) }
       async def self.fetch_all(url, params)
-        parse_many(await Wire.default.get_json(url, params))
+        parse_many(await Wire.default.get_json(url, params: params))
       end
 
       sig { params(url: String, params: T::Hash[String, T.untyped]).returns(Dataset) }
@@ -136,7 +138,7 @@ module Swill
         return self if !creating && !dirty?
         method = creating ? "POST" : "PATCH"
         url = creating ? self.class.endpoint_url : self.class.resource_url(T.must(id))
-        response = await Wire.default.request_json(method, url, serialize(!creating))
+        response = await Wire.default.request_json(method, url, body: serialize(!creating))
         persisted = self.class.parse_one(response)
         raise "#{method} #{url} returned no record" unless persisted
         self.id = persisted.id
@@ -152,7 +154,7 @@ module Swill
       async def delete
         identifier = id
         return self if identifier == nil
-        await Wire.default.request_json("DELETE", self.class.resource_url(identifier), nil)
+        await Wire.default.request_json("DELETE", self.class.resource_url(identifier))
         self.class.remove(identifier)
         self
       end
@@ -217,6 +219,10 @@ module Swill
       sig { params(name: String).void }
       def property_will_access(name)
         super(name)
+        if self.class.remote_fields.key?(name)
+          Swill::Runtime.data_field_will_access(self, name)
+          return
+        end
         return if id == nil
         return unless self.class.model_relationships[name]
         return if relationship_loaded?(name)
@@ -253,7 +259,7 @@ module Swill
         begin
           descriptor = relationship(name)
           model_class = descriptor.model_class
-          request = Wire.default.get_json(descriptor.url_for(self), {})
+          request = Wire.default.get_json(descriptor.url_for(self))
           @relationship_requests[name] = request
           payload = await request
           value = descriptor.many? ? model_class.parse_many(payload) : model_class.parse_one(payload)

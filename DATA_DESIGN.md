@@ -5,24 +5,21 @@
 Use four model locations with distinct responsibilities:
 
 ```text
-models/post.rb
-shared/models/post.rb
+server/models/post.rb
+server/operations/post.rb
 client/models/generated/post.rb
 client/models/post.rb
 ```
 
-`models/post.rb` is the authoritative server model. It remains a normal `Sequel::Model` and contains persistence, associations, validations, dataset methods, command implementations, and `sequel-privacy` rules.
+`server/models/post.rb` is the authoritative server model. It remains a normal `Sequel::Model` and contains persistence, associations, validations, dataset methods, command implementations, and `sequel-privacy` rules.
 
-`shared/models/post.rb` reopens the model and declares the remote Swill surface plus any genuinely shared behavior.
+`server/operations/post.rb` reopens the server model and declares the remote
+Swill surface. It is schema input and is never compiled into the browser.
 
 ```ruby
 class Post
   query :search
   command :publish!
-
-  def display_title
-    title || "Untitled"
-  end
 end
 ```
 
@@ -37,6 +34,15 @@ class Post
   end
 end
 ```
+
+The server loads `server/models/` and `server/operations/`; it never loads
+either client directory. The client compiler loads
+`client/models/generated/` and then `client/models/`. Generated RBI files are
+loaded only by Sorbet. The generated client class contains the methods that
+perform remote calls; server declarations are not executable client input.
+Generated and handwritten definitions reopen the same local Ruby class. The
+compiler combines their bodies in load order and emits one JavaScript class,
+with normal Ruby last-definition-wins method semantics.
 
 ## 2. Make Swill own a small protocol type system
 
@@ -88,7 +94,7 @@ query :first_by_email
 
 Sorbet users keep their existing `T::Sig`.
 
-Swill should use Ruby reflection to infer argument names, positional/keyword structure, requiredness, and defaults regardless of typing.
+Swill should use Ruby reflection to infer argument names, positional/keyword structure, and requiredness regardless of typing. Reflection does not expose default expressions; generated clients preserve omission and let the server method evaluate its defaults.
 
 ## 3. Define three remote operation types
 
@@ -124,10 +130,10 @@ Organization.current
 The client syntax should remain ordinary Ruby:
 
 ```ruby
-User.current_user
-Post.search("distributed objects")
-User.first_by_email("foo@example.com")
-post.publish!
+user = await User.current_user
+posts = await Post.search("distributed objects")
+found = await User.first_by_email("foo@example.com")
+await post.publish!
 ```
 
 ## 4. Integrate queries directly with Sequel dataset methods
@@ -158,7 +164,7 @@ class User < Sequel::Model
 end
 ```
 
-The shared files merely expose them:
+The server operation files merely expose them:
 
 ```ruby
 class Post
@@ -244,15 +250,17 @@ That gives the client a persistent object graph.
 
 Every client model should track field presence separately from field value.
 
-Distinguish at least:
+Distinguish:
 
 ```text
 present
 unknown / not fetched
-suppressed / unavailable
 ```
 
 A known `nil` must differ from a field that has never been loaded.
+An authorization-denied value is present nil, deliberately indistinguishable
+from an authorized nil. Authorization remains entirely server-side; the client
+does not expose policy state.
 
 Internally this should probably use a field-presence bitmap generated from the schema.
 
@@ -335,7 +343,7 @@ Define a Swill wire protocol with messages such as:
 
 ```text
 HELLO
-SCHEMA
+WELCOME
 
 GET
 QUERY
@@ -471,7 +479,7 @@ The build pipeline should be:
 
 ```text
 Sequel model metadata
-+ shared Swill declarations
++ server Swill operation declarations
 + Sorbet / Swill signatures
         ↓
 Swill schema
@@ -595,16 +603,16 @@ Avoid implementing subscriptions, offline synchronization, arbitrary query compo
 Browser-side Ruby should be able to write:
 
 ```ruby
-user = User.current_user
+user = await User.current_user
 
-posts = Post.search("distributed objects")
+posts = await Post.search("distributed objects")
 
 post = posts.first
 
 bind :text, to: post.author, key: :name
 bind :content, to: post, key: :comments
 
-post.publish!
+await post.publish!
 ```
 
 with these guarantees:

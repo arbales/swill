@@ -52,6 +52,9 @@ Gem::Specification.new do |spec|
   # Declarations carry Sorbet signatures, and the compiler reads them by
   # reflection when it loads an application's Ruby.
   spec.add_dependency "sorbet-runtime", ">= 0.5"
+  spec.add_dependency "msgpack", ">= 1.7"
+  spec.add_dependency "sequel", ">= 5"
+  spec.add_dependency "sequel-privacy", ">= 0.7"
 
   # esbuild is required on PATH: it formats generated JavaScript and bundles
   # the application. It is not a gem.

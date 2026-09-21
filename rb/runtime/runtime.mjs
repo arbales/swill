@@ -34,6 +34,14 @@ import {
   restorations, outlets,
   collectAttributes, applyAttributes
 } from "./attributes.mjs";
+import {
+  configureData, closeData, initializeRemoteData, dataQuery, dataResolve, dataCommand,
+  dataFieldWillAccess, dataFieldLoaded, dataFieldLoading, dataFieldError, loadDataField
+} from "./data_client.mjs";
+import {
+  keywordArguments, blockArgument, omittedArgument, isOmittedArgument,
+  bindArguments, argument, yieldBlock
+} from "./arguments.mjs";
 
 export const Runtime = {
   // Classes
@@ -66,6 +74,14 @@ export const Runtime = {
 
   // Declarations
   isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
+
+  // Remote data
+  configureData, closeData, initializeRemoteData, dataQuery, dataResolve, dataCommand,
+  dataFieldWillAccess, dataFieldLoaded, dataFieldLoading, dataFieldError, loadDataField,
+
+  // Ruby complex calls
+  keywordArguments, blockArgument, omittedArgument, isOmittedArgument,
+  bindArguments, argument, yieldBlock,
 
   // Invalid URL input is reported, not raised.
   warn(message) {

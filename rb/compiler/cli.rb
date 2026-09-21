@@ -14,6 +14,8 @@ module Swill
           swill build [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill types [ENTRY] [--into DIR]
+          swill data generate SERVER_ENTRY [--root DIR]
+          swill data check SERVER_ENTRY [--root DIR]
 
         ENTRY is a Ruby file, or a directory holding app.rb (default: .).
         The entry's require_relative lines name the sources, in order.
@@ -40,6 +42,7 @@ module Swill
           opts.on("--with-framework") { options[:framework] = true }
           opts.on("--interval SECONDS", Float) { |seconds| options[:interval] = seconds }
           opts.on("--into DIR") { |dir| options[:into] = dir }
+          opts.on("--root DIR") { |dir| options[:root] = dir }
         end
         arguments = parser.parse(rest)
         case command
@@ -51,6 +54,9 @@ module Swill
           0
         when "types"
           types(arguments.first || ".", options)
+          0
+        when "data"
+          data(arguments, options)
           0
         else
           $stderr.puts USAGE
@@ -78,6 +84,23 @@ module Swill
         puts format("swill: wrote %d Sorbet files under %s", written.length, File.dirname(root))
         puts "swill: run `srb tc` from #{File.dirname(File.dirname(root))}"
         written
+      end
+
+      def data(arguments, options)
+        action, entry = arguments
+        unless %w[generate check].include?(action) && entry
+          raise OptionParser::ParseError, "data expects generate or check and a SERVER_ENTRY"
+        end
+        generator = Swill::Data::Generator.new(entry, root: options[:root] || Dir.pwd)
+        if action == "generate"
+          written = generator.generate
+          puts "swill: wrote #{written.length} data files"
+        else
+          generator.check
+          puts "swill: generated data files are current"
+        end
+      rescue ArgumentError => error
+        raise CompileError, error.message
       end
 
       # Polls the sources' modification times; no dependency on a file

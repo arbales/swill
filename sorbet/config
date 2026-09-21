@@ -1,2 +1,3 @@
 --silence-dev-message
 --enable-experimental-requires-ancestor
+sorbet/rbi/prism_lex_compat.rbi

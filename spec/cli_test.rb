@@ -79,4 +79,22 @@ class CLITest < Minitest::Test
     assert_includes stderr, "swill build [ENTRY]"
     assert_empty stdout
   end
+
+  def test_data_generate_and_check
+    Dir.mktmpdir do |dir|
+      server = File.join(ROOT, "spec/fixtures/data/server.rb")
+      stdout, stderr, status = swill("data", "generate", server, "--root", dir)
+      assert status.success?, stderr
+      assert_includes stdout, "wrote 7 data files"
+
+      stdout, stderr, status = swill("data", "check", server, "--root", dir)
+      assert status.success?, stderr
+      assert_includes stdout, "generated data files are current"
+
+      File.write(File.join(dir, "client/models/generated/schema.json"), "stale")
+      _stdout, stderr, status = swill("data", "check", server, "--root", dir)
+      refute status.success?
+      assert_includes stderr, "generated data file is stale"
+    end
+  end
 end

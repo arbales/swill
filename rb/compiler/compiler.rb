@@ -64,6 +64,8 @@ module Swill
       rb/framework/model/drafts.rb
       rb/framework/model/store.rb
       rb/framework/model/identity.rb
+      rb/framework/model/collection.rb
+      rb/framework/model/remote_data.rb
       rb/framework/model/relationship.rb
       rb/framework/model/codec.rb
       rb/framework/model/dataset.rb
@@ -80,7 +82,10 @@ module Swill
         # read back. A compiler with imports is an application, and shares the
         # framework's container; one without is a root, and gets its own.
         def initialize(imports: [], loader: :default)
+          @imports = imports
+          @sources = []
           loader = imports.empty? ? Loader.new : Loader.new(parent: Loader.framework) if loader == :default
+          @loader_factory = -> { loader.fresh }
           @knowledge = Knowledge.new(imports, loader: loader)
         end
 
@@ -91,8 +96,10 @@ module Swill
 
         def add(source, file: "(spike)")
           knowledge.collect(source, file)
+          @sources << [source, file]
           self
         rescue CompileError => error
+          rebuild_knowledge
           raise error if file == "(spike)"
           raise CompileError, "#{file}: #{error.message}"
         end
@@ -201,6 +208,17 @@ module Swill
 
       private
 
+        # A failed reopening may already have changed the MRI class object
+        # used for reflection. Replaying accepted sources into a fresh loader
+        # restores the compiler's transactional add contract. This path runs
+        # only after an error and has no effect on generated runtime code.
+        def rebuild_knowledge
+          loader = @loader_factory.call
+          rebuilt = Knowledge.new(@imports, loader: loader)
+          @sources.each { |source, file| rebuilt.collect(source, file) }
+          @knowledge = rebuilt
+        end
+
         # What must hold for the graph to compile and emit: ancestry order and
         # kinds, mixin shape, and members that would collide in JavaScript or
         # be ambiguous to lower. What the runtime cannot install or honor is
@@ -239,6 +257,12 @@ module Swill
             members = entry["properties"].map { |p| [p["js"], p["name"]] } +
               entry["methods"].flat_map { |m| Knowledge.variants(m).map { |v| [v["js"], v["name"]] } }
             raise CompileError, "colliding members in #{entry['name']}" unless members.map(&:first).uniq.length == members.length
+            statics = entry.fetch("static_methods", []).flat_map do |method|
+              Knowledge.variants(method).map { |variant| [variant["js"], variant["name"]] }
+            end
+            unless statics.map(&:first).uniq.length == statics.length
+              raise CompileError, "colliding class methods in #{entry['name']}"
+            end
             # A method with a property's name would be lowered as a property read.
             if entry["methods"].any? { |method| inherited_properties(entry).include?(method["name"]) }
               raise CompileError, "method/property overlap requires explicit lowering"
@@ -255,12 +279,31 @@ module Swill
           entry["methods"].each do |method|
             inherited = inherited_method_entry(entry, parent_name, method["name"])
             next unless inherited
+            if method["complex"] || inherited["complex"]
+              next if call_shape(inherited) == call_shape(method)
+              raise CompileError,
+                "#{entry['name']}##{method['name']} must accept the same arguments as the method it overrides"
+            end
             inherited_family = Knowledge.variants(inherited).map { |variant| variant.values_at("name", "arity") }
             own_family = Knowledge.variants(method).map { |variant| variant.values_at("name", "arity") }
             next if inherited_family == own_family
             raise CompileError,
               "#{entry['name']}##{method['name']} must accept the same arities as the method it overrides"
           end
+          entry.fetch("static_methods", []).each do |method|
+            inherited = parent_name && knowledge.static_method_entry(parent_name, method["name"])
+            next unless inherited
+            next if call_shape(inherited) == call_shape(method)
+            raise CompileError,
+              "#{entry['name']}.#{method['name']} must accept the same arguments as the method it overrides"
+          end
+        end
+
+        def call_shape(method)
+          shape = method.fetch("formals", []).map do |formal|
+            formal["kind"].start_with?("key") ? [formal["kind"], formal["name"]] : formal["kind"]
+          end
+          [shape, method["implicit_block"] == true]
         end
 
         def inherited_method_entry(entry, parent_name, name)
@@ -376,8 +419,9 @@ module Swill
         # The widest variant carries the body; every shorter one hands it the
         # defaults, which is where Ruby's own argument binding is written down.
         def variant_methods(entry)
-          entry["methods"].flat_map do |method|
+          (entry["methods"] + entry.fetch("static_methods", [])).flat_map do |method|
             next [] unless method["formals"]
+            next [] if method["complex"]
             variants = Knowledge.variants(method)
             widest = variants.last
             variants[0...-1].map do |variant|
@@ -389,7 +433,8 @@ module Swill
               end
               parameters = Knowledge.variant_formals(method, variant["taken"]).map { |formal| formal["name"] }
               call = "#{widest['name']}(#{arguments.join(', ')})"
-              header = "def #{variant['name']}(#{parameters.join(', ')})"
+              static = entry.fetch("static_methods", []).include?(method)
+              header = "def #{static ? 'self.' : ''}#{variant['name']}(#{parameters.join(', ')})"
               method["async"] ? "async #{header}\nawait #{call}\nend" : "#{header}\n#{call}\nend"
             end
           end

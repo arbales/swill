@@ -61,6 +61,13 @@ def bundle_spike(minify: false)
   end
 end
 
+def build_data_fixture_client
+  Swill::Ruby2JS::Build.new(
+    "spec/fixtures/data/client/app.rb",
+    out: "build/data_client.js"
+  ).run
+end
+
 desc "Generate metadata and swill.js/app.js browser bundles with source maps"
 task :build do
   Dir.chdir(ROOT) do
@@ -80,7 +87,11 @@ task test: :typecheck do
     sh "bundle exec ruby spec/compiler_test.rb"
     sh "bundle exec ruby spec/shared_test.rb"
     sh "bundle exec ruby spec/cli_test.rb"
+    sh "bundle exec ruby spec/data_test.rb"
     sh "node --test spec/runtime_test.mjs"
+    sh "node --test spec/data_client_test.mjs"
+    build_data_fixture_client
+    sh "node --test spec/data_integration_test.mjs"
     sh "node --test spec/bundle_test.mjs"
   end
 end

@@ -124,15 +124,10 @@ module Swill
     # pre-rendered content, awaken it, record the content in the URL fragment
     # as a history entry, restore the new controller's state, and hand the
     # first responder to it. Returns that controller.
-    sig { params(window_name: String, content_name: String).returns(T.nilable(Controller)) }
-    def load_window_content(window_name, content_name)
-      load_window_content_with(window_name, content_name, :push)
-    end
-
     # history is :push for navigation, :replace to rewrite the entry, or :none
     # when the fragment itself asked for the content (Back/Forward).
     sig { params(window_name: String, content_name: String, history: Symbol).returns(T.nilable(Controller)) }
-    def load_window_content_with(window_name, content_name, history)
+    def load_window_content(window_name, content_name, history: :push)
       window = window_named(window_name)
       raise "No window container: #{window_name}" unless window
       container = window.root
@@ -144,8 +139,8 @@ module Swill
       container.setAttribute("name", content_name)
       controllers = awakening.awaken(container)
       window.assign_content(content_name, top_controller_in(container))
-      @fragments.write(window.name, content_name, history)
-      restore_window_state(window, history != :none, history != :none)
+      @fragments.write(window.name, content_name, history: history)
+      restore_window_state(window, prune_stale: history != :none, write_content: history != :none)
       awakening.finish(controllers)
       controller = window.controller
       if controller
@@ -161,13 +156,8 @@ module Swill
     # Present a template as a window appended to the root. A <dialog> root is
     # shown. Dismiss it with dismiss(controller); the window's closed promise
     # resolves then.
-    sig { params(name: String).returns(Window) }
-    def show_window(name)
-      show_window_in(name, @root)
-    end
-
     sig { params(name: String, into: Element).returns(Window) }
-    def show_window_in(name, into)
+    def show_window(name, into: @root)
       node = clone_window_content(name)
       into.appendChild(node)
       awakening = Awakening.new
@@ -184,7 +174,7 @@ module Swill
       window.assign_content(name, controller)
       window.save_first_responder(first_responder)
       @windows << window
-      restore_window_state(window, false, false)
+      restore_window_state(window, prune_stale: false, write_content: false)
       awakening.finish(controllers)
       make_first_responder(controller) unless responder_within?(first_responder, node)
       window
@@ -464,20 +454,20 @@ module Swill
     # for it.
 
     sig { params(window: Window, prune_stale: T::Boolean, write_content: T::Boolean).void }
-    def restore_window_state(window, prune_stale, write_content)
+    def restore_window_state(window, prune_stale:, write_content:)
       stale = window.dispose_restoration
       controller = window.controller
       declarations = T.let(controller ? Runtime.restorations(controller) : [], T::Array[T.untyped])
       keys = declarations.map { |declaration| window.scoped_key(declaration.key) }
       content = window.content_name
-      @fragments.write(window.name, content, :replace) if write_content && content
+      @fragments.write(window.name, content, history: :replace) if write_content && content
       if prune_stale
-        stale.each { |key| @fragments.write(key, nil, :replace) unless keys.include?(key) }
+        stale.each { |key| @fragments.write(key, nil, history: :replace) unless keys.include?(key) }
       end
       return unless controller
       params = @fragments.params
       applied = 0
-      @fragments.suspended(->() do
+      @fragments.suspended do
         declarations.each do |declaration|
           text = params[window.scoped_key(declaration.key)]
           next if text == nil
@@ -486,7 +476,7 @@ module Swill
           Runtime.writePath(controller, declaration.path, value)
           applied += 1
         end
-      end)
+      end
       controller.controller_did_restore(applied > 0) unless declarations.empty?
       declarations.each do |declaration|
         disposer = Runtime.observePath(controller, declaration.path, ->(_value) { write_window_state(window) })
@@ -496,7 +486,7 @@ module Swill
 
     sig { void }
     def restore_launched_windows
-      @windows.each { |window| restore_window_state(window, false, true) }
+      @windows.each { |window| restore_window_state(window, prune_stale: false, write_content: true) }
     end
 
     # Push the controller's current restorable state into the fragment.
@@ -506,7 +496,7 @@ module Swill
       return unless controller
       T.let(Runtime.restorations(controller), T::Array[T.untyped]).each do |declaration|
         value = Runtime.encodeFragment(Runtime.readPath(controller, declaration.path))
-        @fragments.write(window.scoped_key(declaration.key), value, :replace)
+        @fragments.write(window.scoped_key(declaration.key), value, history: :replace)
       end
     end
 
@@ -524,12 +514,12 @@ module Swill
       requested = params[window.name]
       if requested != nil && requested != window.content_name
         if window_content?(requested)
-          load_window_content_with(window.name, requested, :none)
+          load_window_content(window.name, requested, history: :none)
         else
           warn("window \"#{window.name}\" requested unknown content \"#{requested}\"")
         end
       else
-        restore_window_state(window, false, false)
+        restore_window_state(window, prune_stale: false, write_content: false)
       end
     end
 

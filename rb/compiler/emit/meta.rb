@@ -47,6 +47,10 @@ module Swill
             methods = entry["methods"].flat_map do |method|
               Knowledge.variants(method).map do |variant|
                 descriptor = {"arity" => variant["arity"]}
+                if method["complex"]
+                  descriptor["minimum"] = variant["minimum"]
+                  descriptor["maximum"] = variant["maximum"]
+                end
                 descriptor["js"] = variant["js"] if variant["js"] != variant["name"]
                 descriptor["family"] = variant["family"] if variant["family"]
                 "#{object_key(variant['name'])}: #{JSON.pretty_generate(descriptor)}"
