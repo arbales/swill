@@ -155,7 +155,7 @@ GEM
       console (~> 1.0)
     sequel (5.108.0)
       bigdecimal
-    sequel-privacy (0.7.1)
+    sequel-privacy (0.7.2)
       sequel (~> 5.0)
       sorbet-runtime (~> 0.5)
     sorbet (0.6.13506)

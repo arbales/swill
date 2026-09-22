@@ -61,7 +61,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "sorbet-runtime", ">= 0.5"
   spec.add_dependency "msgpack", ">= 1.7"
   spec.add_dependency "sequel", ">= 5"
-  spec.add_dependency "sequel-privacy", ">= 0.7.1"
+  spec.add_dependency "sequel-privacy", ">= 0.7.2"
 
   # esbuild is required on PATH: it formats generated JavaScript and bundles
   # the application. It is not a gem.
