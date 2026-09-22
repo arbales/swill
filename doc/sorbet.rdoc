@@ -1,0 +1,40 @@
+= Sorbet
+
+Declarations carry explicit types, and method signatures feed the compiler's
+static lowering as well as Sorbet:
+
+  attribute :name, type: String, default: ""
+
+  property :label, type: String do
+    loud ? name.upcase : name
+  end
+
+<tt>extend T::Sig</tt> and <tt>sig</tt> are erased from output. <tt>T.must</tt>, <tt>T.cast</tt>, <tt>T.let</tt>,
+<tt>T.assert_type!</tt>, <tt>T.unsafe</tt>, and <tt>T.absurd</tt> compile to runtime checks with
+sorbet-runtime's behavior, and the compiler uses their types: <tt>T.must(person)</tt>
+on a nilable property lowers to a direct call on the class, and <tt>T.unsafe</tt>
+makes the sends on its result dynamic. No other <tt>T</tt> construct is allowed in a
+body, and no browser <tt>sorbet-runtime</tt> is bundled. The build generates RBIs for
+declared accessors and type-check-only probes for declaration expressions.
+
+== Typing an application
+
+<tt>swill types</tt> writes the Sorbet artifacts an application needs to check
+itself:
+
+  swill types frontend        # writes frontend/sorbet/, then run srb tc there
+
+<tt>sorbet/rbi/application.rbi</tt> :: The accessors the application's own declarations create
+<tt>sorbet/rbi/swill.rbi</tt> :: The same for the framework's classes
+<tt>sorbet/rbi/swill-dom.rbi</tt> :: The DOM and the browser globals, from <tt>knowledge/dom.rb</tt>
+<tt>sorbet/rbi/swill-runtime.rbi</tt> :: The runtime and declaration-macro boundary, handwritten
+<tt>sorbet/checks/declarations.rb</tt> :: Each declaration expression as a typed method, so defaults and computed blocks are checked
+<tt>sorbet/config</tt> :: Written only if absent; an existing one is the application's own
+
+The config lists the application's sources, the framework's Ruby (where its
+methods and macros are declared), and the generated RBIs. The framework's MRI
+host is described by <tt>swill-runtime.rbi</tt> rather than checked as source, since
+checking both would declare the declaration macros twice. Because the config
+names absolute paths into the installed gem, it is regenerated rather than
+committed.
+

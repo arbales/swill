@@ -12,6 +12,7 @@ custom_template_idea.swib
 /.bundle/
 /vendor/
 /build/
+/rdoc/
 /sorbet/rbi/generated.rbi
 /sorbet/rbi/dom.rbi
 /sorbet/checks/

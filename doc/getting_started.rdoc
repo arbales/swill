@@ -1,0 +1,74 @@
+= Getting started
+
+== Building an application
+
+The <tt>swill</tt> command compiles an application against the framework and
+bundles it into one script that reads the framework from the page:
+
+  exe/swill build frontend            # frontend/app.rb, output frontend/dist/app.js
+  exe/swill build frontend/app.rb --out public/assets/app.js --with-framework
+  exe/swill watch frontend            # rebuild as the sources change
+
+The entry file's <tt>require_relative</tt> lines name the sources in order, as they
+would on MRI; the compiler treats those lines as inert. The page loads
+<tt>swill.js</tt> (from a CDN, or the copy <tt>--with-framework</tt> places beside the
+output) before <tt>app.js</tt>, and names its application with
+<tt><body application="..."></tt>. <tt>esbuild</tt> must be on the path; a source map is
+written beside the output.
+
+== Installing as a gem
+
+The gem carries the compiler, the framework's Ruby, the JavaScript runtime,
+a prebuilt <tt>swill.js</tt>, and the <tt>swill</tt> command, so an application needs no
+checkout of this repository. Install it from the repository with Bundler:
+
+  # Gemfile
+  gem "swill", github: "arbales/swill"
+  gem "ruby2js", git: "https://github.com/ruby2js/ruby2js.git", branch: "master"
+
+Both lines are required. This compiler extends Ruby2JS's Pragma filter, which
+no released <tt>ruby2js</tt> carries: 5.1.2 on rubygems does not have it, and the
+version on master reports that same number. The gem declares the dependency,
+but only the consumer's Gemfile can point it at the git source, so a Gemfile
+with the first line alone resolves to a <tt>ruby2js</tt> that cannot work. Loading
+the compiler without the filter raises a <tt>LoadError</tt> saying so. For the same
+reason the gem cannot go to rubygems.org, and its <tt>allowed_push_host</tt> is set
+to refuse a push until that changes.
+
+To build and install it by hand instead:
+
+  gem build swill.gemspec
+  gem install ./swill-0.0.1.gem
+
+The framework's interface is compiled from its sources on demand rather than
+shipped prebuilt: it costs about 0.16s per process, against a whole
+application build of roughly 0.25s, so precomputing it would buy nothing and
+could go stale.
+
+== Application ports
+
+The "bar" application (<tt>~/Workspace/bar</tt>, a Roda API with a TypeScript
+Swill frontend) has a second frontend in Ruby under <tt>frontend-ruby/</tt>,
+compiled by <tt>bin/drinks frontend:build --ruby</tt> through the <tt>swill</tt> command
+and checked in headless Chrome against a fake JSON:API server
+(<tt>node frontend-ruby/spec/browser_check.mjs</tt>). Its <tt>PORT.md</tt> lists every
+markup change against the TypeScript markup and whether it is a naming
+difference, a framework difference, or a choice of the port. Two framework
+rules came out of it: a <tt>false</tt> value removes a <tt>data-*</tt> attribute (ARIA
+attributes keep <tt>"false"</tt>), and a first responder that new window content
+chooses while loading (a field focused in <tt>controller_did_load</tt>) stands.
+<tt>Swill::Application#browser</tt> is the window, for <tt>prompt</tt> and <tt>print</tt>.
+
+== The static example
+
+<tt>examples/rb/static/index.html</tt> with <tt>examples/rb/static.rb</tt> is the full proof of
+the UI surface, ported from the retired Opal port's static example
+(<tt>examples/opal/static/app.rb</tt>): a toolbar that switches
+the main window between a bindings pane (key-path bindings, computed model
+predicates, a draft editor, a nested card with a binding root, a nested
+counter posting notifications, and a first-responder readout), a controls
+pane (text field, select, custom select), and a data pane (an editable,
+sortable list of plain observable objects); a palette dialog; and a
+workspace window whose panes keep their fields in the URL fragment. The
+brewery search from the original waits for the backend model slice.
+

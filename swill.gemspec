@@ -34,8 +34,15 @@ Gem::Specification.new do |spec|
     Dir["rb/**/*.{rb,mjs}"] +
     Dir["rb/dist/swill*.{js,map}"] +
     Dir["sorbet/rbi/runtime.rbi"] +
-    Dir["docs/*.md"] +
-    ["README.md", "LICENSE", "swill.gemspec"].select { |path| File.file?(path) }
+    Dir["doc/*.rdoc"] +
+    ["README.rdoc", "LICENSE", "swill.gemspec"].select { |path| File.file?(path) }
+
+  spec.extra_rdoc_files = ["README.rdoc", "LICENSE"] + Dir["doc/*.rdoc"]
+  spec.rdoc_options = [
+    "--quiet", "--line-numbers", "--inline-source",
+    "--title", "Swill: a Cocoa-inspired browser UI framework",
+    "--main", "README.rdoc"
+  ]
   spec.bindir = "exe"
   spec.executables = ["swill"]
   spec.require_paths = ["rb"]
@@ -54,7 +61,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "sorbet-runtime", ">= 0.5"
   spec.add_dependency "msgpack", ">= 1.7"
   spec.add_dependency "sequel", ">= 5"
-  spec.add_dependency "sequel-privacy", ">= 0.7"
+  spec.add_dependency "sequel-privacy", ">= 0.7.1"
 
   # esbuild is required on PATH: it formats generated JavaScript and bundles
   # the application. It is not a gem.

@@ -216,7 +216,7 @@ module Swill
           entry = nil if kind == :integer && %i[/ %].include?(method) && static_type(args.first) != "Integer"
           if entry.nil?
             return nil if NATIVE_SENDS.include?(method) || OPERATORS.include?(method)
-            raise CompileError, "no lowering for #{type}##{method}; docs/compiler.md lists the core type methods"
+            raise CompileError, "no lowering for #{type}##{method}; doc/compiler.rdoc lists the core type methods"
           end
           arities, _result, form = entry
           unless arities === args.length
@@ -232,7 +232,7 @@ module Swill
           table = {array: ARRAY_BLOCKS, hash: HASH_BLOCKS}[kind]
           entry = table && call_args.empty? && table[method]
           unless entry
-            raise CompileError, "no lowering for #{type}##{method} with a block; docs/compiler.md lists the core type methods"
+            raise CompileError, "no lowering for #{type}##{method} with a block; doc/compiler.rdoc lists the core type methods"
           end
           target, _result, mode, post = entry
           previous = @local_types

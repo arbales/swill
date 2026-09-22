@@ -1,0 +1,153 @@
+= Bindings
+
+A binding keeps a DOM endpoint equal to a value at a key path in the object
+graph. Markup names the path; the framework decides whether the endpoint is a
+control, a child controller's represented object, or an element's text or
+property.
+
+== Markup Bindings
+
+<tt>bind="path"</tt> is the value binding.
+
+  <input bind="address">
+  <span bind="name"></span>
+  <section controller="MailingListDetail" bind="selected_object"></section>
+
+Direction depends on the endpoint:
+
+* A form control (<tt>input</tt>, <tt>textarea</tt>, <tt>select</tt>) is
+  two-way, unless it carries <tt>readonly</tt>, which makes it one-way. A
+  checkbox binds its checked state to the truth of the value and writes back
+  a boolean; every other control writes back on <tt>input</tt>, a
+  <tt>select</tt> on <tt>change</tt>.
+* A <tt>Control</tt> subclass binds its own <tt>value</tt> property, two-way.
+* Any other element receives the value as text, one-way.
+* An element carrying <tt>controller</tt> is a child controller root: the
+  value becomes that child's <tt>represented_object</tt>, one-way.
+
+A two-way binding requires a writable path: the leaf must be a declared,
+non-computed property, or a key already present in a Hash. Anything else
+raises when the region is wired. A write through a nil owner mid-path is
+dropped.
+
+A nil value renders as the empty string.
+
+<tt>bind-*</tt> writes a DOM property, one-way.
+
+  <input bind-readonly="id.present?">
+  <button bind-disabled="member_list.selected_indexes.empty?">Remove</button>
+
+<tt>disabled</tt>, <tt>checked</tt>, <tt>hidden</tt>, <tt>readonly</tt>,
+<tt>required</tt>, and <tt>open</tt> are set from the truth of the value.
+<tt>data-*</tt> attributes are removed for nil, <tt>""</tt>, and false;
+<tt>aria-*</tt> attributes are removed for nil and <tt>""</tt> but keep
+<tt>"false"</tt>. A nil <tt>href</tt> or <tt>src</tt> removes the attribute.
+
+<tt>bind-*</tt> on a controller root belongs to that controller, not its
+parent.
+
+== Key Paths
+
+A path is dot-separated property names, read through the property system.
+Path segments may name a plain object's key, which reads nil when absent, and
+may end in a value reader applied to whatever the preceding segment produced:
+<tt>blank?</tt>, <tt>present?</tt>, <tt>empty?</tt>, <tt>nil?</tt>,
+<tt>zero?</tt>, <tt>positive?</tt>, <tt>negative?</tt>, <tt>size</tt>,
+<tt>length</tt>, <tt>first</tt>, <tt>last</tt>, <tt>strip</tt>,
+<tt>upcase</tt>, <tt>downcase</tt>, and other value methods. On nil, only
+<tt>nil?</tt>, <tt>blank?</tt>, <tt>present?</tt>, <tt>to_s</tt>,
+<tt>to_i</tt>, and <tt>to_f</tt> resolve; every other segment through nil
+reads nil.
+
+== Binding Roots
+
+A controller declares a default prefix by overriding <tt>binding_root</tt>,
+which answers a property name or nil.
+
+  def binding_root
+    :represented_object
+  end
+
+With that root, <tt>bind="address"</tt> resolves to
+<tt>represented_object.address</tt> and <tt>bind=""</tt> resolves to the root
+itself.
+
+A leading <tt>@</tt> ignores the root and resolves against the controller.
+
+  <button bind-disabled="@saving">Save</button>
+
+== Value Transformers
+
+<tt>transform="name"</tt> on a bound element formats the value for display and
+parses the control's text back into the model. Registered names:
+
+string :: The value's string form; nil formats as <tt>""</tt>. Parses text unchanged.
+number :: Parses to a float; blank text parses to nil, so an emptied field clears the value.
+boolean :: Formats as <tt>"true"</tt> or <tt>"false"</tt>; parses <tt>"true"</tt>, <tt>"1"</tt>, and <tt>"on"</tt> as true.
+
+Register others by name before views awaken:
+
+  Swill::ValueTransformer.register("currency", CurrencyTransformer.new)
+
+An unregistered name raises when the region is wired. A transform on a
+checkbox applies to display only.
+
+== Observation
+
+Bindings observe every declared property along the path and rewire when an
+intermediate value changes. A path segment that is not a declared property is
+read but not observed, so changes to it do not propagate.
+
+Observe a property directly with <tt>observe</tt>, on self or another object:
+
+  observe(:query, ->(value) { reload })
+  observe(document, :selection, ->(value) { reload })
+
+The receiver of <tt>observe</tt> is the observer: it retains the observation
+and lets it go when it deallocs. A controller's bindings are released when it
+unloads.
+
+A property notifies only when its new value differs from the previous one,
+after <tt>coerce_property_value</tt> has run. A class may also define
+<tt>name_did_change(previous, value)</tt> to be called on each change.
+
+Computed properties — <tt>property</tt> declared with a block — track the
+properties read while computing and invalidate when any of them changes. They
+are read-only: a binding to one must be one-way.
+
+== Object Bindings
+
+<tt>bind</tt> keeps one of the receiver's properties equal to a path on
+another object.
+
+  bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
+       null_placeholder: [])
+
+The target must be a declared property or a generated writer. One binding per
+target; rebinding disposes the previous one. <tt>null_placeholder:</tt> is the
+value the target receives when the path has no value, so a path running
+through a nilable object can feed a property that is not nilable; the single
+placeholder value is reused for every fall-back and must be treated as
+immutable. Omitting it means nil.
+
+<tt>unbind(:target)</tt> releases one binding; <tt>unbind_all</tt> releases
+all of them, as a controller does when it unloads.
+
+== Restoration Bindings
+
+<tt>restorable</tt> declares a path whose value the application keeps in the
+window's URL fragment.
+
+  restorable :query, key: :q
+  restorable "source_list.selected_object_id"
+
+The path must be dotted property names and must begin with a property declared
+on the class. <tt>key:</tt> defaults to the path, and is scoped by window.
+
+On launch, fragment values are written through the path before
+<tt>controller_did_load</tt>; <tt>controller_did_restore(restored)</tt> then
+runs on the window controller, with <tt>restored</tt> true when at least one
+value was applied. A fragment key that is absent, or whose text does not
+decode to the path's leaf type, leaves the property at its declared value.
+Thereafter the path is observed and each change rewrites the fragment,
+replacing history rather than pushing it.

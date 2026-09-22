@@ -1,0 +1,167 @@
+= Lifecycle
+
+A region is awakened once: the walk creates a View for every managed element,
+attaches a Controller to every <tt>[controller]</tt> root, and then runs the
+hooks. Markup awakened at launch, content loaded into a window, a presented
+window, and any subtree inserted into the document after launch all take this
+same path.
+
+== Activation Order
+
+Awakening a region has two phases with an optional restoration step between
+them.
+
+The load phase runs on each new controller, innermost first, so a parent sees
+its children already wired:
+
+1. <tt>view_did_load</tt>
+2. outlets connected
+3. bindings wired
+4. actions wired
+5. <tt>awake_from_dom</tt>
+
+Restoration then runs, for a window only.
+
+The finish phase runs three passes over the same controllers, each innermost
+first:
+
+1. <tt>controller_did_load</tt>
+2. <tt>view_will_appear</tt>
+3. <tt>view_did_appear</tt>
+
+Each pass completes for every controller before the next begins:
+<tt>controller_did_load</tt> has run on the whole region before any
+<tt>view_will_appear</tt>.
+
+view_did_load :: Object setup that depends on nothing outside the controller.
+                 Outlets are still nil and no binding has fired.
+awake_from_dom :: The first point at which outlets are connected, bindings have
+                  pushed their initial values, actions are live, and child
+                  controllers are wired. Decoded JSON outlet data is available
+                  here.
+controller_did_load :: The whole region, including any restored values, is in
+                       place. Runs once per controller instance.
+view_will_appear, view_did_appear :: Appearance. Run each time a region is
+                                     awakened.
+
+Outlets are nilable until the load phase connects them. A controller reached
+before its own <tt>awake_from_dom</tt> — by a child, or by a binding — must
+tolerate that.
+
+== Restoration
+
+Declare a restorable path with the <tt>restorable</tt> macro:
+
+    class SearchController < Swill::Controller
+      property :query, type: String, default: ""
+      restorable :query, key: :q
+    end
+
+The path is a dotted property path resolved against the controller; the key
+names the fragment parameter and defaults to the path. The application scopes
+it under the window name, so <tt>restorable :query, key: :q</tt> in the
+<tt>main</tt> window reads and writes <tt>main.q</tt>.
+
+Restoration applies only to the controller a window holds as its content — the
+topmost controller in the container. Nested controllers may declare
+<tt>restorable</tt>, but nothing restores them.
+
+The step runs after the load phase and before <tt>controller_did_load</tt>:
+
+1. Every declared path whose key is present in the fragment and decodes to a
+   value is written. A key that is absent, or whose text does not decode,
+   leaves the property at its current value.
+2. <tt>controller_did_restore(restored)</tt> runs, with <tt>restored</tt> true
+   when at least one value was applied. It is skipped entirely when the
+   controller declares no restorable paths.
+3. Each declared path is observed. From then on, a change to the property
+   writes the fragment, replacing the current history entry.
+
+Fragment writes are suspended while values are being applied, so restoring does
+not write back what it just read.
+
+A window's restoration observations are disposed when its content is replaced
+or the window is dismissed. Keys the next content does not own are removed from
+the fragment.
+
+== Teardown
+
+<tt>Controller#unload</tt> tears a controller down. Loading is once per
+controller instance: an unloaded controller is finished, and re-awakening the
+region builds a new one. The element keeps its View.
+
+<tt>unload</tt> returns immediately unless its view still holds it, so calling
+it twice is harmless. Otherwise, in order:
+
+1. <tt>view_will_disappear</tt>
+2. the first responder is released if it lies within this region
+3. object bindings are unbound
+4. everything the controller retained is released — property and path
+   observations, notification observers registered through
+   <tt>observe_notification</tt>, DOM listeners, and the disposers installed for
+   its bindings and actions
+5. each child controller is unloaded, recursively
+6. subviews are released and the view is removed from its superview
+7. the view's controller is cleared
+8. <tt>view_did_disappear</tt>
+
+A parent's <tt>view_will_disappear</tt> therefore runs before its children's,
+and its <tt>view_did_disappear</tt> after theirs.
+
+Anything with the controller's lifetime must go through <tt>retain</tt>, or
+through <tt>observe</tt> and <tt>observe_notification</tt>, which retain for
+you. A listener added by hand and not retained outlives the controller.
+
+<tt>unload</tt> does not remove the element from the document. Removing the
+element is the caller's business; a subtree removed from the document is
+detached — and so unloaded — automatically.
+
+<tt>Application#terminate</tt> posts <tt>application_will_terminate</tt>, stops
+observing the fragment and the document, releases every window, unloads every
+launch-time controller, and drops the first responder. It is idempotent.
+
+== Direct Ownership
+
+Manage only what you own.
+
+* A controller owns its root view, its outlets, and the region between its root
+  and the next nested <tt>[controller]</tt> boundary. A nested controller root
+  and everything under it belong to that controller.
+* A view owns the subviews adopted into it.
+* The application owns windows, the first responder, and the URL fragment.
+
+<tt>Controller#parent</tt> and <tt>Controller#child_controllers</tt> are derived
+from the view tree; <tt>parent</tt> is nil for a root controller. Reach a child
+through its public API, a binding, an outlet, or an action — not by walking its
+DOM.
+
+To replace a region, ask its owner. Do not remove a controller's element and
+leave the controller behind.
+
+== Focus and First Responder
+
+The application holds the first responder and is itself the first responder
+when nothing more specific is. <tt>Application#make_first_responder</tt> is the
+only way to set it deliberately.
+
+* A responder that answers false to <tt>accepts_first_responder?</tt> is refused
+  up front; <tt>make_first_responder</tt> returns false and nothing changes.
+* The current first responder may refuse by returning false from
+  <tt>resign_first_responder</tt>, which also fails the change.
+* A responder that refuses to become first responder leaves the application
+  holding it.
+
+A controller accepts the first responder only when its region contains a
+focusable element. Becoming first responder focuses the first one; resigning
+blurs it.
+
+Browser focus and the first responder are kept in agreement: focus moving
+within the application reassigns the first responder without re-running
+<tt>become_first_responder</tt>, and focus leaving the application's root
+returns it to the application. Focus moving into the browser's own chrome
+leaves it alone.
+
+Loading window content hands the first responder to the new controller unless
+that content already claimed it — a field focused in <tt>controller_did_load</tt>
+stands. A presented window remembers the first responder it displaced and
+restores it on dismissal, if that responder is still in the document.

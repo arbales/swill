@@ -1,0 +1,70 @@
+= Server data
+
+The v1 data layer exposes named Sequel queries, contextual resolvers, and
+instance commands over binary MessagePack WebSockets. <tt>DATA_DESIGN.md</tt>
+describes the model and <tt>DATA_PLAN.md</tt> records the implemented decisions.
+
+Install declarations on the application's Sequel base in the server entry,
+load authoritative models and their exported operations, then generate the
+checked-in client schema, Ruby models, and RBIs:
+
+  # server.rb
+  Swill::Data.install(Sequel::Model)
+  require_relative "server/models/post"
+  require_relative "server/operations/post"
+
+  # server/operations/post.rb
+  class Post
+    query :search, returns: Swill::Data::ResultSet[Post], preload: [:title]
+    command :publish!, returns: T::Boolean, changes: %i[published published_at]
+  end
+
+  bundle exec swill data generate config/server.rb
+  bundle exec swill data check config/server.rb
+
+The generation root is the current directory, or <tt>--root DIR</tt>. A complete
+application can keep the boundary visible with this layout:
+
+TODO-TABLE 3col: Path / Loaded by / Purpose
+TODO-ROW | Path | Loaded by | Purpose |
+TODO-ROW | --- | --- | --- |
+TODO-ROW | `server.rb` and `server/models/` | Server and generator | Database models, policies, query implementations, and commands |
+TODO-ROW | `server/operations/` | Server and generator | The explicitly exported query, resolver, command, and projection declarations |
+TODO-ROW | `client/models/generated/` | Client compiler | Generated proxy fields and async operation methods |
+TODO-ROW | `client/models/` | Client compiler | Handwritten browser-only model behavior |
+TODO-ROW | `sorbet/rbi/shims/generated/` | Sorbet only | Generated type declarations; never executable input |
+
+The server derives its schema from the loaded server models. It does not load
+the generated client Ruby or RBI files. The client entry loads generated
+models first and handwritten client files second. The compiler merges those
+local class reopenings in source order and emits one JavaScript class; later
+handwritten method definitions replace generated definitions with the same name.
+<tt>client/models/generated/schema.json</tt> supplies the client handshake hash.
+The repository fixture follows this layout under <tt>spec/fixtures/data</tt> so its
+artifacts do not leak into the repository-level <tt>client/</tt> or <tt>sorbet/</tt> trees.
+
+Generated operations are asynchronous; callers write <tt>await Post.search(...)</tt>
+and <tt>await post.publish!</tt>. Local fields and relationships remain synchronous.
+Unknown members return nil and queue one batched hydration request. Call
+<tt>await post.load_field(:body)</tt> when failure must reject explicitly.
+
+Mount <tt>Swill::Data::WebSocket</tt> in a Rack application and provide one
+authenticated viewer context, actor, and opaque scope token per connection.
+The browser configures the endpoint before its first operation:
+
+  Swill.Runtime.configureData("wss://example.test/data", schemaHash);
+
+Protocol v1 generated methods preserve required and optional positional
+parameters, positional rest, required and optional keywords, and keyword rest.
+Defaults run only on the server, and explicit <tt>nil</tt> remains distinct from an
+omitted argument. Schema generation rejects block parameters because executable
+callbacks do not cross the data connection.
+
+Compiled Ruby methods also support named <tt>*rest</tt>, required and optional
+keywords, named <tt>**options</tt>, <tt>&block</tt>, block passing, <tt>yield</tt>, and
+<tt>block_given?</tt>. Anonymous forwarding (<tt>*</tt>, <tt>**</tt>, <tt>&</tt>, and <tt>...</tt>) and <tt>**nil</tt>
+remain outside the compiler subset and fail during compilation.
+
+<tt>build/</tt> is disposable. <tt>rb/dist/</tt> contains checked-in browser output.
+Regenerate it with <tt>rake build</tt>; do not edit generated files.
+

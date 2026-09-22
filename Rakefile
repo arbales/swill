@@ -116,6 +116,29 @@ end
 
 task default: %i[test optimize]
 
+RDOC_OPTS = [
+  "--line-numbers", "--inline-source",
+  "--title", "Swill: a Cocoa-inspired browser UI framework",
+  "--main", "README.rdoc"
+]
+begin
+  gem "hanna"
+  RDOC_OPTS.concat(["-f", "hanna"])
+rescue Gem::LoadError
+  # Stock RDoc renders the same content without hanna's styling.
+end
+
+desc "Generate HTML documentation into rdoc/"
+task :rdoc do
+  Dir.chdir(ROOT) do
+    require_relative "rakelib/sorbet_rdoc"
+    require "rdoc/rdoc"
+    FileUtils.rm_rf("rdoc")
+    files = ["README.rdoc", "LICENSE"] + Dir["doc/*.rdoc"] + Dir["rb/**/*.rb"]
+    RDoc::RDoc.new.document(RDOC_OPTS + ["-o", "rdoc"] + files)
+  end
+end
+
 desc "Report non-gating runtime and warm compiler medians"
 task benchmark: :build do
   Dir.chdir(ROOT) do
