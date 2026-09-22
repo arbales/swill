@@ -59,17 +59,20 @@ module Swill
       rb/framework/controller/inline_editor.rb
       rb/framework/controller/editable_list.rb
       rb/framework/model/attributes.rb
-      rb/framework/model/relationships.rb
       rb/framework/model/dirty_tracking.rb
       rb/framework/model/drafts.rb
+      rb/framework/model/base.rb
+      rb/framework/model/editable.rb
+      rb/framework/model/relationships.rb
       rb/framework/model/store.rb
       rb/framework/model/identity.rb
       rb/framework/model/collection.rb
-      rb/framework/model/remote_data.rb
+      rb/framework/model/distant_data.rb
+      rb/framework/model/distant_object.rb
       rb/framework/model/relationship.rb
       rb/framework/model/codec.rb
       rb/framework/model/dataset.rb
-      rb/framework/model/base.rb
+      rb/framework/model/resource.rb
     ].freeze
 
     # Orchestration: collect facts, validate the graph, convert each entry
@@ -99,9 +102,21 @@ module Swill
           @sources << [source, file]
           self
         rescue CompileError => error
+          error = model_base_migration_error(source, error)
           rebuild_knowledge
           raise error if file == "(spike)"
           raise CompileError, "#{file}: #{error.message}"
+        end
+
+        def model_base_migration_error(source, error)
+          return error unless source.match?(/<\s*Swill::Model::Base\b/)
+          match = error.message.match(/undefined method '(endpoint|resource_type|codec|has_many|has_one)'/)
+          return error unless match
+
+          destination = %w[has_many has_one].include?(match[1]) ?
+            "Swill::Model::Resource for endpoint relationships or Swill::Model::DistantObject for generated relationships" :
+            "Swill::Model::Resource"
+          CompileError.new("#{error.message}; models using #{match[1]} must inherit #{destination}")
         end
 
         def javascript(runtime:, framework: nil)
@@ -489,3 +504,4 @@ end
 
 require_relative "emit/meta"
 require_relative "emit/sorbet"
+require_relative "emit/doc"

@@ -5,6 +5,9 @@ module DataFixture
     plugin :privacy
     extend T::Sig
 
+    client_model fields: %i[author_id title excerpt body published published_at],
+                 relationships: %i[author comments], writable: %i[author_id title excerpt body]
+
     many_to_one :author, class: "DataFixture::User", key: :author_id
     one_to_many :comments, class: "DataFixture::Comment", key: :post_id
 

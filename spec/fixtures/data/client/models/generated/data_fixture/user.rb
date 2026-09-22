@@ -2,13 +2,13 @@
 # frozen_string_literal: true
 
 module DataFixture
-  class User < Swill::Model::Base
-    remote_model "DataFixture::User"
-    remote_attribute :avatar, type: T.nilable(String)
-    remote_attribute :email, type: String
-    remote_attribute :name, type: String
-    remote_has_many :comments, model: "DataFixture::Comment"
-    remote_has_many :posts, model: "DataFixture::Post"
+  class User < Swill::Model::DistantObject
+    model_name "DataFixture::User"
+    attribute :avatar, type: T.nilable(String)
+    attribute :email, type: String
+    attribute :name, type: String
+    has_many :comments, model: "DataFixture::Comment"
+    has_many :posts, model: "DataFixture::Post"
 
     sig { returns(T.nilable(DataFixture::User)) }
     async def self.current_user()

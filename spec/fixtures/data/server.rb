@@ -11,6 +11,7 @@ module DataFixture
     String :email, null: false
     String :name, null: false
     String :avatar
+    String :surprise
   end
   DB.create_table(:posts) do
     primary_key :id
@@ -29,7 +30,8 @@ module DataFixture
   end
 
   DB[:users].multi_insert([
-                            { id: 1, email: "ada@example.test", name: "Ada", avatar: "ada.png" },
+                            { id: 1, email: "ada@example.test", name: "Ada", avatar: "ada.png",
+                              surprise: "A party" },
                             { id: 2, email: "grace@example.test", name: "Grace", avatar: "grace.png" }
                           ])
   DB[:posts].insert(id: 1, author_id: 1, title: "Distributed Objects", excerpt: nil,

@@ -30,6 +30,11 @@ module Swill
         context.use { dispatch(type, message) }
       rescue RemoteError => e
         error_message(message, e.code, e.message, e.details)
+      rescue Sequel::Privacy::Unauthorized, Sequel::Privacy::FieldUnauthorized => e
+        error_message(message, "unauthorized", e.message)
+      rescue Sequel::ValidationFailed => e
+        details = e.respond_to?(:model) && e.model ? e.model.errors.to_hash : nil
+        error_message(message, "validation_failed", e.message, details)
       rescue StandardError => e
         error_message(message, "operation_failed", e.message)
       end
@@ -53,8 +58,60 @@ module Swill
       def dispatch(type, message)
         case type
         when "QUERY", "RESOLVE", "COMMAND" then operation(type, message)
+        when "CREATE", "UPDATE", "DELETE" then persist(type, message)
         when "GET" then hydrate(message)
         else raise RemoteError.new("unknown_message", "unknown message #{type}")
+        end
+      end
+
+      def persist(type, message)
+        model_name = message.fetch("model")
+        model_schema = schema.models.fetch(model_name) do
+          raise RemoteError.new("unknown_model", "unknown model #{model_name}")
+        end
+        klass = schema.model_class(model_name)
+        generation = Integer(message.fetch("generation"))
+
+        return destroy_record(klass, message) if type == "DELETE"
+
+        attributes = validated_attributes(model_schema, message.fetch("attributes", {}))
+        transaction(klass) do
+          record = if type == "CREATE"
+                     privacy_dataset(klass).new(attributes)
+                   else
+                     privacy_dataset(klass).with_pk!(message.fetch("id"))
+                   end
+          type == "CREATE" ? record.save : record.update(attributes)
+          response(message, "RETURN", record, model_schema.fetch("fields").keys, generation)
+        end
+      end
+
+      def destroy_record(klass, message)
+        transaction(klass) do
+          record = privacy_dataset(klass).with_pk!(message.fetch("id"))
+          if record.respond_to?(:allow?) && !record.allow?(context.viewer_context, :delete)
+            raise Sequel::Privacy::Unauthorized, "Cannot delete #{klass}"
+          end
+          record.destroy
+          envelope(message, "RETURN").merge("value" => nil, "patches" => [])
+        end
+      end
+
+      def validated_attributes(model_schema, encoded)
+        unless encoded.is_a?(Hash)
+          raise RemoteError.new("invalid_attributes", "attributes must be a map")
+        end
+        allowed = model_schema.fetch("writable_fields")
+        unknown = encoded.keys.map(&:to_s) - allowed
+        unless unknown.empty?
+          raise RemoteError.new("invalid_attributes", "field is not client-writable",
+                                details: { "fields" => unknown.sort })
+        end
+        encoded.to_h do |name, value|
+          field = model_schema.fetch("fields").fetch(name.to_s)
+          resolved = resolve_argument(value, field.fetch("type"))
+          Validator.value!(resolved, field.fetch("type"), "attribute #{name}")
+          [name.to_sym, resolved]
         end
       end
 

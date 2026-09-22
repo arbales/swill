@@ -35,7 +35,8 @@ import {
   collectAttributes, applyAttributes
 } from "./attributes.mjs";
 import {
-  configureData, closeData, initializeRemoteData, dataQuery, dataResolve, dataCommand,
+  configureData, closeData, initializeDistantData, dataQuery, dataResolve, dataCommand,
+  dataSave, dataDelete, dataDraft, applyDataDraft,
   dataFieldWillAccess, dataFieldLoaded, dataFieldLoading, dataFieldError, loadDataField
 } from "./data_client.mjs";
 import {
@@ -76,7 +77,8 @@ export const Runtime = {
   isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
 
   // Remote data
-  configureData, closeData, initializeRemoteData, dataQuery, dataResolve, dataCommand,
+  configureData, closeData, initializeDistantData, dataQuery, dataResolve, dataCommand,
+  dataSave, dataDelete, dataDraft, applyDataDraft,
   dataFieldWillAccess, dataFieldLoaded, dataFieldLoading, dataFieldError, loadDataField,
 
   // Ruby complex calls

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {Runtime} from "../rb/runtime/runtime.mjs";
 import {pack, unpack} from "../rb/runtime/message_pack.mjs";
 import {
-  Swill__Model__Base as Base,
+  Swill__Model__DistantObject as DistantObject,
   Swill__Model__Collection as Collection,
   Swill__Model__ResultSet as ResultSet
 } from "../build/framework.mjs";
@@ -17,21 +17,21 @@ test("MessagePack preserves safe 64-bit integers and inert map keys", () => {
   assert.equal(Object.hasOwn(decoded, "__proto__"), true);
 });
 
-class Post extends Base {}
+class Post extends DistantObject {}
 
 Runtime.install({classes: {Post: {
   constructor: Post,
   properties: {
-    title: {type: "T.nilable(String)", willAccess: true, defaultValue: () => null},
-    body: {type: "T.nilable(String)", willAccess: true, defaultValue: () => null},
+    title: {type: "T.nilable(String)", attribute: true, key: "title", willAccess: true, defaultValue: () => null},
+    body: {type: "T.nilable(String)", attribute: true, key: "body", willAccess: true, defaultValue: () => null},
     comments: {type: "Swill::Model::Collection", willAccess: true, defaultValue: () => null}
   },
-  registries: {remoteFields: {
+  registries: {dataFields: {
     title: {kind: "field", type: "T.nilable(String)"},
     body: {kind: "field", type: "T.nilable(String)"},
     comments: {kind: "many", model: "Post"}
   }},
-  settings: [{js: "remoteModelName", value: "Post"}]
+  settings: [{js: "dataModelName", value: "Post"}]
 }}});
 
 class FakeWebSocket {
@@ -57,6 +57,22 @@ class FakeWebSocket {
     for (const callback of this.listeners.get(name) ?? []) callback(event);
   }
 
+  close() {
+    this.readyState = 3;
+    this.emit("close", {});
+  }
+
+  releaseHeldQuery() {
+    const request = this.heldQuery;
+    this.heldQuery = null;
+    const response = {
+      type: "RESULT", request_id: request.request_id,
+      value: [{"$ref": ["Post", "2"]}],
+      patches: [{model: "Post", id: "2", generation: request.generation, fields: {title: "Stale"}}]
+    };
+    this.emit("message", {data: pack(response).buffer});
+  }
+
   send(bytes) {
     const request = unpack(bytes);
     this.requests.push(request);
@@ -64,6 +80,11 @@ class FakeWebSocket {
     if (request.type === "HELLO") {
       response = {type: "WELCOME", protocol_version: 1, schema_hash: "schema", actor_scope: "actor-1"};
     } else if (request.type === "QUERY") {
+      if (this.holdNextQuery) {
+        this.holdNextQuery = false;
+        this.heldQuery = request;
+        return;
+      }
       response = {
         type: "RESULT", request_id: request.request_id,
         value: [{"$ref": ["Post", "1"]}],
@@ -82,6 +103,22 @@ class FakeWebSocket {
         queueMicrotask(() => this.emit("message", {data: pack(reply).buffer}));
       }
       return;
+    } else if (request.type === "CREATE") {
+      response = {
+        type: "RETURN", request_id: request.request_id,
+        value: {"$ref": ["Post", "2"]},
+        patches: [{model: "Post", id: "2", generation: request.generation,
+          fields: request.attributes}]
+      };
+    } else if (request.type === "UPDATE") {
+      response = {
+        type: "RETURN", request_id: request.request_id,
+        value: {"$ref": ["Post", String(request.id)]},
+        patches: [{model: "Post", id: String(request.id), generation: request.generation,
+          fields: request.attributes}]
+      };
+    } else if (request.type === "DELETE") {
+      response = {type: "RETURN", request_id: request.request_id, value: null, patches: []};
     } else {
       response = {
         type: "RETURN", request_id: request.request_id, value: null,
@@ -103,6 +140,7 @@ test("queries return canonical ResultSets and unknown fields hydrate", async () 
   assert.equal(results.isLoaded(), true);
   const post = results.first();
   assert.equal(post.title, "Hello");
+  assert.equal(post.isDirty, false, "server identity does not become a local edit");
 
   await Runtime.dataQuery(Post, "search",
     [Runtime.omittedArgument(), null],
@@ -125,4 +163,40 @@ test("queries return canonical ResultSets and unknown fields hydrate", async () 
   assert.equal(sameFromOlder, post);
   assert.equal(sameFromNewer, post);
   assert.equal(post.title, "Newer", "an older response cannot replace a newer field");
+});
+
+test("distant drafts persist only after acceptance and deletion is observable", async () => {
+  globalThis.WebSocket = FakeWebSocket;
+  let transport;
+  Runtime.configureData("ws://fixture-lifecycle", "schema", () => (transport = new FakeWebSocket()));
+
+  const post = new Post();
+  post.title = "Created";
+  assert.throws(() => post.draft(), /before drafting/);
+  const saved = await post.save();
+  assert.equal(saved, post, "the newly assigned identity keeps the original object canonical");
+  assert.equal(post.id, "2");
+  assert.equal(post.isDirty, false);
+
+  const draft = post.draft();
+  draft.title = "Edited";
+  assert.equal(post.title, "Created", "editing a draft does not expose unaccepted values");
+  await post.applyDraft(draft);
+  assert.equal(post.title, "Edited");
+  assert.equal(draft.isDirty, false);
+  await assert.rejects(draft.save(), /original\.apply_draft/);
+
+  transport.holdNextQuery = true;
+  const stale = Runtime.dataQuery(Post, "search", ["stale"], {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await post.delete();
+  assert.equal(post.isDeleted, true);
+  transport.releaseHeldQuery();
+  const staleResults = await stale;
+  assert.equal(staleResults.first(), post, "an older response retains the deleted tombstone identity");
+  assert.equal(post.title, "Edited", "an older response cannot resurrect deleted data");
+  await assert.rejects(post.save(), /deleted distant object/);
+  assert.equal(transport.requests.filter(request => request.type === "CREATE").length, 1);
+  assert.equal(transport.requests.filter(request => request.type === "UPDATE").length, 1);
+  assert.equal(transport.requests.filter(request => request.type === "DELETE").length, 1);
 });

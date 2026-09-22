@@ -6,6 +6,9 @@ module DataFixture
     include Sequel::Privacy::IActor
     extend Swill::Sig
 
+    client_model fields: %i[email name avatar], relationships: %i[comments posts],
+                 writable: %i[email name avatar]
+
     one_to_many :posts, class: "DataFixture::Post", key: :author_id
     one_to_many :comments, class: "DataFixture::Comment", key: :author_id
 

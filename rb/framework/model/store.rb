@@ -12,10 +12,10 @@ module Swill
       sig { void }
       def initialize
         super()
-        @instances = T.let({}, T::Hash[String, Base])
+        @instances = T.let({}, T::Hash[String, Resource])
       end
 
-      sig { params(id: String).returns(T.nilable(Base)) }
+      sig { params(id: String).returns(T.nilable(Resource)) }
       def get(id)
         @instances.key?(id) ? @instances[id] : nil
       end
@@ -25,7 +25,7 @@ module Swill
         @instances.key?(id)
       end
 
-      sig { params(instance: Base).returns(Base) }
+      sig { params(instance: Resource).returns(Resource) }
       def put(instance)
         id = instance.id
         raise "Store#put requires an id" if id == nil
@@ -48,7 +48,7 @@ module Swill
         @instances = {}
       end
 
-      sig { returns(T::Array[Base]) }
+      sig { returns(T::Array[Resource]) }
       def values
         @instances.values
       end

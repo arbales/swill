@@ -220,7 +220,7 @@ Without Sorbet, the Swill-native signature syntax provides the same information.
 
 ## 6. Introduce canonical model identity on the client
 
-Every remote model instance has stable identity:
+Every distant model instance has stable identity:
 
 ```text
 (Post, 123)
@@ -286,15 +286,30 @@ Both hydrate the same canonical `Post:123`.
 
 Partials should merge into existing objects.
 
-## 8. Keep privacy separate from projections
+## 8. Keep the client schema, privacy, and projections separate
 
-Do not introduce a second field-visibility declaration system if `sequel-privacy` already provides per-field authorization.
+Declare the fields and relationships that belong to the client protocol on
+each server model. Server columns are private by default:
+
+```ruby
+client_model fields: [:title, :body],
+             relationships: [:author, :comments],
+             writable: [:title, :body]
+```
+
+The declaration controls protocol exposure and write capability. It does not
+grant authorization. `sequel-privacy` still decides what the current actor may
+read or change at runtime.
 
 The responsibilities should be:
 
 ```text
 Sequel schema
     fields and associations that exist
+
+Swill client schema
+    fields and associations the protocol may expose
+    fields generic persistence may write
 
 sequel-privacy
     fields/records the current actor may access
@@ -309,7 +324,7 @@ Swill Store
 The actual returned fields are approximately:
 
 ```text
-requested projection ∩ privacy policy
+client schema ∩ requested projection ∩ privacy policy
 ```
 
 plus identity/version metadata.
@@ -530,6 +545,32 @@ Post:123.comment_count = 17
 The client Store applies those changes to canonical objects and emits KVO notifications for changed fields and relationships.
 
 This provides a foundation for optimistic updates later without requiring them in v1.
+
+Generated distant objects also support ordinary persistence for routine CRUD:
+
+```ruby
+comment = Comment.new
+comment.post_id = post.id
+comment.body = "Hello"
+await comment.save
+
+draft = comment.draft
+draft.body = "Revised"
+await comment.apply_draft(draft)
+
+await comment.delete
+```
+
+Create and update accept only the model's declared `writable:` fields. The
+server returns authoritative patches after a successful transaction, so
+validation, coercion, defaults, and callbacks remain server-owned. Drafts are
+detached editing copies: they do not enter the canonical Store or hydrate on
+access. Deletion removes the canonical entry and leaves existing references as
+observable tombstones through `deleted?`.
+
+Named commands remain the API for domain actions such as `publish!` whose
+meaning is richer than generic field persistence. Their typed return values and
+declared graph changes use the same canonical patch path.
 
 ## 14. Treat authentication as connection context
 

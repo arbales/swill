@@ -8,7 +8,7 @@
 module Static
   # A client model: attributes with wire keys, validation on assignment, and
   # dirty tracking. blank_email? and clean? are computed from them.
-  class User < Swill::Model::Base
+  class User < Swill::Model::Editable
     extend T::Sig
 
     attribute :name, type: String, default: "world"

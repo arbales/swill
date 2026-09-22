@@ -28,7 +28,7 @@ module DecorateName
 end
 
 module Demo
-  class Person < Swill::Model::Base
+  class Person < Swill::Model::Editable
     extend T::Sig
     include NormalizeName
     include StripName

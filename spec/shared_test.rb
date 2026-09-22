@@ -3,17 +3,20 @@ require "json"
 require_relative "mri_host"
 require_relative "../rb/framework/core/wire"
 require_relative "../rb/framework/model/attributes"
-require_relative "../rb/framework/model/relationships"
 require_relative "../rb/framework/model/dirty_tracking"
 require_relative "../rb/framework/model/drafts"
+require_relative "../rb/framework/model/base"
+require_relative "../rb/framework/model/editable"
+require_relative "../rb/framework/model/relationships"
 require_relative "../rb/framework/model/store"
 require_relative "../rb/framework/model/identity"
 require_relative "../rb/framework/model/collection"
-require_relative "../rb/framework/model/remote_data"
+require_relative "../rb/framework/model/distant_data"
+require_relative "../rb/framework/model/distant_object"
 require_relative "../rb/framework/model/relationship"
 require_relative "../rb/framework/model/codec"
 require_relative "../rb/framework/model/dataset"
-require_relative "../rb/framework/model/base"
+require_relative "../rb/framework/model/resource"
 require_relative "../examples/rb/models"
 require_relative "../examples/rb/records"
 require_relative "../examples/rb/concerns"
@@ -30,6 +33,21 @@ class DisconnectDependent < Swill::Object
 end
 
 class SharedTest < Minitest::Test
+  def test_model_strategies_share_only_the_explicit_base_layers
+    base = Swill::Model::Base.new
+    editable = Swill::Model::Editable.new
+    resource = Swill::Model::Resource.new
+    distant = Swill::Model::DistantObject.new
+
+    refute_respond_to base, :dirty?
+    assert_respond_to editable, :dirty?
+    assert_respond_to resource.class, :endpoint
+    refute_respond_to resource.class, :data_model_name
+    assert_respond_to distant.class, :data_model_name
+    refute_respond_to distant.class, :endpoint
+    refute_respond_to distant.class, :store
+  end
+
   def test_model_attribute_registry_on_mri
     result = {
       record: Swill::Model::Base.model_attributes.keys,

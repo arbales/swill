@@ -2114,7 +2114,7 @@ const Author = Runtime.resolve("Demo::Author");
 const Book = Runtime.resolve("Demo::Book");
 const Note = Runtime.resolve("Demo::Note");
 const Wire = Runtime.resolve("Swill::Wire");
-const ModelBase = Runtime.resolve("Swill::Model::Base");
+const ModelResource = Runtime.resolve("Swill::Model::Resource");
 const ValueTransformer = Runtime.resolve("Swill::ValueTransformer");
 
 // Arrays and objects made in the sandbox have that realm's prototypes;
@@ -2171,7 +2171,7 @@ test("JSON:API documents pool records by type and hydrate relationships from inc
   assert.equal(requests.length, 1);
   assert.ok(Book.get("10") === ada.books[0]);
   assert.ok(Author.store() !== Book.store(), "each class has its own store");
-  assert.ok(ModelBase.classForType("books") === Book && ModelBase.classForType("pages") === null);
+  assert.ok(ModelResource.classForType("books") === Book && ModelResource.classForType("pages") === null);
   assert.deepEqual(plain([ada.isDirty, Author.isPooled("2"), Author.values().length]), [false, true, 2], "applied attributes are clean");
   assert.deepEqual(plain(ada.relationships().map(relationship => [relationship.name(), relationship.key(), relationship.isMany()])), [["books", "books", true]]);
 });

@@ -2,7 +2,9 @@
 
 ## Summary
 
-Build a server-driven data layer from `DATA_DESIGN.md` around named remote operations, generated client Ruby, canonical partial objects, demand-driven hydration, and MessagePack over WebSockets.
+Build a server-driven data layer from `DATA_DESIGN.md` around declared client
+schemas, named operations, generated client Ruby, canonical partial objects,
+demand-driven hydration, generic persistence, and MessagePack over WebSockets.
 
 Locked decisions:
 
@@ -15,6 +17,12 @@ Locked decisions:
 - Unauthorized values remain indistinguishable from legitimate nils.
 - Client generations prevent stale responses from overwriting newer fields.
 - Operations without a signature must declare `returns:`.
+- Server models opt into a closed client schema with `client_model`; primary
+  keys are implicit and writable fields are an explicit subset.
+- Generated models inherit from `Swill::Model::DistantObject`; endpoint-backed
+  JSON:API/plain JSON models inherit from `Swill::Model::Resource`.
+- Generic `save`, `apply_draft`, and `delete` cover routine persistence. Named
+  commands remain domain mutations.
 - Schema, generated Ruby, and generated RBI files are checked in.
 - A User/Post fixture application proves the first vertical slice.
 
@@ -31,14 +39,23 @@ Current implementation status:
   collections, explicit hydration, and command patches.
 - Command validation and projection serialization run inside the transaction;
   invalid results roll back the mutation.
-- Remaining migration work is the browser-facing fixture and removal of the
-  transitional JSON:API, arbitrary persistence, and relationship URL APIs.
+- Generated distant objects now create, update, apply detached drafts, and
+  delete through authoritative transactional patches. Deleted objects are
+  observable tombstones and stale responses cannot resurrect them.
+- The browser-facing fixture now proves that ordinary bindings update from
+  query projections, automatic field and relationship hydration, and command
+  patches across the real Falcon WebSocket boundary. It also exercises create,
+  draft application, and deletion from compiled Ruby in Chrome.
+- Generated operations and partial-field hydration are the data plan's active
+  development path. The existing JSON:API and plain JSON codecs, endpoint
+  persistence, identity pool, datasets, and relationship URL APIs remain
+  available as compatibility strategies.
 
 ## Public Interfaces and Semantics
 
 ### Model declarations
 
-Shared model files expose only named operations:
+Server operation files expose named operations:
 
 ```ruby
 class Post
@@ -105,7 +122,16 @@ Partial patches merge only included fields. Each included field becomes present 
 
 `has_many` relationships and query results use a stable `Swill::Model::Collection`. It exposes Array-like reads plus `loaded?`, `loading?`, and `error`. Hydration replaces its internal records and emits KVO without replacing the collection object.
 
-General JSON:API persistence, arbitrary `where`, `save`, `delete`, and codec APIs are outside the final data API. V1 mutations cross named commands.
+Generated distant objects use `save`, `apply_draft`, and `delete` for ordinary
+record persistence. The server accepts only fields listed in the model's
+`client_model writable:` declaration and returns authoritative patches after
+commit. Named commands remain the API for domain actions such as `publish!`.
+
+Existing JSON:API and plain JSON consumers continue to use
+`Swill::Model::Resource`, including `where`, `save`, `delete`, codecs, datasets,
+and relationship URLs. The two strategies share attributes, observation, and
+editing behavior through `Base` and `Editable`, but their stores, loading, and
+transport APIs remain separate.
 
 ## Implementation
 
@@ -133,7 +159,7 @@ swill data check SERVER_ENTRY
 ```
 
 Generation boots the server entry, loads authoritative models and server
-operation declarations, reflects Sequel columns and associations, and writes
+operation declarations, reads each explicit `client_model` schema, and writes
 deterministic artifacts:
 
 ```text
@@ -152,6 +178,11 @@ The compiler supports the resulting local class reopenings directly: it folds
 the bodies in load order into one JavaScript class and keeps later method
 definitions. Imported framework constants remain closed to application code.
 
+Generated classes use the ordinary declarations `model_name`, `attribute`,
+`has_one`, and `has_many`; their superclass gives those declarations distant
+data semantics. A class using endpoint APIs must inherit from `Resource`, and
+the compiler reports that migration when old code still subclasses `Base`.
+
 ### 3. MessagePack protocol and transport
 
 Define a client transport interface for connect, request, queued demand, and close. Implement it with the browser WebSocket API. Implement the server endpoint through Roda and `Async::WebSocket::Adapters::Rack`, hosted by Falcon.
@@ -168,6 +199,9 @@ QUERY
 RESOLVE
 COMMAND
 GET
+CREATE
+UPDATE
+DELETE
 
 RESULT
 RETURN
@@ -190,6 +224,8 @@ Dispatch only operations declared in the generated schema.
 - Commands load their receiver through the same privacy-aware dataset and invoke the declared instance method.
 - Resolvers invoke the declared class method inside the connection context.
 - Hydration GETs resolve requested fields and relationships on privacy-aware records.
+- Creates, updates, and deletes construct or load records through the same
+  privacy-aware path and accept only schema-declared writable fields.
 
 Treat `query` read-only behavior as trusted application code rather than attempting to sandbox it.
 
@@ -198,6 +234,11 @@ Validate arguments and return values when a Sorbet or Swill signature supplies t
 Evaluate projections through privacy-aware model access. Every requested scalar field is included in the patch; a privacy-denied read therefore becomes a present nil. Record-level privacy may remove entire records.
 
 Execute commands inside a database transaction. After the method succeeds, serialize its typed return value and the receiver fields named by `changes:`. Send the response only after commit. Cross-model mutation capture and arbitrary affected-object projections remain future work.
+
+Execute generic persistence inside a database transaction as well. Create and
+update responses project all exposed scalar fields so server defaults,
+validation transformations, and callbacks replace speculative client values.
+Delete returns only after commit.
 
 ### 5. Demand collection and stale responses
 
@@ -223,7 +264,11 @@ Cover:
 
 Build a browser example whose bindings update through ordinary KVO as partial fields and stable relationship collections hydrate.
 
-Once the fixture passes end to end, remove the transitional JSON:API codecs, endpoint-based querying, and relationship URL loading. Retain the observation runtime, compiler declaration machinery, canonical-store concepts, and explicit/background error split.
+Keep the JSON:API, plain JSON, endpoint-based querying, and relationship URL
+APIs as supported compatibility strategies. New data-layer investment goes to
+named operations and partial hydration. Both strategies retain the observation
+runtime, compiler declaration machinery, canonical-store concepts, and
+explicit/background error split.
 
 ## Test Plan
 
@@ -239,6 +284,9 @@ Once the fixture passes end to end, remove the transitional JSON:API codecs, end
 - Deliver responses out of order and prove per-member generations reject stale values.
 - Verify relationship collections retain identity while membership and bindings update.
 - Verify declared command changes apply after commit and failed commands apply no patches.
+- Verify generic create/update/delete, rejected undeclared writes, validation
+  rollback, detached drafts, canonical identity after create, and deletion
+  tombstones.
 - Verify actor-scope changes clear the Store before new data is exposed.
 - Run compiler, MRI parity, Node runtime, generated bundle, and real Chrome integration tests.
 - Add non-gating benchmarks for MessagePack encode/decode, patch hydration, Store lookup, demand batching, and WebSocket round trips.

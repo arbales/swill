@@ -17,6 +17,9 @@ module Swill
   module ObjectBindings
     extend T::Sig
 
+    # Keeps +target+ equal to +key_path+ on +to+, writing +null_placeholder+
+    # whenever the path has no value. Replaces any existing binding on
+    # +target+. Answers self.
     sig do
       params(
         target: Symbol,
@@ -35,6 +38,7 @@ module Swill
       self
     end
 
+    # Releases the binding on +target+, if any. Answers self.
     sig { params(target: Symbol).returns(T.untyped) }
     def unbind(target)
       remaining = T.let([], T::Array[T::Hash[Symbol, T.untyped]])
@@ -49,6 +53,7 @@ module Swill
       self
     end
 
+    # Releases every binding, as a controller does when it unloads.
     sig { returns(T.untyped) }
     def unbind_all
       object_bindings.each { |binding| binding[:dispose].() }
@@ -57,7 +62,7 @@ module Swill
     end
 
     sig { returns(T::Array[T::Hash[Symbol, T.untyped]]) }
-    def object_bindings
+    def object_bindings # :nodoc:
       @object_bindings = [] unless @object_bindings
       @object_bindings
     end

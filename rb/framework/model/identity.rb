@@ -40,7 +40,7 @@ module Swill
           store.include?(id)
         end
 
-        sig { params(instance: Base).returns(T.attached_class) }
+        sig { params(instance: Resource).returns(T.attached_class) }
         def put(instance)
           T.unsafe(store.put(instance))
         end

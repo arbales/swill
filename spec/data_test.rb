@@ -40,6 +40,76 @@ class DataTest < Minitest::Test
                  Swill::Data::Types.dump(Swill::Data::Types.parse("T.nilable(DataFixture::User)"))
   end
 
+  def test_client_schema_is_closed_and_writes_are_an_explicit_subset
+    user = @schema.models.fetch("DataFixture::User")
+    assert_equal %w[avatar email id name], user.fetch("fields").keys
+    refute_includes user.fetch("fields"), "surprise"
+    assert_equal %w[avatar email name], user.fetch("writable_fields")
+
+    hidden = @dispatcher.call("type" => "GET", "request_id" => 20, "generation" => 20,
+                              "demands" => [{ "model" => "DataFixture::User", "id" => "1",
+                                              "fields" => ["surprise"] }])
+    assert_equal "unknown_field", hidden.dig("error", "code")
+  end
+
+  def test_distant_lifecycle_uses_writable_fields_and_privacy_actions
+    created = @dispatcher.call(
+      "type" => "CREATE", "request_id" => 21, "generation" => 21,
+      "model" => "DataFixture::Comment",
+      "attributes" => { "post_id" => 1, "author_id" => 1, "body" => "Draft" }
+    )
+    assert_equal "RETURN", created["type"]
+    reference = created.fetch("value")
+    assert_instance_of Swill::Data::Protocol::Reference, reference
+    id = reference.id
+    assert_equal "Draft", DataFixture::DB[:comments].where(id: id).get(:body)
+
+    rejected = @dispatcher.call(
+      "type" => "UPDATE", "request_id" => 22, "generation" => 22,
+      "model" => "DataFixture::Comment", "id" => id,
+      "attributes" => { "id" => 999 }
+    )
+    assert_equal "invalid_attributes", rejected.dig("error", "code")
+    assert_equal id.to_i, DataFixture::DB[:comments].where(id: id).get(:id)
+
+    updated = @dispatcher.call(
+      "type" => "UPDATE", "request_id" => 23, "generation" => 23,
+      "model" => "DataFixture::Comment", "id" => id,
+      "attributes" => { "body" => "Accepted" }
+    )
+    assert_equal "Accepted", updated.fetch("patches").first.dig("fields", "body")
+
+    deleted = @dispatcher.call(
+      "type" => "DELETE", "request_id" => 24, "generation" => 24,
+      "model" => "DataFixture::Comment", "id" => id
+    )
+    assert_equal "RETURN", deleted["type"]
+    assert_nil DataFixture::DB[:comments].where(id: id).first
+  ensure
+    DataFixture::DB[:comments].where(body: %w[Draft Accepted]).delete
+  end
+
+  def test_distant_lifecycle_rolls_back_validation_and_authorization_failures
+    invalid = @dispatcher.call(
+      "type" => "CREATE", "request_id" => 25, "generation" => 25,
+      "model" => "DataFixture::Comment",
+      "attributes" => { "post_id" => 1, "author_id" => 1, "body" => "invalid" }
+    )
+    assert_equal "validation_failed", invalid.dig("error", "code")
+    assert_nil DataFixture::DB[:comments].where(body: "invalid").first
+
+    denied = @dispatcher.call(
+      "type" => "CREATE", "request_id" => 26, "generation" => 26,
+      "model" => "DataFixture::User",
+      "attributes" => { "email" => "denied@example.test", "name" => "Denied" }
+    )
+    assert_equal "unauthorized", denied.dig("error", "code")
+    assert_nil DataFixture::DB[:users].where(email: "denied@example.test").first
+  ensure
+    DataFixture::DB[:comments].where(body: "invalid").delete
+    DataFixture::DB[:users].where(email: "denied@example.test").delete
+  end
+
   def test_connection_context_reuses_the_viewer_and_resets_policy_caches
     context = @dispatcher.context
     viewer = context.viewer_context
@@ -141,7 +211,13 @@ class DataTest < Minitest::Test
       assert generator.check
       assert(paths.any? { |path| path.end_with?("schema.json") })
       proxy = paths.find { |path| path.end_with?("data_fixture/post.rb") }
-      assert_includes File.read(proxy),
+      proxy_source = File.read(proxy)
+      assert_includes proxy_source, "class Post < Swill::Model::DistantObject"
+      assert_includes proxy_source, 'model_name "DataFixture::Post"'
+      assert_includes proxy_source, "attribute :title"
+      assert_includes proxy_source, "has_one :author"
+      refute_includes proxy_source, "remote_"
+      assert_includes proxy_source,
                       "async def self.search(text, published = Swill::Runtime.omitted_argument)"
       user_proxy = paths.find { |path| path.end_with?("data_fixture/user.rb") }
       assert_includes File.read(user_proxy), "async def self.lookup(*emails, exact:, limit: Swill::Runtime.omitted_argument, **options)"
@@ -150,11 +226,12 @@ class DataTest < Minitest::Test
     end
   end
 
-  def test_remote_block_parameters_are_rejected_explicitly
+  def test_data_block_parameters_are_rejected_explicitly
     DataFixture::DB.create_table(:blocked_operations) { primary_key :id }
     klass = Class.new(Sequel::Model(DataFixture::DB[:blocked_operations]))
     DataFixture.const_set(:BlockedOperation, klass)
     klass.extend(Swill::Sig)
+    klass.client_model fields: []
     klass.singleton_class.class_eval do
       define_method(:stream) { |_value = nil, &_block| nil }
     end

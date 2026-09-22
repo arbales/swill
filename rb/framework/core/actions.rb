@@ -1,6 +1,9 @@
 # typed: true
 # frozen_string_literal: true
 
+# TODO: This class name and its semantics should be revised so its more apparent
+# what they do. Given this is markup-specific, this is an awakening related concern, and
+# not the way an action association is likely created manually/in-code.
 module Swill
   class Actions < Swill::Object
     extend T::Sig
@@ -21,7 +24,10 @@ module Swill
       ->() { disposers.each { |dispose| dispose.() } }
     end
 
-    # data-action="name" on click, or "event:name".
+    # Connects a given element with a `data-action` parameter to a Controller
+    # with a corresponding action.
+    #
+    # Returns a disposer Proc that severs this association.
     sig { params(controller: Controller, element: Element).returns(T.proc.void) }
     def wire_element(controller, element)
       return ->() {} if element.__swill_action__

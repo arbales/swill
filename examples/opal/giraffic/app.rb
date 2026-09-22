@@ -2,7 +2,7 @@
 
 Swill::Wire.base_url = "/giraffic-api"
 
-class MailingAddress < Swill::Model::Base
+class MailingAddress < Swill::Model::Editable
   codec Swill::Model::JSONAPI
   json_api_type "mailing_address"
 
@@ -14,7 +14,7 @@ class MailingAddress < Swill::Model::Base
   attribute :country, default: ""
 end
 
-class Member < Swill::Model::Base
+class Member < Swill::Model::Resource
   codec Swill::Model::JSONAPI
   json_api_type "member"
   endpoint "/api/members"
@@ -54,7 +54,7 @@ class Member < Swill::Model::Base
   end
 end
 
-class MailingList < Swill::Model::Base
+class MailingList < Swill::Model::Resource
   codec Swill::Model::JSONAPI
   json_api_type "list"
   endpoint "/api/lists"

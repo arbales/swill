@@ -7,6 +7,7 @@ module DataFixture
   SCHEMA = Swill::Data::Schema.discover
 
   class App < Roda
+    ROOT = File.expand_path("../../../..", __dir__)
     DATA_ENDPOINT = Swill::Data::WebSocket.new(
       schema: SCHEMA,
       authenticate: ->(_env) do
@@ -23,8 +24,51 @@ module DataFixture
         request.halt DATA_ENDPOINT.call(request.env)
       end
 
-      response["content-type"] = "text/plain"
-      "Swill data fixture"
+      request.get "swill.js" do
+        response["content-type"] = "text/javascript"
+        File.binread(File.join(ROOT, "rb/dist/swill.js"))
+      end
+
+      request.get "app.js" do
+        response["content-type"] = "text/javascript"
+        File.binread(File.join(ROOT, "build/data_client.js"))
+      end
+
+      request.root do
+        response["content-type"] = "text/html"
+        <<~HTML
+          <!doctype html>
+          <html>
+            <head>
+              <meta charset="utf-8">
+              <title>Swill data fixture</title>
+            </head>
+            <body application="Swill::Application">
+              <main controller="DataFixture::BrowserController">
+                <p data-field="status" bind="status"></p>
+                <h1 data-field="title" bind="post.display_title"></h1>
+                <p data-field="author" bind="post.author.name"></p>
+                <p data-field="body" bind="post.body"></p>
+                <output data-field="comments" bind="comment_count"></output>
+                <output data-field="published" bind="post.published"></output>
+                <output data-field="published-at" bind="post.published_at"></output>
+                <button type="button" data-action="publish">Publish</button>
+              </main>
+              <script src="/swill.js"></script>
+              <script src="/app.js"></script>
+              <script>
+                Swill.Runtime.configureData(
+                  `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/data`,
+                  #{SCHEMA.hash.to_json}
+                );
+              </script>
+            </body>
+          </html>
+        HTML
+      end
+
+      response.status = 404
+      "Not found"
     end
   end
 end

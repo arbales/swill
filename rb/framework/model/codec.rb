@@ -9,24 +9,24 @@ module Swill
     class Codec < Swill::Object
       extend T::Sig
 
-      sig { params(model_class: T.class_of(Base), payload: T.untyped).returns(T.nilable(Base)) }
+      sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T.nilable(Resource)) }
       def self.parse_one(model_class, payload)
         raise "codec does not parse"
       end
 
-      sig { params(model_class: T.class_of(Base), payload: T.untyped).returns(T::Array[Base]) }
+      sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T::Array[Resource]) }
       def self.parse_many(model_class, payload)
         raise "codec does not parse"
       end
 
-      sig { params(model: Base, dirty_only: T::Boolean).returns(T.untyped) }
+      sig { params(model: Resource, dirty_only: T::Boolean).returns(T.untyped) }
       def self.serialize(model, dirty_only)
         raise "codec does not serialize"
       end
 
       # The attributes a payload carries, by wire key; the id is identity,
       # not an attribute, and travels on its own.
-      sig { params(model: Base, dirty_only: T::Boolean).returns(T::Hash[T.untyped, T.untyped]) }
+      sig { params(model: Resource, dirty_only: T::Boolean).returns(T::Hash[T.untyped, T.untyped]) }
       def self.attributes_of(model, dirty_only)
         attributes = dirty_only ? model.collect_dirty_attributes : model.collect_attributes
         attributes.delete("id")
@@ -37,27 +37,27 @@ module Swill
     # Plain JSON: an object per record with its attributes at the top level
     # and its id under "id"; a collection is an array of them.
     class PlainJSON < Codec
-      sig { params(model_class: T.class_of(Base), payload: T.untyped).returns(T.nilable(Base)) }
+      sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T.nilable(Resource)) }
       def self.parse_one(model_class, payload)
         return nil if payload == nil
         materialize(model_class, T.cast(payload, T::Hash[String, T.untyped]))
       end
 
-      sig { params(model_class: T.class_of(Base), payload: T.untyped).returns(T::Array[Base]) }
+      sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T::Array[Resource]) }
       def self.parse_many(model_class, payload)
         T.cast(payload, T::Array[T.untyped]).map do |item|
           materialize(model_class, T.cast(item, T::Hash[String, T.untyped]))
         end
       end
 
-      sig { params(model: Base, dirty_only: T::Boolean).returns(T.untyped) }
+      sig { params(model: Resource, dirty_only: T::Boolean).returns(T.untyped) }
       def self.serialize(model, dirty_only)
         Codec.attributes_of(model, dirty_only)
       end
 
       # The pooled instance for the object's id, refreshed, or a new one.
       # The id is a string in the pool, whatever the payload's number.
-      sig { params(model_class: T.class_of(Base), values: T::Hash[String, T.untyped]).returns(Base) }
+      sig { params(model_class: T.class_of(Resource), values: T::Hash[String, T.untyped]).returns(Resource) }
       def self.materialize(model_class, values)
         raw = values["id"]
         id = raw == nil ? nil : "#{raw}"
@@ -77,7 +77,7 @@ module Swill
     # whatever their order. A resource's class is the one declaring its
     # type as resource_type.
     class JSONAPI < Codec
-      sig { params(model_class: T.class_of(Base), payload: T.untyped).returns(T.nilable(Base)) }
+      sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T.nilable(Resource)) }
       def self.parse_one(model_class, payload)
         document = T.cast(payload, T::Hash[String, T.untyped])
         data = document["data"]
@@ -86,7 +86,7 @@ module Swill
         data == nil ? nil : pooled(T.cast(data, T::Hash[String, T.untyped]))
       end
 
-      sig { params(model_class: T.class_of(Base), payload: T.untyped).returns(T::Array[Base]) }
+      sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T::Array[Resource]) }
       def self.parse_many(model_class, payload)
         document = T.cast(payload, T::Hash[String, T.untyped])
         data = document["data"]
@@ -95,7 +95,7 @@ module Swill
         resources_in(data).map { |resource| pooled(resource) }.compact
       end
 
-      sig { params(model: Base, dirty_only: T::Boolean).returns(T.untyped) }
+      sig { params(model: Resource, dirty_only: T::Boolean).returns(T.untyped) }
       def self.serialize(model, dirty_only)
         attributes = Codec.attributes_of(model, dirty_only)
         resource = T.let({"type" => model.class.resource_type, "attributes" => attributes}, T::Hash[String, T.untyped])
@@ -119,11 +119,11 @@ module Swill
         [T.cast(value, T::Hash[String, T.untyped])]
       end
 
-      sig { params(resource: T::Hash[String, T.untyped]).returns(T.nilable(Base)) }
+      sig { params(resource: T::Hash[String, T.untyped]).returns(T.nilable(Resource)) }
       def self.materialize(resource)
         raw_type = resource["type"]
         type = "#{raw_type}"
-        model_class = Base.class_for_type(type)
+        model_class = Resource.class_for_type(type)
         unless model_class
           warn "no model class declares resource_type #{type}"
           return nil
@@ -141,10 +141,10 @@ module Swill
         model_class.put(instance)
       end
 
-      sig { params(resource: T::Hash[String, T.untyped]).returns(T.nilable(Base)) }
+      sig { params(resource: T::Hash[String, T.untyped]).returns(T.nilable(Resource)) }
       def self.pooled(resource)
         raw_type = resource["type"]
-        model_class = Base.class_for_type("#{raw_type}")
+        model_class = Resource.class_for_type("#{raw_type}")
         id = resource["id"]
         return nil unless model_class && id != nil
         model_class.get("#{id}")

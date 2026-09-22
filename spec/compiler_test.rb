@@ -2126,21 +2126,24 @@ class CompilerTest < Minitest::Test
       .add(File.read("rb/framework/core/object.rb"))
       .add(File.read("rb/framework/core/wire.rb"))
       .add(File.read("rb/framework/model/attributes.rb"))
-      .add(File.read("rb/framework/model/relationships.rb"))
       .add(File.read("rb/framework/model/dirty_tracking.rb"))
       .add(File.read("rb/framework/model/drafts.rb"))
+      .add(File.read("rb/framework/model/base.rb"))
+      .add(File.read("rb/framework/model/editable.rb"))
+      .add(File.read("rb/framework/model/relationships.rb"))
       .add(File.read("rb/framework/model/store.rb"))
       .add(File.read("rb/framework/model/identity.rb"))
       .add(File.read("rb/framework/model/collection.rb"))
-      .add(File.read("rb/framework/model/remote_data.rb"))
+      .add(File.read("rb/framework/model/distant_data.rb"))
+      .add(File.read("rb/framework/model/distant_object.rb"))
       .add(File.read("rb/framework/model/relationship.rb"))
       .add(File.read("rb/framework/model/codec.rb"))
       .add(File.read("rb/framework/model/dataset.rb"))
-      .add(File.read("rb/framework/model/base.rb"))
+      .add(File.read("rb/framework/model/resource.rb"))
     compiler = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface)
     compiler.add(File.read("examples/rb/models.rb"))
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs", framework: "./framework.mjs")
-    assert_includes js, "class Demo__Person extends Swill__Model__Base {"
+    assert_includes js, "class Demo__Person extends Swill__Model__Editable {"
     assert_includes js, "export { Demo__Person };"
     assert_includes js, "mixins: [NormalizeName, StripName, DecorateName]"
     assert_includes js, "constructor: Demo__Person"
@@ -2153,6 +2156,20 @@ class CompilerTest < Minitest::Test
     assert_includes framework_js, "let copy = new this.constructor"
     refute_includes framework_js, "Runtime.draft("
     assert_equal js, Swill::Ruby2JS::Compiler.format_javascript(js)
+  end
+
+  def test_old_model_base_reports_the_explicit_resource_migration
+    framework = Swill::Ruby2JS::Compiler.new
+    Swill::Ruby2JS::FRAMEWORK_SOURCES.each { |path| framework.add(File.read(path), file: path) }
+    compiler = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface)
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler.add(<<~RUBY)
+        class OldMenu < Swill::Model::Base
+          endpoint "/api/menus"
+        end
+      RUBY
+    end
+    assert_includes error.message, "must inherit Swill::Model::Resource"
   end
 
   def test_source_constants_do_not_capture_runtime_or_mixin_plumbing_names

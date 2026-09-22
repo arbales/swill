@@ -3,10 +3,11 @@
 
 module Swill
   # The top of the responder chain. One application runs per page, as one
-  # NSApp runs per process: it owns the first responder, routes focus and
-  # key events, presents windows, and keeps the URL fragment, none of which
-  # two applications could share. Controllers reach it through
-  # Application.shared.
+  # NSApp runs per process: it owns the first responder, routes focus and key
+  # events, presents windows, and keeps the URL fragment. Controllers reach it
+  # through Application.shared.
+  #
+  # See the Lifecycle guide for launch, restoration and teardown.
   class Application < Responder
     extend T::Sig
     include Ownership
@@ -20,21 +21,23 @@ module Swill
       running
     end
 
+    # Whether an application is running on this page.
     sig { returns(T::Boolean) }
     def self.running?
       @running != nil
     end
 
     sig { params(application: Application).void }
-    def self.launched(application)
+    def self.launched(application) # :nodoc:
       @running = T.let(application, T.nilable(Application))
     end
 
     sig { params(application: Application).void }
-    def self.terminated(application)
+    def self.terminated(application) # :nodoc:
       @running = nil if @running == application
     end
 
+    # Creates the application. Call #launch to start it.
     sig { void }
     def initialize
       super()
@@ -47,6 +50,9 @@ module Swill
       @observer = T.let(nil, T.nilable(MutationObserver))
     end
 
+    # Starts the application at +root+: awakens the markup beneath it,
+    # restores window content from the URL fragment, and begins watching for
+    # content added later. One application runs per page.
     sig { params(root: Element).returns(Application) }
     def launch(root)
       raise "An application is already running" if Application.running?
@@ -87,6 +93,7 @@ module Swill
       @controllers
     end
 
+    # The element the application was launched at.
     sig { returns(Element) }
     def root
       @root
@@ -112,9 +119,11 @@ module Swill
       Application.terminated(self)
     end
 
+    # The application is running and its markup is awake.
     sig { void }
     def application_did_launch; end
 
+    # The application is about to stop. Everything it owns is still alive.
     sig { void }
     def application_will_terminate; end
 
@@ -180,6 +189,8 @@ module Swill
       window
     end
 
+    # Closes the window +controller+ belongs to, restoring the first responder
+    # it displaced.
     sig { params(controller: Controller).returns(T::Boolean) }
     def dismiss(controller)
       window = window_containing(controller)
@@ -191,11 +202,13 @@ module Swill
       true
     end
 
+    # The window with +name+, or nil.
     sig { params(name: String).returns(T.nilable(Window)) }
     def window_named(name)
       @windows.find { |window| matches_container?(window, name) }
     end
 
+    # Whether content named +name+ exists to be loaded into a window.
     sig { params(name: String).returns(T::Boolean) }
     def window_content?(name)
       (@captured[name] || window_template(name)) != nil
@@ -231,7 +244,7 @@ module Swill
     end
 
     sig { params(responder: T.nilable(Responder)).void }
-    def assign_first_responder(responder)
+    def assign_first_responder(responder) # :nodoc:
       @first_responder = responder
       post_first_responder_change
     end
@@ -249,12 +262,12 @@ module Swill
     end
 
     sig { params(event: Event).void }
-    def focus_in(event)
+    def focus_in(event) # :nodoc:
       sync_first_responder(event.target, event.relatedTarget)
     end
 
     sig { params(event: Event).void }
-    def focus_out(event)
+    def focus_out(event) # :nodoc:
       focus_left(event.relatedTarget)
     end
 
@@ -299,14 +312,14 @@ module Swill
     end
 
     sig { params(responder: Responder).returns(T.nilable(Element)) }
-    def responder_element(responder)
+    def responder_element(responder) # :nodoc:
       return T.cast(responder, Controller).view.element if responder.is_a?(Controller)
       return T.cast(responder, View).element if responder.is_a?(View)
       nil
     end
 
     sig { params(responder: Responder, previous: T.nilable(Element)).void }
-    def restore_focus(responder, previous)
+    def restore_focus(responder, previous) # :nodoc:
       owner = responder_element(responder)
       return unless owner
       target = previous && owner.contains(previous) ? previous : T.must(owner.__swill_view__).first_focusable_element
@@ -335,7 +348,7 @@ module Swill
     end
 
     sig { params(name: String).returns(Element) }
-    def clone_window_content(name)
+    def clone_window_content(name) # :nodoc:
       captured = @captured[name]
       return captured.cloneNode(true) if captured
       template = window_template(name)
@@ -346,7 +359,7 @@ module Swill
     end
 
     sig { returns(T::Array[Element]) }
-    def window_containers
+    def window_containers # :nodoc:
       found = T.let([], T::Array[Element])
       found << @root if @root.hasAttribute("window")
       @root.querySelectorAll("[window]").forEach { |container| found << container }
@@ -383,7 +396,7 @@ module Swill
     end
 
     sig { void }
-    def register_window_containers
+    def register_window_containers # :nodoc:
       window_containers.each do |container|
         window = Window.new(T.must(container.getAttribute("window")), container)
         window.assign_content(container.getAttribute("name"), top_controller_in(container))
@@ -398,23 +411,23 @@ module Swill
     end
 
     sig { params(controller: Controller, container: Element).returns(T::Boolean) }
-    def top_within?(controller, container)
+    def top_within?(controller, container) # :nodoc:
       parent = controller.parent
       parent == nil || !container.contains(parent.view.element)
     end
 
     sig { params(window: Window, name: String).returns(T::Boolean) }
-    def matches_container?(window, name)
+    def matches_container?(window, name) # :nodoc:
       window.container? && window.name == name
     end
 
     sig { params(controller: Controller).returns(T.nilable(Window)) }
-    def window_containing(controller)
+    def window_containing(controller) # :nodoc:
       @windows.find { |window| holds?(window, controller) }
     end
 
     sig { params(window: Window, controller: Controller).returns(T::Boolean) }
-    def holds?(window, controller)
+    def holds?(window, controller) # :nodoc:
       window.contains_controller?(controller)
     end
 
@@ -428,7 +441,7 @@ module Swill
     end
 
     sig { params(responder: T.nilable(Responder)).returns(T::Boolean) }
-    def attached?(responder)
+    def attached?(responder) # :nodoc:
       return false unless responder
       element = responder_element(responder)
       element != nil && @root.contains(element)
@@ -485,7 +498,7 @@ module Swill
     end
 
     sig { void }
-    def restore_launched_windows
+    def restore_launched_windows # :nodoc:
       @windows.each { |window| restore_window_state(window, prune_stale: false, write_content: true) }
     end
 
@@ -509,7 +522,7 @@ module Swill
     end
 
     sig { params(window: Window, params: T::Hash[String, String]).void }
-    def apply_fragment_to(window, params)
+    def apply_fragment_to(window, params) # :nodoc:
       return unless window.container?
       requested = params[window.name]
       if requested != nil && requested != window.content_name

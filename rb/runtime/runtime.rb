@@ -51,7 +51,7 @@ module Swill
       # how a JSON:API type finds its model class.
       def class_with_setting(name, value)
         ObjectSpace.each_object(::Class).find do |klass|
-          klass < Swill::Model::Base && klass.instance_variable_get(:"@#{name}") == value
+          klass < Swill::Model::Resource && klass.instance_variable_get(:"@#{name}") == value
         end
       end
 
@@ -94,16 +94,16 @@ module Swill
         Kernel.warn("[Swill] #{message}")
       end
 
-      # Remote transport is a browser concern. These state readers make
+      # Distant transport is a browser concern. These state readers make
       # generated models safe to load and inspect on MRI during generation.
       def data_field_loaded(_object, _name) = false
       def data_field_loading(_object, _name) = false
       def data_field_error(_object, _name) = nil
 
-      def initialize_remote_data(object)
-        return unless object.class.respond_to?(:remote_fields)
+      def initialize_distant_data(object)
+        return unless object.class.respond_to?(:data_fields)
 
-        object.class.remote_fields.each do |name, descriptor|
+        object.class.data_fields.each do |name, descriptor|
           write(object, name, Swill::Model::Collection.new) if descriptor["kind"] == "many"
         end
       end
@@ -115,6 +115,10 @@ module Swill
       def data_query(*) = raise("remote data is available only in the browser runtime")
       def data_resolve(*) = raise("remote data is available only in the browser runtime")
       def data_command(*) = raise("remote data is available only in the browser runtime")
+      def data_save(*) = raise("distant data is available only in the browser runtime")
+      def data_delete(*) = raise("distant data is available only in the browser runtime")
+      def data_draft(*) = raise("distant data is available only in the browser runtime")
+      def apply_data_draft(*) = raise("distant data is available only in the browser runtime")
     end
   end
 end

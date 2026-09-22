@@ -68,14 +68,14 @@ module Swill
       end
 
       def proxy_source(model)
-        body = ["remote_model #{model['name'].to_json}"]
+        body = ["model_name #{model['name'].to_json}"]
         model.fetch("fields").each_value do |field|
           next if field["name"] == "id"
 
-          body << "remote_attribute :#{field['name']}, type: #{ruby_type(field['type'])}"
+          body << "attribute :#{field['name']}, type: #{ruby_type(field['type'])}"
         end
         model.fetch("relationships").each_value do |relationship|
-          macro = relationship["kind"] == "many" ? "remote_has_many" : "remote_has_one"
+          macro = relationship["kind"] == "many" ? "has_many" : "has_one"
           body << "#{macro} :#{relationship['name']}, model: #{relationship['model'].to_json}"
         end
         model.fetch("operations").each_value do |operation|
@@ -135,7 +135,7 @@ module Swill
         namespace = parts[0...-1]
         lines = namespace.each_with_index.map { |part, index| "#{'  ' * index}module #{part}" }
         depth = namespace.length
-        lines << "#{'  ' * depth}class #{parts.last} < Swill::Model::Base"
+        lines << "#{'  ' * depth}class #{parts.last} < Swill::Model::DistantObject"
         lines.concat(body.map { |line| line.empty? ? "" : "#{'  ' * (depth + 1)}#{line}" })
         lines << "#{'  ' * depth}end"
         namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }

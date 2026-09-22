@@ -8,6 +8,7 @@ module Swill
   class View < Responder
     extend T::Sig
 
+    # Wraps +element+, marking it managed.
     sig { params(element: Element).void }
     def initialize(element)
       super()
@@ -18,21 +19,25 @@ module Swill
       element.__swill_view__ = self
     end
 
+    # The element this view wraps.
     sig { returns(Element) }
     def element
       @element
     end
 
+    # The controller rooted here, or nil when this view is not a controller
+    # root. Use #owner to find the controller a view belongs to.
     sig { returns(T.nilable(Controller)) }
     def controller_value
       @controller
     end
 
     sig { params(controller: T.nilable(Controller)).returns(T.nilable(Controller)) }
-    def controller=(controller)
+    def controller=(controller) # :nodoc:
       @controller = controller
     end
 
+    # The view that adopted this one, or nil.
     sig { returns(T.nilable(View)) }
     def superview
       @superview
@@ -53,6 +58,8 @@ module Swill
       @superview&.owner
     end
 
+    # Takes +child+ into this view, releasing it from any previous superview.
+    # Structural only: it does not awaken or lay anything out.
     sig { params(child: View).returns(View) }
     def adopt_subview(child)
       previous = child.superview()
@@ -62,12 +69,14 @@ module Swill
       child
     end
 
+    # Drops +child+ from this view.
     sig { params(child: View).void }
     def release_subview(child)
       @subviews = @subviews.select { |candidate| candidate != child }
       child.assign_superview(nil)
     end
 
+    # Drops this view from its superview, if it has one.
     sig { void }
     def remove_from_superview
       superview = @superview
@@ -76,10 +85,11 @@ module Swill
 
     # Tree-internal; adopt_subview and release_subview keep both sides consistent.
     sig { params(superview: T.nilable(View)).void }
-    def assign_superview(superview)
+    def assign_superview(superview) # :nodoc:
       @superview = superview
     end
 
+    # The controller rooted here, else the superview.
     sig { override.returns(T.nilable(Responder)) }
     def next_responder
       @controller || @superview
@@ -100,11 +110,13 @@ module Swill
       view ? view.controller_value() : nil
     end
 
+    # Whether the element carries +name+.
     sig { params(name: String).returns(T::Boolean) }
     def has_attribute?(name)
       @element.hasAttribute(name)
     end
 
+    # Whether +element+ lies within this view's element.
     sig { params(element: Element).returns(T::Boolean) }
     def contains?(element)
       @element.contains(element)
@@ -118,16 +130,19 @@ module Swill
       node ? node.cloneNode(true) : nil
     end
 
+    # Appends +element+ to this view's element.
     sig { params(element: Element).void }
     def append(element)
       @element.appendChild(element)
     end
 
+    # Inserts +element+ after +anchor+.
     sig { params(anchor: Element, element: Element).void }
     def insert_after(anchor, element)
       anchor.after(element)
     end
 
+    # Removes +element+ from the document.
     sig { params(element: Element).void }
     def remove(element)
       element.remove
@@ -154,6 +169,7 @@ module Swill
       element.setAttribute("aria-selected", on ? "true" : "false")
     end
 
+    # Scrolls the nearest ancestor just far enough to bring +element+ into view.
     sig { params(element: Element).void }
     def reveal(element)
       element.scrollIntoView({block: "nearest"})
@@ -182,6 +198,7 @@ module Swill
 
     # ---- focus ----
 
+    # The selector deciding what counts as focusable. Override to widen it.
     sig { returns(String) }
     def focusable_selector
       "input, select, textarea, button, [tabindex]"
@@ -193,12 +210,14 @@ module Swill
       @element.matches(focusable_selector) ? @element : @element.querySelector(focusable_selector)
     end
 
+    # Focuses the first focusable element, if there is one.
     sig { void }
     def focus_element
       target = first_focusable_element
       target.focus if target
     end
 
+    # Blurs the first focusable element, if there is one.
     sig { void }
     def blur_element
       target = first_focusable_element
@@ -212,6 +231,7 @@ module Swill
       true
     end
 
+    # Focuses the element.
     sig { override.returns(T::Boolean) }
     def become_first_responder
       focus_element

@@ -18,7 +18,8 @@ module Swill
       def self.discover
         candidates = ObjectSpace.each_object(Class).select do |klass|
           klass.name&.match?(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/) &&
-            defined?(Sequel::Model) && klass < Sequel::Model
+            defined?(Sequel::Model) && klass < Sequel::Model &&
+            klass.respond_to?(:swill_client_model) && klass.swill_client_model
         end
         new(candidates.sort_by(&:name))
       end
@@ -56,29 +57,40 @@ module Swill
           raise ArgumentError, "#{klass.name} must have one primary key in protocol v1"
         end
 
+        declaration = klass.swill_client_model
         {
           "name" => klass.name,
           "primary_key" => Array(klass.primary_key).map(&:to_s),
-          "fields" => fields(klass),
-          "relationships" => relationships(klass),
+          "fields" => fields(klass, declaration),
+          "relationships" => relationships(klass, declaration),
+          "writable_fields" => declaration.fetch("writable").sort,
           "operations" => operations(klass)
         }
       end
 
-      def fields(klass)
-        klass.db_schema.sort.to_h do |name, descriptor|
+      def fields(klass, declaration)
+        names = (Array(klass.primary_key).map(&:to_s) + declaration.fetch("fields")).uniq.sort
+        names.to_h do |field|
+          name = field.to_sym
+          descriptor = klass.db_schema[name]
+          raise ArgumentError, "unknown client field #{klass.name}.#{field}" unless descriptor
+
           type = Types.parse(SEQUEL_TYPES.fetch(descriptor[:type], "T.untyped"))
           type = Type.new("optional", members: [type]) if descriptor[:allow_null]
-          [name.to_s, { "name" => name.to_s, "type" => type.to_h }]
+          [field, { "name" => field, "type" => type.to_h }]
         end
       end
 
-      def relationships(klass)
-        klass.association_reflections.sort.to_h do |name, reflection|
+      def relationships(klass, declaration)
+        declaration.fetch("relationships").sort.to_h do |relationship|
+          name = relationship.to_sym
+          reflection = klass.association_reflections[name]
+          raise ArgumentError, "unknown client relationship #{klass.name}.#{relationship}" unless reflection
+
           target = reflection.associated_class.name
           many = %i[one_to_many many_to_many].include?(reflection[:type])
-          [name.to_s, {
-            "name" => name.to_s,
+          [relationship, {
+            "name" => relationship,
             "kind" => many ? "many" : "one",
             "model" => target
           }]
@@ -152,6 +164,13 @@ module Swill
 
       def validate_schema!
         models.each_value do |model|
+          primary_keys = model.fetch("primary_key")
+          writable = model.fetch("writable_fields")
+          unknown_writable = writable - model.fetch("fields").keys
+          raise ArgumentError, "unknown writable field #{model['name']}.#{unknown_writable.first}" unless unknown_writable.empty?
+          primary_writable = writable & primary_keys
+          raise ArgumentError, "primary key is not writable: #{model['name']}.#{primary_writable.first}" unless primary_writable.empty?
+
           model.fetch("relationships").each_value do |relationship|
             unless models.key?(relationship.fetch("model"))
               raise ArgumentError, "unknown related model #{relationship['model']}"

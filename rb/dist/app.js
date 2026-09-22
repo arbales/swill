@@ -36,23 +36,26 @@
   var Swill__Controller__EditableList = framework.Swill__Controller__EditableList;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
-  var Swill__Model__Relationships = framework.Swill__Model__Relationships;
-  var Swill__Model__Relationships_ClassMethods = framework.Swill__Model__Relationships_ClassMethods;
   var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;
   var Swill__Model__Drafts = framework.Swill__Model__Drafts;
+  var Swill__Model__Base = framework.Swill__Model__Base;
+  var Swill__Model__Editable = framework.Swill__Model__Editable;
+  var Swill__Model__Relationships = framework.Swill__Model__Relationships;
+  var Swill__Model__Relationships_ClassMethods = framework.Swill__Model__Relationships_ClassMethods;
   var Swill__Model__Store = framework.Swill__Model__Store;
   var Swill__Model__Identity = framework.Swill__Model__Identity;
   var Swill__Model__Identity_ClassMethods = framework.Swill__Model__Identity_ClassMethods;
   var Swill__Model__Collection = framework.Swill__Model__Collection;
   var Swill__Model__ResultSet = framework.Swill__Model__ResultSet;
-  var Swill__Model__RemoteData = framework.Swill__Model__RemoteData;
-  var Swill__Model__RemoteData_ClassMethods = framework.Swill__Model__RemoteData_ClassMethods;
+  var Swill__Model__DistantData = framework.Swill__Model__DistantData;
+  var Swill__Model__DistantData_ClassMethods = framework.Swill__Model__DistantData_ClassMethods;
+  var Swill__Model__DistantObject = framework.Swill__Model__DistantObject;
   var Swill__Model__Relationship = framework.Swill__Model__Relationship;
   var Swill__Model__Codec = framework.Swill__Model__Codec;
   var Swill__Model__PlainJSON = framework.Swill__Model__PlainJSON;
   var Swill__Model__JSONAPI = framework.Swill__Model__JSONAPI;
   var Swill__Model__Dataset = framework.Swill__Model__Dataset;
-  var Swill__Model__Base = framework.Swill__Model__Base;
+  var Swill__Model__Resource = framework.Swill__Model__Resource;
 
   // build/application.classes.mjs
   function NormalizeName(Superclass) {
@@ -79,7 +82,7 @@
     }
     return DecorateName_Layer;
   }
-  var Demo__Person = class extends Swill__Model__Base {
+  var Demo__Person = class extends Swill__Model__Editable {
     normalize(value) {
       return `[${super.normalize(value)}]`;
     }
@@ -105,7 +108,7 @@
       return cleaned;
     }
   };
-  var Demo__Book = class extends Swill__Model__Base {
+  var Demo__Book = class extends Swill__Model__Resource {
     async loadAuthor() {
       return await this.loadRelationship("author");
     }
@@ -113,7 +116,7 @@
       return await this.reloadRelationship("author");
     }
   };
-  var Demo__Author = class extends Swill__Model__Base {
+  var Demo__Author = class extends Swill__Model__Resource {
     validate() {
       return Runtime.isEmpty(Runtime.strip(this.name)) ? "name must not be blank" : null;
     }
@@ -124,7 +127,7 @@
       return await this.reloadRelationship("books");
     }
   };
-  var Demo__Note = class extends Swill__Model__Base {
+  var Demo__Note = class extends Swill__Model__Resource {
   };
   function NameTracking(Superclass) {
     class NameTracking_Layer extends Superclass {
@@ -267,7 +270,7 @@
       return "represented_object";
     }
   };
-  var Static__User = class extends Swill__Model__Base {
+  var Static__User = class extends Swill__Model__Editable {
     validateEmail(value, _previous) {
       return Runtime.downcase(Runtime.strip(value));
     }

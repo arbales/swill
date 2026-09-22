@@ -35,14 +35,14 @@ module Swill
 
       # The declared class, by its installed name: a relationship may name a
       # class defined later, so the descriptor carries the name.
-      sig { returns(T.class_of(Base)) }
+      sig { returns(T.class_of(Resource)) }
       def model_class
         T.unsafe(Swill::Runtime.resolve(@type))
       end
 
       # Where an owner's related records are: the declared pattern with the
       # owner's id, or the owner's own URL followed by the key.
-      sig { params(owner: Base).returns(String) }
+      sig { params(owner: Resource).returns(String) }
       def url_for(owner)
         id = T.must(owner.id)
         pattern = @url

@@ -48,6 +48,11 @@
           "model": "DataFixture::Post"
         }
       },
+      "writable_fields": [
+        "author_id",
+        "body",
+        "post_id"
+      ],
       "operations": {}
     },
     "DataFixture::Post": {
@@ -133,6 +138,12 @@
           "model": "DataFixture::Comment"
         }
       },
+      "writable_fields": [
+        "author_id",
+        "body",
+        "excerpt",
+        "title"
+      ],
       "operations": {
         "invalid_publish!": {
           "kind": "command",
@@ -259,6 +270,11 @@
           "model": "DataFixture::Post"
         }
       },
+      "writable_fields": [
+        "avatar",
+        "email",
+        "name"
+      ],
       "operations": {
         "current_user": {
           "kind": "resolver",
@@ -356,5 +372,5 @@
       }
     }
   },
-  "schema_hash": "1be96ccefac16321d369ecf1ac397d231a304dbdb214c34baa947a0527ac345d"
+  "schema_hash": "0faf0acfc5fcbfe7ff65d06c368e69b52cd1a5af76cd98e174e7158ab24459e5"
 }

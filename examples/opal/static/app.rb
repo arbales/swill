@@ -2,7 +2,7 @@
 
 # A client model parsed from plain JSON. Attributes are observable, serialized
 # through their wire keys, validated on assignment, and dirty-tracked.
-class User < Swill::Model::Base
+class User < Swill::Model::Editable
   attribute :name, default: "world"
   attribute :email, key: :email_address, default: ""
 
@@ -26,7 +26,7 @@ end
 # The first backend-backed model slice mirrors the TypeScript breweries demo.
 # A Dataset owns observable request state while PlainJSON decodes and pools the
 # returned Brewery instances.
-class Brewery < Swill::Model::Base
+class Brewery < Swill::Model::Editable
   ENDPOINT = "https://api.openbrewerydb.org/v1/breweries/search"
 
   attribute :name, default: ""

@@ -13,7 +13,7 @@ module Swill
       property :loading, type: T::Boolean, default: false
       property :error, type: T.nilable(String), default: nil
 
-      sig { params(model_class: T.class_of(Base), url: String, params: T::Hash[String, T.untyped]).void }
+      sig { params(model_class: T.class_of(Resource), url: String, params: T::Hash[String, T.untyped]).void }
       def initialize(model_class, url, params)
         super()
         @model_class = model_class

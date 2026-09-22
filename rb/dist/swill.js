@@ -1329,18 +1329,20 @@
   // rb/runtime/data_client.mjs
   var objectStates = /* @__PURE__ */ new WeakMap();
   var stores = /* @__PURE__ */ new Map();
+  var tombstones = /* @__PURE__ */ new Map();
   var configuration2 = null;
   var socket = null;
   var connecting = null;
   var actorScope = null;
   var sequence = 0;
   var generation = 0;
+  var activeGenerations = /* @__PURE__ */ new Set();
   var pending = /* @__PURE__ */ new Map();
   var queuedDemands = /* @__PURE__ */ new Map();
   var demandScheduled = false;
   function state2(object) {
     if (!objectStates.has(object)) {
-      objectStates.set(object, { fields: /* @__PURE__ */ new Map() });
+      objectStates.set(object, { fields: /* @__PURE__ */ new Map(), detached: false, original: null });
     }
     return objectStates.get(object);
   }
@@ -1353,23 +1355,44 @@
     if (!stores.has(name)) stores.set(name, /* @__PURE__ */ new Map());
     return stores.get(name);
   }
-  function canonical(name, id) {
+  function modelTombstones(name) {
+    if (!tombstones.has(name)) tombstones.set(name, /* @__PURE__ */ new Map());
+    return tombstones.get(name);
+  }
+  function pruneTombstones() {
+    if (!tombstones.size) return;
+    let oldestActive = Number.MAX_SAFE_INTEGER;
+    for (const active of activeGenerations) oldestActive = Math.min(oldestActive, active);
+    for (const [name, removedObjects] of tombstones) {
+      for (const [id, removed] of removedObjects) {
+        if (removed.generation < oldestActive) removedObjects.delete(id);
+      }
+      if (!removedObjects.size) tombstones.delete(name);
+    }
+  }
+  function canonical(name, id, responseGeneration = Number.MAX_SAFE_INTEGER, preferred = null) {
     const key = String(id);
     const store = modelStore(name);
     if (store.has(key)) return store.get(key);
-    const object = new (resolve(name))();
-    write(object, "id", key);
+    const removed = modelTombstones(name).get(key);
+    if (removed && responseGeneration <= removed.generation) return removed.object;
+    if (removed) modelTombstones(name).delete(key);
+    const object = preferred ?? new (resolve(name))();
+    object.applyAttributes({ id: key });
     fieldState(object, "id").status = "present";
     store.set(key, object);
     return object;
   }
-  function decodeValue(value) {
-    if (Array.isArray(value)) return value.map(decodeValue);
+  function decodeValue(value, responseGeneration = Number.MAX_SAFE_INTEGER, preferred = null) {
+    if (Array.isArray(value)) return value.map((item) => decodeValue(item, responseGeneration, preferred));
     if (value && typeof value === "object") {
-      if (Object.keys(value).length === 1 && value.$ref) return canonical(value.$ref[0], value.$ref[1]);
+      if (Object.keys(value).length === 1 && value.$ref) {
+        const usePreferred = preferred && modelName(preferred) === value.$ref[0] && preferred.id == null;
+        return canonical(value.$ref[0], value.$ref[1], responseGeneration, usePreferred ? preferred : null);
+      }
       if (Object.keys(value).length === 1 && value.$time) return new Date(value.$time);
       if (Object.keys(value).length === 1 && value.$date) return value.$date;
-      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decodeValue(item)]));
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decodeValue(item, responseGeneration, preferred)]));
     }
     return value;
   }
@@ -1377,30 +1400,34 @@
     if (Array.isArray(value)) return value.map(encodeValue);
     if (value instanceof Date) return { $time: value.toISOString() };
     if (value && typeof value === "object") {
-      const name = value.constructor.remoteModelName?.();
+      const name = value.constructor.dataModelName?.();
       if (name && value.id != null) return { $ref: [name, String(value.id)] };
       return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encodeValue(item)]));
     }
     return value;
   }
-  function applyPatch(patch) {
-    const object = canonical(patch.model, patch.id);
+  function applyPatch(patch, preferred = null) {
+    const usePreferred = preferred && modelName(preferred) === patch.model && preferred.id == null;
+    const object = canonical(patch.model, patch.id, patch.generation, usePreferred ? preferred : null);
+    const removed = modelTombstones(patch.model).get(String(patch.id));
+    if (removed && patch.generation <= removed.generation) return object;
     for (const [name, encoded] of Object.entries(patch.fields ?? {})) {
       const slot = fieldState(object, name);
       if (patch.generation < slot.generation) continue;
       slot.generation = patch.generation;
       slot.status = "present";
       slot.error = null;
-      const value = decodeValue(encoded);
-      const current = object[name];
-      if (current && typeof current.replace === "function" && Array.isArray(value)) current.replace(value);
+      const value = decodeValue(encoded, patch.generation);
+      const descriptor = object.constructor.dataFields?.()[name];
+      if (descriptor?.kind === "many") object[name].replace(value);
+      else if (descriptor?.kind === "field" || name === "id") object.applyAttributes({ [name]: value });
       else write(object, name, value);
     }
     return object;
   }
-  function applyEnvelope(message) {
-    for (const patch of message.patches ?? []) applyPatch(patch);
-    return decodeValue(message.value);
+  function applyEnvelope(message, responseGeneration, preferred = null) {
+    for (const patch of message.patches ?? []) applyPatch(patch, preferred);
+    return decodeValue(message.value, responseGeneration, preferred);
   }
   function clearState() {
     for (const store of stores.values()) {
@@ -1410,6 +1437,7 @@
       }
     }
     stores.clear();
+    tombstones.clear();
     queuedDemands.clear();
   }
   function openSocket() {
@@ -1473,15 +1501,24 @@
       socket.send(pack(message));
     });
   }
-  async function request(type, contents) {
+  async function requestWithGeneration(type, contents, preferred = null) {
     await openSocket();
     const request_id = ++sequence;
     const operationGeneration = ++generation;
-    const response = await sendRaw({ type, request_id, generation: operationGeneration, ...contents });
-    return applyEnvelope(response);
+    activeGenerations.add(operationGeneration);
+    try {
+      const response = await sendRaw({ type, request_id, generation: operationGeneration, ...contents });
+      return { value: applyEnvelope(response, operationGeneration, preferred), generation: operationGeneration };
+    } finally {
+      activeGenerations.delete(operationGeneration);
+      pruneTombstones();
+    }
+  }
+  async function request(type, contents) {
+    return (await requestWithGeneration(type, contents)).value;
   }
   function modelName(target) {
-    const declared = typeof target === "function" ? target.remoteModelName?.() : target.constructor.remoteModelName?.();
+    const declared = typeof target === "function" ? target.dataModelName?.() : target.constructor.dataModelName?.();
     return declared ?? nameOf(target);
   }
   function configureData(url, schemaHash, webSocketFactory = (value) => new WebSocket(value)) {
@@ -1498,8 +1535,8 @@
     pending.clear();
     current?.close();
   }
-  function initializeRemoteData(object) {
-    for (const [field, descriptor] of Object.entries(object.constructor.remoteFields?.() ?? {})) {
+  function initializeDistantData(object) {
+    for (const [field, descriptor] of Object.entries(object.constructor.dataFields?.() ?? {})) {
       if (descriptor.kind === "many") write(object, field, new (resolve("Swill::Model::Collection"))());
     }
   }
@@ -1533,6 +1570,70 @@
       keywords: encodeKeywords(keywords)
     });
   }
+  function assertMutable(object) {
+    if (object.isDeleted) throw new Error("Cannot persist a deleted distant object");
+    if (state2(object).detached) throw new Error("Save a distant draft with original.apply_draft(draft)");
+  }
+  async function dataSave(object) {
+    assertMutable(object);
+    const attributes = object.collectDirtyAttributes();
+    if (object.id != null && Object.keys(attributes).length === 0) return object;
+    const type = object.id == null ? "CREATE" : "UPDATE";
+    const contents = { model: modelName(object), attributes: encodeValue(attributes) };
+    if (object.id != null) contents.id = object.id;
+    const { value } = await requestWithGeneration(type, contents, type === "CREATE" ? object : null);
+    object.markClean();
+    return value ?? object;
+  }
+  function dataDraft(object) {
+    if (object.isDeleted) throw new Error("Cannot draft a deleted distant object");
+    if (object.id == null) throw new Error("Save a distant object before drafting it");
+    const copy = new object.constructor();
+    const copyState = state2(copy);
+    copyState.detached = true;
+    copyState.original = object;
+    const attributes = {};
+    attributes.id = object.id;
+    fieldState(copy, "id").status = "present";
+    for (const [name, descriptor] of Object.entries(object.constructor.dataFields?.() ?? {})) {
+      if (descriptor.kind !== "field" || !dataFieldLoaded(object, name)) continue;
+      attributes[name] = object[name];
+      fieldState(copy, name).status = "present";
+    }
+    copy.applyAttributes(attributes);
+    copy.markClean();
+    return copy;
+  }
+  async function applyDataDraft(object, copy) {
+    assertMutable(object);
+    const copyState = state2(copy);
+    if (!copyState.detached || copyState.original !== object) {
+      throw new Error("apply_draft requires a draft created from this distant object");
+    }
+    const attributes = copy.collectDirtyAttributes();
+    if (Object.keys(attributes).length === 0) return object;
+    await requestWithGeneration("UPDATE", {
+      model: modelName(object),
+      id: object.id,
+      attributes: encodeValue(attributes)
+    });
+    copy.markClean();
+    return object;
+  }
+  async function dataDelete(object) {
+    assertMutable(object);
+    if (object.id == null) throw new Error("Cannot delete an unsaved distant object");
+    const name = modelName(object);
+    const id = String(object.id);
+    const { generation: removedGeneration } = await requestWithGeneration("DELETE", { model: name, id });
+    modelStore(name).delete(id);
+    modelTombstones(name).set(id, { object, generation: removedGeneration });
+    write(object, "deleted", true);
+    queuedDemands.delete(`${name}:${id}`);
+    disconnect(object);
+    pruneTombstones();
+    return object;
+  }
   function encodeArguments(args) {
     const encoded = [];
     for (const value of args) if (!isOmittedArgument(value)) encoded.push(encodeValue(value));
@@ -1546,6 +1647,7 @@
     return encoded;
   }
   function dataFieldWillAccess(object, name) {
+    if (state2(object).detached || object.isDeleted) return;
     const slot = fieldState(object, name);
     if (slot.status !== "unknown" || object.id == null) return;
     slot.status = "loading";
@@ -1596,6 +1698,9 @@
     return fieldState(object, name).error;
   }
   async function loadDataField(object, name, reload) {
+    if (state2(object).detached) throw new Error("A distant draft cannot hydrate fields");
+    if (object.isDeleted) throw new Error("A deleted distant object cannot hydrate fields");
+    if (object.id == null) throw new Error("An unsaved distant object cannot hydrate fields");
     const slot = fieldState(object, name);
     if (!reload && slot.status === "present") return object[name];
     slot.status = "loading";
@@ -1703,10 +1808,14 @@
     // Remote data
     configureData,
     closeData,
-    initializeRemoteData,
+    initializeDistantData,
     dataQuery,
     dataResolve,
     dataCommand,
+    dataSave,
+    dataDelete,
+    dataDraft,
+    applyDataDraft,
     dataFieldWillAccess,
     dataFieldLoaded,
     dataFieldLoading,
@@ -1753,7 +1862,11 @@
     Swill__Model__Collection: () => Swill__Model__Collection,
     Swill__Model__Dataset: () => Swill__Model__Dataset,
     Swill__Model__DirtyTracking: () => Swill__Model__DirtyTracking,
+    Swill__Model__DistantData: () => Swill__Model__DistantData,
+    Swill__Model__DistantData_ClassMethods: () => Swill__Model__DistantData_ClassMethods,
+    Swill__Model__DistantObject: () => Swill__Model__DistantObject,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
+    Swill__Model__Editable: () => Swill__Model__Editable,
     Swill__Model__Identity: () => Swill__Model__Identity,
     Swill__Model__Identity_ClassMethods: () => Swill__Model__Identity_ClassMethods,
     Swill__Model__JSONAPI: () => Swill__Model__JSONAPI,
@@ -1761,8 +1874,7 @@
     Swill__Model__Relationship: () => Swill__Model__Relationship,
     Swill__Model__Relationships: () => Swill__Model__Relationships,
     Swill__Model__Relationships_ClassMethods: () => Swill__Model__Relationships_ClassMethods,
-    Swill__Model__RemoteData: () => Swill__Model__RemoteData,
-    Swill__Model__RemoteData_ClassMethods: () => Swill__Model__RemoteData_ClassMethods,
+    Swill__Model__Resource: () => Swill__Model__Resource,
     Swill__Model__ResultSet: () => Swill__Model__ResultSet,
     Swill__Model__Store: () => Swill__Model__Store,
     Swill__Notification: () => Swill__Notification,
@@ -1784,9 +1896,13 @@
   // build/framework.classes.mjs
   function Swill__Observable(Superclass) {
     class Swill__Observable_Layer extends Superclass {
-      // I observe a property: my own, or another object's. Either way the
-      // receiver is the observer, so either way it retains the observation and
-      // lets it go when it deallocs.
+      // Observes a property, on the receiver or on +object+, calling +callback+
+      // with each new value. The receiver is the observer: it retains the
+      // observation and releases it on `dealloc`.
+      //
+      //     observe(:query, ->(value) { reload })
+      //     observe(document, :selection, ->(value) { reload })
+      //
       // sorbet-runtime will not wrap a method whose optional parameter comes
       // first, so this signature is static only.
       observeWithObject(object, name, callback) {
@@ -1796,35 +1912,38 @@
           callback
         ));
       }
-      // Cocoa's retain: I claim this disposer and am responsible for letting it
-      // go. Every disposer with my lifetime goes through here — an observation,
-      // a notification, a DOM listener, a binding's release.
+      // Claims ownership of +disposer+; the receiver releases it on `dealloc`.
+      // Anything with the receiver's lifetime goes through here — an
+      // observation, a notification, a DOM listener, a binding's release.
+      // Answers the disposer.
       retain(disposer) {
         return Runtime.retain(this, disposer);
       }
-      // Cocoa's release, the counterpart of retain: give one up before I go.
+      // Gives up a disposer ahead of `dealloc`.
       release(disposer) {
         return Runtime.release(this, disposer);
       }
-      // End of life: release everything retained, then leave the observation
-      // graph.
+      // Releases everything retained and leaves the observation graph. End of
+      // life for the object.
       dealloc() {
         return Runtime.dealloc(this);
       }
-      // Leave the observation graph without ending: stored values are kept and
+      // Leaves the observation graph without ending: stored values are kept and
       // computed properties resubscribe on the next read.
       disconnect() {
         return Runtime.disconnect(this);
       }
+      // Runs before a write lands, answering the value to store. Override it to
+      // coerce or to reject the write by raising.
       coercePropertyValue(name, value, previous) {
         return value;
       }
+      // Runs before a write lands, after coercion.
       propertyWillChange(name, previous, value) {
         return null;
       }
-      // Cocoa's -willAccessValueForKey:, and the third of the three hooks this
-      // framework speaks. A property declared will_access: notifies its object
-      // before the read resolves, so the value can load itself.
+      // Runs before a read resolves, for a property declared `will_access:`, so
+      // the value can load itself.
       propertyWillAccess(name) {
         return null;
       }
@@ -1866,6 +1985,9 @@
   }
   function Swill__ObjectBindings(Superclass) {
     class Swill__ObjectBindings_Layer extends Superclass {
+      // Keeps +target+ equal to +key_path+ on +to+, writing +null_placeholder+
+      // whenever the path has no value. Replaces any existing binding on
+      // +target+. Answers self.
       bind(...__swill_arguments) {
         let __swill_bound = Runtime.bindArguments(__swill_arguments, {
           positional: [{ name: "target", kind: "req" }],
@@ -1897,6 +2019,7 @@
         );
         return this;
       }
+      // Releases the binding on +target+, if any. Answers self.
       unbind(target) {
         let remaining = Runtime.cast(
           [],
@@ -1909,6 +2032,7 @@
         this._object_bindings = remaining;
         return this;
       }
+      // Releases every binding, as a controller does when it unloads.
       unbindAll() {
         this.objectBindings().forEach((binding) => binding.dispose.call(null));
         this._object_bindings = [];
@@ -2155,30 +2279,38 @@
     }
   };
   var Swill__Responder = class extends Swill__Object {
+    // The next link in the chain, or nil at the end of it.
     nextResponder() {
       return null;
     }
+    // Sends +name+ to the first responder in the chain that implements it.
+    // Raises when no responder does.
     performAction(name, sender, event) {
       let target = this.actionTarget(name);
       if (!target) throw new Error(`Unhandled action: ${name}`);
       return Runtime.performAction(target, name, sender, event);
     }
     // TODO: It's unclear to me that this is the right place to handle this bubbling.
+    // The responder that would handle +name+, or nil.
     actionTarget(name) {
       if (Runtime.isTruthy(Runtime.respondsTo(this, name))) return this;
       return Runtime.nilable(this.nextResponder()?.actionTarget(name));
     }
+    // Whether this responder will take focus. False here; a controller
+    // accepts when its region holds something focusable.
     acceptsFirstResponder() {
       return false;
     }
-    // Return false to refuse to become First Reponder.
+    // Called as this responder takes focus. Answer false to refuse it.
     becomeFirstResponder() {
       return true;
     }
-    // Return false to refuse to resign to the provided next Reaponder.
+    // Called as focus moves to +next_responder+. Answer false to keep it.
     resignFirstResponder(next_responder) {
       return true;
     }
+    // Routes Escape, Enter and Tab to their own hooks; anything else passes
+    // to the next responder.
     keyDown(event) {
       let target;
       switch (event.key) {
@@ -2193,24 +2325,29 @@
           if (target) return target.keyDown(event);
       }
     }
+    // Passes to the next responder.
     keyUp(event) {
       let target = this.nextResponder();
       if (target) return target.keyUp(event);
     }
+    // Escape. Dismiss what is open, or pass it along.
     cancelOperation(event) {
       let target = this.nextResponder();
       if (target) return target.cancelOperation(event);
     }
+    // Enter. Commit what is being edited, or pass it along.
     insertNewline(event) {
       let target = this.nextResponder();
       if (target) return target.insertNewline(event);
     }
+    // Tab. Complete what is being edited, or pass it along.
     complete(event) {
       let target = this.nextResponder();
       if (target) return target.complete(event);
     }
   };
   var Swill__View = class _Swill__View extends Swill__Responder {
+    // Wraps +element+, marking it managed.
     constructor(element) {
       super();
       this._element = element;
@@ -2219,9 +2356,12 @@
       this._subviews = Runtime.cast([], "T::Array[View]");
       element.__swill_view__ = this;
     }
+    // The element this view wraps.
     element() {
       return this._element;
     }
+    // The controller rooted here, or nil when this view is not a controller
+    // root. Use #owner to find the controller a view belongs to.
     controllerValue() {
       return this._controller;
     }
@@ -2229,6 +2369,7 @@
       this._controller = controller;
       return this._controller;
     }
+    // The view that adopted this one, or nil.
     superview() {
       return this._superview;
     }
@@ -2243,6 +2384,8 @@
       if (own) return own;
       return Runtime.nilable(this._superview?.owner());
     }
+    // Takes +child+ into this view, releasing it from any previous superview.
+    // Structural only: it does not awaken or lay anything out.
     adoptSubview(child) {
       let previous = child.superview();
       if (previous) previous.releaseSubview(child);
@@ -2250,10 +2393,12 @@
       Runtime.append(this._subviews, child);
       return child;
     }
+    // Drops +child+ from this view.
     releaseSubview(child) {
       this._subviews = this._subviews.filter((candidate) => candidate !== child);
       return child.assignSuperview(null);
     }
+    // Drops this view from its superview, if it has one.
     removeFromSuperview() {
       let superview = this._superview;
       if (superview) return superview.releaseSubview(this);
@@ -2263,6 +2408,7 @@
       this._superview = superview;
       return this._superview;
     }
+    // The controller rooted here, else the superview.
     nextResponder() {
       return this._controller || this._superview;
     }
@@ -2273,9 +2419,11 @@
       let view = _Swill__View.of(element);
       return view ? view.controllerValue() : null;
     }
+    // Whether the element carries +name+.
     hasAttribute(name) {
       return this._element.hasAttribute(name);
     }
+    // Whether +element+ lies within this view's element.
     contains(element) {
       return this._element.contains(element);
     }
@@ -2285,12 +2433,15 @@
       let node = template.content.firstElementChild;
       return node ? node.cloneNode(true) : null;
     }
+    // Appends +element+ to this view's element.
     append(element) {
       return this._element.appendChild(element);
     }
+    // Inserts +element+ after +anchor+.
     insertAfter(anchor, element) {
       return anchor.after(element);
     }
+    // Removes +element+ from the document.
     remove(element) {
       return element.remove();
     }
@@ -2312,6 +2463,7 @@
       this.mark(element, "selected", on);
       return element.setAttribute("aria-selected", on ? "true" : "false");
     }
+    // Scrolls the nearest ancestor just far enough to bring +element+ into view.
     reveal(element) {
       return element.scrollIntoView({ block: "nearest" });
     }
@@ -2346,6 +2498,7 @@
       return () => this._element.removeEventListener(type, handler, capture);
     }
     // ---- focus ----
+    // The selector deciding what counts as focusable. Override to widen it.
     focusableSelector() {
       return "input, select, textarea, button, [tabindex]";
     }
@@ -2353,10 +2506,12 @@
     firstFocusableElement() {
       return this._element.matches(this.focusableSelector()) ? this._element : this._element.querySelector(this.focusableSelector());
     }
+    // Focuses the first focusable element, if there is one.
     focusElement() {
       let target = this.firstFocusableElement();
       if (target) return target.focus();
     }
+    // Blurs the first focusable element, if there is one.
     blurElement() {
       let target = this.firstFocusableElement();
       if (target) return target.blur();
@@ -2366,6 +2521,7 @@
     acceptsFirstResponder() {
       return true;
     }
+    // Focuses the element.
     becomeFirstResponder() {
       this.focusElement();
       return true;
@@ -2682,11 +2838,13 @@
     bindingRoot() {
       return null;
     }
+    // Adopts +element+ as this controller's root view. Answers self.
     attach(element) {
       this._view = Swill__View.of(element) || new Swill__View(element);
       this._view.controller = this;
       return this;
     }
+    // The root view of this controller's region.
     view() {
       return this._view;
     }
@@ -2716,24 +2874,26 @@
         callback
       ));
     }
-    // Releases this controller's bindings, everything it retained, and its own
-    // observation state, then its descendants, exactly once. The element keeps
-    // its View, so the region can be awakened again later.
-    // A controller can be first responder when its view has something to
-    // focus; becoming and resigning move DOM focus accordingly.
+    // True when the region holds something focusable.
     acceptsFirstResponder() {
       return this._view.firstFocusableElement() != null;
     }
+    // Focuses the first focusable element in the region.
     becomeFirstResponder() {
       if (!super.becomeFirstResponder()) return false;
       this._view.focusElement();
       return true;
     }
+    // Blurs the focused element. Answers false to refuse the change.
     resignFirstResponder(next_responder) {
       if (!super.resignFirstResponder(next_responder)) return false;
       this._view.blurElement();
       return true;
     }
+    // Releases this controller's bindings, everything it retained, and its own
+    // observation state, then its descendants, exactly once. The element keeps
+    // its View, so the region can be awakened again later. Calling it twice is
+    // harmless.
     unload() {
       if (this._view.controllerValue() !== this) return;
       this.viewWillDisappear();
@@ -2751,9 +2911,14 @@
     decodeOutletData(name, value) {
       return value;
     }
+    // Object setup that depends on nothing outside the controller. Outlets are
+    // still nil and no binding has fired.
     viewDidLoad() {
       return null;
     }
+    // Outlets are connected, bindings have pushed their initial values, actions
+    // are live, and child controllers are wired. Decoded JSON outlet data is
+    // available here.
     awakeFromDOM() {
       return null;
     }
@@ -2763,18 +2928,24 @@
     controllerDidRestore(restored) {
       return null;
     }
+    // The whole region, including any restored values, is in place. Runs once
+    // per controller instance.
     controllerDidLoad() {
       return null;
     }
+    // The region is about to appear. Runs each time it is awakened.
     viewWillAppear() {
       return null;
     }
+    // The region has appeared.
     viewDidAppear() {
       return null;
     }
+    // The region is about to go away, before anything it owns is released.
     viewWillDisappear() {
       return null;
     }
+    // The region is gone and everything it owned has been released.
     viewDidDisappear() {
       return null;
     }
@@ -3004,7 +3175,10 @@
       let disposers = this.ownedMatching(element, "[data-action]").map((target) => this.wireElement(controller, target));
       return () => disposers.forEach((dispose) => dispose());
     }
-    // data-action="name" on click, or "event:name".
+    // Connects a given element with a `data-action` parameter to a Controller
+    // with a corresponding action.
+    //
+    // Returns a disposer Proc that severs this association.
     wireElement(controller, element) {
       let event_name, action_name;
       if (element.__swill_action__) return () => null;
@@ -3437,6 +3611,7 @@
         return this._running;
       }
     }
+    // Creates the application. Call #launch to start it.
     constructor() {
       super();
       this._windows = Runtime.cast([], "T::Array[Window]");
@@ -3453,6 +3628,9 @@
       );
       this._observer = null;
     }
+    // Starts the application at +root+: awakens the markup beneath it,
+    // restores window content from the URL fragment, and begins watching for
+    // content added later. One application runs per page.
     launch(root) {
       if (_Swill__Application.isRunning()) {
         throw new Error("An application is already running");
@@ -3490,6 +3668,7 @@
     controllers() {
       return this._controllers;
     }
+    // The element the application was launched at.
     root() {
       return this._root;
     }
@@ -3514,9 +3693,11 @@
       this.assignFirstResponder(null);
       return _Swill__Application.terminated(this);
     }
+    // The application is running and its markup is awake.
     applicationDidLaunch() {
       return null;
     }
+    // The application is about to stop. Everything it owns is still alive.
     applicationWillTerminate() {
       return null;
     }
@@ -3613,6 +3794,8 @@
       ;
       return window;
     }
+    // Closes the window +controller+ belongs to, restoring the first responder
+    // it displaced.
     dismiss(controller) {
       let window = this.windowContaining(controller);
       if (!window) return false;
@@ -3625,9 +3808,11 @@
       ;
       return true;
     }
+    // The window with +name+, or nil.
     windowNamed(name) {
       return this._windows.find((window) => this.matchesContainer(window, name));
     }
+    // Whether content named +name+ exists to be loaded into a window.
     isWindowContent(name) {
       return (this._captured[name] || this.windowTemplate(name)) != null;
     }
@@ -4792,20 +4977,6 @@
     Object.setPrototypeOf(Swill__Model__Attributes_ClassMethods_Layer.prototype, Superclass);
     return Swill__Model__Attributes_ClassMethods_Layer.prototype;
   }
-  function Swill__Model__Relationships(Superclass) {
-    class Swill__Model__Relationships_Layer extends Superclass {
-    }
-    return Swill__Model__Relationships_Layer;
-  }
-  function Swill__Model__Relationships_ClassMethods(Superclass) {
-    class Swill__Model__Relationships_ClassMethods_Layer extends Object {
-      modelRelationships() {
-        return Runtime.inheritableRegistry(this, "modelRelationships", "hash");
-      }
-    }
-    Object.setPrototypeOf(Swill__Model__Relationships_ClassMethods_Layer.prototype, Superclass);
-    return Swill__Model__Relationships_ClassMethods_Layer.prototype;
-  }
   function Swill__Model__DirtyTracking(Superclass) {
     class Swill__Model__DirtyTracking_Layer extends Superclass {
       dirty() {
@@ -4873,10 +5044,28 @@
     }
     return Swill__Model__Drafts_Layer;
   }
+  var Swill__Model__Base = class extends Swill__Object {
+  };
+  var Swill__Model__Editable = class extends Swill__Model__Base {
+  };
+  function Swill__Model__Relationships(Superclass) {
+    class Swill__Model__Relationships_Layer extends Superclass {
+    }
+    return Swill__Model__Relationships_Layer;
+  }
+  function Swill__Model__Relationships_ClassMethods(Superclass) {
+    class Swill__Model__Relationships_ClassMethods_Layer extends Object {
+      modelRelationships() {
+        return Runtime.inheritableRegistry(this, "modelRelationships", "hash");
+      }
+    }
+    Object.setPrototypeOf(Swill__Model__Relationships_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Model__Relationships_ClassMethods_Layer.prototype;
+  }
   var Swill__Model__Store = class extends Swill__Object {
     constructor() {
       super();
-      this._instances = Runtime.cast({}, "T::Hash[String, Base]");
+      this._instances = Runtime.cast({}, "T::Hash[String, Resource]");
     }
     get(id) {
       return Object.hasOwn(this._instances, id) ? this._instances[id] : null;
@@ -4980,38 +5169,76 @@
   };
   var Swill__Model__ResultSet = class extends Swill__Model__Collection {
   };
-  function Swill__Model__RemoteData(Superclass) {
-    class Swill__Model__RemoteData_Layer extends Superclass {
+  function Swill__Model__DistantData(Superclass) {
+    class Swill__Model__DistantData_Layer extends Superclass {
+      // :nodoc:
+      // :nodoc:
+      // Declares the authoritative server model name used on the wire.
+      // Declares a partially loadable scalar field.
+      // Declares a partially loadable to-one relationship.
+      // Declares a partially loadable to-many relationship.
+      // Whether +name+ has an authoritative value, including nil.
       isFieldLoaded(name) {
         return Runtime.dataFieldLoaded(this, name);
       }
+      // Whether +name+ currently has a request in flight.
       isFieldLoading(name) {
         return Runtime.dataFieldLoading(this, name);
       }
+      // The last loading error for +name+, if any.
       fieldError(name) {
         return Runtime.dataFieldError(this, name);
       }
+      // Loads +name+ explicitly and returns its value.
       loadField(name) {
         return Runtime.loadDataField(this, name, false);
       }
+      // Loads +name+ again even when it already has a value.
       reloadField(name) {
         return Runtime.loadDataField(this, name, true);
       }
     }
-    return Swill__Model__RemoteData_Layer;
+    return Swill__Model__DistantData_Layer;
   }
-  function Swill__Model__RemoteData_ClassMethods(Superclass) {
-    class Swill__Model__RemoteData_ClassMethods_Layer extends Object {
-      remoteFields() {
-        return Runtime.inheritableRegistry(this, "remoteFields", "hash");
+  function Swill__Model__DistantData_ClassMethods(Superclass) {
+    class Swill__Model__DistantData_ClassMethods_Layer extends Object {
+      dataFields() {
+        return Runtime.inheritableRegistry(this, "dataFields", "hash");
       }
-      remoteModelName(...values) {
-        return Runtime.classSetting(this, "remote_model_name", values);
+      dataModelName(...values) {
+        return Runtime.classSetting(this, "data_model_name", values);
       }
     }
-    Object.setPrototypeOf(Swill__Model__RemoteData_ClassMethods_Layer.prototype, Superclass);
-    return Swill__Model__RemoteData_ClassMethods_Layer.prototype;
+    Object.setPrototypeOf(Swill__Model__DistantData_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Model__DistantData_ClassMethods_Layer.prototype;
   }
+  var Swill__Model__DistantObject = class extends Swill__Model__Editable {
+    // Initializes partial-field tracking for the generated declarations.
+    constructor() {
+      super();
+      Runtime.initializeDistantData(this);
+    }
+    // Schedules hydration when a declared member is unknown.
+    propertyWillAccess(name) {
+      super.propertyWillAccess(name);
+      if (Object.hasOwn(this.constructor.dataFields(), name)) {
+        return Runtime.dataFieldWillAccess(this, name);
+      }
+    }
+    async save() {
+      return await Runtime.dataSave(this);
+    }
+    async applyDraft(copy) {
+      return await Runtime.applyDataDraft(this, copy);
+    }
+    async delete() {
+      return await Runtime.dataDelete(this);
+    }
+    // Returns a detached editable copy that never hydrates independently.
+    draft() {
+      return Runtime.dataDraft(this);
+    }
+  };
   var Swill__Model__Relationship = class extends Swill__Object {
     constructor(descriptor) {
       super();
@@ -5140,7 +5367,7 @@
     static materialize(resource) {
       let raw_type = resource.type;
       let type = `${raw_type}`;
-      let model_class = Swill__Model__Base.classForType(type);
+      let model_class = Swill__Model__Resource.classForType(type);
       if (!model_class) {
         Runtime.warn(`no model class declares resource_type ${type}`);
         return null;
@@ -5161,7 +5388,7 @@
     }
     static pooled(resource) {
       let raw_type = resource.type;
-      let model_class = Swill__Model__Base.classForType(`${raw_type}`);
+      let model_class = Swill__Model__Resource.classForType(`${raw_type}`);
       let id = resource.id;
       if (!Runtime.isTruthy(model_class && id != null)) return null;
       return model_class.get(`${id}`);
@@ -5227,14 +5454,14 @@
       return this;
     }
   };
-  var Swill__Model__Base = class extends Swill__Object {
+  var Swill__Model__Resource = class extends Swill__Model__Editable {
+    // Creates an empty resource with no relationship requests in flight.
     constructor() {
       super();
       this._relationship_requests = Runtime.cast(
         {},
         "T::Hash[String, T.untyped]"
       );
-      Runtime.initializeRemoteData(this);
     }
     static classForType(type) {
       return Runtime.classWithSetting("resource_type", type);
@@ -5282,9 +5509,6 @@
     static dataset(url, params) {
       return new Swill__Model__Dataset(this, url, params);
     }
-    // ---- writing ----
-    // An error message that refuses a save, or nil. Attribute validators
-    // run as values are written; this is the whole record's check.
     validate() {
       return null;
     }
@@ -5332,7 +5556,6 @@
       this.markClean();
       return this;
     }
-    // ---- relationships ----
     relationships() {
       let descriptors = Runtime.cast(
         Object.values(this.constructor.modelRelationships()),
@@ -5354,9 +5577,6 @@
     isRelationshipLoaded(name) {
       return Runtime.read(this, `${name}_loaded`) === true;
     }
-    // A relationship's value, assigned here or hydrated from a document.
-    // Assignment is a load: whatever the value came from, the relationship
-    // is loaded and has no failure to report.
     assignRelationship(name, value) {
       Runtime.write(this, name, value);
       Runtime.write(this, `${name}_error`, null);
@@ -5372,18 +5592,8 @@
       ;
       return await this.reloadRelationship(name);
     }
-    // Cocoa's -willAccessValueForKey:. A relationship nobody prefetched
-    // loads itself when it is first read: the value answers what it has,
-    // and fills in when the request lands. The guard is what keeps a
-    // re-render from re-requesting, and a remembered failure is part of it;
-    // reload_<name> is how an application asks again.
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
-      if (Object.hasOwn(this.constructor.remoteFields(), name)) {
-        Runtime.dataFieldWillAccess(this, name);
-        return;
-      }
-      ;
       if (this.id == null) return;
       if (!Runtime.isTruthy(this.constructor.modelRelationships()[name])) return;
       if (this.isRelationshipLoaded(name)) return;
@@ -5531,11 +5741,6 @@
           }
         }
       },
-      "Swill::Model::Relationships": {
-        factory: Swill__Model__Relationships,
-        classFactory: Swill__Model__Relationships_ClassMethods,
-        methods: {}
-      },
       "Swill::Model::DirtyTracking": {
         factory: Swill__Model__DirtyTracking,
         methods: {
@@ -5576,14 +5781,19 @@
           }
         }
       },
+      "Swill::Model::Relationships": {
+        factory: Swill__Model__Relationships,
+        classFactory: Swill__Model__Relationships_ClassMethods,
+        methods: {}
+      },
       "Swill::Model::Identity": {
         factory: Swill__Model__Identity,
         classFactory: Swill__Model__Identity_ClassMethods,
         methods: {}
       },
-      "Swill::Model::RemoteData": {
-        factory: Swill__Model__RemoteData,
-        classFactory: Swill__Model__RemoteData_ClassMethods,
+      "Swill::Model::DistantData": {
+        factory: Swill__Model__DistantData,
+        classFactory: Swill__Model__DistantData_ClassMethods,
         methods: {
           "field_loaded?": {
             "arity": 1,
@@ -7116,6 +7326,47 @@
           }
         }
       },
+      "Swill::Model::Base": {
+        constructor: Swill__Model__Base,
+        mixins: [Swill__Model__Attributes],
+        properties: {
+          "id": {
+            type: "T.nilable(String)",
+            attribute: true,
+            key: "id",
+            defaultValue() {
+              return null;
+            }
+          }
+        },
+        registries: {
+          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null } }
+        },
+        methods: {}
+      },
+      "Swill::Model::Editable": {
+        constructor: Swill__Model__Editable,
+        mixins: [Swill__Model__DirtyTracking, Swill__Model__Drafts],
+        properties: {
+          "dirty_attributes": {
+            js: "dirtyAttributes",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "dirty?": {
+            js: "isDirty",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_isDirty() {
+              return !Runtime.isEmpty(this.dirtyAttributes);
+            }
+          }
+        },
+        methods: {}
+      },
       "Swill::Model::Store": {
         constructor: Swill__Model__Store,
         properties: {},
@@ -7211,6 +7462,49 @@
         properties: {},
         methods: {}
       },
+      "Swill::Model::DistantObject": {
+        constructor: Swill__Model__DistantObject,
+        mixins: [Swill__Model__DistantData],
+        properties: {
+          "deleted": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "deleted?": {
+            js: "isDeleted",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_isDeleted() {
+              return this.deleted;
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "property_will_access": {
+            "arity": 1,
+            "js": "propertyWillAccess"
+          },
+          "save": {
+            "arity": 0
+          },
+          "apply_draft": {
+            "arity": 1,
+            "js": "applyDraft"
+          },
+          "delete": {
+            "arity": 0
+          },
+          "draft": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::Model::Relationship": {
         constructor: Swill__Model__Relationship,
         properties: {},
@@ -7293,38 +7587,10 @@
           }
         }
       },
-      "Swill::Model::Base": {
-        constructor: Swill__Model__Base,
-        mixins: [Swill__Model__Attributes, Swill__Model__Relationships, Swill__Model__DirtyTracking, Swill__Model__Drafts, Swill__Model__Identity, Swill__Model__RemoteData],
-        properties: {
-          "dirty_attributes": {
-            js: "dirtyAttributes",
-            type: "T::Array[T.untyped]",
-            attribute: false,
-            defaultValue() {
-              return [];
-            }
-          },
-          "dirty?": {
-            js: "isDirty",
-            type: "T::Boolean",
-            attribute: false,
-            compute: function compute_isDirty() {
-              return !Runtime.isEmpty(this.dirtyAttributes);
-            }
-          },
-          "id": {
-            type: "T.nilable(String)",
-            attribute: true,
-            key: "id",
-            defaultValue() {
-              return null;
-            }
-          }
-        },
-        registries: {
-          modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null } }
-        },
+      "Swill::Model::Resource": {
+        constructor: Swill__Model__Resource,
+        mixins: [Swill__Model__Relationships, Swill__Model__Identity],
+        properties: {},
         methods: {
           "initialize": {
             "arity": 0
@@ -7482,11 +7748,16 @@
     const ValueTransformer = definitions.Swill__ValueTransformer;
     const Model = Object.freeze({
       Base: definitions.Swill__Model__Base,
+      Editable: definitions.Swill__Model__Editable,
+      Resource: definitions.Swill__Model__Resource,
+      DistantObject: definitions.Swill__Model__DistantObject,
       Store: definitions.Swill__Model__Store,
       Codec: definitions.Swill__Model__Codec,
       PlainJSON: definitions.Swill__Model__PlainJSON,
       JSONAPI: definitions.Swill__Model__JSONAPI,
-      Dataset: definitions.Swill__Model__Dataset
+      Dataset: definitions.Swill__Model__Dataset,
+      Collection: definitions.Swill__Model__Collection,
+      ResultSet: definitions.Swill__Model__ResultSet
     });
     const roots = /* @__PURE__ */ new Set([
       Controller,

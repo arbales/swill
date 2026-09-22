@@ -3,7 +3,7 @@
 module Demo
   # Records the runtime tests persist through a fake fetch: JSON:API authors
   # with their books, and plain JSON notes.
-  class Book < Swill::Model::Base
+  class Book < Swill::Model::Resource
     endpoint "/api/books"
     resource_type "books"
 
@@ -11,7 +11,7 @@ module Demo
     has_one :author, type: "Author", key: "author"
   end
 
-  class Author < Swill::Model::Base
+  class Author < Swill::Model::Resource
     extend T::Sig
 
     endpoint "/api/authors"
@@ -27,7 +27,7 @@ module Demo
     end
   end
 
-  class Note < Swill::Model::Base
+  class Note < Swill::Model::Resource
     endpoint "/api/notes"
     codec Swill::Model::PlainJSON
 

@@ -113,11 +113,16 @@ export function browserAPI(definitions, Runtime) {
   const ValueTransformer = definitions.Swill__ValueTransformer;
   const Model = Object.freeze({
     Base: definitions.Swill__Model__Base,
+    Editable: definitions.Swill__Model__Editable,
+    Resource: definitions.Swill__Model__Resource,
+    DistantObject: definitions.Swill__Model__DistantObject,
     Store: definitions.Swill__Model__Store,
     Codec: definitions.Swill__Model__Codec,
     PlainJSON: definitions.Swill__Model__PlainJSON,
     JSONAPI: definitions.Swill__Model__JSONAPI,
-    Dataset: definitions.Swill__Model__Dataset
+    Dataset: definitions.Swill__Model__Dataset,
+    Collection: definitions.Swill__Model__Collection,
+    ResultSet: definitions.Swill__Model__ResultSet
   });
   const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList,
     Control, TextField, Select, CustomSelect]);

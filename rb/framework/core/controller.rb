@@ -2,6 +2,27 @@
 # frozen_string_literal: true
 
 module Swill
+  # Owns a region of the document and the objects behind it.
+  #
+  # A controller's region runs from its root element down to the next element
+  # carrying a `controller` attribute, which belongs to that controller
+  # instead. Within its own region it connects outlets, wires bindings and
+  # actions, and answers to the responder chain.
+  #
+  # A subclass declares what it needs and overrides the hooks it cares about:
+  #
+  #     class SearchController < Swill::Controller
+  #       outlet :results, type: Swill::View
+  #       property :query, type: String, default: ""
+  #       restorable :query, key: :q
+  #
+  #       def awake_from_dom
+  #         observe(:query, ->(value) { reload })
+  #       end
+  #     end
+  #
+  # See the Lifecycle guide for when each hook runs, and
+  # the Bindings guide for how markup reaches these properties.
   class Controller < Responder
     extend T::Sig
     include ObjectBindings
@@ -33,6 +54,7 @@ module Swill
       nil
     end
 
+    # Adopts +element+ as this controller's root view. Answers self.
     sig { params(element: Element).returns(Controller) }
     def attach(element)
       @view = View.of(element) || View.new(element)
@@ -40,6 +62,7 @@ module Swill
       self
     end
 
+    # The root view of this controller's region.
     sig { returns(View) }
     def view
       @view
@@ -78,16 +101,13 @@ module Swill
       retain(NotificationCenter.default.add_observer(name, callback))
     end
 
-    # Releases this controller's bindings, everything it retained, and its own
-    # observation state, then its descendants, exactly once. The element keeps
-    # its View, so the region can be awakened again later.
-    # A controller can be first responder when its view has something to
-    # focus; becoming and resigning move DOM focus accordingly.
+    # True when the region holds something focusable.
     sig { override.returns(T::Boolean) }
     def accepts_first_responder?
       @view.first_focusable_element != nil
     end
 
+    # Focuses the first focusable element in the region.
     sig { override.returns(T::Boolean) }
     def become_first_responder
       return false unless super
@@ -95,6 +115,7 @@ module Swill
       true
     end
 
+    # Blurs the focused element. Answers false to refuse the change.
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
     def resign_first_responder(next_responder)
       return false unless super(next_responder)
@@ -102,6 +123,10 @@ module Swill
       true
     end
 
+    # Releases this controller's bindings, everything it retained, and its own
+    # observation state, then its descendants, exactly once. The element keeps
+    # its View, so the region can be awakened again later. Calling it twice is
+    # harmless.
     sig { void }
     def unload
       return if @view.controller_value != self
@@ -124,9 +149,14 @@ module Swill
       value
     end
 
+    # Object setup that depends on nothing outside the controller. Outlets are
+    # still nil and no binding has fired.
     sig { void }
     def view_did_load; end
 
+    # Outlets are connected, bindings have pushed their initial values, actions
+    # are live, and child controllers are wired. Decoded JSON outlet data is
+    # available here.
     sig { void }
     def awake_from_dom; end
 
@@ -136,23 +166,29 @@ module Swill
     sig { params(restored: T::Boolean).void }
     def controller_did_restore(restored); end
 
+    # The whole region, including any restored values, is in place. Runs once
+    # per controller instance.
     sig { void }
     def controller_did_load; end
 
+    # The region is about to appear. Runs each time it is awakened.
     sig { void }
     def view_will_appear; end
 
+    # The region has appeared.
     sig { void }
     def view_did_appear; end
 
+    # The region is about to go away, before anything it owns is released.
     sig { void }
     def view_will_disappear; end
 
+    # The region is gone and everything it owned has been released.
     sig { void }
     def view_did_disappear; end
 
     sig { params(view: View, found: T::Array[Controller]).void }
-    def collect_child_controllers(view, found)
+    def collect_child_controllers(view, found) # :nodoc:
       view.subviews.each do |subview|
         controller = subview.controller_value
         if controller

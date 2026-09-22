@@ -2,8 +2,23 @@
 
 module Swill
   module Data
-    # Remote operations declared on authoritative server models.
+    # Client schema and data operations declared on authoritative models.
     module Declarations
+      def swill_client_model
+        return @swill_client_model if instance_variable_defined?(:@swill_client_model)
+        superclass.respond_to?(:swill_client_model) ? superclass.swill_client_model : nil
+      end
+
+      def client_model(fields:, relationships: [], writable: [])
+        raise ArgumentError, "duplicate client_model declaration" if instance_variable_defined?(:@swill_client_model)
+
+        @swill_client_model = {
+          "fields" => Array(fields).map(&:to_s),
+          "relationships" => Array(relationships).map(&:to_s),
+          "writable" => Array(writable).map(&:to_s)
+        }
+      end
+
       def swill_data_operations
         inherited = superclass.respond_to?(:swill_data_operations) ? superclass.swill_data_operations : {}
         inherited.merge(@swill_data_operations || {})
@@ -26,7 +41,7 @@ module Swill
       def declare_remote(kind, name, returns:, projection:)
         @swill_data_operations ||= {}
         key = name.to_s
-        raise ArgumentError, "duplicate remote operation #{key}" if @swill_data_operations.key?(key)
+        raise ArgumentError, "duplicate data operation #{key}" if @swill_data_operations.key?(key)
 
         @swill_data_operations[key] = {
           "kind" => kind.to_s,

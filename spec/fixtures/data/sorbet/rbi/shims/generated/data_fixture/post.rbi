@@ -1,7 +1,7 @@
 # typed: true
 
 module DataFixture
-  class Post < Swill::Model::Base
+  class Post < Swill::Model::DistantObject
     sig { returns(Integer) }
     def author_id; end
     sig { returns(T.nilable(String)) }

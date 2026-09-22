@@ -1,7 +1,7 @@
 # typed: true
 
 module DataFixture
-  class Comment < Swill::Model::Base
+  class Comment < Swill::Model::DistantObject
     sig { returns(Integer) }
     def author_id; end
     sig { returns(String) }

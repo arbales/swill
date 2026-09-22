@@ -115,7 +115,7 @@ module Swill
     def self.data_field_will_access(object, name); end
 
     sig { params(object: T.untyped).void }
-    def self.initialize_remote_data(object); end
+    def self.initialize_distant_data(object); end
 
     sig { void }
     def self.close_data; end
@@ -140,6 +140,18 @@ module Swill
 
     sig { params(object: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
     def self.data_command(object, name, arguments, keywords); end
+
+    sig { params(object: T.untyped).returns(T.untyped) }
+    def self.data_save(object); end
+
+    sig { params(object: T.untyped).returns(T.untyped) }
+    def self.data_delete(object); end
+
+    sig { params(object: T.untyped).returns(T.untyped) }
+    def self.data_draft(object); end
+
+    sig { params(object: T.untyped, copy: T.untyped).returns(T.untyped) }
+    def self.apply_data_draft(object, copy); end
 
     # Declaration-time helpers. These run while a class body is evaluated on
     # MRI and are never compiled into the browser.

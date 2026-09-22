@@ -2,16 +2,16 @@
 # frozen_string_literal: true
 
 module DataFixture
-  class Post < Swill::Model::Base
-    remote_model "DataFixture::Post"
-    remote_attribute :author_id, type: Integer
-    remote_attribute :body, type: T.nilable(String)
-    remote_attribute :excerpt, type: T.nilable(String)
-    remote_attribute :published, type: T::Boolean
-    remote_attribute :published_at, type: T.nilable(Time)
-    remote_attribute :title, type: String
-    remote_has_one :author, model: "DataFixture::User"
-    remote_has_many :comments, model: "DataFixture::Comment"
+  class Post < Swill::Model::DistantObject
+    model_name "DataFixture::Post"
+    attribute :author_id, type: Integer
+    attribute :body, type: T.nilable(String)
+    attribute :excerpt, type: T.nilable(String)
+    attribute :published, type: T::Boolean
+    attribute :published_at, type: T.nilable(Time)
+    attribute :title, type: String
+    has_one :author, model: "DataFixture::User"
+    has_many :comments, model: "DataFixture::Comment"
 
     sig { returns(T::Boolean) }
     async def invalid_publish!()
