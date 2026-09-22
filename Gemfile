@@ -11,6 +11,7 @@ gem "msgpack"
 gem "sequel"
 gem "sequel-privacy"
 group :development do
+  gem "hanna"
   gem "async-websocket"
   gem "falcon"
   gem "roda"

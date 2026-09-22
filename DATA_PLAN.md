@@ -111,7 +111,9 @@ General JSON:API persistence, arbitrary `where`, `save`, `delete`, and codec API
 
 ### 1. Privacy execution context
 
-Add an operation-scoped cache API to `sequel-privacy`. Policy results and `single_match` state must live in the current thread/fiber execution context and be discarded when the operation block exits.
+Use `sequel-privacy`'s `with_cache_scope` API. Policy results and `single_match`
+state live in the current thread/fiber execution context and are discarded when
+the operation block exits.
 
 Reuse one viewer context for the lifetime of a WebSocket connection. Every query, resolver, command, and hydration batch runs inside a fresh policy-cache scope with that VC.
 

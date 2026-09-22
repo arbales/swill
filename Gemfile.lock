@@ -50,6 +50,7 @@ GEM
       fiber-local (~> 1.1)
       json
     drb (2.2.3)
+    erb (6.0.7)
     falcon (0.57.0)
       async
       async-container (~> 0.20)
@@ -67,6 +68,8 @@ GEM
     fiber-local (1.1.0)
       fiber-storage
     fiber-storage (1.0.1)
+    hanna (1.5.1)
+      rdoc (>= 4, != 6.13.0)
     io-endpoint (0.18.0)
       openssl (>= 3.3.0)
     io-event (1.22.0)
@@ -80,7 +83,6 @@ GEM
     localhost (1.8.0)
       bake
     logger (1.7.0)
-    mini_portile2 (2.8.9)
     minitest (6.0.6)
       drb (~> 2.0)
       prism (~> 1.5)
@@ -113,6 +115,11 @@ GEM
     rbs (4.2.0)
       logger
       prism (>= 1.6.0)
+      tsort
+    rdoc (8.0.0)
+      erb
+      prism (>= 1.6.0)
+      rbs (>= 4.0.0)
       tsort
     regexp_parser (2.12.0)
     roda (3.108.0)
@@ -148,7 +155,7 @@ GEM
       console (~> 1.0)
     sequel (5.108.0)
       bigdecimal
-    sequel-privacy (0.7.0)
+    sequel-privacy (0.7.1)
       sequel (~> 5.0)
       sorbet-runtime (~> 0.5)
     sorbet (0.6.13506)
@@ -157,8 +164,6 @@ GEM
     sorbet-static (0.6.13506-aarch64-linux)
     sorbet-static (0.6.13506-universal-darwin)
     sorbet-static (0.6.13506-x86_64-linux)
-    sqlite3 (2.9.6)
-      mini_portile2 (~> 2.8.0)
     sqlite3 (2.9.6-aarch64-linux-gnu)
     sqlite3 (2.9.6-arm64-darwin)
     sqlite3 (2.9.6-x86_64-darwin)
@@ -178,6 +183,7 @@ PLATFORMS
 DEPENDENCIES
   async-websocket
   falcon
+  hanna
   kanayago (~> 0.9.0)
   minitest
   msgpack

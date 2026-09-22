@@ -22,7 +22,7 @@ module Swill
       def use(&block)
         previous = Thread.current[KEY]
         Thread.current[KEY] = self
-        PrivacyScope.use(&block)
+        Sequel::Privacy.with_cache_scope(&block)
       ensure
         Thread.current[KEY] = previous
       end
