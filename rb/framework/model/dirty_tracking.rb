@@ -25,7 +25,7 @@ module Swill
       # The dirty attributes' values by wire key: what a PATCH carries.
       sig { returns(T::Hash[T.untyped, T.untyped]) }
       def collect_dirty_attributes
-        Swill::Runtime.collect_attributes(self, dirty_attributes)
+        collect_selected_attributes(dirty_attributes)
       end
 
       sig { returns(T.untyped) }
@@ -52,7 +52,8 @@ module Swill
       def property_will_change(name, previous, value)
         super(name, previous, value)
         return if (@dirty_suspensions || 0) > 0
-        return unless Swill::Runtime.isAttribute(self, name)
+        attributes = T.cast(self.class.model_attributes, T::Hash[String, T.untyped])
+        return unless attributes.key?("#{name}")
         mark_attribute_dirty(name, previous, value)
       end
 

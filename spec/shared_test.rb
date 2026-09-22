@@ -11,6 +11,7 @@ require_relative "../rb/framework/model/relationships"
 require_relative "../rb/framework/model/store"
 require_relative "../rb/framework/model/identity"
 require_relative "../rb/framework/model/collection"
+require_relative "../rb/framework/model/distant_client"
 require_relative "../rb/framework/model/distant_data"
 require_relative "../rb/framework/model/distant_object"
 require_relative "../rb/framework/model/relationship"
@@ -46,6 +47,12 @@ class SharedTest < Minitest::Test
     assert_respond_to distant.class, :data_model_name
     refute_respond_to distant.class, :endpoint
     refute_respond_to distant.class, :store
+
+    distant.id = "1"
+    copy = distant.draft
+    refute distant.draft?
+    assert copy.draft?
+    assert_equal "1", copy.id
   end
 
   def test_model_attribute_registry_on_mri

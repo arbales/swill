@@ -16,7 +16,6 @@ module Swill
   # id yet, once the collection changes. That is the path to restore.
   class Controller::List < Controller
     extend T::Sig
-    include Ownership
 
     # NSTableHeaderView analog; never a row.
     outlet :header_view, type: Swill::View, optional: true
@@ -208,7 +207,7 @@ module Swill
     sig { returns(T::Array[Element]) }
     def row_elements
       found = T.let([], T::Array[Element])
-      each_child(container, ->(child) { found << child if child.tagName != "TEMPLATE" && row_element?(child) })
+      DOM.each_child(container, ->(child) { found << child if child.tagName != "TEMPLATE" && row_element?(child) })
       found
     end
 
@@ -228,7 +227,7 @@ module Swill
 
     sig { returns(T.nilable(HTMLTemplateElement)) }
     def row_template
-      found = owned_matching(@view.element, 'template[for="row"]')
+      found = DOM.owned_matching(@view.element, 'template[for="row"]')
       found.empty? ? nil : T.cast(found[0], HTMLTemplateElement)
     end
 
@@ -264,15 +263,14 @@ module Swill
       # Managed elements inside the row awaken under it before its bindings
       # are wired, so a controller root in a row is fed by bind like any
       # child, and finishes loading with its represented object in place.
-      awakening = Awakening.new
-      controllers = awakening.awaken(element)
-      release_bindings = Bindings.new.wire_object(item, element)
-      release_actions = Actions.new.wire_into(self, element)
+      controllers = Awakening.awaken(element)
+      release_bindings = Connections::Bindings.establish_in(element, item)
+      release_actions = Connections::Actions.establish_in(element, self)
       element.__swill_row__ = ->() do
         release_bindings.()
         release_actions.()
       end
-      awakening.finish(controllers)
+      Awakening.finish(controllers)
       configure_row(element, item)
     end
 

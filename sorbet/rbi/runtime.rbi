@@ -15,6 +15,15 @@ module Swill
     sig { params(receiver: T.untyped, name: String).returns(T::Boolean) }
     def self.respondsTo(receiver, name); end
 
+    sig { params(receiver: T.untyped, name: String).returns(T::Boolean) }
+    def self.responds_to(receiver, name); end
+
+    sig { params(receiver: T.untyped, name: String, count: Integer).returns(T::Boolean) }
+    def self.method_accepts(receiver, name, count); end
+
+    sig { params(receiver: T.untyped, name: String, arguments: T.untyped).returns(T.untyped) }
+    def self.invoke(receiver, name, *arguments); end
+
     sig { params(receiver: T.untyped, name: String, sender: T.untyped, event: T.untyped).returns(T.untyped) }
     def self.performAction(receiver, name, sender, event); end
 
@@ -66,20 +75,8 @@ module Swill
     sig { params(object: T.untyped).void }
     def self.disconnect(object); end
 
-    sig { params(object: T.untyped, name: T.any(Symbol, String)).returns(T::Boolean) }
-    def self.isAttribute(object, name); end
-
-    sig { params(object: T.untyped, name: T.any(Symbol, String), value: T.untyped, previous: T.untyped).returns(T.untyped) }
-    def self.validate_attribute(object, name, value, previous); end
-
     sig { params(object: T.untyped).returns(T.untyped) }
     def self.restorations(object); end
-
-    sig { params(type: T.untyped, text: String).returns(T.untyped) }
-    def self.decodeFragment(type, text); end
-
-    sig { params(value: T.untyped).returns(T.nilable(String)) }
-    def self.encodeFragment(value); end
 
     sig { params(message: String).void }
     def self.warn(message); end
@@ -90,8 +87,14 @@ module Swill
     sig { params(object: T.untyped).returns(T.nilable(String)) }
     def self.nameOf(object); end
 
-    sig { params(left: T.untyped, right: T.untyped).returns(Integer) }
-    def self.compareValues(left, right); end
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.is_number(value); end
+
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.is_boolean(value); end
+
+    sig { params(left: String, right: String).returns(Integer) }
+    def self.compare_text(left, right); end
 
     sig { params(object: T.untyped).returns(T.untyped) }
     def self.outlets(object); end
@@ -99,59 +102,35 @@ module Swill
     sig { params(value: T.untyped, type: String).returns(T::Boolean) }
     def self.conforms(value, type); end
 
-    sig { params(object: T.untyped, only: T.nilable(T::Array[T.untyped])).returns(T::Hash[T.untyped, T.untyped]) }
-    def self.collect_attributes(object, only = nil); end
-
     sig { params(klass: T.untyped).returns(T.untyped) }
     def self.identity_store(klass); end
 
     sig { params(name: String, value: T.untyped).returns(T.untyped) }
     def self.class_with_setting(name, value); end
 
-    sig { params(object: T.untyped, source: T.untyped).returns(T.untyped) }
-    def self.apply_attributes(object, source); end
-
-    sig { params(object: T.untyped, name: String).void }
-    def self.data_field_will_access(object, name); end
-
-    sig { params(object: T.untyped).void }
-    def self.initialize_distant_data(object); end
-
     sig { void }
     def self.close_data; end
 
-    sig { params(object: T.untyped, name: String).returns(T::Boolean) }
-    def self.data_field_loaded(object, name); end
+    sig { params(reset: T.proc.void, opened: T.proc.void).void }
+    def self.register_data_lifecycle(reset, opened); end
 
-    sig { params(object: T.untyped, name: String).returns(T::Boolean) }
-    def self.data_field_loading(object, name); end
+    sig { returns(T::Boolean) }
+    def self.data_connected; end
 
-    sig { params(object: T.untyped, name: String).returns(T.nilable(String)) }
-    def self.data_field_error(object, name); end
+    sig { params(type: String, contents: T::Hash[String, T.untyped]).returns(T.untyped) }
+    def self.data_request(type, contents); end
 
-    sig { params(object: T.untyped, name: String, reload: T::Boolean).returns(T.untyped) }
-    def self.load_data_field(object, name, reload); end
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.data_time(value); end
 
-    sig { params(model: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
-    def self.data_query(model, name, arguments, keywords); end
+    sig { params(value: T.untyped).returns(String) }
+    def self.data_time_iso(value); end
 
-    sig { params(model: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
-    def self.data_resolve(model, name, arguments, keywords); end
+    sig { params(value: String).returns(T.untyped) }
+    def self.data_time_from_iso(value); end
 
-    sig { params(object: T.untyped, name: String, arguments: T::Array[T.untyped], keywords: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
-    def self.data_command(object, name, arguments, keywords); end
-
-    sig { params(object: T.untyped).returns(T.untyped) }
-    def self.data_save(object); end
-
-    sig { params(object: T.untyped).returns(T.untyped) }
-    def self.data_delete(object); end
-
-    sig { params(object: T.untyped).returns(T.untyped) }
-    def self.data_draft(object); end
-
-    sig { params(object: T.untyped, copy: T.untyped).returns(T.untyped) }
-    def self.apply_data_draft(object, copy); end
+    sig { params(value: T.untyped).returns(T::Boolean) }
+    def self.data_record(value); end
 
     # Declaration-time helpers. These run while a class body is evaluated on
     # MRI and are never compiled into the browser.

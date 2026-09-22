@@ -91,9 +91,10 @@ module Swill
           "#{item['name']}: #{ruby_type(item['type'])}"
         end.join(", ")
         sig_params = signature.empty? ? "" : "params(#{signature})."
-        runtime = { "query" => "data_query", "resolver" => "data_resolve", "command" => "data_command" }
-                  .fetch(operation["kind"])
+        client_method = { "query" => "query", "resolver" => "resolve", "command" => "command" }
+                        .fetch(operation["kind"])
         prefix = operation["kind"] == "command" ? "" : "self."
+        target = operation["kind"] == "command" ? "self" : "data_model_name"
         declaration = parameters.map { |item| parameter_declaration(item) }.join(", ")
         positional = parameters.select { |item| %w[req opt rest].include?(item["kind"]) }
         args = positional.map { |item| item["kind"] == "rest" ? "*#{item['name']}" : item["name"] }.join(", ")
@@ -104,7 +105,7 @@ module Swill
         [
           "sig { #{sig_params}returns(#{ruby_type(operation['returns'])}) }",
           "async def #{prefix}#{operation['name']}(#{declaration})",
-          "  await Swill::Runtime.#{runtime}(self, #{operation['name'].to_json}, [#{args}], {#{keywords}})",
+          "  await Swill::Model::DistantClient.default.#{client_method}(#{target}, #{operation['name'].to_json}, [#{args}], {#{keywords}}, #{operation.dig('returns', 'kind').to_json})",
           "end"
         ]
       end
@@ -171,10 +172,10 @@ module Swill
         name = parameter["name"]
         case parameter["kind"]
         when "req" then name
-        when "opt" then "#{name} = T.unsafe(nil)"
+        when "opt" then "#{name} = Swill::Runtime.omitted_argument"
         when "rest" then "*#{name}"
         when "keyreq" then "#{name}:"
-        when "key" then "#{name}: T.unsafe(nil)"
+        when "key" then "#{name}: Swill::Runtime.omitted_argument"
         when "keyrest" then "**#{name}"
         end
       end

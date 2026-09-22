@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {loadBundles} from "./load_bundles.mjs";
 
-const {Runtime, context} = loadBundles();
+const swill = loadBundles();
+const {Runtime, context} = swill;
 
 const SwillObject = Runtime.resolve("Swill::Object");
 const Person = Runtime.resolve("Demo::Person");
@@ -22,8 +23,8 @@ function launched(body) {
   application.launch(body);
   return application.controllers();
 }
-const Bindings = Runtime.resolve("Swill::Bindings");
-const Actions = Runtime.resolve("Swill::Actions");
+const Bindings = swill.Swill__Connections__Bindings;
+const Actions = swill.Swill__Connections__Actions;
 
 test("real Attributes concern builds isolated inherited registries", () => {
   const Base = Runtime.resolve("Swill::Model::Base");
@@ -292,9 +293,8 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   const person = new Person();
   const input = new Element({bind: "name"}, "INPUT");
   const output = new Element({bind: "label"});
-  const bindings = new Bindings();
-  const unbindInput = bindings.wireElement(person, input, null);
-  const unbindOutput = bindings.wireElement(person, output, null);
+  const unbindInput = Bindings.connect(person, input, null);
+  const unbindOutput = Bindings.connect(person, output, null);
   input.value = "Ada";
   input.dispatchEvent(new Event("input"));
   assert.equal(person.name, "Ada");
@@ -309,11 +309,11 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   assert.equal(output.textContent, "ADA");
   assert.equal(input.value, "Ignored");
   assert.throws(
-    () => bindings.wireElement(person, new Element({bind: "label"}, "INPUT"), null),
+    () => Bindings.connect(person, new Element({bind: "label"}, "INPUT"), null),
     /Read-only/
   );
   const readonly = new Element({bind: "label", readonly: ""}, "INPUT");
-  const unbindReadonly = bindings.wireElement(person, readonly, null);
+  const unbindReadonly = Bindings.connect(person, readonly, null);
   assert.equal(readonly.value, "GRACE");
   readonly.value = "Ignored";
   readonly.dispatchEvent(new Event("input"));
@@ -321,7 +321,7 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   unbindReadonly();
 
   const checkbox = new Element({bind: "loud"}, "INPUT", "checkbox");
-  const unbindCheckbox = bindings.wireElement(person, checkbox, null);
+  const unbindCheckbox = Bindings.connect(person, checkbox, null);
   assert.equal(checkbox.checked, true);
   checkbox.checked = false;
   checkbox.dispatchEvent(new Event("change"));
@@ -331,7 +331,7 @@ test("compiled bindings are two-way, validate writers, and release listeners", (
   // A path whose owner is not there yet wires, ignores writes, and catches up.
   const controller = new Controller();
   const pending = new Element({bind: "person.name"}, "INPUT");
-  const unbindPending = bindings.wireElement(controller, pending, null);
+  const unbindPending = Bindings.connect(controller, pending, null);
   assert.equal(pending.value, "");
   pending.value = "Early";
   pending.dispatchEvent(new Event("input"));
@@ -358,10 +358,9 @@ test("compiled actions parse event prefixes and release listeners", () => {
 
   const controller = new Controller();
   const element = new Element("change:clear");
-  const actions = new Actions();
   const first = new Person();
   controller.person = first;
-  const dispose = actions.wireElement(controller, element);
+  const dispose = Actions.connect(element, controller);
   element.dispatchEvent(new Event("click"));
   assert.equal(controller.person, first, "click is not the selected event");
   element.dispatchEvent(new Event("change"));
@@ -373,7 +372,7 @@ test("compiled actions parse event prefixes and release listeners", () => {
   assert.equal(controller.person, second, "a disposed action no longer fires");
   assert.equal(element.__swill_action__, false);
   const blank = new Element(" ");
-  actions.wireElement(controller, blank)();
+  Actions.connect(blank, controller)();
   assert.equal(blank.__swill_action__, undefined);
 });
 
@@ -548,7 +547,7 @@ test("a did_change hook runs for stored properties and keeps a computed property
 
 import {element, keyEvent, Browser} from "./dom.mjs";
 
-const Awakening = Runtime.resolve("Swill::Awakening");
+const Awakening = swill.Swill__Awakening;
 const Badge = Runtime.resolve("Demo::Badge");
 let fixtureSequence = 0;
 
@@ -655,6 +654,131 @@ test("outlets connect to their direct owner as views, controllers, and data", ()
   f.childBump.click();
   assert.deepEqual(seen, [1]);
   dispose();
+});
+
+// What every element kind does with every kind of value, recorded so a change
+// to the binding path has to state which of these it means to alter. Ruby
+// truthiness is load-bearing here: "" and 0 are true, only nil and false are
+// false, which is not what JavaScript would do with the same values.
+test("a bound value reaches each element kind the same way", () => {
+  class Subject extends SwillObject {}
+  Runtime.installClass(Subject, "Test::BindingMatrix",
+    [{name: "v", js: "v", defaultValue() { return null; }}], []);
+
+  const bound = (tag, attributes) => {
+    const subject = new Subject();
+    const target = element(tag, {bind: "v", ...attributes});
+    Bindings.connect(subject, target, null);
+    return [subject, target];
+  };
+
+  // [value, span textContent, input value, checkbox checked]
+  for (const [value, text, field, checked] of [
+    ["hi", "hi", "hi", true],
+    ["", "", "", true],
+    [null, "", "", false],
+    [0, "0", "0", true],
+    [42, "42", "42", true],
+    [false, "false", "false", false],
+    [true, "true", "true", true]
+  ]) {
+    const label = JSON.stringify(value);
+    const [span, spanElement] = bound("SPAN", {});
+    span.v = value;
+    assert.equal(spanElement.textContent, text, `span text for ${label}`);
+
+    const [input, inputElement] = bound("INPUT", {});
+    input.v = value;
+    assert.equal(inputElement.value, field, `input value for ${label}`);
+
+    const [box, boxElement] = bound("INPUT", {type: "checkbox"});
+    box.v = value;
+    assert.equal(boxElement.checked, checked, `checkbox for ${label}`);
+  }
+});
+
+test("a bound DOM property follows the rule for its kind", () => {
+  class Subject extends SwillObject {}
+  Runtime.installClass(Subject, "Test::PropertyMatrix",
+    [{name: "v", js: "v", defaultValue() { return null; }}], []);
+
+  const written = (property, value) => {
+    const subject = new Subject();
+    const target = element("a", {});
+    Bindings.connectProperty(subject, null, target, property, "v");
+    subject.v = value;
+    return [target.getAttribute(property), target[property]];
+  };
+
+  // A boolean property takes the truth of the value and never an attribute.
+  for (const [value, expected] of [
+    ["v", true], ["", true], [null, false], [0, true], [false, false], [true, true]
+  ]) {
+    assert.deepEqual(written("hidden", value), [null, expected],
+      `hidden for ${JSON.stringify(value)}`);
+  }
+
+  // data-* drops nil, "" and false; aria-* drops nil and "" but keeps "false",
+  // which is a state of its own rather than an absence.
+  assert.deepEqual(written("data-flag", "v")[0], "v");
+  assert.deepEqual(written("data-flag", "")[0], null);
+  assert.deepEqual(written("data-flag", null)[0], null);
+  assert.deepEqual(written("data-flag", false)[0], null);
+  assert.deepEqual(written("data-flag", 0)[0], "0");
+
+  assert.deepEqual(written("aria-busy", "")[0], null);
+  assert.deepEqual(written("aria-busy", null)[0], null);
+  assert.deepEqual(written("aria-busy", false)[0], "false");
+  assert.deepEqual(written("aria-busy", 0)[0], "0");
+
+  // A nil href clears the property rather than leaving "null" in the document.
+  assert.deepEqual(written("href", null), [null, ""]);
+  assert.deepEqual(written("href", "/x")[1], "/x");
+  // Any other property is written as it comes, nil included.
+  assert.deepEqual(written("title", null)[1], null);
+  assert.deepEqual(written("title", 0)[1], 0);
+});
+
+// A change partway along a path re-points only what is below it, so the
+// subscriptions above stay put and the ones below follow the new object.
+test("observing a path re-subscribes below a change and releases the old branch", () => {
+  const f = nestedFixture();
+  const seen = [];
+  const first = f.parent.person;
+  const second = new Person();
+  second.name = "Second";
+
+  const dispose = Runtime.observePath(f.parent, "person.name", value => seen.push(value));
+
+  first.name = "First";
+  assert.deepEqual(seen, ["First"], "the leaf notifies");
+
+  f.parent.person = second;
+  assert.deepEqual(seen, ["First", "Second"], "swapping the owner reports the new leaf");
+
+  first.name = "Ignored";
+  assert.deepEqual(seen, ["First", "Second"], "the branch that was replaced is silent");
+
+  second.name = "Third";
+  assert.deepEqual(seen, ["First", "Second", "Third"], "the new branch is live");
+
+  f.parent.person = null;
+  assert.deepEqual(seen, ["First", "Second", "Third", null], "a nil owner reports nil");
+
+  second.name = "Detached";
+  assert.deepEqual(seen, ["First", "Second", "Third", null], "a detached branch is silent");
+
+  // Restoring an owner has to re-read it rather than trust what was cached.
+  f.parent.person = second;
+  assert.deepEqual(seen, ["First", "Second", "Third", null, "Detached"], "reattaching resubscribes");
+
+  second.name = "Live";
+  assert.deepEqual(seen.at(-1), "Live", "the restored branch notifies again");
+
+  dispose();
+  second.name = "After";
+  f.parent.person = first;
+  assert.equal(seen.at(-1), "Live", "disposal releases every segment");
 });
 
 test("bindings and actions are wired only by their direct owner", () => {
@@ -769,7 +893,7 @@ test("a method family resolves by argument count", () => {
     validateTag(value) { return value; }
   }
   Runtime.install({classes: {"Test::Family": {constructor: Family,
-    properties: {tag: {type: "String", attribute: true, key: "tag", defaultValue() { return ""; }}},
+    properties: {},
     methods: {
       tally: {arity: 0},
       tally_with_scale: {arity: 1, js: "tallyWithScale", family: "tally"},
@@ -791,11 +915,7 @@ test("a method family resolves by argument count", () => {
   assert.deepEqual(Runtime.performAction(family, "clicked", "s", "e"), ["two", "s", "e"]);
   assert.equal(Runtime.performAction(family, "tally", "s", "e"), "s",
     "the widest variant that fits takes the sender, though the plain one takes nothing");
-
-  // A validator that cannot take the value and the previous one would never
-  // run; saying so beats passing the value through unvalidated.
-  assert.throws(() => Runtime.validateAttribute(family, "tag", "x", ""),
-    /Validator must take a value and a previous value: validate_tag/);
+  assert.equal(Runtime.methodAccepts(family, "validate_tag", 2), false);
 });
 
 test("method-family lookup does not scan unrelated methods", () => {
@@ -823,12 +943,12 @@ test("awakening a later fragment adopts it into the nearest live owner", () => {
   const lateTitle = element("p", {bind: "title"});
   const lateRoot = element("section", {controller: "Demo::Badge"}, [lateTitle]);
   f.childRoot.append(element("div", {}, [lateRoot]));
-  const [late] = new Awakening().wire(lateRoot);
+  const [late] = Awakening.instantiate(lateRoot);
   assert.equal(late.parent(), f.child);
   assert.deepEqual(Array.from(f.child.childControllers()), [f.grandchild, late]);
   assert.equal(lateTitle.textContent, "Badge 0");
   assert.equal(f.log.filter(entry => entry.endsWith(":viewDidLoad")).length, 3, "existing controllers are not re-awakened");
-  assert.deepEqual(Array.from(new Awakening().wire(f.document)), [], "an awakened tree yields no new controllers");
+  assert.deepEqual(Array.from(Awakening.instantiate(f.document)), [], "an awakened tree yields no new controllers");
 });
 
 test("unloading the parent releases every descendant exactly once", () => {
@@ -855,7 +975,7 @@ test("unloading the parent releases every descendant exactly once", () => {
   f.parent.unload();
   f.child.unload();
   assert.equal(f.log.length, 6, "a second unload is a no-op");
-  const [again] = new Awakening().wire(f.parentRoot);
+  const [again] = Awakening.instantiate(f.parentRoot);
   assert.notEqual(again, f.parent);
   assert.equal(again.childControllers().length, 1);
   assert.equal(f.childTitle.textContent, "Badge 0");
@@ -1089,14 +1209,13 @@ test("respond_to? answers from metadata for objects, nil, and plain values", () 
 });
 
 test("binding roots and @ resolve paths against the right object", () => {
-  const bindings = new Bindings();
-  assert.equal(bindings.resolvePath(null, "name"), "name");
-  assert.equal(bindings.resolvePath(null, "@name"), "name");
-  assert.equal(bindings.resolvePath("represented_object", "name"), "represented_object.name");
-  assert.equal(bindings.resolvePath("represented_object", "@note"), "note");
-  assert.equal(bindings.resolvePath("represented_object", ""), "represented_object");
+  assert.equal(Bindings.resolvePath(null, "name"), "name");
+  assert.equal(Bindings.resolvePath(null, "@name"), "name");
+  assert.equal(Bindings.resolvePath("represented_object", "name"), "represented_object.name");
+  assert.equal(Bindings.resolvePath("represented_object", "@note"), "note");
+  assert.equal(Bindings.resolvePath("represented_object", ""), "represented_object");
   assert.equal(new PersonEditor().bindingRoot(), "represented_object", "a Ruby symbol is a string here");
-  assert.equal(bindings.resolvePath("represented_object", "@"), "");
+  assert.equal(Bindings.resolvePath("represented_object", "@"), "");
 });
 
 test("a parent binds a child controller's represented object, nil included", () => {
@@ -1140,12 +1259,11 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   const field = element("input", {"bind-readonly": "person.nil?", "bind-required": "fallback", "bind-title": "fallback"});
   f.parentRoot.append(link);
   f.parentRoot.append(field);
-  const [] = new Awakening().wire(f.parentRoot);
-  const bindings = new Bindings();
+  const [] = Awakening.instantiate(f.parentRoot);
   const disposers = [];
   for (const el of [link, field]) {
     for (const name of el.getAttributeNames()) {
-      disposers.push(bindings.wireProperty(f.parent, null, el, name.slice(5), el.getAttribute(name)));
+      disposers.push(Bindings.connectProperty(f.parent, null, el, name.slice(5), el.getAttribute(name)));
     }
   }
   assert.equal(link.href, "Ada");
@@ -1156,7 +1274,7 @@ test("bind-* writes DOM properties and attributes one way with Ruby truthiness",
   assert.equal(link.href, "");
   assert.equal(link.getAttribute("data-name"), null, "empty strings remove data attributes");
   const flagged = element("i", {"bind-data-on": "person.nil?", "bind-aria-busy": "person.nil?"});
-  const releaseFlag = [bindings.wireProperty(f.parent, null, flagged, "data-on", "person.nil?"), bindings.wireProperty(f.parent, null, flagged, "aria-busy", "person.nil?")];
+  const releaseFlag = [Bindings.connectProperty(f.parent, null, flagged, "data-on", "person.nil?"), Bindings.connectProperty(f.parent, null, flagged, "aria-busy", "person.nil?")];
   assert.deepEqual([flagged.getAttribute("data-on"), flagged.getAttribute("aria-busy")], [null, "false"], "false removes a data attribute and is written to an ARIA one");
   releaseFlag.forEach(dispose => dispose());
   f.parent.person = null;
@@ -1203,6 +1321,32 @@ test("object bindings keep a target equal to a source path and release on unload
   f.parent.unload();
   other.count = 10;
   assert.equal(f.parent.badgeCount, 9, "unload unbinds object bindings");
+});
+
+// The same options markup has, asked for in Ruby: a binding is one thing
+// established two ways.
+test("a binding made in Ruby takes a transformer, as transform= does in markup", () => {
+  const f = nestedFixture();
+  const other = new Badge();
+  other.count = 7;
+
+  f.parent.bind("fallback", Runtime.keywordArguments({
+    to: other, key_path: "count", transform: "string"
+  }));
+  assert.equal(f.parent.fallback, "7", "the transformer formatted on the way out");
+
+  other.count = 8;
+  assert.equal(f.parent.fallback, "8", "and keeps formatting as the source changes");
+
+  assert.throws(
+    () => f.parent.bind("fallback", Runtime.keywordArguments({
+      to: other, key_path: "count", transform: "nonexistent"
+    })),
+    /unknown transform nonexistent/,
+    "an unregistered name is refused when the binding is made, not ignored"
+  );
+
+  f.parent.unbind("fallback");
 });
 
 // ---- first responder and key routing ----
@@ -1397,10 +1541,9 @@ test("show_window presents a dialog whose dismissal restores the first responder
 test("detach tears down a removed subtree and terminate releases windows", () => {
   const f = windowedPage();
   const [parent, badge, welcomeBadge, sideBadge] = f.application.controllers();
-  const awakening = new Awakening();
-  assert.deepEqual(Array.from(awakening.controllersWithin(f.main)), [parent, badge, welcomeBadge, sideBadge]);
+  assert.deepEqual(Array.from(Awakening.controllersWithin(f.main)), [parent, badge, welcomeBadge, sideBadge]);
   f.badge.remove();
-  awakening.detach(f.badge);
+  Awakening.detach(f.badge);
   assert.equal(badge.view().controllerValue(), null);
   assert.deepEqual(Array.from(parent.childControllers()), [welcomeBadge, sideBadge]);
   const window = f.application.showWindow("palette");
@@ -1616,6 +1759,28 @@ test("clicks select by identity, shift-click extends, and the selection shows on
   assert.deepEqual(Array.from(f.controller.selectedObjects), [ada], "out-of-range indexes are ignored");
 });
 
+// A row's bindings are the list's to release. Removing the region any way
+// other than through the list itself — a window's content being replaced, or
+// the observer noticing a removed subtree — must release them just the same,
+// or every re-render leaves the old rows observing their objects forever.
+test("detaching a region releases the bindings of the rows inside it", () => {
+  const f = peoplePage();
+  const [ada] = f.parent.people;
+  const row = f.rowsOf()[0];
+  const cell = row.children[0];
+  assert.equal(cell.textContent, "Ada", "the row is bound before detaching");
+
+  // The path the MutationObserver takes for a removed subtree, and the one a
+  // window takes when its content is replaced. The list reaches its rows
+  // because it retains a disposer that clears them, so unloading it releases
+  // every row's bindings without the caller knowing rows exist.
+  Awakening.detach(f.list);
+
+  ada.name = "Ada Lovelace";
+  assert.equal(cell.textContent, "Ada",
+    "a detached row stops observing the object it displayed");
+});
+
 test("row actions dispatch from the list knowing their row, and activation reaches the owner", () => {
   const f = peoplePage("", null, "Swill::Controller::SortableList");
   const [ada, grace, linus] = f.parent.people;
@@ -1712,7 +1877,7 @@ test("a controller inside a row belongs to the list and is fed the row's object"
   assert.deepEqual(gone, [0, 1, 2], "re-rendering tears down row controllers");
   assert.equal(f.controller.childControllers().length, 1);
   assert.equal(f.controller.childControllers()[0].representedObject, ada);
-  assert.deepEqual(Array.from(new Awakening().wire(f.rowsOf()[0])), [], "the observer finds nothing new in a rendered row");
+  assert.deepEqual(Array.from(Awakening.instantiate(f.rowsOf()[0])), [], "the observer finds nothing new in a rendered row");
   f.controller.unload();
   assert.deepEqual([f.rowsOf().length, f.controller.childControllers().length], [0, 0]);
 });
@@ -2368,14 +2533,13 @@ test("transform= formats and parses through value transformers; predicate reader
     element("input", {bind: "name", transform: "shout"})
   ]);
   const [born, shown, button, shouted] = root.children;
-  const bindings = new Bindings();
-  assert.throws(() => bindings.wireObject(author, element("div", {}, [element("input", {bind: "name", transform: "nope"})])), /unknown transform nope/);
+  assert.throws(() => Bindings.establishIn(element("div", {}, [element("input", {bind: "name", transform: "nope"})]), author), /unknown transform nope/);
   class Shout extends ValueTransformer {
     format(value) { return String(value ?? "").toUpperCase(); }
     parse(text) { return text.toLowerCase(); }
   }
   ValueTransformer.register("shout", new Shout());
-  const dispose = bindings.wireObject(author, root);
+  const dispose = Bindings.establishIn(root, author);
   assert.deepEqual(plain([born.value, shown.textContent, button.disabled, button.getAttribute("data-old"), shouted.value]), ["1815", "1815", true, "true", ""]);
   born.value = "1816";
   born.dispatchEvent(new Event("input"));

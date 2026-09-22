@@ -163,36 +163,69 @@ export function writePath(object, path, value) {
 }
 
 export function observePath(object, path, callback) {
-  let disposers = [];
+  const names = segments(path);
   let active = true;
 
-  const rehook = () => {
-    disposers.splice(0).forEach(dispose => dispose());
-    let owner = object;
+  // A single segment is the common case and owns no chain: nothing below it can
+  // move, so it needs neither the owner cache nor a rebuild.
+  if (names.length === 1) {
+    const name = names[0];
+    if (object == null || !declarations(object.constructor, "properties").has(name)) {
+      return () => {};
+    }
 
-    for (const name of segments(path)) {
+    const dispose = subscribe(object, name, () => {
+      if (active) callback(read(object, name));
+    }, "observers");
+
+    return () => {
+      active = false;
+      dispose();
+    };
+  }
+
+  // owners[i] is the object segment i is read from, so a rebuild can start
+  // partway down the path instead of walking it again from the root.
+  const owners = [object];
+  const disposers = [];
+
+  // A change at segment i moves only what is below it: the owners above are
+  // still the same objects, and their subscriptions are still correct. So a
+  // change rebinds from i + 1, and a change in the last segment — the common
+  // case for a leaf binding — rebinds nothing at all.
+  const hook = start => {
+    for (let index = start; index < disposers.length; index += 1) disposers[index]?.();
+    disposers.length = start;
+    owners.length = start;
+    // The segment above is what changed, so what it points at is re-read rather
+    // than taken from the cache, which still holds the old object.
+    owners[start] = start === 0 ? object : read(owners[start - 1], names[start - 1]);
+
+    let owner = owners[start];
+    for (let index = start; index < names.length; index += 1) {
       if (owner == null) break;
+      const name = names[index];
 
-      if (declarations(owner.constructor, "properties").has(name)) {
-        disposers.push(
-          subscribe(owner, name, () => {
+      disposers[index] = declarations(owner.constructor, "properties").has(name)
+        ? subscribe(owner, name, () => {
             if (!active) return;
 
-            rehook(); // Rebind before user code runs.
+            if (index + 1 < names.length) hook(index + 1); // Rebind before user code runs.
             callback(readPath(object, path));
           }, "observers")
-        );
-      }
+        : null;
 
       owner = read(owner, name);
+      owners[index + 1] = owner;
     }
   };
 
-  rehook();
+  hook(0);
 
   return () => {
     active = false;
-    disposers.splice(0).forEach(dispose => dispose());
+    for (const dispose of disposers) dispose?.();
+    disposers.length = 0;
   };
 }
 
@@ -216,6 +249,12 @@ export function respondsTo(object, name) {
   }
 
   return properties.has(name) || methods.has(name);
+}
+
+export function methodAccepts(object, name, count) {
+  if (object == null || (typeof object !== "object" && typeof object !== "function")) return false;
+  if (isPlainObject(object)) return false;
+  return resolveMethod(declarations(object.constructor, "methods"), name, count) !== null;
 }
 
 // Invoke an untyped receiver through metadata.

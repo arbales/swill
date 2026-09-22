@@ -450,6 +450,47 @@ Recorded so they are fixed deliberately rather than rediscovered:
   property calling `downcase` on it threw; the alternative, refusing, would
   break a page over one column. Values of the wrong non-nil type are still
   stored as given: there is no runtime type check beyond nil.
+- Writing a property costs far more than reading one (22 September 2026):
+  217 ns with **no observers at all**, against 11.7 ns for an ordinary getter
+  and 45.8 ns for `Runtime.invoke`. Adding an observer is nearly free on top
+  (+10 ns), so the cost is in `writeProperty` itself — the coerce hook, the
+  equality check, the will-change hook, the state map write, and the empty
+  notification loops — not in delivery. Nothing depends on this being slow;
+  it simply has not been looked at. Measured with `rake benchmark`, which
+  gained binding and path-observation cases the same day. Worth a pass before
+  any workload writes properties in bulk.
+- A binding resolves its property descriptor on every write, though its target
+  never changes (22 September 2026): `Runtime.write` looks the descriptor up by
+  Ruby name on each call, because the accessor is installed under the compiled
+  name (`represented_object` reads back as `representedObject`), so the name
+  has to be translated. A binding is established once, so the lookup could be
+  done then and the descriptor kept — `pathWriter` already answers a resolved
+  `{owner, descriptor}` pair, and `writeProperty` takes it directly. Deferred
+  deliberately; it belongs with the property-write pass above rather than with
+  the binding refactor. Note that writing `target[key] = value` to skip the
+  translation is not the shortcut it looks like: it lands in an expando beside
+  the real accessor, firing no observers and raising nothing.
+- A module is not reachable through `Runtime.resolve` (22 September 2026): a
+  class registers under `meta.classes` and resolves by name, but a module
+  registers under `meta.mixins` and does not, so `Runtime.resolve("Swill::
+  Connections::Bindings")` raises `Unknown class`. Nothing but the exported
+  identifier (`Swill__Connections__Bindings`) reaches it, which is private
+  browser API — so a plain-JavaScript application cannot reach a framework
+  module at all, and the specs and benchmark had to use that identifier when
+  the connection readers became modules. Modules should resolve like classes;
+  the fix is presumably registering mixins in the same table, or falling back
+  to the mixin table when a name misses.
+- A Hash value type accepts a narrower set than an Array element type
+  (22 September 2026): `T::Array[T.proc.void]` is recognised and its `each`
+  lowers normally, but `T::Hash[Symbol, T.proc.void]` is not recognised at all —
+  the receiver leaves the typed path and is treated as untyped, so `each` is
+  rejected with "block call each on an untyped receiver" and `values` lowers to
+  `Runtime.read(hash, "values")`, which is the key-value-coding read and answers
+  undefined. Found declaring the object-binding registry, which holds procs by
+  target; it is declared `T::Hash[Symbol, T.untyped]` because that is the most
+  precise type the compiler currently models, which is less than the code knows.
+  Likely a one-place widening in the Hash type recognition rather than a
+  decision, since Array already allows it.
 
 ## Explicitly Deferred
 

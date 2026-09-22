@@ -13,6 +13,6 @@ module DataFixture
     sig { params(email: String).returns(T.nilable(DataFixture::User)) }
     def self.first_by_email(email); end
     sig { params(emails: String, exact: T::Boolean, limit: Integer, options: T.untyped).returns(T.nilable(DataFixture::User)) }
-    def self.lookup(*emails, exact:, limit: T.unsafe(nil), **options); end
+    def self.lookup(*emails, exact:, limit: Swill::Runtime.omitted_argument, **options); end
   end
 end

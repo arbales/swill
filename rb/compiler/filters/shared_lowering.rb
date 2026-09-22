@@ -67,9 +67,20 @@ module Swill
         # Methods, and on a class its static methods, either possibly wrapped
         # in async; a mixin's def self.included is interpreted at collection,
         # never compiled.
+        # A mixin's own `def self.` is a module function rather than a member of
+        # the layer, and is emitted separately onto the factory; the included
+        # hook is a declaration, not code. Both are dropped from the body here.
         def class_body_statement?(statement)
           statement = statement.children[2] if Knowledge.async_wrapper?(statement)
-          statement.type == :def || (statement.type == :defs && @entry["kind"] == "class")
+          return true if statement.type == :def
+          return false unless statement.type == :defs
+          @entry["kind"] == "class" || module_function_body?
+        end
+
+        # True while converting a module's functions into the statics of the
+        # throwaway class they are lifted from.
+        def module_function_body?
+          @compiled_class.to_s.end_with?("_Functions")
         end
 
         # async def compiles to an async method, whose body may await; the

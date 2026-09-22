@@ -49,32 +49,21 @@ module Swill
       # Whether +name+ has an authoritative value, including nil.
       sig { params(name: Symbol).returns(T::Boolean) }
       def field_loaded?(name)
-        Swill::Runtime.data_field_loaded(self, name.to_s)
+        data_field_loaded(name.to_s)
       end
 
       # Whether +name+ currently has a request in flight.
       sig { params(name: Symbol).returns(T::Boolean) }
       def field_loading?(name)
-        Swill::Runtime.data_field_loading(self, name.to_s)
+        data_field_loading(name.to_s)
       end
 
       # The last loading error for +name+, if any.
       sig { params(name: Symbol).returns(T.nilable(String)) }
       def field_error(name)
-        Swill::Runtime.data_field_error(self, name.to_s)
+        data_field_error(name.to_s)
       end
 
-      # Loads +name+ explicitly and returns its value.
-      sig { params(name: Symbol).returns(T.untyped) }
-      def load_field(name)
-        Swill::Runtime.load_data_field(self, name.to_s, false)
-      end
-
-      # Loads +name+ again even when it already has a value.
-      sig { params(name: Symbol).returns(T.untyped) }
-      def reload_field(name)
-        Swill::Runtime.load_data_field(self, name.to_s, true)
-      end
     end
   end
 end

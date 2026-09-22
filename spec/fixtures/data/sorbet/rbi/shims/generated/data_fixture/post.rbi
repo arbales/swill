@@ -19,6 +19,6 @@ module DataFixture
     sig { returns(T::Boolean) }
     def publish!(); end
     sig { params(text: String, published: T.nilable(T::Boolean)).returns(Swill::Model::ResultSet[DataFixture::Post]) }
-    def self.search(text, published = T.unsafe(nil)); end
+    def self.search(text, published = Swill::Runtime.omitted_argument); end
   end
 end

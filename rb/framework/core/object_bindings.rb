@@ -3,10 +3,11 @@
 
 module Swill
   # Cocoa-style object bindings: bind(:target, to: source, key_path: "a.b")
-  # keeps the target property equal to the source path. Built entirely from
-  # the runtime's path observation and metadata-checked writes, so a target
-  # must be a declared property or generated writer. One binding per target;
-  # rebinding disposes the previous observation first.
+  # keeps the target property equal to the source path. This is the same
+  # binding markup establishes, asked for in Ruby rather than read from an
+  # attribute, so the same options apply and the same machinery runs.
+  #
+  # One binding per target; rebinding disposes the previous one first.
   #
   # null_placeholder: is Cocoa's NSNullPlaceholderBindingOption — what the
   # target receives when the path has no value, so a path that runs through a
@@ -14,6 +15,9 @@ module Swill
   #
   #   bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
   #        null_placeholder: [])
+  #
+  # transform: names a registered ValueTransformer, as transform= does in
+  # markup.
   module ObjectBindings
     extend T::Sig
 
@@ -25,45 +29,45 @@ module Swill
         target: Symbol,
         to: Swill::Object,
         key_path: String,
-        null_placeholder: T.untyped
+        null_placeholder: T.untyped,
+        transform: T.nilable(String)
       ).returns(T.untyped)
     end
-    def bind(target, to:, key_path:, null_placeholder: nil)
+    def bind(target, to:, key_path:, null_placeholder: nil, transform: nil)
       unbind(target)
+      transformer = transform ? ValueTransformer.named(transform) : nil
+      raise "unknown transform #{transform}" if transform && !transformer
       # One value serves every fall-back, so a placeholder is treated as
       # immutable, as Cocoa's is. Not giving one is giving nil.
-      sync = ->(value) { Runtime.write(self, target, value == nil ? null_placeholder : value) }
-      sync.(Runtime.readPath(to, key_path))
-      object_bindings << {target: target, dispose: Runtime.observePath(to, key_path, sync)}
+      object_bindings[target] = Binding.establish(
+        BindingDestination.object_property, self, target.to_s, to, key_path,
+        transformer, null_placeholder, true
+      )
       self
     end
 
     # Releases the binding on +target+, if any. Answers self.
     sig { params(target: Symbol).returns(T.untyped) }
     def unbind(target)
-      remaining = T.let([], T::Array[T::Hash[Symbol, T.untyped]])
-      object_bindings.each do |binding|
-        if binding[:target] == target
-          binding[:dispose].()
-        else
-          remaining << binding
-        end
-      end
-      @object_bindings = remaining
+      dispose = object_bindings[target]
+      return self unless dispose
+      dispose.()
+      object_bindings.delete(target)
       self
     end
 
     # Releases every binding, as a controller does when it unloads.
     sig { returns(T.untyped) }
     def unbind_all
-      object_bindings.each { |binding| binding[:dispose].() }
-      @object_bindings = []
+      object_bindings.each { |_target, dispose| dispose.() }
+      @object_bindings = {}
       self
     end
 
-    sig { returns(T::Array[T::Hash[Symbol, T.untyped]]) }
+    # Keyed by target: binding a target replaces whatever was bound there.
+    sig { returns(T::Hash[Symbol, T.untyped]) }
     def object_bindings # :nodoc:
-      @object_bindings = [] unless @object_bindings
+      @object_bindings = {} unless @object_bindings
       @object_bindings
     end
   end

@@ -276,16 +276,9 @@ export function modulo(left, right) {
   return ((left % right) + right) % right;
 }
 
-// Sort-column comparison: nil last, numbers and booleans by value,
-// everything else in locale-aware text order.
-export function compareValues(left, right) {
-  if (left == null && right == null) return 0;
-  if (left == null) return 1;
-  if (right == null) return -1;
-  if (typeof left === "number" && typeof right === "number") return left - right;
-  if (typeof left === "boolean" && typeof right === "boolean") return Number(left) - Number(right);
-  return String(left).localeCompare(String(right));
-}
+export const isNumber = value => typeof value === "number";
+export const isBoolean = value => typeof value === "boolean";
+export const compareText = (left, right) => left.localeCompare(right);
 
 export function between(value, low, high) {
   return value >= low && value <= high;
@@ -374,28 +367,6 @@ export function valueRead(value, name) {
     default:
       throw new Error(`Unknown value reader: ${name}`);
   }
-}
-
-// Decode typed fragment leaves; undefined rejects invalid values.
-export function decodeFragment(type, text) {
-  const inner = (type ?? "").replace(/^T\.nilable\((.+)\)$/, "$1");
-  switch (inner) {
-    case "Integer": {
-      const number = Number.parseInt(text, 10);
-      return Number.isNaN(number) ? undefined : number;
-    }
-    case "T::Boolean":
-      if (text === "true" || text === "1") return true;
-      if (text === "false" || text === "0") return false;
-      return undefined;
-    default:
-      return text;
-  }
-}
-
-// nil and empty strings leave no fragment value.
-export function encodeFragment(value) {
-  return value == null || value === "" ? null : String(value);
 }
 
 // Readers with an answer for nil itself (nil.to_s is "", nil.to_i is 0);

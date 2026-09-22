@@ -5,7 +5,7 @@ module Swill
   # URL-fragment state: #key=value params, writes with push or replace
   # history, and browser-driven change events. Inert without a browser window
   # that has a location and history, as in Node.
-  class Fragments < Swill::Object
+  class URLFragment
     extend T::Sig
 
     sig { params(browser: T.nilable(DOMWindow)).void }

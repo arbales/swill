@@ -10,7 +10,6 @@ module Swill
   # See the Lifecycle guide for launch, restoration and teardown.
   class Application < Responder
     extend T::Sig
-    include Ownership
 
     # NSApp: the application running on this page. Asking for it when none
     # is running is a mistake, not a nil.
@@ -66,14 +65,13 @@ module Swill
       root.addEventListener("focusout", @on_focus_out)
       root.addEventListener("keydown", @on_key_down)
       root.addEventListener("keyup", @on_key_up)
-      @fragments = Fragments.new(root.ownerDocument.defaultView)
+      @fragments = URLFragment.new(root.ownerDocument.defaultView)
       scan_templates
       prepare_window_containers
-      awakening = Awakening.new
-      @controllers = awakening.awaken(root)
+      @controllers = Awakening.awaken(root)
       register_window_containers
       restore_launched_windows
-      awakening.finish(@controllers)
+      Awakening.finish(@controllers)
       @fragments.start_observing(->() { apply_fragment })
       watch(root)
       application_did_launch
@@ -141,16 +139,15 @@ module Swill
       raise "No window container: #{window_name}" unless window
       container = window.root
       previous = first_responder
-      awakening = Awakening.new
-      each_child(container, ->(child) { awakening.detach(child) })
+            DOM.each_child(container, ->(child) { Awakening.detach(child) })
       container.replaceChildren
       container.appendChild(clone_window_content(content_name))
       container.setAttribute("name", content_name)
-      controllers = awakening.awaken(container)
+      controllers = Awakening.awaken(container)
       window.assign_content(content_name, top_controller_in(container))
       @fragments.write(window.name, content_name, history: history)
       restore_window_state(window, prune_stale: history != :none, write_content: history != :none)
-      awakening.finish(controllers)
+      Awakening.finish(controllers)
       controller = window.controller
       if controller
         # The content's own choice (a field focused in controller_did_load)
@@ -169,12 +166,11 @@ module Swill
     def show_window(name, into: @root)
       node = clone_window_content(name)
       into.appendChild(node)
-      awakening = Awakening.new
-      controllers = awakening.awaken(node)
+      controllers = Awakening.awaken(node)
       controller = View.controller_for(node)
       unless controller
         # Leave nothing behind: whatever the template awakened is torn down.
-        awakening.detach(node)
+        Awakening.detach(node)
         node.remove
         raise "Window root has no controller: #{name}"
       end
@@ -184,7 +180,7 @@ module Swill
       window.save_first_responder(first_responder)
       @windows << window
       restore_window_state(window, prune_stale: false, write_content: false)
-      awakening.finish(controllers)
+      Awakening.finish(controllers)
       make_first_responder(controller) unless responder_within?(first_responder, node)
       window
     end
@@ -407,7 +403,7 @@ module Swill
     # The first controller inside the container whose parent is outside it.
     sig { params(container: Element).returns(T.nilable(Controller)) }
     def top_controller_in(container)
-      Awakening.new.controllers_within(container).find { |controller| top_within?(controller, container) }
+      Awakening.controllers_within(container).find { |controller| top_within?(controller, container) }
     end
 
     sig { params(controller: Controller, container: Element).returns(T::Boolean) }
@@ -484,7 +480,7 @@ module Swill
         declarations.each do |declaration|
           text = params[window.scoped_key(declaration.key)]
           next if text == nil
-          value = Runtime.decodeFragment(declaration.type, text)
+          value = decode_fragment_value(declaration.type, text)
           next if value == nil
           Runtime.writePath(controller, declaration.path, value)
           applied += 1
@@ -508,9 +504,31 @@ module Swill
       controller = window.controller
       return unless controller
       T.let(Runtime.restorations(controller), T::Array[T.untyped]).each do |declaration|
-        value = Runtime.encodeFragment(Runtime.readPath(controller, declaration.path))
+        value = encode_fragment_value(Runtime.readPath(controller, declaration.path))
         @fragments.write(window.scoped_key(declaration.key), value, history: :replace)
       end
+    end
+
+    # Typed URL leaves; nil rejects invalid values.
+    sig { params(type: String, text: String).returns(T.untyped) }
+    def decode_fragment_value(type, text) # :nodoc:
+      if type == "Integer" || type == "T.nilable(Integer)"
+        stripped = text.strip
+        return nil unless stripped =~ /\A[+-]?\d/
+        return stripped.to_i
+      end
+      if type == "T::Boolean" || type == "T.nilable(T::Boolean)"
+        return true if text == "true" || text == "1"
+        return false if text == "false" || text == "0"
+        return nil
+      end
+      text
+    end
+
+    sig { params(value: T.untyped).returns(T.nilable(String)) }
+    def encode_fragment_value(value) # :nodoc:
+      return nil if value.nil? || value == ""
+      "#{value}"
     end
 
     # Back/Forward: a container whose fragment names other known content loads
@@ -542,11 +560,10 @@ module Swill
     sig { params(root: Element).void }
     def watch(root)
       return unless defined?(MutationObserver)
-      awakening = Awakening.new
-      observer = MutationObserver.new(->(records, _observer) do
+            observer = MutationObserver.new(->(records, _observer) do
         records.each do |record|
-          record.removedNodes.forEach { |node| awakening.detach(node) if node.nodeType == 1 }
-          record.addedNodes.forEach { |node| awakening.wire(node) if node.nodeType == 1 }
+          record.removedNodes.forEach { |node| Awakening.detach(node) if node.nodeType == 1 }
+          record.addedNodes.forEach { |node| Awakening.instantiate(node) if node.nodeType == 1 }
         end
       end)
       observer.observe(root, {childList: true, subtree: true})

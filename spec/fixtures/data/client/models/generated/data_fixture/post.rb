@@ -15,17 +15,17 @@ module DataFixture
 
     sig { returns(T::Boolean) }
     async def invalid_publish!()
-      await Swill::Runtime.data_command(self, "invalid_publish!", [], {})
+      await Swill::Model::DistantClient.default.command(self, "invalid_publish!", [], {}, "primitive")
     end
 
     sig { returns(T::Boolean) }
     async def publish!()
-      await Swill::Runtime.data_command(self, "publish!", [], {})
+      await Swill::Model::DistantClient.default.command(self, "publish!", [], {}, "primitive")
     end
 
     sig { params(text: String, published: T.nilable(T::Boolean)).returns(Swill::Model::ResultSet[DataFixture::Post]) }
     async def self.search(text, published = Swill::Runtime.omitted_argument)
-      await Swill::Runtime.data_query(self, "search", [text, published], {})
+      await Swill::Model::DistantClient.default.query(data_model_name, "search", [text, published], {}, "result_set")
     end
   end
 end

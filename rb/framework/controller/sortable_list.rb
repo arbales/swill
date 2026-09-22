@@ -82,8 +82,20 @@ module Swill
       return objects unless key
       sign = self.sort_direction == "descending" ? -1 : 1
       objects.sort do |left, right|
-        Runtime.compareValues(Runtime.read(left, key), Runtime.read(right, key)) * sign
+        compare_sort_values(Runtime.read(left, key), Runtime.read(right, key)) * sign
       end
+    end
+
+    sig { params(left: T.untyped, right: T.untyped).returns(Integer) }
+    def compare_sort_values(left, right) # :nodoc:
+      return 0 if left.nil? && right.nil?
+      return 1 if left.nil?
+      return -1 if right.nil?
+      return left - right if Runtime.is_number(left) && Runtime.is_number(right)
+      if Runtime.is_boolean(left) && Runtime.is_boolean(right)
+        return (left ? 1 : 0) - (right ? 1 : 0)
+      end
+      Runtime.compare_text("#{left}", "#{right}")
     end
 
     sig { void }

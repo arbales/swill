@@ -34,11 +34,13 @@ module Swill
     FRAMEWORK_SOURCES = %w[
       rb/framework/core/observable.rb
       rb/framework/core/object.rb
-      rb/framework/core/ownership.rb
-      rb/framework/core/object_bindings.rb
+      rb/framework/core/dom.rb
       rb/framework/core/notification_center.rb
       rb/framework/core/wire.rb
       rb/framework/core/value_transformer.rb
+      rb/framework/core/binding_destinations.rb
+      rb/framework/core/binding.rb
+      rb/framework/core/object_bindings.rb
       rb/framework/core/responder.rb
       rb/framework/core/view.rb
       rb/framework/control/base.rb
@@ -46,11 +48,11 @@ module Swill
       rb/framework/control/select.rb
       rb/framework/control/custom_select.rb
       rb/framework/core/controller.rb
-      rb/framework/core/bindings.rb
-      rb/framework/core/actions.rb
-      rb/framework/core/outlets.rb
+      rb/framework/connections/bindings.rb
+      rb/framework/connections/actions.rb
+      rb/framework/connections/outlets.rb
       rb/framework/core/awakening.rb
-      rb/framework/core/fragments.rb
+      rb/framework/core/url_fragment.rb
       rb/framework/core/window.rb
       rb/framework/core/application.rb
       rb/framework/controller/list.rb
@@ -67,6 +69,7 @@ module Swill
       rb/framework/model/store.rb
       rb/framework/model/identity.rb
       rb/framework/model/collection.rb
+      rb/framework/model/distant_client.rb
       rb/framework/model/distant_data.rb
       rb/framework/model/distant_object.rb
       rb/framework/model/relationship.rb
@@ -196,6 +199,7 @@ module Swill
             end
             if mixin
               lines << "export function #{id}(Superclass) {\n#{js}\nreturn #{class_name};\n}"
+              lines << module_functions(entry) if entry["module_functions"].any?
               lines << class_method_factory(entry) if entry["extends_class_methods"]
             else
               # Ruby2JS may prepend truthiness helper declarations, so prefixing the

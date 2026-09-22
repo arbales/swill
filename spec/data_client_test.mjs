@@ -4,6 +4,7 @@ import {Runtime} from "../rb/runtime/runtime.mjs";
 import {pack, unpack} from "../rb/runtime/message_pack.mjs";
 import {
   Swill__Model__DistantObject as DistantObject,
+  Swill__Model__DistantClient as DistantClient,
   Swill__Model__Collection as Collection,
   Swill__Model__ResultSet as ResultSet
 } from "../build/framework.mjs";
@@ -26,16 +27,24 @@ Runtime.install({classes: {Post: {
     body: {type: "T.nilable(String)", attribute: true, key: "body", willAccess: true, defaultValue: () => null},
     comments: {type: "Swill::Model::Collection", willAccess: true, defaultValue: () => null}
   },
-  registries: {dataFields: {
-    title: {kind: "field", type: "T.nilable(String)"},
-    body: {kind: "field", type: "T.nilable(String)"},
-    comments: {kind: "many", model: "Post"}
-  }},
+  registries: {
+    modelAttributes: {
+      id: {name: "id", key: "id", type: "T.nilable(String)", default: null},
+      title: {name: "title", key: "title", type: "T.nilable(String)", default: null},
+      body: {name: "body", key: "body", type: "T.nilable(String)", default: null}
+    },
+    dataFields: {
+      title: {kind: "field", type: "T.nilable(String)"},
+      body: {kind: "field", type: "T.nilable(String)"},
+      comments: {kind: "many", model: "Post"}
+    }
+  },
   settings: [{js: "dataModelName", value: "Post"}]
 }}});
 
 class FakeWebSocket {
   static OPEN = 1;
+  static actorScope = "actor-1";
 
   constructor() {
     this.readyState = 0;
@@ -78,7 +87,8 @@ class FakeWebSocket {
     this.requests.push(request);
     let response;
     if (request.type === "HELLO") {
-      response = {type: "WELCOME", protocol_version: 1, schema_hash: "schema", actor_scope: "actor-1"};
+      response = {type: "WELCOME", protocol_version: 1, schema_hash: "schema",
+        actor_scope: FakeWebSocket.actorScope};
     } else if (request.type === "QUERY") {
       if (this.holdNextQuery) {
         this.holdNextQuery = false;
@@ -135,30 +145,30 @@ test("queries return canonical ResultSets and unknown fields hydrate", async () 
   Runtime.configureData("ws://fixture", "schema", () => (transport = new FakeWebSocket()));
   assert.ok(new Post().comments instanceof Collection);
 
-  const results = await Runtime.dataQuery(Post, "search", ["Hello"], {});
+  const results = await DistantClient.default().query("Post", "search", ["Hello"], {}, "result_set");
   assert.ok(results instanceof ResultSet);
   assert.equal(results.isLoaded(), true);
   const post = results.first();
   assert.equal(post.title, "Hello");
   assert.equal(post.isDirty, false, "server identity does not become a local edit");
 
-  await Runtime.dataQuery(Post, "search",
+  await DistantClient.default().query("Post", "search",
     [Runtime.omittedArgument(), null],
-    {limit: Runtime.omittedArgument(), explicit: null});
+    {limit: Runtime.omittedArgument(), explicit: null}, "result_set");
   const encoded = transport.requests.filter(request => request.type === "QUERY").at(-1);
   assert.deepEqual(encoded.arguments, [null]);
   assert.deepEqual(encoded.keywords, {explicit: null});
-  assert.equal(Runtime.dataFieldLoaded(post, "title"), true);
+  assert.equal(post.isFieldLoaded("title"), true);
 
   assert.equal(post.body, null);
-  assert.equal(Runtime.dataFieldLoading(post, "body"), true);
+  assert.equal(post.isFieldLoading("body"), true);
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(Runtime.dataFieldLoaded(post, "body"), true);
+  assert.equal(post.isFieldLoaded("body"), true);
   assert.equal(post.body, null, "known nil reads exactly like unknown nil");
   assert.equal(transport.requests.filter(request => request.type === "GET").length, 1);
 
-  const older = Runtime.dataResolve(Post, "find", ["1"], {});
-  const newer = Runtime.dataResolve(Post, "find", ["1"], {});
+  const older = DistantClient.default().resolve("Post", "find", ["1"], {}, "model");
+  const newer = DistantClient.default().resolve("Post", "find", ["1"], {}, "model");
   const [sameFromOlder, sameFromNewer] = await Promise.all([older, newer]);
   assert.equal(sameFromOlder, post);
   assert.equal(sameFromNewer, post);
@@ -172,6 +182,7 @@ test("distant drafts persist only after acceptance and deletion is observable", 
 
   const post = new Post();
   post.title = "Created";
+  assert.equal(post.isDraft(), false);
   assert.throws(() => post.draft(), /before drafting/);
   const saved = await post.save();
   assert.equal(saved, post, "the newly assigned identity keeps the original object canonical");
@@ -179,6 +190,7 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   assert.equal(post.isDirty, false);
 
   const draft = post.draft();
+  assert.equal(draft.isDraft(), true);
   draft.title = "Edited";
   assert.equal(post.title, "Created", "editing a draft does not expose unaccepted values");
   await post.applyDraft(draft);
@@ -187,7 +199,7 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   await assert.rejects(draft.save(), /original\.apply_draft/);
 
   transport.holdNextQuery = true;
-  const stale = Runtime.dataQuery(Post, "search", ["stale"], {});
+  const stale = DistantClient.default().query("Post", "search", ["stale"], {}, "result_set");
   await new Promise(resolve => setTimeout(resolve, 0));
   await post.delete();
   assert.equal(post.isDeleted, true);
@@ -199,4 +211,34 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   assert.equal(transport.requests.filter(request => request.type === "CREATE").length, 1);
   assert.equal(transport.requests.filter(request => request.type === "UPDATE").length, 1);
   assert.equal(transport.requests.filter(request => request.type === "DELETE").length, 1);
+});
+
+test("dirty fields survive background patches and actor changes replace identity", async () => {
+  globalThis.WebSocket = FakeWebSocket;
+  FakeWebSocket.actorScope = "actor-1";
+  let transport;
+  Runtime.configureData("ws://fixture-scope", "schema", () => (transport = new FakeWebSocket()));
+
+  const first = (await DistantClient.default().query(
+    "Post", "search", [], {}, "result_set"
+  )).first();
+  first.title = "Local edit";
+  const same = (await DistantClient.default().query(
+    "Post", "search", [], {}, "result_set"
+  )).first();
+  assert.equal(same, first);
+  assert.equal(first.title, "Local edit", "a background patch does not replace a dirty field");
+
+  const plain = await DistantClient.default().query("Post", "search", [], {}, "array");
+  assert.equal(Array.isArray(plain), true, "schema cardinality controls result wrapping");
+  assert.equal(plain instanceof ResultSet, false);
+
+  transport.close();
+  FakeWebSocket.actorScope = "actor-2";
+  const replacement = (await DistantClient.default().query(
+    "Post", "search", [], {}, "result_set"
+  )).first();
+  assert.notEqual(replacement, first);
+  assert.equal(replacement.title, "Hello");
+  FakeWebSocket.actorScope = "actor-1";
 });

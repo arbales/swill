@@ -166,6 +166,7 @@ module Swill
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
             "includes" => [], "properties" => [], "methods" => [], "static_methods" => [], "included_properties" => [],
             "class_methods" => [], "class_method_entries" => [], "registries" => [], "settings" => [],
+            "module_functions" => [],
             "setting_values" => {}, "registry_values" => {}, "restorations" => []
           }
           target = loader.constant(name)
@@ -232,7 +233,16 @@ module Swill
               collect_static_method(entry, child, pending_signature, async)
               pending_signature = nil
             elsif child.type == :defs && kind == "mixin"
-              collect_included_hook(entry, child)
+              if child.children[1] == :included
+                collect_included_hook(entry, child)
+              else
+                # A module function: the module is a namespace as well as a
+                # mixin, so the function belongs to the module itself rather
+                # than to whatever includes it.
+                collect_static_method(entry, child, pending_signature, async)
+                entry["module_functions"] << child
+                pending_signature = nil
+              end
             elsif child.type == :module && kind == "mixin" &&
                   constant(child.children.first) == "ClassMethods"
               collect_class_methods(entry, child)

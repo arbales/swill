@@ -221,6 +221,8 @@ class DataTest < Minitest::Test
                       "async def self.search(text, published = Swill::Runtime.omitted_argument)"
       user_proxy = paths.find { |path| path.end_with?("data_fixture/user.rb") }
       assert_includes File.read(user_proxy), "async def self.lookup(*emails, exact:, limit: Swill::Runtime.omitted_argument, **options)"
+      generated_rbis = paths.select { |path| path.end_with?(".rbi") }.map { |path| File.read(path) }
+      refute generated_rbis.any? { |source| source.include?("T.unsafe") }
       File.write(proxy, "stale")
       assert_raises(ArgumentError) { generator.check }
     end

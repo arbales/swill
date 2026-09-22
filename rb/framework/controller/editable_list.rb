@@ -211,7 +211,7 @@ module Swill
 
     sig { returns(T.nilable(HTMLTemplateElement)) }
     def editor_template
-      found = owned_matching(@view.element, 'template[for="editor"]')
+      found = DOM.owned_matching(@view.element, 'template[for="editor"]')
       found.empty? ? nil : T.cast(found[0], HTMLTemplateElement)
     end
 
@@ -250,7 +250,7 @@ module Swill
     # down before the mistake is reported.
     sig { params(node: Element).returns(Controller::InlineEditor) }
     def awaken_editor(node)
-      Awakening.wire(node)
+      Awakening.instantiate(node)
       editor = View.controller_for(node)
       return T.cast(editor, Controller::InlineEditor) if editor.is_a?(Controller::InlineEditor)
       Awakening.detach(node)

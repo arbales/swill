@@ -78,8 +78,10 @@ Writing an application:
 | --- | --- |
 | [Getting started](doc/getting_started.md) | Building an application, installing the gem, application ports, and the static example |
 | [Awakening](doc/awakening.md) | How markup becomes objects: managed and inert elements, ownership, JSON outlets, and templates |
-| [Lifecycle](doc/lifecycle.md) | Activation order, restoration, teardown, and first responder |
-| [Bindings](doc/bindings.md) | Markup bindings, key paths, binding roots, value transformers, and observation |
+| [Lifecycle](doc/lifecycle.md) | Activation order, restoration, and teardown |
+| [Bindings](doc/bindings.md) | Key paths, binding roots, value transformers, and observation |
+| [Responders](doc/responders.md) | The responder chain, actions, key events, and first responder |
+| [Markup](doc/markup.md) | Every attribute Swill reads, in one reference |
 | [Models](doc/models.md) | Base, editable, resource, and distant model roles; identity, drafts, and partial fields |
 | [Server data](doc/server_data.md) | Queries, resolvers, and commands over MessagePack WebSockets |
 

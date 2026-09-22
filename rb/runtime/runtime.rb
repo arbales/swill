@@ -15,6 +15,7 @@
 # answer is attributes.mjs for the browser and attributes.rb here. This host
 # grows only when a shared example needs it.
 require "sorbet-runtime"
+require "time"
 require_relative "declarations"
 require_relative "properties"
 require_relative "attributes"
@@ -38,6 +39,23 @@ module Swill
 
       def write(object, name, value)
         object.public_send("#{name}=", value)
+      end
+
+      def responds_to(object, name)
+        object.respond_to?(name)
+      end
+
+      def method_accepts(object, name, count)
+        method = object.method(name)
+        method.arity == count || (method.arity < 0 && count >= -method.arity - 1)
+      end
+
+      def invoke(object, name, *arguments)
+        object.public_send(name, *arguments)
+      end
+
+      def duplicate(value)
+        value.dup
       end
 
       # One identity store per class, created on first use, so a subclass
@@ -94,31 +112,17 @@ module Swill
         Kernel.warn("[Swill] #{message}")
       end
 
-      # Distant transport is a browser concern. These state readers make
-      # generated models safe to load and inspect on MRI during generation.
-      def data_field_loaded(_object, _name) = false
-      def data_field_loading(_object, _name) = false
-      def data_field_error(_object, _name) = nil
-
-      def initialize_distant_data(object)
-        return unless object.class.respond_to?(:data_fields)
-
-        object.class.data_fields.each do |name, descriptor|
-          write(object, name, Swill::Model::Collection.new) if descriptor["kind"] == "many"
-        end
-      end
-
-      def load_data_field(_object, _name, _reload)
-        raise "remote data is available only in the browser runtime"
-      end
-
-      def data_query(*) = raise("remote data is available only in the browser runtime")
-      def data_resolve(*) = raise("remote data is available only in the browser runtime")
-      def data_command(*) = raise("remote data is available only in the browser runtime")
-      def data_save(*) = raise("distant data is available only in the browser runtime")
-      def data_delete(*) = raise("distant data is available only in the browser runtime")
-      def data_draft(*) = raise("distant data is available only in the browser runtime")
-      def apply_data_draft(*) = raise("distant data is available only in the browser runtime")
+      # MRI can exercise all distant-data semantics except the browser transport.
+      def register_data_lifecycle(_reset, _opened); end
+      def data_connected = false
+      def data_request(*) = raise("remote data is available only in the browser runtime")
+      def data_time(value) = value.is_a?(Time)
+      def data_time_iso(value) = value.iso8601(3)
+      def data_time_from_iso(value) = Time.iso8601(value)
+      def data_record(value) = value.is_a?(Hash)
+      def is_number(value) = value.is_a?(Numeric)
+      def is_boolean(value) = value.equal?(true) || value.equal?(false)
+      def compare_text(left, right) = left <=> right
     end
   end
 end

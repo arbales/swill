@@ -101,17 +101,24 @@ class CompilerTest < Minitest::Test
     end
 
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
-    assert_includes js, "class Swill__Bindings extends Swill__Object"
+# The connection readers are modules of functions, so they compile to a
+# mixin factory carrying its own statics rather than to a class.
+assert_includes js, "Swill__Connections__Bindings.establish = Swill__Connections__Bindings_Functions.establish;"
+assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections__Actions_Functions.establish;"
     assert_includes js, "class Swill__Controller__List extends Swill__Controller", "a class nested under a class compiles"
-    assert_match(/new Swill__Bindings\(\)\.wireObject\(\s*item,\s*element\s*\)/, js)
-    assert_match(/new Swill__Actions\(\)\.wireInto\(\s*this,\s*element\s*\)/, js)
-    assert_includes js, "Runtime.observePath(object, path, render)"
+    assert_match(/Swill__Connections__Bindings\.establishIn\(\s*element,\s*item\s*\)/, js)
+    assert_match(/Swill__Connections__Actions\.establishIn\(\s*element,\s*this\s*\)/, js)
+    # Establishing a binding and reporting an edit are both compiled from the
+    # framework's Ruby: the first lives in Binding, the second in the endpoint
+    # that knows what an edit means for its kind of element.
+    assert_includes js, "Runtime.observePath(object, key_path, push)"
     assert_includes js, "Runtime.isTruthy(value)"
-    assert_includes js, "element.addEventListener(event_name, handler)"
-    assert_includes js, "class Swill__Actions extends Swill__Object"
+    assert_includes js, "target.addEventListener(name, handler)"
+    assert_includes js, "target.removeEventListener(name, handler)"
+
     assert_includes js, "controller.performAction(action_name, element, event)"
-    assert_includes js, "new Swill__Bindings().wire(controller)"
-    assert_includes js, "new Swill__Actions().wire(controller)"
+    assert_includes js, "Swill__Connections__Bindings.establish(controller)"
+    assert_includes js, "Swill__Connections__Actions.establish(controller)"
     assert_match(/document\.addEventListener\(\s*"DOMContentLoaded"/, js)
     assert_includes js, "if (!event.persisted) return application.terminate()"
     modules = compiler.modules(name: "fixture", runtime: "../rb/runtime/runtime.mjs", publish: "Swill", launch: "Swill::Launcher")
@@ -289,10 +296,23 @@ class CompilerTest < Minitest::Test
     assert_includes js, "return Leaf.of(node);"
     error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("def self.new; end") }
     assert_includes error.message, "unsupported method definition self.new"
-    error = assert_raises(Swill::Ruby2JS::CompileError) do
-      compiler_with_test_object.add("module Helper\ndef self.go; end\nend").javascript(runtime: "../rb/runtime/runtime.mjs")
-    end
-    assert_includes error.message, "included"
+    # A module is a namespace as well as a mixin. Its own functions are not
+    # members of the layer it mixes in, so they compile onto the factory, which
+    # is a function and so an object like any other.
+    functions = compiler_with_test_object.add(<<~RUBY)
+      module Helper
+        extend T::Sig
+        sig { params(value: String).returns(String) }
+        def self.go(value)
+          value
+        end
+      end
+    RUBY
+    js = functions.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_includes js, "static go(value) {"
+    assert_includes js, "Helper.go = Helper_Functions.go;"
+    refute_includes js, "class Helper_Layer extends Superclass {\n    static go",
+                    "a module function is not a member of what includes the module"
   end
 
   # A receiver whose class is known gets Ruby calls and property access from
@@ -2134,6 +2154,7 @@ class CompilerTest < Minitest::Test
       .add(File.read("rb/framework/model/store.rb"))
       .add(File.read("rb/framework/model/identity.rb"))
       .add(File.read("rb/framework/model/collection.rb"))
+      .add(File.read("rb/framework/model/distant_client.rb"))
       .add(File.read("rb/framework/model/distant_data.rb"))
       .add(File.read("rb/framework/model/distant_object.rb"))
       .add(File.read("rb/framework/model/relationship.rb"))

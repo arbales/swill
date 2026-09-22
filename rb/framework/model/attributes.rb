@@ -41,23 +41,61 @@ module Swill
       # Attribute values by wire key.
       sig { returns(T::Hash[T.untyped, T.untyped]) }
       def collect_attributes
-        Swill::Runtime.collect_attributes(self)
+        collect_selected_attributes(nil)
+      end
+
+      sig { params(only: T.nilable(T::Array[T.untyped])).returns(T::Hash[T.untyped, T.untyped]) }
+      def collect_selected_attributes(only)
+        selected = only ? T.cast(only, T::Array[T.untyped]).map { |name| name.to_s } : nil
+        result = T.let({}, T::Hash[T.untyped, T.untyped])
+        self.class.model_attributes.each do |name, descriptor|
+          declared_name = T.cast(name, String)
+          declared = T.cast(descriptor, T::Hash[String, T.untyped])
+          next if selected && !selected.include?(declared_name)
+          result[declared["key"]] = Swill::Runtime.read(self, declared_name)
+        end
+        result
       end
 
       sig { params(source: T.untyped).returns(T.self_type) }
       def apply_attributes(source)
-        Swill::Runtime.apply_attributes(self, source)
+        values = T.cast(source, T::Hash[T.untyped, T.untyped])
+        self.class.model_attributes.each do |name, descriptor|
+          declared_name = T.cast(name, String)
+          declared = T.cast(descriptor, T::Hash[String, T.untyped])
+          key = T.cast(declared["key"], String)
+          candidates = [key, key.to_sym, declared_name, declared_name.to_sym]
+          found = candidates.find { |candidate| values.key?(candidate) }
+          next unless found
+          value = applied_attribute_value(declared, values[found])
+          Swill::Runtime.write(self, declared_name, value)
+        end
+        self
       end
 
       # Declared attributes coerce through the validate_<name>(value, previous)
       # convention, resolved from metadata. A validator may raise to reject.
       def coerce_property_value(name, value, previous)
         value = super
-        Swill::Runtime.validate_attribute(self, name, value, previous)
+        return value unless self.class.model_attributes.key?(name)
+        validator = "validate_#{name}"
+        return value unless Swill::Runtime.responds_to(self, validator)
+        unless Swill::Runtime.method_accepts(self, validator, 2)
+          raise "Validator must take a value and a previous value: #{validator}"
+        end
+        Swill::Runtime.invoke(self, validator, value, previous)
       end
 
       def property_will_change(name, previous, value)
         super
+      end
+
+      sig { params(descriptor: T::Hash[String, T.untyped], value: T.untyped).returns(T.untyped) }
+      def applied_attribute_value(descriptor, value)
+        return value unless value.nil?
+        type = T.cast(descriptor["type"], String)
+        return value if type == "T.untyped" || type == "NilClass" || type.start_with?("T.nilable(")
+        Swill::Runtime.duplicate(descriptor["default"])
       end
     end
   end

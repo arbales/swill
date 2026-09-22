@@ -16,28 +16,24 @@ import {
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase,
   valueRead, NIL_READERS, VALUE_READERS,
-  decodeFragment, encodeFragment,
   length, stringify, toInteger, toFloat, capitalize, split, slice,
   sort, sortWith, sortBy, minBy, maxBy, min, max, sum,
   uniq, compact, flatten, reverse, indexOf,
   append, prepend, difference, fetch, deleteKey,
-  intDiv, modulo, between, clamp, compareValues
+  intDiv, modulo, between, clamp, isNumber, isBoolean, compareText
 } from "./values.mjs";
 import {
   read, segments, readPath,
   write, assertWritablePath, writePath,
-  observePath, respondsTo, invoke, performAction
+  observePath, respondsTo, methodAccepts, invoke, performAction
 } from "./paths.mjs";
 import {must, cast, absurd, conforms} from "./types.mjs";
 import {
-  isAttribute, validateAttribute,
-  restorations, outlets,
-  collectAttributes, applyAttributes
+  restorations, outlets
 } from "./attributes.mjs";
 import {
-  configureData, closeData, initializeDistantData, dataQuery, dataResolve, dataCommand,
-  dataSave, dataDelete, dataDraft, applyDataDraft,
-  dataFieldWillAccess, dataFieldLoaded, dataFieldLoading, dataFieldError, loadDataField
+  configureData, closeData, registerDataLifecycle, dataConnected, dataRequest,
+  dataTime, dataTimeIso, dataTimeFromIso, dataRecord
 } from "./data_client.mjs";
 import {
   keywordArguments, blockArgument, omittedArgument, isOmittedArgument,
@@ -53,14 +49,14 @@ export const Runtime = {
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase, valueRead,
-  decodeFragment, encodeFragment, NIL_READERS, VALUE_READERS,
+  NIL_READERS, VALUE_READERS,
 
   // Ruby core semantics
   length, stringify, toInteger, toFloat, capitalize, split, slice,
   sort, sortWith, sortBy, minBy, maxBy, min, max, sum,
   uniq, compact, flatten, reverse, indexOf,
   append, prepend, difference, fetch, deleteKey,
-  intDiv, modulo, between, clamp, compareValues,
+  intDiv, modulo, between, clamp, isNumber, isBoolean, compareText,
 
   // Sorbet runtime operations
   must, cast, absurd, conforms,
@@ -68,18 +64,17 @@ export const Runtime = {
   // Dispatch
   read, segments, readPath,
   write, assertWritablePath, writePath,
-  respondsTo, invoke, performAction,
+  respondsTo, methodAccepts, invoke, performAction,
 
   // Observation
   observe, observePath, retain, release, dealloc, disconnect,
 
   // Declarations
-  isAttribute, validateAttribute, restorations, outlets, collectAttributes, applyAttributes,
+  restorations, outlets,
 
   // Remote data
-  configureData, closeData, initializeDistantData, dataQuery, dataResolve, dataCommand,
-  dataSave, dataDelete, dataDraft, applyDataDraft,
-  dataFieldWillAccess, dataFieldLoaded, dataFieldLoading, dataFieldError, loadDataField,
+  configureData, closeData, registerDataLifecycle, dataConnected, dataRequest,
+  dataTime, dataTimeIso, dataTimeFromIso, dataRecord,
 
   // Ruby complex calls
   keywordArguments, blockArgument, omittedArgument, isOmittedArgument,

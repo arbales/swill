@@ -115,6 +115,22 @@ module Swill
           "{\n#{metadata.join(",\n")}\n}"
         end
 
+        # A module's own functions. The module compiles to a mixin factory, so
+        # there is no class to hang them on; they are converted as the statics
+        # of a throwaway class and then moved onto the factory, which is a
+        # function and so an object like any other.
+        def module_functions(entry)
+          id = entry["identifier"]
+          holder = "#{id}_Functions"
+          sources = entry["module_functions"].map { |node| node.loc.expression.source }
+          js = convert("class Placeholder < Object\n#{sources.join("\n")}\nend",
+                       entry, compiled_class: holder, compiled_parent: "Object")
+          moves = entry["static_methods"].map do |method|
+            "#{id}.#{method['js']} = #{holder}.#{method['js']};"
+          end
+          "#{js}\n#{moves.join("\n")}"
+        end
+
         def class_method_factory(entry)
           id = entry["identifier"]
           class_name = "#{id}_ClassMethods_Layer"
