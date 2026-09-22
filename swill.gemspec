@@ -34,14 +34,15 @@ Gem::Specification.new do |spec|
     Dir["rb/**/*.{rb,mjs}"] +
     Dir["rb/dist/swill*.{js,map}"] +
     Dir["sorbet/rbi/runtime.rbi"] +
-    Dir["doc/*.rdoc"] +
-    ["README.rdoc", "LICENSE", "swill.gemspec"].select { |path| File.file?(path) }
+    Dir["doc/*.md"] +
+    ["README.md", "LICENSE", "swill.gemspec"].select { |path| File.file?(path) }
 
-  spec.extra_rdoc_files = ["README.rdoc", "LICENSE"] + Dir["doc/*.rdoc"]
+  spec.extra_rdoc_files = ["README.md", "LICENSE"] + Dir["doc/*.md"]
   spec.rdoc_options = [
-    "--quiet", "--line-numbers", "--inline-source",
+    "--quiet", "--line-numbers",
     "--title", "Swill: a Cocoa-inspired browser UI framework",
-    "--main", "README.rdoc"
+    "--markup", "markdown",
+    "--main", "README.md"
   ]
   spec.bindir = "exe"
   spec.executables = ["swill"]

@@ -16,24 +16,75 @@ require "rdoc/parser/ruby"
 module SwillRDoc
   module SigAwareComments
     def prepare_comments(comments)
+      @swill_sigs = {}
+      @line_nodes.each do |line, node|
+        next unless sig_call?(node)
+        target, sigs = advance_past_sigs(line)
+        @swill_sigs[target] ||= sigs.first
+      end
       super
-      @unprocessed_comments&.each { |entry| entry[0] = advance_past_sigs(entry[0]) }
+      @unprocessed_comments&.each { |entry| entry[0] = advance_past_sigs(entry[0]).first }
+    end
+
+    # The types are already declared, so the argument list can carry them
+    # instead of repeating the method in a separate signature block. RDoc
+    # renders this as the method's arguments, which keeps it on one line.
+    def add_method(method_name, **opts)
+      sig = (@swill_sigs ||= {})[opts[:start_line]]
+      typed = sig && typed_params(sig)
+      opts = opts.merge(params: typed) if typed
+      super(method_name, **opts)
     end
 
     private
 
     # Advances +line+ over any run of sig blocks and the blank lines between
-    # them, returning the first line that is neither.
+    # them. Answers the first line that is neither, and the sig nodes passed.
     def advance_past_sigs(line)
+      sigs = []
       while (node = @line_nodes[line]) && sig_call?(node)
+        sigs << node
         line = node.location.end_line + 1
         line += 1 while line <= @lines.size && @lines[line - 1]&.match?(/\A\s*$/)
       end
-      line
+      [line, sigs]
     end
 
     def sig_call?(node)
       node.is_a?(Prism::CallNode) && node.name == :sig
+    end
+
+    # "(name: String, callback: Proc) → void", read from the sig's own AST so
+    # that a nested generic's commas cannot be mistaken for argument breaks.
+    def typed_params(sig)
+      statement = sig.block&.body&.body&.first
+      return nil unless statement
+
+      params = nil
+      returns = nil
+      node = statement
+      while node.is_a?(Prism::CallNode)
+        case node.name
+        when :params then params = keyword_types(node)
+        when :returns then returns = node.arguments&.arguments&.first&.slice
+        when :void then returns = "void"
+        end
+        node = node.receiver
+      end
+
+      arguments = params ? "(#{params.map { |n, t| "#{n}: #{t}" }.join(', ')})" : "()"
+      returns ? "#{arguments} → #{returns}" : arguments
+    rescue StandardError
+      nil
+    end
+
+    def keyword_types(node)
+      hash = node.arguments&.arguments&.first
+      return nil unless hash.respond_to?(:elements)
+      hash.elements.filter_map do |element|
+        next unless element.is_a?(Prism::AssocNode)
+        [element.key.slice.delete_suffix(":"), element.value.slice]
+      end
     end
   end
 end

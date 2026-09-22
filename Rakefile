@@ -111,15 +111,20 @@ end
 
 desc "Exercise the example in headless Chrome (set CHROME_BIN outside macOS)"
 task browser: :build do
-  Dir.chdir(ROOT) { sh "node spec/browser_test.mjs" }
+  Dir.chdir(ROOT) do
+    build_data_fixture_client
+    sh "node spec/browser_test.mjs"
+    sh "node spec/data_browser_test.mjs"
+  end
 end
 
 task default: %i[test optimize]
 
 RDOC_OPTS = [
-  "--line-numbers", "--inline-source",
+  "--line-numbers",
+  "--markup", "markdown",
   "--title", "Swill: a Cocoa-inspired browser UI framework",
-  "--main", "README.rdoc"
+  "--main", "README.md"
 ]
 begin
   gem "hanna"
@@ -128,13 +133,60 @@ rescue Gem::LoadError
   # Stock RDoc renders the same content without hanna's styling.
 end
 
+# The declaration reference is read from the compiler rather than written by
+# hand, so a new macro or property appears in the docs without anyone
+# remembering to add it. Committed, so a declaration change shows up in review.
+desc "Regenerate doc/declarations.md from the compiler's knowledge"
+task :declarations do
+  Dir.chdir(ROOT) do
+    framework = Swill::Ruby2JS::Compiler.new(loader: Swill::Ruby2JS::Loader.framework)
+    Swill::Ruby2JS::FRAMEWORK_SOURCES.each { |path| framework.add(File.read(path), file: path) }
+    File.write("doc/declarations.md", framework.declaration_reference)
+  end
+end
+
+# Undocumented public API under rb/framework/. A ratchet, not a gate: it
+# fails when the number grows, and the baseline comes down as the framework
+# gets documented. Internals drop out of the count as they are marked :nodoc:.
+DOC_COVERAGE_BASELINE = 204
+
+desc "Report undocumented public framework API (fails if it grew)"
+task :doc_coverage do
+  Dir.chdir(ROOT) do
+    require_relative "rakelib/sorbet_rdoc"
+    require "rdoc/rdoc"
+    require "tmpdir"
+
+    gaps = []
+    Dir.mktmpdir do |tmp|
+      rdoc = RDoc::RDoc.new
+      rdoc.document(RDOC_OPTS - ["-f", "hanna"] + ["-q", "-o", File.join(tmp, "out")] + Dir["rb/framework/**/*.rb"])
+      rdoc.store.all_classes_and_modules.sort_by(&:full_name).each do |mod|
+        gaps << mod.full_name unless mod.documented?
+        mod.method_list.each do |method|
+          next unless method.visibility == :public
+          gaps << "#{mod.full_name}##{method.name}" unless method.documented?
+        end
+      end
+    end
+
+    puts gaps
+    puts "#{gaps.size} undocumented (baseline #{DOC_COVERAGE_BASELINE})"
+    if gaps.size > DOC_COVERAGE_BASELINE
+      abort "Documentation coverage regressed: #{gaps.size} > #{DOC_COVERAGE_BASELINE}"
+    elsif gaps.size < DOC_COVERAGE_BASELINE
+      puts "Coverage improved. Lower DOC_COVERAGE_BASELINE to #{gaps.size}."
+    end
+  end
+end
+
 desc "Generate HTML documentation into rdoc/"
-task :rdoc do
+task rdoc: :declarations do
   Dir.chdir(ROOT) do
     require_relative "rakelib/sorbet_rdoc"
     require "rdoc/rdoc"
     FileUtils.rm_rf("rdoc")
-    files = ["README.rdoc", "LICENSE"] + Dir["doc/*.rdoc"] + Dir["rb/**/*.rb"]
+    files = ["README.md", "LICENSE"] + Dir["doc/*.md"] + Dir["rb/**/*.rb"]
     RDoc::RDoc.new.document(RDOC_OPTS + ["-o", "rdoc"] + files)
   end
 end
