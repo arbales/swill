@@ -152,10 +152,37 @@
             "kind": "primitive",
             "name": "Boolean"
           },
-          "projection": [
+          "target": "instance",
+          "changes": [
             "published"
           ],
+          "transaction": true,
           "parameters": []
+        },
+        "lookup_title": {
+          "kind": "command",
+          "name": "lookup_title",
+          "returns": {
+            "kind": "value",
+            "name": "DataFixture::PostLookup"
+          },
+          "projection": {
+            "post": [
+              "title"
+            ]
+          },
+          "target": "class",
+          "changes": [],
+          "transaction": false,
+          "parameters": [
+            {
+              "name": "title",
+              "kind": "req",
+              "type": {
+                "kind": "dynamic"
+              }
+            }
+          ]
         },
         "publish!": {
           "kind": "command",
@@ -164,10 +191,29 @@
             "kind": "primitive",
             "name": "Boolean"
           },
-          "projection": [
+          "target": "instance",
+          "changes": [
             "published",
             "published_at"
           ],
+          "transaction": true,
+          "parameters": []
+        },
+        "publish_author!": {
+          "kind": "command",
+          "name": "publish_author!",
+          "returns": {
+            "kind": "model",
+            "name": "DataFixture::User"
+          },
+          "projection": [
+            "name"
+          ],
+          "target": "instance",
+          "changes": [
+            "published"
+          ],
+          "transaction": true,
           "parameters": []
         },
         "search": {
@@ -215,6 +261,30 @@
               }
             }
           ]
+        },
+        "unwrapped_transaction?": {
+          "kind": "command",
+          "name": "unwrapped_transaction?",
+          "returns": {
+            "kind": "primitive",
+            "name": "Boolean"
+          },
+          "target": "class",
+          "changes": [],
+          "transaction": false,
+          "parameters": []
+        },
+        "wrapped_transaction?": {
+          "kind": "command",
+          "name": "wrapped_transaction?",
+          "returns": {
+            "kind": "primitive",
+            "name": "Boolean"
+          },
+          "target": "class",
+          "changes": [],
+          "transaction": true,
+          "parameters": []
         }
       }
     },
@@ -372,5 +442,40 @@
       }
     }
   },
-  "schema_hash": "0faf0acfc5fcbfe7ff65d06c368e69b52cd1a5af76cd98e174e7158ab24459e5"
+  "values": {
+    "DataFixture::PostLookup": {
+      "name": "DataFixture::PostLookup",
+      "fields": {
+        "post": {
+          "name": "post",
+          "type": {
+            "kind": "optional",
+            "members": [
+              {
+                "kind": "model",
+                "name": "DataFixture::Post"
+              }
+            ]
+          }
+        },
+        "status": {
+          "name": "status",
+          "type": {
+            "kind": "enum",
+            "members": [
+              {
+                "kind": "literal",
+                "name": "found"
+              },
+              {
+                "kind": "literal",
+                "name": "missing"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "schema_hash": "e1ac7f048ad2d12bb333a3ecf966d4393b1b97f145615e2b974dc69691ea78b1"
 }

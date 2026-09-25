@@ -39,6 +39,9 @@ module Swill
         def swill_class(type)
           return nil unless type
           name = type.sub(/\AT\.nilable\((.+)\)\z/, '\1')
+          # A generic framework class (Collection[Recipe]) is that class for
+          # member lookup; the type arguments are Sorbet's.
+          name = name.sub(/\[.+\]\z/, "") unless name.start_with?("T::")
           return nil unless name.match?(/\A[A-Z]\w*(?:::\w+)*\z/)
           resolved = @knowledge.resolve(name, @entry["name"].split("::"))
           @knowledge.entries.any? { |entry| entry["name"] == resolved } ? resolved : nil
@@ -472,7 +475,7 @@ module Swill
             return nil if inner.nil? || inner == "NilClass"
             inner[/\AT\.nilable\((.+)\)\z/, 1] || inner
           when :unsafe then "T.untyped"
-          when :absurd then nil
+          when :absurd, :bind then nil
           else type
           end
         end

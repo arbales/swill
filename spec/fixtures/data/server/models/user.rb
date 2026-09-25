@@ -4,7 +4,7 @@ module DataFixture
   class User < Sequel::Model(DB[:users])
     plugin :privacy
     include Sequel::Privacy::IActor
-    extend Swill::Sig
+    extend T::Sig
 
     client_model fields: %i[email name avatar], relationships: %i[comments posts],
                  writable: %i[email name avatar]
@@ -17,19 +17,19 @@ module DataFixture
       field :avatar, Policies::AllowSelf
     end
 
-    sig { returns(Swill::Data::Optional[User]) }
+    sig { returns(T.nilable(User)) }
     def self.current_user
       for_vc(Swill::Data.context.viewer_context).with_pk(Swill::Data.context.actor.id)
     end
 
-    sig { params(email: String).returns(Swill::Data::Optional[User]) }
+    sig { params(email: String).returns(T.nilable(User)) }
     def self.first_by_email(email)
       for_vc(Swill::Data.context.viewer_context).first(email: email)
     end
 
     sig do
       params(emails: String, exact: T::Boolean, limit: Integer, options: T.untyped)
-        .returns(Swill::Data::Optional[User])
+        .returns(T.nilable(User))
     end
     def self.lookup(*emails, exact:, limit: 1, **options)
       dataset = for_vc(Swill::Data.context.viewer_context).limit(limit)

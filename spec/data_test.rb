@@ -3,9 +3,77 @@
 require "minitest/autorun"
 require "tmpdir"
 require "json"
+require "open3"
 require_relative "fixtures/data/server"
 
+DataFixture::DB.create_table(:plain_records) do
+  primary_key :id
+  String :name, null: false
+end
+
+module DataFixture
+  class PlainRecord < Sequel::Model(DB[:plain_records])
+    client_model fields: [:name], writable: [:name]
+  end
+end
+
 class DataTest < Minitest::Test
+  def test_server_entrypoint_supplies_sorbet_syntax_without_loading_sorbet
+    source = <<~'RUBY'
+      require "json"
+      require "sequel"
+      require "swill/server"
+
+      DB = Sequel.sqlite
+      DB.create_table(:facade_records) do
+        primary_key :id
+        String :name
+      end
+      Swill::Data.install(Sequel::Model)
+
+      class FacadeRecord < Sequel::Model(DB[:facade_records])
+        extend T::Sig
+        client_model fields: {name: T.nilable(String)}
+
+        sig { params(name: String).returns(T.nilable(FacadeRecord)) }
+        def self.named(name)
+          first(name: name)
+        end
+        command :named, on: :class
+      end
+
+      data_schema = Swill::Data::Schema.new([FacadeRecord])
+      schema = data_schema.models.fetch("FacadeRecord")
+      dispatcher = Swill::Data::Dispatcher.new(
+        schema: data_schema, viewer_context: nil, actor: nil, scope_token: "plain"
+      )
+      dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => data_schema.hash)
+      reply = dispatcher.call(
+        "type" => "COMMAND", "request_id" => 1, "generation" => 1,
+        "model" => "FacadeRecord", "name" => "named", "arguments" => ["missing"], "keywords" => {}
+      )
+      puts JSON.generate({
+        sorbet: $LOADED_FEATURES.any? { |path| path.include?("sorbet-runtime") },
+        privacy: $LOADED_FEATURES.any? { |path| path.include?("sequel-privacy") },
+        field: schema.dig("fields", "name", "type", "kind"),
+        result: schema.dig("operations", "named", "returns", "kind"),
+        reply: reply["type"],
+        boolean: T::Boolean.name,
+        array: T::Array[String].kind,
+        union: T.any(String, Integer).kind,
+        dynamic: T.untyped.kind
+      })
+    RUBY
+    output, status = Open3.capture2e("ruby", "-Irb", "-e", source)
+    assert status.success?, output
+    assert_equal({
+                   "sorbet" => false, "privacy" => false, "field" => "optional", "result" => "optional",
+                   "reply" => "RETURN", "boolean" => "Boolean", "array" => "array",
+                   "union" => "union", "dynamic" => "dynamic"
+                 },
+                 JSON.parse(output))
+  end
+
   def setup
     @schema = Swill::Data::Schema.new([
                                         DataFixture::Comment, DataFixture::Post, DataFixture::User
@@ -36,8 +104,16 @@ class DataTest < Minitest::Test
     assert_equal "String", operations.dig("DataFixture::User", "operations", "first_by_email",
                                            "parameters", 0, "type", "name")
     assert_equal "Boolean", operations.dig("DataFixture::Post", "operations", "publish!", "returns", "name")
-    assert_equal Swill::Data::Types.dump(Swill::Data::Optional[DataFixture::User]),
+    lookup = operations.dig("DataFixture::User", "operations", "lookup", "parameters")
+    lookup_types = lookup.map do |parameter|
+      type = parameter.fetch("type")
+      type["name"] || type.fetch("kind")
+    end
+    assert_equal %w[String Boolean Integer dynamic], lookup_types
+    assert_equal Swill::Data::Types.dump(T.nilable(DataFixture::User)),
                  Swill::Data::Types.dump(Swill::Data::Types.parse("T.nilable(DataFixture::User)"))
+    nested = Swill::Data::Types.parse("T.any(T.nilable(String), T::Array[Integer])")
+    assert_equal %w[optional array], nested.members.map(&:kind)
   end
 
   def test_client_schema_is_closed_and_writes_are_an_explicit_subset
@@ -87,6 +163,24 @@ class DataTest < Minitest::Test
     assert_nil DataFixture::DB[:comments].where(id: id).first
   ensure
     DataFixture::DB[:comments].where(body: %w[Draft Accepted]).delete
+  end
+
+  def test_create_supports_a_plain_sequel_model
+    schema = Swill::Data::Schema.new([DataFixture::PlainRecord])
+    dispatcher = Swill::Data::Dispatcher.new(
+      schema: schema, viewer_context: nil, actor: nil, scope_token: "plain"
+    )
+    dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => schema.hash)
+
+    created = dispatcher.call(
+      "type" => "CREATE", "request_id" => 27, "generation" => 27,
+      "model" => "DataFixture::PlainRecord", "attributes" => { "name" => "Plain" }
+    )
+
+    assert_equal "RETURN", created["type"]
+    assert_equal "Plain", DataFixture::DB[:plain_records].get(:name)
+  ensure
+    DataFixture::DB[:plain_records].delete
   end
 
   def test_distant_lifecycle_rolls_back_validation_and_authorization_failures
@@ -174,6 +268,69 @@ class DataTest < Minitest::Test
     assert_instance_of Time, response.fetch("patches").first.dig("fields", "published_at")
   end
 
+  def test_class_command_returns_a_typed_value_without_an_id
+    operation = @schema.models.dig("DataFixture::Post", "operations", "lookup_title")
+    assert_equal "class", operation.fetch("target")
+    assert_equal false, operation.fetch("transaction")
+    assert_equal "value", operation.dig("returns", "kind")
+
+    response = @dispatcher.call("type" => "COMMAND", "request_id" => 30, "generation" => 30,
+                                "model" => "DataFixture::Post", "name" => "lookup_title",
+                                "arguments" => ["Distributed Objects"], "keywords" => {})
+    assert_equal "RETURN", response["type"]
+    assert_equal "DataFixture::PostLookup", response.dig("value", "$value", 0)
+    assert_equal "found", response.dig("value", "$value", 1, "status").to_s
+    assert_instance_of Swill::Data::Protocol::Reference, response.dig("value", "$value", 1, "post")
+    assert_equal "Distributed Objects", response.fetch("patches").first.dig("fields", "title")
+  end
+
+  def test_command_changes_and_preload_follow_different_models
+    response = @dispatcher.call("type" => "COMMAND", "request_id" => 40, "generation" => 40,
+                                "model" => "DataFixture::Post", "id" => "1", "name" => "publish_author!",
+                                "arguments" => [], "keywords" => {})
+    assert_equal "RETURN", response["type"], response.inspect
+    assert_equal Swill::Data::Protocol::Reference.new("DataFixture::User", "1"), response["value"]
+    author = response.fetch("patches").find { |patch| patch["model"] == "DataFixture::User" }
+    post = response.fetch("patches").find { |patch| patch["model"] == "DataFixture::Post" }
+    assert_equal({"name" => "Ada"}, author.fetch("fields"))
+    assert_equal({"published" => true}, post.fetch("fields"))
+  end
+
+  def test_projection_validation_uses_the_return_type
+    declaration = DataFixture::Post.swill_data_operations.fetch("publish_author!")
+    original = declaration.fetch("projection")
+    declaration["projection"] = [:title]
+    error = assert_raises(ArgumentError) do
+      Swill::Data::Schema.new([DataFixture::Comment, DataFixture::Post, DataFixture::User])
+    end
+    assert_includes error.message, "DataFixture::User.title"
+  ensure
+    declaration["projection"] = original
+  end
+
+  def test_class_commands_reject_receiver_changes
+    klass = Class.new.extend(Swill::Data::Declarations)
+    error = assert_raises(ArgumentError) { klass.command(:publish, on: :class, changes: [:title]) }
+    assert_includes error.message, "class commands have no receiver"
+  end
+
+  def test_non_nilable_fields_stay_non_nilable
+    assert_equal({"kind" => "primitive", "name" => "String"},
+                 @schema.models.dig("DataFixture::User", "fields", "name", "type"))
+    assert_equal "optional", @schema.models.dig("DataFixture::User", "fields", "avatar", "type", "kind")
+  end
+
+  def test_command_transaction_can_be_owned_by_the_application
+    wrapped = @dispatcher.call("type" => "COMMAND", "request_id" => 31, "generation" => 31,
+                               "model" => "DataFixture::Post", "name" => "wrapped_transaction?",
+                               "arguments" => [], "keywords" => {})
+    unwrapped = @dispatcher.call("type" => "COMMAND", "request_id" => 32, "generation" => 32,
+                                 "model" => "DataFixture::Post", "name" => "unwrapped_transaction?",
+                                 "arguments" => [], "keywords" => {})
+    assert_equal true, wrapped.fetch("value")
+    assert_equal false, unwrapped.fetch("value")
+  end
+
   def test_invalid_command_result_rolls_back_the_transaction
     DataFixture::DB[:posts].where(id: 1).update(published: false)
     response = @dispatcher.call("type" => "COMMAND", "request_id" => 13, "generation" => 13,
@@ -219,6 +376,13 @@ class DataTest < Minitest::Test
       refute_includes proxy_source, "remote_"
       assert_includes proxy_source,
                       "async def self.search(text, published = Swill::Runtime.omitted_argument)"
+      assert_includes proxy_source, "async def self.lookup_title(title)"
+      assert_includes proxy_source, ".class_command(data_model_name, \"lookup_title\""
+      value_proxy = paths.find { |path| path.end_with?("data_fixture/post_lookup.rb") }
+      assert_includes File.read(value_proxy), "class PostLookup < Swill::Object"
+      assert_includes File.read(value_proxy), "property :status"
+      schema_source = paths.find { |path| path.end_with?("generated/schema.rb") }
+      assert_includes File.read(schema_source), "module DataSchema"
       user_proxy = paths.find { |path| path.end_with?("data_fixture/user.rb") }
       assert_includes File.read(user_proxy), "async def self.lookup(*emails, exact:, limit: Swill::Runtime.omitted_argument, **options)"
       generated_rbis = paths.select { |path| path.end_with?(".rbi") }.map { |path| File.read(path) }
@@ -232,7 +396,7 @@ class DataTest < Minitest::Test
     DataFixture::DB.create_table(:blocked_operations) { primary_key :id }
     klass = Class.new(Sequel::Model(DataFixture::DB[:blocked_operations]))
     DataFixture.const_set(:BlockedOperation, klass)
-    klass.extend(Swill::Sig)
+    klass.extend(T::Sig)
     klass.client_model fields: []
     klass.singleton_class.class_eval do
       define_method(:stream) { |_value = nil, &_block| nil }

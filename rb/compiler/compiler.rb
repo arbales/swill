@@ -44,6 +44,7 @@ module Swill
       rb/framework/core/responder.rb
       rb/framework/core/view.rb
       rb/framework/control/base.rb
+      rb/framework/control/button.rb
       rb/framework/control/text_field.rb
       rb/framework/control/select.rb
       rb/framework/control/custom_select.rb
@@ -199,7 +200,7 @@ module Swill
             end
             if mixin
               lines << "export function #{id}(Superclass) {\n#{js}\nreturn #{class_name};\n}"
-              lines << module_functions(entry) if entry["module_functions"].any?
+              lines << module_functions(entry) if entry["module_functions"].any? || entry["constant_nodes"].any?
               lines << class_method_factory(entry) if entry["extends_class_methods"]
             else
               # Ruby2JS may prepend truthiness helper declarations, so prefixing the
@@ -299,23 +300,43 @@ module Swill
             inherited = inherited_method_entry(entry, parent_name, method["name"])
             next unless inherited
             if method["complex"] || inherited["complex"]
-              next if call_shape(inherited) == call_shape(method)
-              raise CompileError,
-                "#{entry['name']}##{method['name']} must accept the same arguments as the method it overrides"
+              unless call_shape(inherited) == call_shape(method)
+                raise CompileError,
+                  "#{entry['name']}##{method['name']} must accept the same arguments as the method it overrides"
+              end
+            else
+              inherited_family = Knowledge.variants(inherited).map { |variant| variant.values_at("name", "arity") }
+              own_family = Knowledge.variants(method).map { |variant| variant.values_at("name", "arity") }
+              unless inherited_family == own_family
+                raise CompileError,
+                  "#{entry['name']}##{method['name']} must accept the same arities as the method it overrides"
+              end
             end
-            inherited_family = Knowledge.variants(inherited).map { |variant| variant.values_at("name", "arity") }
-            own_family = Knowledge.variants(method).map { |variant| variant.values_at("name", "arity") }
-            next if inherited_family == own_family
-            raise CompileError,
-              "#{entry['name']}##{method['name']} must accept the same arities as the method it overrides"
+            inherit_signature(method, inherited)
           end
           entry.fetch("static_methods", []).each do |method|
             inherited = parent_name && knowledge.static_method_entry(parent_name, method["name"])
             next unless inherited
-            next if call_shape(inherited) == call_shape(method)
-            raise CompileError,
-              "#{entry['name']}.#{method['name']} must accept the same arguments as the method it overrides"
+            unless call_shape(inherited) == call_shape(method)
+              raise CompileError,
+                "#{entry['name']}.#{method['name']} must accept the same arguments as the method it overrides"
+            end
+            inherit_signature(method, inherited)
           end
+        end
+
+        # An override keeps the inherited method contract when it does not
+        # restate one. Ruby applications can then use typed framework hooks
+        # without repeating their signatures solely for JavaScript lowering.
+        def inherit_signature(method, inherited)
+          if method["parameters"].empty?
+            method["parameters"] = method.fetch("formals", []).each_with_index.filter_map do |formal, index|
+              inherited_formal = inherited.fetch("formals", [])[index]
+              type = inherited_formal && inherited["parameters"][inherited_formal["name"]]
+              [formal["name"], type] if type
+            end.to_h
+          end
+          method["returns"] ||= inherited["returns"]
         end
 
         def call_shape(method)

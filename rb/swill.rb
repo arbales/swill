@@ -11,4 +11,4 @@ end
 
 require_relative "compiler/version"
 require_relative "compiler/compiler"
-require_relative "data"
+require_relative "swill/server"

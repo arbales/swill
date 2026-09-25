@@ -2,9 +2,11 @@
 
 require "sequel"
 require "sequel-privacy"
-require_relative "../../../rb/swill"
+require_relative "../../../rb/swill/server"
 
 module DataFixture
+  Swill::Data.install(Sequel::Model)
+
   DB = Sequel.sqlite
   DB.create_table(:users) do
     primary_key :id
@@ -44,8 +46,6 @@ module DataFixture
     policy :AllowAll, -> { allow }, allow_anonymous: true
     policy :AllowSelf, ->(actor, subject) { allow if actor.id == subject.id }
   end
-
-  Swill::Data.install(Sequel::Model)
 
 end
 

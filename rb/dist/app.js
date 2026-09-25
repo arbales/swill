@@ -24,6 +24,7 @@
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
   var Swill__Control = framework.Swill__Control;
+  var Swill__Control__Button = framework.Swill__Control__Button;
   var Swill__Control__TextField = framework.Swill__Control__TextField;
   var Swill__Control__Select = framework.Swill__Control__Select;
   var Swill__Control__CustomSelect = framework.Swill__Control__CustomSelect;

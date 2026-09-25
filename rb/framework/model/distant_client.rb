@@ -14,6 +14,11 @@ module Swill
         @default ||= new
       end
 
+      sig { params(url: String, schema_hash: String).void }
+      def self.configure(url:, schema_hash:)
+        Runtime.configure_data(url, schema_hash)
+      end
+
       sig { void }
       def initialize
         super()
@@ -53,6 +58,15 @@ module Swill
         contents = operation(object.class.data_model_name, name, positional, keywords)
         contents["id"] = object.id
         value = await request("COMMAND", contents, nil, true)
+        wrap_result(value, result_kind)
+      end
+
+      sig do
+        params(model: String, name: String, positional: T::Array[T.untyped],
+               keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
+      end
+      async def class_command(model, name, positional, keywords, result_kind)
+        value = await request("COMMAND", operation(model, name, positional, keywords), nil, true)
         wrap_result(value, result_kind)
       end
 
@@ -214,6 +228,14 @@ module Swill
         end
         return Runtime.data_time_from_iso(record["$time"].to_s) if record.size == 1 && record.key?("$time")
         return record["$date"] if record.size == 1 && record.key?("$date")
+        if record.size == 1 && record.key?("$value")
+          tagged = T.cast(record["$value"], T::Array[T.untyped])
+          klass = Runtime.resolve(tagged[0].to_s)
+          attributes = T.cast(decode_value(tagged[1], response_generation), T::Hash[String, T.untyped])
+          object = klass.new
+          attributes.each { |name, item| Runtime.write(object, name, item) }
+          return object
+        end
 
         result = T.let({}, T::Hash[String, T.untyped])
         record.each { |name, item| result[name] = decode_value(item, response_generation, preferred) }
@@ -322,7 +344,7 @@ module Swill
           end
         end
         @tombstones.keys.each do |model|
-          @tombstones.delete(model) if @tombstones[model].empty?
+          @tombstones.delete(model) if T.must(@tombstones[model]).empty?
         end
       end
 

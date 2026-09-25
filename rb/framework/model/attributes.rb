@@ -46,6 +46,7 @@ module Swill
 
       sig { params(only: T.nilable(T::Array[T.untyped])).returns(T::Hash[T.untyped, T.untyped]) }
       def collect_selected_attributes(only)
+        T.bind(self, Swill::Model::Base)
         selected = only ? T.cast(only, T::Array[T.untyped]).map { |name| name.to_s } : nil
         result = T.let({}, T::Hash[T.untyped, T.untyped])
         self.class.model_attributes.each do |name, descriptor|
@@ -59,6 +60,7 @@ module Swill
 
       sig { params(source: T.untyped).returns(T.self_type) }
       def apply_attributes(source)
+        T.bind(self, Swill::Model::Base)
         values = T.cast(source, T::Hash[T.untyped, T.untyped])
         self.class.model_attributes.each do |name, descriptor|
           declared_name = T.cast(name, String)
@@ -76,6 +78,7 @@ module Swill
       # Declared attributes coerce through the validate_<name>(value, previous)
       # convention, resolved from metadata. A validator may raise to reject.
       def coerce_property_value(name, value, previous)
+        T.bind(self, Swill::Model::Base)
         value = super
         return value unless self.class.model_attributes.key?(name)
         validator = "validate_#{name}"

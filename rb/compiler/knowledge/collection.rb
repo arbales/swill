@@ -43,6 +43,8 @@ module Swill
               next
             elsif type_member?(child)
               next
+            elsif child.type == :casgn && child.children[0].nil?
+              validate_expression!(child.children[2])
             elsif child.type == :send && child.children.first.nil? && %i[extend include].include?(child.children[1])
               next
             elsif child.type == :module && kind == "mixin" && constant(child.children.first) == "ClassMethods"
@@ -166,7 +168,7 @@ module Swill
             "parent" => kind == "class" && node.children[1] ? constant(node.children[1]) : nil,
             "includes" => [], "properties" => [], "methods" => [], "static_methods" => [], "included_properties" => [],
             "class_methods" => [], "class_method_entries" => [], "registries" => [], "settings" => [],
-            "module_functions" => [],
+            "module_functions" => [], "constant_nodes" => [], "constants" => [],
             "setting_values" => {}, "registry_values" => {}, "restorations" => []
           }
           target = loader.constant(name)
@@ -214,6 +216,10 @@ module Swill
             elsif type_member?(child)
               # Sorbet-only generic metadata; JavaScript has no runtime type member.
               next
+            elsif child.type == :casgn && child.children[0].nil?
+              validate_expression!(child.children[2])
+              entry["constant_nodes"] << child
+              entry["constants"] << child.children[1].to_s
             elsif child.type == :send && child.children[0..1] == [nil, :extend] &&
                   [::Ruby2JS.parse("T::Sig").first, ::Ruby2JS.parse("T::Generic").first].include?(child.children[2])
               # Annotation-only extension.
@@ -301,6 +307,8 @@ module Swill
           entry["class_methods"] = merge_method_nodes(entry["class_methods"], fragment["class_methods"])
           entry["class_method_entries"] = merge_methods(entry["class_method_entries"],
                                                           fragment["class_method_entries"])
+          entry["constant_nodes"] = merge_constant_nodes(entry["constant_nodes"], fragment["constant_nodes"])
+          entry["constants"] = entry["constant_nodes"].map { |node| node.children[1].to_s }
           %w[macros properties restorations registries settings registry_values setting_values
              included_properties].each do |key|
             entry[key] = fragment[key]
@@ -312,6 +320,13 @@ module Swill
         def merge_methods(existing, additions)
           additions.reduce(existing.dup) do |methods, method|
             methods.reject { |candidate| candidate["name"] == method["name"] } << method
+          end
+        end
+
+        def merge_constant_nodes(existing, additions)
+          additions.reduce(existing.dup) do |constants, constant_node|
+            name = constant_node.children[1]
+            constants.reject { |candidate| candidate.children[1] == name } << constant_node
           end
         end
 
@@ -358,6 +373,7 @@ module Swill
           case statement.type
           when :def then ["instance", statement.children.first.to_s]
           when :defs then ["class", statement.children[1].to_s]
+          when :casgn then ["constant", statement.children[1].to_s] unless type_member?(statement)
           end
         end
 

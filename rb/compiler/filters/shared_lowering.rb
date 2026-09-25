@@ -73,6 +73,9 @@ module Swill
         def class_body_statement?(statement)
           statement = statement.children[2] if Knowledge.async_wrapper?(statement)
           return true if statement.type == :def
+          if statement.type == :casgn && !Knowledge.type_member_node?(statement)
+            return @entry["kind"] == "class" || module_function_body?
+          end
           return false unless statement.type == :defs
           @entry["kind"] == "class" || module_function_body?
         end

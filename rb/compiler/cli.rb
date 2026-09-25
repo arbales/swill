@@ -3,6 +3,7 @@
 
 require "optparse"
 require_relative "build"
+require_relative "project"
 
 module Swill
   module Ruby2JS
@@ -13,6 +14,8 @@ module Swill
         Usage:
           swill build [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
+          swill build --project swill.yml
+          swill watch --project swill.yml
           swill types [ENTRY] [--into DIR]
           swill data generate SERVER_ENTRY [--root DIR]
           swill data check SERVER_ENTRY [--root DIR]
@@ -21,6 +24,8 @@ module Swill
         The entry's require_relative lines name the sources, in order.
         Output defaults to dist/app.js beside the entry; --with-framework
         copies swill.js next to it for pages that do not load it from a CDN.
+        With no ENTRY, swill.yml in the current directory selects a project
+        workflow: data generation, client build, framework copy, and types.
 
         `types` writes the Sorbet artifacts an application needs to typecheck
         itself — the framework's RBI, the DOM's, the runtime's, its own
@@ -43,8 +48,17 @@ module Swill
           opts.on("--interval SECONDS", Float) { |seconds| options[:interval] = seconds }
           opts.on("--into DIR") { |dir| options[:into] = dir }
           opts.on("--root DIR") { |dir| options[:root] = dir }
+          opts.on("--project FILE") { |file| options[:project] = file }
         end
         arguments = parser.parse(rest)
+        project = options[:project]
+        project ||= "swill.yml" if %w[build watch].include?(command) && arguments.empty? && File.file?("swill.yml")
+        if project
+          unless %w[build watch].include?(command) && arguments.empty? && (options.keys - %i[project interval]).empty?
+            raise OptionParser::ParseError, "project builds use swill.yml options; do not also pass ENTRY or build flags"
+          end
+          return run_project(project, watch: command == "watch", interval: options.fetch(:interval, 0.5))
+        end
         case command
         when "build"
           build(arguments.first || ".", options)
@@ -119,6 +133,32 @@ module Swill
         end
       rescue Interrupt
         puts
+      end
+
+      def run_project(path, watch:, interval:)
+        raise CompileError, "watch interval must be positive" unless interval.positive?
+        project = Project.new(path)
+        unless watch
+          project.run
+          return 0
+        end
+
+        loop do
+          begin
+            project = Project.new(path)
+            stamps = project.snapshot
+            project.run
+          rescue CompileError => error
+            $stderr.puts "swill: #{error.message}"
+          end
+          stamps ||= project.snapshot
+          puts "swill: watching project #{project.path} (Ctrl-C to stop)"
+          sleep interval while project.snapshot == stamps
+          stamps = nil
+        end
+      rescue Interrupt
+        puts
+        0
       end
 
     private

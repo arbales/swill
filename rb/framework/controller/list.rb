@@ -117,11 +117,13 @@ module Swill
       super
       install_selection
       @awakened = true
+      observe_collection(self.represented_object)
       render_all
     end
 
     sig { params(_previous: T.untyped, _objects: T.untyped).void }
     def represented_object_did_change(_previous, _objects)
+      observe_collection(_objects)
       @selection_anchor = nil
       render_all if @awakened
       reconcile_selection
@@ -156,16 +158,24 @@ module Swill
     sig { override.params(event: KeyboardEvent).void }
     def key_down(event)
       total = arranged_objects.length
-      key = event.key
-      if total > 0 && (key == "ArrowDown" || key == "ArrowUp")
+      return super if total == 0
+
+      indexes = current_indexes
+      current = indexes.empty? ? -1 : T.must(indexes[0])
+      if event.key == "ArrowDown"
         event.preventDefault
-        indexes = current_indexes
-        current = indexes.empty? ? -1 : T.must(indexes[0])
-        index = key == "ArrowDown" ? current + 1 : current - 1
-        index = 0 if index < 0
+        index = current < 0 ? 0 : current + 1
         index = total - 1 if index > total - 1
         select_indexes([index])
         @selection_anchor = index
+      elsif event.key == "ArrowUp"
+        event.preventDefault
+        if current <= 0
+          cancel_operation(event)
+        else
+          select_indexes([current - 1])
+          @selection_anchor = current - 1
+        end
       else
         super
       end
@@ -187,7 +197,22 @@ module Swill
     # The objects the rows show, in order; subclasses may sort or filter.
     sig { returns(T::Array[T.untyped]) }
     def arranged_objects
-      T.let(self.represented_object || [], T::Array[T.untyped])
+      objects = self.represented_object
+      objects = objects.records if objects.is_a?(Model::Collection)
+      T.let(objects || [], T::Array[T.untyped])
+    end
+
+    sig { params(objects: T.untyped).void }
+    def observe_collection(objects)
+      observer = @collection_observer
+      observer.() if observer
+      @collection_observer = nil
+      return unless objects.is_a?(Model::Collection)
+      @collection_observer = Runtime.observe(objects, "records", ->(_value) do
+        @selection_anchor = nil
+        render_all if @awakened
+        reconcile_selection
+      end)
     end
 
     # Where rows mount.
@@ -318,6 +343,9 @@ module Swill
         stop_mouse_down.()
         stop_click.()
         stop_double_click.()
+        observer = @collection_observer
+        observer.() if observer
+        @collection_observer = nil
         clear_rows
         @awakened = false
       end)

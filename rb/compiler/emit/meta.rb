@@ -122,12 +122,13 @@ module Swill
         def module_functions(entry)
           id = entry["identifier"]
           holder = "#{id}_Functions"
-          sources = entry["module_functions"].map { |node| node.loc.expression.source }
+          sources = (entry["module_functions"] + entry["constant_nodes"]).map { |node| node.loc.expression.source }
           js = convert("class Placeholder < Object\n#{sources.join("\n")}\nend",
                        entry, compiled_class: holder, compiled_parent: "Object")
           moves = entry["static_methods"].map do |method|
             "#{id}.#{method['js']} = #{holder}.#{method['js']};"
           end
+          moves.concat(entry["constants"].map { |name| "#{id}.#{name} = #{holder}.#{name};" })
           "#{js}\n#{moves.join("\n")}"
         end
 

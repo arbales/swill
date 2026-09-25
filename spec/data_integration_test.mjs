@@ -59,7 +59,7 @@ test("generated clients cross the real WebSocket boundary", {timeout: 20_000}, a
     await waitForServer(`http://127.0.0.1:${port}/`, child);
     const schema = JSON.parse(await readFile(new URL("fixtures/data/client/models/generated/schema.json", import.meta.url)));
     const context = createContext({
-      console, URLSearchParams, Event, WebSocket, Blob, TextEncoder, TextDecoder,
+      console, URL, URLSearchParams, Event, WebSocket, Blob, TextEncoder, TextDecoder,
       queueMicrotask, setTimeout, clearTimeout
     });
     for (const file of ["../rb/dist/swill.js", "../build/data_client.js"]) {
@@ -96,6 +96,9 @@ test("generated clients cross the real WebSocket boundary", {timeout: 20_000}, a
     assert.equal(await post.publish(), true);
     assert.equal(post.published, true);
     assert.equal(post.publishedAt.toISOString(), "2026-01-02T03:04:05.000Z");
+    const lookup = await Post.lookupTitle("Distributed Objects");
+    assert.equal(lookup.post, post);
+    assert.equal(lookup.status, "found");
     Runtime.closeData();
   } catch (error) {
     error.message += `\nFalcon output:\n${output}`;

@@ -14,13 +14,13 @@ module Swill
         # method => [arity, whether the last argument is a type]
         OPERATIONS = {
           must: [1, false], unsafe: [1, false], absurd: [1, false],
-          cast: [2, true], let: [2, true], assert_type!: [2, true]
+          cast: [2, true], let: [2, true], assert_type!: [2, true], bind: [2, true]
         }.freeze
 
         # The types a check can name: the declaration types plus Float,
-        # Symbol, NilClass, and T.untyped. Unions, procs, and generics other
-        # than Array and Hash are not checkable here.
-        SIMPLE_TYPE = /(?:String|Integer|Float|Symbol|NilClass|T::Boolean|T\.untyped|T\.proc\.void|T\.proc\.params\([^()]*\)\.(?:void|returns\([^()]*\))|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)/
+        # Symbol, NilClass, T.untyped, and a generic class, which is checked
+        # as its class. Unions and procs are not checkable here.
+        SIMPLE_TYPE = /(?:String|Integer|Float|Symbol|NilClass|T::Boolean|T\.untyped|T\.proc\.void|T\.proc\.params\([^()]*\)\.(?:void|returns\([^()]*\))|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)/
         TYPE = /\A(?:#{SIMPLE_TYPE}|T\.nilable\(#{SIMPLE_TYPE}\))\z/
 
         def self.operation?(node)
@@ -59,6 +59,14 @@ module Swill
           when :must then s(:call, runtime, :must, process(value))
           when :absurd then s(:call, runtime, :absurd, process(value))
           when :unsafe then process(value)
+          when :bind
+            # T.bind tells Sorbet what self is inside a mixin; in JavaScript
+            # self already is the instance, so nothing is emitted. A runtime
+            # check here would sit on hot paths such as property writes.
+            unless value.type == :self
+              raise CompileError, "T.bind binds self, not #{value.loc.expression.source}"
+            end
+            s(:begin)
           else
             # The browser's own classes are not the runtime's to check, and
             # T.untyped checks nothing: such a cast is an annotation for
@@ -76,6 +84,13 @@ module Swill
         def checkable_type(type, method)
           inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
           return type if inner.start_with?("T::") || %w[String Integer Float Symbol NilClass].include?(inner)
+          # A generic class is checked as its class, as sorbet-runtime checks
+          # it: the type arguments are Sorbet's.
+          generic = inner[/\A([A-Z]\w*(?:::\w+)*)\[.+\]\z/, 1]
+          if generic
+            type = type.sub(inner, generic)
+            inner = generic
+          end
           return type unless inner.match?(/\A[A-Z]\w*(?:::\w+)*\z/)
           resolved = begin
             @knowledge.resolve(inner, @scope)

@@ -50,6 +50,7 @@ module Swill
 
       sig { params(name: T.any(Symbol, String), previous: T.untyped, value: T.untyped).void }
       def property_will_change(name, previous, value)
+        T.bind(self, Swill::Model::Editable)
         super(name, previous, value)
         return if (@dirty_suspensions || 0) > 0
         attributes = T.cast(self.class.model_attributes, T::Hash[String, T.untyped])

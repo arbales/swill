@@ -556,12 +556,17 @@ let fixtureSequence = 0;
 // under fresh names exactly like generated metadata would.
 function nestedFixture() {
   const log = [];
+  const atLoad = {};
   const hooks = ["viewDidLoad", "awakeFromDOM", "controllerDidLoad", "viewWillAppear",
     "viewDidAppear", "viewWillDisappear", "viewDidDisappear"];
   const recording = (Base, label) => {
     const klass = class extends Base {};
     for (const hook of hooks) {
-      klass.prototype[hook] = function () { log.push(`${label}:${hook}`); return Base.prototype[hook].call(this); };
+      klass.prototype[hook] = function () {
+        log.push(`${label}:${hook}`);
+        if (hook === "viewDidLoad") atLoad[label] = {nameField: this.nameField, title: parentTitle.textContent};
+        return Base.prototype[hook].call(this);
+      };
     }
     return klass;
   };
@@ -597,7 +602,7 @@ function nestedFixture() {
   const document = element("body", {}, [parentRoot]);
   const controllers = launched(document);
   const [parent, child, grandchild] = controllers;
-  return {log, suffix, document, controllers, parent, child, grandchild, parentRoot, childRoot, grandchildRoot,
+  return {log, atLoad, suffix, document, controllers, parent, child, grandchild, parentRoot, childRoot, grandchildRoot,
     parentTitle, nameInput, parentClear, childTitle, childClear, childBump, childShout, grandchildTitle};
 }
 
@@ -634,6 +639,13 @@ test("lifecycle runs children first per phase and preserves the flat order", () 
   ]);
   assert.ok(f.parent.person instanceof Person, "the parent's inherited view_did_load ran");
   assert.equal(f.parentTitle.textContent, "Hello Ada", "awake_from_dom saw the decoded JSON outlet");
+});
+
+test("view_did_load runs after outlets connect and before bindings push", () => {
+  const f = nestedFixture();
+  assert.equal(f.atLoad.parent.nameField, f.parent.nameField, "the outlet was already connected");
+  assert.ok(f.atLoad.parent.nameField, "and is not nil");
+  assert.equal(f.atLoad.parent.title, "", "no binding had pushed yet");
 });
 
 test("outlets connect to their direct owner as views, controllers, and data", () => {
@@ -1357,6 +1369,7 @@ test("the application owns the first responder and moves focus with it", () => {
   const [parent, badge] = application.controllers();
   assert.equal(application.firstResponder(), parent.nameField, "awake_from_dom made the field first responder");
   assert.equal(f.document.activeElement, f.nameInput);
+  assert.equal(f.nameInput.focusOptions.preventScroll, true, "first responder changes do not scroll the page");
   assert.equal(application.makeFirstResponder(parent.nameField), true, "already first responder");
   assert.equal(application.makeFirstResponder(badge), true, "a controller with a focusable element accepts");
   assert.equal(application.firstResponder(), badge);
@@ -1818,10 +1831,17 @@ test("the keyboard moves a single selection from the first responder and Enter a
   assert.deepEqual(Array.from(f.controller.selectedIndexes), [2]);
   key("ArrowDown");
   assert.deepEqual(Array.from(f.controller.selectedIndexes), [2], "the end clamps");
+  let boundaryCancels = 0;
+  const cancelOperation = f.controller.cancelOperation.bind(f.controller);
+  f.controller.cancelOperation = event => {
+    if (event.key === "ArrowUp") boundaryCancels += 1;
+    else cancelOperation(event);
+  };
   key("ArrowUp");
   key("ArrowUp");
   key("ArrowUp");
-  assert.deepEqual(Array.from(f.controller.selectedIndexes), [0], "the start clamps");
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [0]);
+  assert.equal(boundaryCancels, 1, "Up at the first row invokes the list's cancel behavior");
   key("ArrowDown");
   key("Enter");
   assert.equal(f.parent.person, grace, "Enter activates the selection");
@@ -1956,6 +1976,7 @@ test("a sortable list restores its sort from the fragment and writes changes bac
 
 const InlineEditor = Runtime.resolve("Swill::Controller::InlineEditor");
 const TextField = Runtime.resolve("Swill::Control::TextField");
+const Button = Runtime.resolve("Swill::Control::Button");
 const Select = Runtime.resolve("Swill::Control::Select");
 const CustomSelect = Runtime.resolve("Swill::Control::CustomSelect");
 
@@ -2111,6 +2132,16 @@ test("an editable list needs an editor template whose root is an inline editor",
 });
 
 // ---- controls ----
+
+test("a button joins the keyboard focus order without overriding an author's choice", () => {
+  const button = element("button", {klass: "Swill::Control::Button", outlet: "button"});
+  const excluded = element("button", {klass: "Swill::Control::Button", outlet: "excluded", tabindex: "-1"});
+  const host = installHost({button: false, excluded: false});
+  const [controller] = launched(element("body", {}, [element("main", {controller: host}, [button, excluded])]));
+  assert.ok(controller.button instanceof Button);
+  assert.equal(button.getAttribute("tabindex"), "0");
+  assert.equal(excluded.getAttribute("tabindex"), "-1");
+});
 
 test("a text field mirrors its input both ways and a select renders its options", () => {
   const nameInput = element("input", {klass: "Swill::Control::TextField", outlet: "field", value: "Ada"});

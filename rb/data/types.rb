@@ -26,7 +26,7 @@ module Swill
       end
     end
 
-    # `ResultSet[Post]`, `Optional[User]`, and the other Swill-native forms.
+    # Protocol types that have no direct Sorbet spelling.
     class Generic
       def initialize(kind)
         @kind = kind
@@ -52,6 +52,9 @@ module Swill
 
         name = value.respond_to?(:name) ? value.name : value.to_s
         return Type.new("primitive", name: name) if PRIMITIVES.include?(name)
+        if defined?(Swill::Data::Value) && value.is_a?(Class) && value <= Swill::Data::Value
+          return Type.new("value", name: name)
+        end
         return Type.new("model", name: name) if value.is_a?(Class) || value.is_a?(Module)
 
         parse(name)
@@ -65,16 +68,12 @@ module Swill
           Type.new("array", members: [parse(inner)])
         elsif (inner = wrapped(source, "T.any"))
           Type.new("union", members: split(inner).map { |item| parse(item) })
-        elsif (inner = wrapped(source, "Optional"))
-          Type.new("optional", members: [parse(inner)])
         elsif (inner = wrapped(source, "Array"))
           Type.new("array", members: [parse(inner)])
         elsif (inner = wrapped(source, "ResultSet"))
           Type.new("result_set", members: [parse(inner)])
         elsif (inner = wrapped(source, "ModelRef"))
           Type.new("model_ref", members: [parse(inner)])
-        elsif (inner = wrapped(source, "Union"))
-          Type.new("union", members: split(inner).map { |item| parse(item) })
         elsif PRIMITIVES.include?(source)
           Type.new("primitive", name: source)
         elsif source.empty? || source == "T.untyped"
@@ -103,8 +102,8 @@ module Swill
         start = 0
         parts = []
         source.each_char.with_index do |character, index|
-          depth += 1 if character == "["
-          depth -= 1 if character == "]"
+          depth += 1 if character == "[" || character == "("
+          depth -= 1 if character == "]" || character == ")"
           next unless character == "," && depth.zero?
 
           parts << source[start...index].strip
@@ -114,10 +113,8 @@ module Swill
       end
     end
 
-    Optional = Generic.new("optional")
     ResultSet = Generic.new("result_set")
     ModelRef = Generic.new("model_ref")
-    Union = Generic.new("union")
     Enum = Generic.new("enum")
   end
 end

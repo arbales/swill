@@ -88,7 +88,7 @@ module Swill
         when "union" then members.any? { |member| matches?(value, member) }
         when "enum" then members.any? { |member| value.to_s == member["name"] }
         when "array", "result_set" then collection?(value) && value.all? { |item| matches?(item, members.fetch(0)) }
-        when "model", "model_ref" then value && value.class.name == (type["name"] || members.dig(0, "name"))
+        when "model", "model_ref", "value" then value && value.class.name == (type["name"] || members.dig(0, "name"))
         when "primitive" then primitive?(value, type.fetch("name"))
         else false
         end

@@ -152,7 +152,22 @@ module Swill
 
     sig { params(copy: T.untyped, original: T.untyped, index: Integer).void }
     def commit_edit(copy, original, index)
+      if original.is_a?(Model::DistantObject)
+        commit_distant_edit(copy, original, index)
+        return
+      end
       finish_edit(index, apply_edit(copy, original, index))
+    end
+
+    sig { params(copy: T.untyped, original: Model::DistantObject, index: Integer).void }
+    async def commit_distant_edit(copy, original, index)
+      begin
+        await original.apply_draft(copy)
+        finish_edit(index, original)
+      rescue => error
+        editing_did_fail_save(error)
+        open_editor(index, original, copy)
+      end
     end
 
     # A model takes its draft back and stays the row's object; a plain object
@@ -197,6 +212,12 @@ module Swill
     sig { params(error: T.untyped).void }
     def editing_did_fail_validation(error)
       warn("Edit refused: #{error.message}")
+    end
+
+    # Override to present a persistence error. The same draft is remounted.
+    sig { params(error: T.untyped).void }
+    def editing_did_fail_save(error)
+      warn("Edit did not save: #{error.message}")
     end
 
     # ---- rows and the editor ----

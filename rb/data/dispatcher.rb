@@ -30,13 +30,12 @@ module Swill
         context.use { dispatch(type, message) }
       rescue RemoteError => e
         error_message(message, e.code, e.message, e.details)
-      rescue Sequel::Privacy::Unauthorized, Sequel::Privacy::FieldUnauthorized => e
-        error_message(message, "unauthorized", e.message)
       rescue Sequel::ValidationFailed => e
         details = e.respond_to?(:model) && e.model ? e.model.errors.to_hash : nil
         error_message(message, "validation_failed", e.message, details)
       rescue StandardError => e
-        error_message(message, "operation_failed", e.message)
+        code = privacy_error?(e) ? "unauthorized" : "operation_failed"
+        error_message(message, code, e.message)
       end
 
       private
@@ -77,7 +76,7 @@ module Swill
         attributes = validated_attributes(model_schema, message.fetch("attributes", {}))
         transaction(klass) do
           record = if type == "CREATE"
-                     privacy_dataset(klass).new(attributes)
+                     build_record(klass, attributes)
                    else
                      privacy_dataset(klass).with_pk!(message.fetch("id"))
                    end
@@ -90,7 +89,7 @@ module Swill
         transaction(klass) do
           record = privacy_dataset(klass).with_pk!(message.fetch("id"))
           if record.respond_to?(:allow?) && !record.allow?(context.viewer_context, :delete)
-            raise Sequel::Privacy::Unauthorized, "Cannot delete #{klass}"
+            raise RemoteError.new("unauthorized", "Cannot delete #{klass}")
           end
           record.destroy
           envelope(message, "RETURN").merge("value" => nil, "patches" => [])
@@ -151,13 +150,19 @@ module Swill
                 when "resolver"
                   klass.public_send(name, *arguments, **keywords)
                 when "command"
-                  receiver = privacy_dataset(klass).with_pk!(message.fetch("id"))
-                  reply = transaction(klass) do
+                  receiver = if declaration.fetch("target", "instance") == "class"
+                               klass
+                             else
+                               privacy_dataset(klass).with_pk!(message.fetch("id"))
+                             end
+                  invoke = proc do
                     returned = receiver.public_send(name, *arguments, **keywords)
                     Validator.result!(returned, declaration.fetch("returns"))
                     response(message, "RETURN", returned, declaration.fetch("projection", []), generation,
-                             receiver: receiver)
+                             receiver: receiver.is_a?(Sequel::Model) ? receiver : nil,
+                             changes: declaration.fetch("changes", []))
                   end
+                  reply = declaration.fetch("transaction", true) ? transaction(klass, &invoke) : invoke.call
                   return reply
                 end
         Validator.result!(value, declaration.fetch("returns"))
@@ -184,10 +189,10 @@ module Swill
         envelope(message, "RETURN").merge("value" => nil, "patches" => patches)
       end
 
-      def response(message, type, value, projection, generation, receiver: nil)
+      def response(message, type, value, projection, generation, receiver: nil, changes: [])
         patches = []
         encoded = encode_value(value, projection, generation, patches)
-        patches << patch(receiver, projection, generation, patches) if receiver && !projection.empty?
+        patches << patch(receiver, changes, generation, patches) if receiver && !changes.empty?
         envelope(message, type).merge("value" => encoded, "patches" => patches.uniq)
       end
 
@@ -199,6 +204,13 @@ module Swill
           value.all.map { |item| encode_value(item, projection, generation, patches) }
         elsif value.is_a?(Array)
           value.map { |item| encode_value(item, projection, generation, patches) }
+        elsif value.is_a?(Value)
+          fields = schema.values.fetch(value.class.name).fetch("fields")
+          encoded = fields.to_h do |name, field|
+            item_projection = projection.is_a?(Hash) ? projection.fetch(name, projection.fetch(name.to_sym, [])) : projection
+            [name, encode_value(value.public_send(name), item_projection, generation, patches)]
+          end
+          {"$value" => [value.class.name, encoded]}
         else
           value
         end
@@ -236,6 +248,22 @@ module Swill
 
       def privacy_dataset(klass)
         klass.respond_to?(:for_vc) ? klass.for_vc(context.viewer_context) : klass.dataset
+      end
+
+      def privacy_error?(error)
+        return false unless defined?(Sequel::Privacy)
+        %i[Unauthorized FieldUnauthorized].filter_map do |name|
+          Sequel::Privacy.const_get(name, false) if Sequel::Privacy.const_defined?(name, false)
+        end.any? do |type|
+          error.is_a?(type)
+        end
+      end
+
+      # sequel-privacy datasets attach their viewer context through #new.
+      # Plain Sequel datasets construct records through the model class.
+      def build_record(klass, attributes)
+        dataset = privacy_dataset(klass)
+        dataset.respond_to?(:new) ? dataset.new(attributes) : klass.new(attributes)
       end
 
       def resolve_argument(value, type)

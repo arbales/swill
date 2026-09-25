@@ -1,4 +1,4 @@
-// A small element tree for Node tests: enough DOM for ownership walks,
+// A small element tree for the JavaScript tests: enough DOM for ownership walks,
 // attribute scans, simple selectors, bubbling events, and focus. No layout,
 // no parsing.
 export class Element {
@@ -183,7 +183,8 @@ export class Element {
 
   // ---- focus: records activeElement on the document and fires focusin ----
 
-  focus() {
+  focus(options = {}) {
+    this.focusOptions = options;
     const document = this.ownerDocument;
     const previous = document.activeElement ?? null;
     if (previous === this) return;

@@ -214,7 +214,7 @@ module Swill
     sig { void }
     def focus_element
       target = first_focusable_element
-      target.focus if target
+      target.focus({preventScroll: true}) if target
     end
 
     # Blurs the first focusable element, if there is one.

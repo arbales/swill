@@ -88,11 +88,11 @@ task test: :typecheck do
     sh "bundle exec ruby spec/shared_test.rb"
     sh "bundle exec ruby spec/cli_test.rb"
     sh "bundle exec ruby spec/data_test.rb"
-    sh "node --test spec/runtime_test.mjs"
-    sh "node --test spec/data_client_test.mjs"
+    sh "deno test -A spec/runtime_test.mjs"
+    sh "deno test -A spec/data_client_test.mjs"
     build_data_fixture_client
-    sh "node --test spec/data_integration_test.mjs"
-    sh "node --test spec/bundle_test.mjs"
+    sh "deno test -A spec/data_integration_test.mjs"
+    sh "deno test -A spec/bundle_test.mjs"
   end
 end
 
@@ -100,7 +100,7 @@ desc "Bundle/minify with the root project's esbuild and execute the result"
 task optimize: :build do
   Dir.chdir(ROOT) do
     bundle_spike(minify: true)
-    sh({"MINIFIED" => "1"}, "node", "--test", "spec/bundle_test.mjs")
+    sh({"MINIFIED" => "1"}, "deno", "test", "-A", "spec/bundle_test.mjs")
     require "zlib"
     %w[swill app].each do |name|
       output = File.binread("rb/dist/#{name}.min.js")
@@ -113,8 +113,8 @@ desc "Exercise the example in headless Chrome (set CHROME_BIN outside macOS)"
 task browser: :build do
   Dir.chdir(ROOT) do
     build_data_fixture_client
-    sh "node spec/browser_test.mjs"
-    sh "node spec/data_browser_test.mjs"
+    sh "deno run -A spec/browser_test.mjs"
+    sh "deno run -A spec/data_browser_test.mjs"
   end
 end
 
@@ -201,6 +201,6 @@ task benchmark: :build do
     end
     median = warm_builds.sort[warm_builds.length / 2]
     puts format("warm build: %.2f ms median (%d samples)", median, warm_builds.length)
-    sh "node", "benchmark/runtime.mjs"
+    sh "deno", "run", "-A", "benchmark/runtime.mjs"
   end
 end

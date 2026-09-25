@@ -111,6 +111,9 @@ module Swill
     sig { void }
     def self.close_data; end
 
+    sig { params(url: String, schema_hash: String).void }
+    def self.configure_data(url, schema_hash); end
+
     sig { params(reset: T.proc.void, opened: T.proc.void).void }
     def self.register_data_lifecycle(reset, opened); end
 
@@ -232,8 +235,7 @@ end
 
 module Swill::Model::DirtyTracking
   extend T::Helpers
-  requires_ancestor { Swill::Object }
-  requires_ancestor { Swill::Model::Attributes }
+  requires_ancestor { Swill::Model::Base }
 end
 
 module Swill::Model::Drafts
@@ -242,11 +244,27 @@ module Swill::Model::Drafts
   requires_ancestor { Swill::Object }
   requires_ancestor { Swill::Model::Attributes }
 
-  sig { returns(T.class_of(Swill::Model::Base)) }
-  def class; end
-
   sig { returns(T::Hash[T.untyped, T.untyped]) }
   def collect_attributes; end
+end
+
+module Swill::Model::DistantData
+  extend T::Helpers
+  mixes_in_class_methods(ClassMethods)
+  requires_ancestor { Swill::Model::DistantObject }
+end
+
+module Swill::Model::DistantData::ClassMethods
+  extend T::Helpers
+  extend T::Generic
+  has_attached_class!(:out) { {upper: Swill::Model::DistantObject} }
+  requires_ancestor { T.class_of(Swill::Model::DistantObject) }
+end
+
+# Object bindings are an object's own; raising reaches Kernel through it.
+module Swill::ObjectBindings
+  extend T::Helpers
+  requires_ancestor { Swill::Object }
 end
 
 # The mixin's class-side protocol. Sorbet learns here what the source's
@@ -255,6 +273,7 @@ end
 module Swill::Model::Attributes
   extend T::Helpers
   mixes_in_class_methods(ClassMethods)
+  requires_ancestor { Swill::Model::Base }
 end
 
 module Swill::Model::Attributes::ClassMethods

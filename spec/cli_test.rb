@@ -2,6 +2,7 @@ require "minitest/autorun"
 require "open3"
 require "tmpdir"
 require "fileutils"
+require "timeout"
 require_relative "../rb/compiler/cli"
 
 class CLITest < Minitest::Test
@@ -85,7 +86,7 @@ class CLITest < Minitest::Test
       server = File.join(ROOT, "spec/fixtures/data/server.rb")
       stdout, stderr, status = swill("data", "generate", server, "--root", dir)
       assert status.success?, stderr
-      assert_includes stdout, "wrote 7 data files"
+      assert_includes stdout, "wrote 10 data files"
 
       stdout, stderr, status = swill("data", "check", server, "--root", dir)
       assert status.success?, stderr
@@ -95,6 +96,92 @@ class CLITest < Minitest::Test
       _stdout, stderr, status = swill("data", "check", server, "--root", dir)
       refute status.success?
       assert_includes stderr, "generated data file is stale"
+    end
+  end
+
+  def test_project_build_regenerates_server_changes_in_a_fresh_process
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "client"))
+      server = <<~RUBY
+        require "sequel"
+        require #{File.join(ROOT, "rb/swill/server").inspect}
+        Swill::Data.install(Sequel::Model)
+        module ProjectFixture
+          DB = Sequel.mock
+          class Note < Sequel::Model(DB[:notes])
+            def_column_accessor :id, :title, :body
+            client_model fields: {id: String, title: String}
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "server.rb"), server)
+      File.write(File.join(dir, "client/app.rb"), <<~RUBY)
+        require_relative "models/generated/project_fixture/note"
+        module ProjectFixture
+          class App < Swill::Application
+          end
+        end
+      RUBY
+      config = File.join(dir, "swill.yml")
+      File.write(config, {"server" => "server.rb", "client" => "client/app.rb",
+                          "out" => "public/app.js"}.to_yaml)
+      _stdout, stderr, status = swill("build", "--project", config)
+      assert status.success?, stderr
+      assert File.file?(File.join(dir, "public/swill.js"))
+      assert File.file?(File.join(dir, "client/sorbet/rbi/application.rbi"))
+      project = Swill::Ruby2JS::Project.new(config)
+      stamps = project.snapshot
+      generated = File.join(dir, "client/models/generated/project_fixture/note.rb")
+      File.write(generated, "stale")
+      assert_equal stamps, project.snapshot, "generated files must not trigger a rebuild loop"
+      File.write(File.join(dir, "server.rb"), server.sub("title: String}", "title: String, body: String}"))
+      refute_equal stamps, project.snapshot
+      _stdout, stderr, status = swill("build", "--project", config)
+      assert status.success?, stderr
+      assert_includes File.read(generated), "attribute :body"
+      File.write(File.join(dir, "client/new.rb"), "# newly added source\n")
+      assert project.snapshot.any? { |file, _| file.end_with?("client/new.rb") }
+    end
+  end
+
+  def test_project_reports_config_and_hook_errors
+    Dir.mktmpdir do |dir|
+      config = File.join(dir, "swill.yml")
+      File.write(config, {"client" => "client/app.rb", "typo" => true}.to_yaml)
+      _stdout, stderr, status = swill("build", "--project", config)
+      refute status.success?
+      assert_includes stderr, "unknown project option: typo"
+      File.write(config, {"client" => "client/app.rb", "types" => false,
+                          "before_build" => [[RbConfig.ruby, "-e", "abort 'asset failure'"]]}.to_yaml)
+      _stdout, stderr, status = swill("build", "--project", config)
+      refute status.success?
+      assert_includes stderr, "before_build failed"
+      assert_includes stderr, "asset failure"
+    end
+  end
+
+  def test_project_watch_recovers_when_a_missing_source_is_created
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "app.rb"), "require_relative 'extra'\n")
+      File.write(File.join(dir, "swill.yml"), {"client" => "app.rb", "out" => "app.js",
+                                             "types" => false, "framework" => false}.to_yaml)
+      log = File.join(dir, "watch.log")
+      pid = Process.spawn(RbConfig.ruby, File.join(ROOT, "exe/swill"), "watch", "--interval", "0.05",
+                          chdir: dir, out: log, err: [:child, :out], pgroup: true)
+      begin
+        Timeout.timeout(20) do
+          sleep 0.05 until File.read(log).include?("requires a missing file")
+          File.write(File.join(dir, "extra.rb"), "class Watched < Swill::Object; property :name, type: String, default: 'recovered'; end\n")
+          output = File.join(dir, "app.js")
+          sleep 0.05 until File.file?(output) && File.read(output).include?("recovered")
+          File.write(File.join(dir, "extra.rb"), "class Watched < Swill::Object; property :name, type: String, default: 'edited'; end\n")
+          sleep 0.05 until File.read(output).include?("edited")
+        end
+        refute File.file?(File.join(dir, "sorbet/config")), "types: false skips type generation"
+      ensure
+        Process.kill("TERM", -pid)
+        Process.wait(pid)
+      end
     end
   end
 end

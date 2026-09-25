@@ -57,7 +57,7 @@ module Swill
           "after" => [:method, "void", "node: Node"],
           "append" => [:method, "void", "node: Node"],
           "replaceChildren" => [:method, "void", "nodes?: Node"],
-          "focus" => [:method, "void", ""],
+          "focus" => [:method, "void", "options?: T.untyped"],
           "blur" => [:method, "void", ""],
           "scrollIntoView" => [:method, "void", "options?: T.untyped"],
           # Form and dialog members live on Element here rather than on each

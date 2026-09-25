@@ -19,6 +19,11 @@ module Swill
         Names.member(name)
       end
 
+      def self.type_member_node?(node)
+        node.type == :casgn && node.children[2]&.type == :send &&
+          node.children[2].children[0..1] == [nil, :type_member]
+      end
+
       # A method with optional parameters is one JavaScript method per arity,
       # the way Cocoa spells an overload as a selector: observe and
       # observeWithObject. The shortest variant keeps the plain name; the rest
@@ -132,6 +137,20 @@ module Swill
             parts.pop
           end
           raise CompileError, "unknown constant #{name} in #{scope.join('::')}"
+        end
+
+        def constant_member(name, scope, current = nil)
+          return [current["name"], name] if current && !name.include?("::") && current.fetch("constants", []).include?(name)
+          parts = scope.dup
+          loop do
+            candidate = (parts + [name]).join("::")
+            owner_name, member = candidate.rpartition("::").values_at(0, 2)
+            owner = entries.find { |entry| entry["name"] == owner_name }
+            return [owner_name, member] if owner&.fetch("constants", [])&.include?(member)
+            break if parts.empty?
+            parts.pop
+          end
+          nil
         end
 
         def constant(node)

@@ -94,6 +94,26 @@ class CompilerTest < Minitest::Test
     refute_includes js, "Runtime.read"
   end
 
+  def test_override_inherits_dom_parameter_types
+    compiler = Swill::Ruby2JS::Compiler.new
+    compiler.add(<<~RUBY)
+      class Responder
+        extend T::Sig
+        sig { params(event: KeyboardEvent).void }
+        def key_down(event); end
+      end
+      class SearchField < Responder
+        def key_down(key_event)
+          key_event.preventDefault if key_event.key == "ArrowDown"
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "./runtime.mjs")
+    assert_includes js, 'key_event.key === "ArrowDown"'
+    assert_includes js, "key_event.preventDefault()"
+    refute_includes js, "Runtime.read(key_event"
+  end
+
   def test_binding_and_action_dom_behavior_is_compiled_from_framework_ruby
     compiler = Swill::Ruby2JS::Compiler.new
     Swill::Ruby2JS::FRAMEWORK_SOURCES.each do |path|
@@ -759,6 +779,46 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     end
   end
 
+  # T.bind tells Sorbet what self is inside a mixin, where self.class cannot
+  # reach the including class's class methods. In JavaScript self already is
+  # the instance, so it compiles to nothing. A cast to a generic class checks
+  # the class, as sorbet-runtime does; the type arguments are Sorbet's.
+  def test_bind_is_erased_and_generic_casts_check_their_class
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Box < TestObject
+        extend T::Sig
+        extend T::Generic
+        Item = type_member
+        sig { returns(Integer) }
+        def size; 3; end
+      end
+      module Sizing
+        extend T::Sig
+        sig { params(value: T.untyped).returns(Integer) }
+        def measured(value)
+          T.bind(self, Holder)
+          T.cast(value, Box[T.untyped]).size + limit
+        end
+      end
+      class Holder < TestObject
+        extend T::Sig
+        include Sizing
+        sig { returns(Integer) }
+        def limit; 1; end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    refute_match(/T\.bind|Runtime\.bind/, js, "T.bind leaves nothing behind")
+    assert_includes js, 'Runtime.cast(value, "Box").size()', "the class is checked and its member typed"
+    assert_equal [4], execute(js + <<~JS)
+      console.log(JSON.stringify([new Holder().measured(new Box())]));
+    JS
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript("def go(other); T.bind(other, Example); end")
+    end
+    assert_includes error.message, "T.bind binds self"
+  end
+
   def test_other_sorbet_constructs_and_uncheckable_types_are_rejected
     [
       ["def name; T::Struct.new; end", "unsupported runtime Sorbet construct T::Struct"],
@@ -1181,6 +1241,41 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_equal ["accepted", "ready"], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
       console.log(JSON.stringify([object.label(), object.extra()]));
+    JS
+  end
+
+  def test_application_classes_and_modules_expose_constants
+    compiler = compiler_with_test_object
+      .add(<<~RUBY)
+        module Catalog
+          LABELS = ["new", "old"]
+
+          class Item < TestObject
+            PRIORITIES = {"high" => 1, "low" => 2}
+
+            def self.labels
+              Catalog::LABELS
+            end
+
+            def priority
+              PRIORITIES["high"]
+            end
+          end
+        end
+      RUBY
+      .add(<<~RUBY)
+        module Catalog
+          class Item
+            EXTRA = 3
+          end
+        end
+      RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_includes js, "Catalog__Item.PRIORITIES"
+    assert_includes js, "Catalog.LABELS"
+    assert_equal [["new", "old"], 1, 3], execute(js + <<~JS)
+      const Item = Runtime.resolve("Catalog::Item");
+      console.log(JSON.stringify([Item.labels(), new Item().priority(), Item.EXTRA]));
     JS
   end
 
@@ -2282,7 +2377,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
   def execute(js)
     path = "build/compiler-test.mjs"
     File.write(path, js)
-    output, status = Open3.capture2e("node", path)
+    output, status = Open3.capture2e("deno", "run", "-A", path)
     assert status.success?, output
     JSON.parse(output)
   ensure
@@ -2293,7 +2388,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
   def execute_failing(js)
     path = "build/compiler-test.mjs"
     File.write(path, js)
-    output, status = Open3.capture2e("node", path)
+    output, status = Open3.capture2e("deno", "run", "-A", path)
     refute status.success?, "expected the bundle to fail while installing"
     output
   ensure

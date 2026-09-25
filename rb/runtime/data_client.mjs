@@ -19,11 +19,22 @@ export function configureData(
   schemaHash,
   webSocketFactory = value => new WebSocket(value)
 ) {
+  url = websocketURL(url);
   if (configuration &&
       (configuration.url !== url || configuration.schemaHash !== schemaHash)) {
     closeData();
   }
   configuration = {url, schemaHash, webSocketFactory};
+}
+
+function websocketURL(value) {
+  const url = new URL(value, globalThis.location?.href ?? "http://localhost/");
+  if (url.protocol === "http:") url.protocol = "ws:";
+  if (url.protocol === "https:") url.protocol = "wss:";
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new TypeError(`Unsupported data URL protocol: ${url.protocol}`);
+  }
+  return url.href;
 }
 
 export function closeData() {

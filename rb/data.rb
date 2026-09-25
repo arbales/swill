@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
 require_relative "data/types"
+require_relative "data/value"
 require_relative "data/sig"
+require_relative "data/type_facade"
 require_relative "data/declarations"
 require_relative "data/schema"
 require_relative "data/generator"

@@ -70,7 +70,7 @@ module Swill
       end
 
       # Persists changes from a draft made by this object.
-      sig { params(copy: T.self_type).returns(T.self_type) }
+      sig { params(copy: DistantObject).returns(T.self_type) }
       async def apply_draft(copy)
         raise "Cannot persist a deleted distant object" if deleted?
         unless copy.draft_from?(self)
@@ -186,7 +186,7 @@ module Swill
 
         descriptor = self.class.data_fields[name]
         if descriptor && descriptor["kind"] == "many"
-          T.cast(Swill::Runtime.read(self, name), Collection).replace(T.cast(value, T::Array[T.untyped]))
+          T.cast(Swill::Runtime.read(self, name), Collection[T.untyped]).replace(T.cast(value, T::Array[T.untyped]))
         elsif (descriptor && descriptor["kind"] == "field") || name == "id"
           apply_attributes({name => value})
         else

@@ -13,7 +13,7 @@ module Swill
         datetime: "Time", time: "Time"
       }.freeze
 
-      attr_reader :models
+      attr_reader :models, :values
 
       def self.discover
         candidates = ObjectSpace.each_object(Class).select do |klass|
@@ -27,6 +27,7 @@ module Swill
       def initialize(model_classes)
         @classes = model_classes.to_h { |klass| [klass.name, klass] }
         @models = model_classes.to_h { |klass| [klass.name, model_schema(klass)] }.freeze
+        @values = discover_values.freeze
         validate_schema!
       end
 
@@ -35,7 +36,7 @@ module Swill
       end
 
       def payload
-        { "protocol_version" => PROTOCOL_VERSION, "models" => models }
+        { "protocol_version" => PROTOCOL_VERSION, "models" => models, "values" => values }
       end
 
       def hash
@@ -72,11 +73,11 @@ module Swill
         names = (Array(klass.primary_key).map(&:to_s) + declaration.fetch("fields")).uniq.sort
         names.to_h do |field|
           name = field.to_sym
+          explicit = declaration.fetch("field_types", {})[field]
           descriptor = klass.db_schema[name]
-          raise ArgumentError, "unknown client field #{klass.name}.#{field}" unless descriptor
-
-          type = Types.parse(SEQUEL_TYPES.fetch(descriptor[:type], "T.untyped"))
-          type = Type.new("optional", members: [type]) if descriptor[:allow_null]
+          raise ArgumentError, "unknown client field #{klass.name}.#{field}" unless descriptor || explicit
+          type = explicit || Types.parse(SEQUEL_TYPES.fetch(descriptor[:type], "T.untyped"))
+          type = Type.new("optional", members: [type]) if descriptor && descriptor[:allow_null] && !explicit
           [field, { "name" => field, "type" => type.to_h }]
         end
       end
@@ -120,7 +121,8 @@ module Swill
       def operation_callable(klass, declaration)
         name = declaration.fetch("name")
         case declaration.fetch("kind")
-        when "command" then klass.instance_method(name)
+        when "command"
+          declaration.fetch("target", "instance") == "class" ? klass.method(name) : klass.instance_method(name)
         when "query" then klass.dataset.method(name)
         when "resolver" then klass.method(name)
         end
@@ -129,7 +131,7 @@ module Swill
       end
 
       def signature_for(klass, callable, declaration)
-        side = declaration["kind"] == "command" ? :instance : :class
+        side = declaration["kind"] == "command" && declaration.fetch("target", "instance") == "instance" ? :instance : :class
         native = klass.respond_to?(:swill_signatures) && klass.swill_signatures[[side, declaration["name"].to_sym]]
         if native
           return {
@@ -142,8 +144,17 @@ module Swill
         signature = T::Private::Methods.signature_for_method(callable)
         return unless signature
 
-        parameters = signature.arg_types.to_h do |name, type|
-          [name.to_sym, Types.parse(type.to_s)]
+        positional = signature.arg_types.to_h
+        keywords = signature.kwarg_types
+        parameters = signature.method.parameters.to_h do |kind, name|
+          type = case kind
+                 when :rest then signature.rest_type
+                 when :keyrest then signature.keyrest_type
+                 when :block then signature.block_type
+                 when :key, :keyreq then keywords[name]
+                 else positional[name]
+                 end
+          [name, type ? Types.parse(type.to_s) : Type.new("dynamic")]
         end
         {
           parameters:,
@@ -170,6 +181,17 @@ module Swill
           raise ArgumentError, "unknown writable field #{model['name']}.#{unknown_writable.first}" unless unknown_writable.empty?
           primary_writable = writable & primary_keys
           raise ArgumentError, "primary key is not writable: #{model['name']}.#{primary_writable.first}" unless primary_writable.empty?
+          klass = model_class(model.fetch("name"))
+          model.fetch("fields").each_key do |field|
+            unless klass.method_defined?(field.to_sym)
+              raise ArgumentError, "client field has no reader: #{model['name']}.#{field}"
+            end
+          end
+          writable.each do |field|
+            unless klass.method_defined?("#{field}=")
+              raise ArgumentError, "writable client field has no writer: #{model['name']}.#{field}"
+            end
+          end
 
           model.fetch("relationships").each_value do |relationship|
             unless models.key?(relationship.fetch("model"))
@@ -186,13 +208,38 @@ module Swill
             end
             operation.fetch("parameters").each { |parameter| validate_type!(parameter.fetch("type")) }
             validate_type!(operation.fetch("returns"))
-            validate_projection!(model, operation.fetch("projection", []))
+            validate_projection!(model, operation.fetch("changes", []))
+            validate_return_projection!(operation.fetch("returns"), operation.fetch("projection", []))
           end
         end
       end
 
+      def discover_values
+        found = {}
+        pending = models.values.flat_map do |model|
+          model.fetch("operations").values.map { |operation| operation.fetch("returns") }
+        end
+        until pending.empty?
+          type = pending.pop
+          pending.concat(type.fetch("members", []))
+          next unless type["kind"] == "value"
+          klass = Object.const_get(type.fetch("name"))
+          next if found.key?(klass.name)
+          fields = klass.fields.to_h do |name, field_type|
+            dumped = Types.dump(field_type)
+            pending << dumped
+            [name, {"name" => name, "type" => dumped}]
+          end
+          found[klass.name] = {"name" => klass.name, "fields" => fields}
+        end
+        found.sort.to_h
+      end
+
       def validate_type!(type)
         if %w[model model_ref].include?(type.fetch("kind")) && !models.key?(type["name"])
+          raise ArgumentError, "unsupported protocol type #{type['name']}"
+        end
+        if type.fetch("kind") == "value" && !values.key?(type["name"])
           raise ArgumentError, "unsupported protocol type #{type['name']}"
         end
         type.fetch("members", []).each { |member| validate_type!(member) }
@@ -210,6 +257,30 @@ module Swill
           elsif !model.fetch("fields").key?(item.to_s) && !model.fetch("relationships").key?(item.to_s)
             raise ArgumentError, "unknown projection #{model['name']}.#{item}"
           end
+        end
+      end
+
+      # A return projection follows the declared result, not the method's owner.
+      def validate_return_projection!(type, projection)
+        return if projection.empty?
+
+        case type.fetch("kind")
+        when "model", "model_ref"
+          validate_projection!(models.fetch(type.fetch("name")), projection)
+        when "optional", "array", "result_set", "union"
+          type.fetch("members").each { |member| validate_return_projection!(member, projection) }
+        when "value"
+          fields = values.fetch(type.fetch("name")).fetch("fields")
+          if projection.is_a?(Hash)
+            projection.each do |name, nested|
+              field = fields[name.to_s]
+              raise ArgumentError, "unknown value projection #{type['name']}.#{name}" unless field
+              validate_return_projection!(field.fetch("type"), nested)
+            end
+          else
+            fields.each_value { |field| validate_return_projection!(field.fetch("type"), projection) }
+          end
+        # Scalars carry their own value, with no fields to preload.
         end
       end
     end

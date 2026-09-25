@@ -57,8 +57,14 @@ module Swill
         generated = File.join(root, "client", "models", "generated")
         rbi = File.join(root, "sorbet", "rbi", "shims", "generated")
         outputs = {
-          File.join(generated, "schema.json") => "#{JSON.pretty_generate(schema.to_h)}\n"
+          File.join(generated, "schema.json") => "#{JSON.pretty_generate(schema.to_h)}\n",
+          File.join(generated, "schema.rb") => schema_source
         }
+        schema.values.each_value do |value|
+          basename = underscore(value.fetch("name"))
+          outputs[File.join(generated, "#{basename}.rb")] = value_source(value)
+          outputs[File.join(rbi, "#{basename}.rbi")] = value_rbi_source(value)
+        end
         schema.models.each_value do |model|
           basename = underscore(model.fetch("name"))
           outputs[File.join(generated, "#{basename}.rb")] = proxy_source(model)
@@ -93,8 +99,10 @@ module Swill
         sig_params = signature.empty? ? "" : "params(#{signature})."
         client_method = { "query" => "query", "resolver" => "resolve", "command" => "command" }
                         .fetch(operation["kind"])
-        prefix = operation["kind"] == "command" ? "" : "self."
-        target = operation["kind"] == "command" ? "self" : "data_model_name"
+        instance_command = operation["kind"] == "command" && operation.fetch("target", "instance") == "instance"
+        prefix = instance_command ? "" : "self."
+        target = instance_command ? "self" : "data_model_name"
+        client_method = "class_command" if operation["kind"] == "command" && !instance_command
         declaration = parameters.map { |item| parameter_declaration(item) }.join(", ")
         positional = parameters.select { |item| %w[req opt rest].include?(item["kind"]) }
         args = positional.map { |item| item["kind"] == "rest" ? "*#{item['name']}" : item["name"] }.join(", ")
@@ -121,7 +129,8 @@ module Swill
         model.fetch("operations").each_value do |operation|
           parameters = operation["parameters"].map { |item| "#{item['name']}: #{ruby_type(item['type'])}" }.join(", ")
           sig_params = parameters.empty? ? "" : "params(#{parameters})."
-          prefix = operation["kind"] == "command" ? "" : "self."
+          instance_command = operation["kind"] == "command" && operation.fetch("target", "instance") == "instance"
+          prefix = instance_command ? "" : "self."
           arguments = operation["parameters"].map { |item| rbi_parameter_declaration(item) }.join(", ")
           body.push(
             "sig { #{sig_params}returns(#{ruby_type(operation['returns'])}) }",
@@ -129,6 +138,47 @@ module Swill
           )
         end
         ["# typed: true", "", render_class(model["name"], body), ""].join("\n")
+      end
+
+      def schema_source
+        namespaces = schema.models.keys.map { |name| name.split("::")[0...-1] }
+        common = namespaces.reduce do |left, right|
+          left.take_while.with_index { |part, index| right[index] == part }
+        end || []
+        lines = ["# frozen_string_literal: true", ""]
+        common.each_with_index { |name, index| lines << "#{'  ' * index}module #{name}" }
+        depth = common.length
+        lines << "#{'  ' * depth}module DataSchema"
+        lines << "#{'  ' * (depth + 1)}HASH = #{schema.hash.to_json}"
+        lines << "#{'  ' * depth}end"
+        common.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }
+        "#{lines.join("\n")}\n"
+      end
+
+      def value_source(value)
+        body = value.fetch("fields").values.map do |field|
+          "property :#{field['name']}, type: #{ruby_type(field['type'])}, default: nil"
+        end
+        ["# typed: true", "# frozen_string_literal: true", "", render_value_class(value["name"], body), ""].join("\n")
+      end
+
+      def value_rbi_source(value)
+        body = value.fetch("fields").values.flat_map do |field|
+          ["sig { returns(#{ruby_type(field['type'])}) }", "def #{field['name']}; end"]
+        end
+        ["# typed: true", "", render_value_class(value["name"], body), ""].join("\n")
+      end
+
+      def render_value_class(name, body)
+        parts = name.split("::")
+        namespace = parts[0...-1]
+        lines = namespace.each_with_index.map { |part, index| "#{'  ' * index}module #{part}" }
+        depth = namespace.length
+        lines << "#{'  ' * depth}class #{parts.last} < Swill::Object"
+        lines.concat(body.map { |line| "#{'  ' * (depth + 1)}#{line}" })
+        lines << "#{'  ' * depth}end"
+        namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }
+        lines.join("\n")
       end
 
       def render_class(name, body)
@@ -148,7 +198,8 @@ module Swill
         case type.fetch("kind")
         when "primitive"
           type.fetch("name") == "Boolean" ? "T::Boolean" : type.fetch("name")
-        when "model" then type.fetch("name")
+        when "model", "value" then type.fetch("name")
+        when "enum" then "String"
         when "optional" then "T.nilable(#{ruby_type(members.fetch(0))})"
         when "array" then "T::Array[#{ruby_type(members.fetch(0))}]"
         when "result_set" then "Swill::Model::ResultSet[#{ruby_type(members.fetch(0))}]"

@@ -1305,10 +1305,20 @@
     connectionOpened = opened;
   }
   function configureData(url, schemaHash, webSocketFactory = (value) => new WebSocket(value)) {
+    url = websocketURL(url);
     if (configuration2 && (configuration2.url !== url || configuration2.schemaHash !== schemaHash)) {
       closeData();
     }
     configuration2 = { url, schemaHash, webSocketFactory };
+  }
+  function websocketURL(value) {
+    const url = new URL(value, globalThis.location?.href ?? "http://localhost/");
+    if (url.protocol === "http:") url.protocol = "ws:";
+    if (url.protocol === "https:") url.protocol = "wss:";
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      throw new TypeError(`Unsupported data URL protocol: ${url.protocol}`);
+    }
+    return url.href;
   }
   function closeData() {
     const current = socket;
@@ -1531,6 +1541,7 @@
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
     Swill__Connections__Outlets: () => Swill__Connections__Outlets,
     Swill__Control: () => Swill__Control,
+    Swill__Control__Button: () => Swill__Control__Button,
     Swill__Control__CustomSelect: () => Swill__Control__CustomSelect,
     Swill__Control__Select: () => Swill__Control__Select,
     Swill__Control__TextField: () => Swill__Control__TextField,
@@ -2425,7 +2436,7 @@
     // Focuses the first focusable element, if there is one.
     focusElement() {
       let target = this.firstFocusableElement();
-      if (target) return target.focus();
+      if (target) return target.focus({ preventScroll: true });
     }
     // Blurs the first focusable element, if there is one.
     blurElement() {
@@ -2459,6 +2470,12 @@
       }
       ;
       return super.resignFirstResponder(next_responder);
+    }
+  };
+  var Swill__Control__Button = class extends Swill__Control {
+    constructor(element) {
+      super(element);
+      this.ensureFocusable();
     }
   };
   var Swill__Control__TextField = class extends Swill__Control {
@@ -3190,8 +3207,8 @@
       return Runtime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
     }
     static load(controller) {
-      controller.viewDidLoad();
       Swill__Connections__Outlets.establish(controller);
+      controller.viewDidLoad();
       Swill__Connections__Bindings.establish(controller);
       Swill__Connections__Actions.establish(controller);
       return controller.awakeFromDOM();
@@ -4171,9 +4188,11 @@
       super.awakeFromDOM();
       this.installSelection();
       this._awakened = true;
+      this.observeCollection(this.representedObject);
       return this.renderAll();
     }
     representedObjectDidChange(_previous, _objects) {
+      this.observeCollection(_objects);
       this._selection_anchor = null;
       if (this._awakened) this.renderAll();
       return this.reconcileSelection();
@@ -4198,19 +4217,27 @@
     }
     // Arrow keys move a single selection; everything else continues up.
     keyDown(event) {
-      let indexes, current, index;
+      let index;
       let total = this.arrangedObjects().length;
-      let key = event.key;
-      if (Runtime.isTruthy(total > 0 && (key === "ArrowDown" || key === "ArrowUp"))) {
+      if (total === 0) return super.keyDown(event);
+      let indexes = this.currentIndexes();
+      let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
+      if (event.key === "ArrowDown") {
         event.preventDefault();
-        indexes = this.currentIndexes();
-        current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
-        index = key === "ArrowDown" ? current + 1 : current - 1;
-        if (index < 0) index = 0;
+        index = current < 0 ? 0 : current + 1;
         if (index > total - 1) index = total - 1;
         this.selectIndexes([index]);
         this._selection_anchor = index;
         return this._selection_anchor;
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        if (current <= 0) {
+          return this.cancelOperation(event);
+        } else {
+          this.selectIndexes([current - 1]);
+          this._selection_anchor = current - 1;
+          return this._selection_anchor;
+        }
       } else {
         return super.keyDown(event);
       }
@@ -4227,10 +4254,31 @@
     // ---- rows ----
     // The objects the rows show, in order; subclasses may sort or filter.
     arrangedObjects() {
+      let objects = this.representedObject;
+      if (objects instanceof Swill__Model__Collection) {
+        objects = Runtime.read(objects, "records");
+      }
+      ;
       return Runtime.cast(
-        Runtime.logicalOr(this.representedObject, () => []),
+        Runtime.logicalOr(objects, () => []),
         "T::Array[T.untyped]"
       );
+    }
+    observeCollection(objects) {
+      let observer = this._collection_observer;
+      if (Runtime.isTruthy(observer)) observer();
+      this._collection_observer = null;
+      if (!(objects instanceof Swill__Model__Collection)) return;
+      this._collection_observer = Runtime.observe(
+        objects,
+        "records",
+        (_value) => {
+          this._selection_anchor = null;
+          if (this._awakened) this.renderAll();
+          return this.reconcileSelection();
+        }
+      );
+      return this._collection_observer;
     }
     // Where rows mount.
     container() {
@@ -4356,6 +4404,9 @@
         stop_mouse_down();
         stop_click();
         stop_double_click();
+        let observer = this._collection_observer;
+        if (Runtime.isTruthy(observer)) observer();
+        this._collection_observer = null;
         this.clearRows();
         this._awakened = false;
         return this._awakened;
@@ -4716,7 +4767,21 @@
     }
     // ---- policy hooks ----
     commitEdit(copy, original, index) {
+      if (original instanceof Swill__Model__DistantObject) {
+        this.commitDistantEdit(copy, original, index);
+        return;
+      }
+      ;
       return this.finishEdit(index, this.applyEdit(copy, original, index));
+    }
+    async commitDistantEdit(copy, original, index) {
+      try {
+        await original.applyDraft(copy);
+        return this.finishEdit(index, original);
+      } catch (error) {
+        this.editingDidFailSave(error);
+        return this.openEditor(index, original, copy);
+      }
     }
     // A model takes its draft back and stays the row's object; a plain object
     // is replaced by the copy in a new collection. Returns the final object.
@@ -4761,6 +4826,13 @@
     // Override to show the error; the editor stays open.
     editingDidFailValidation(error) {
       return Runtime.warn(`Edit refused: ${Runtime.read(error, "message")}`);
+    }
+    // Override to present a persistence error. The same draft is remounted.
+    editingDidFailSave(error) {
+      return Runtime.warn(`Edit did not save: ${Runtime.read(
+        error,
+        "message"
+      )}`);
     }
     // ---- rows and the editor ----
     // The editor sits among the rows while editing, but is not one.
@@ -5120,6 +5192,20 @@
     static default() {
       return this._default ||= new this();
     }
+    static configure(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [],
+        keywords: [
+          { name: "url", kind: "keyreq" },
+          { name: "schema_hash", kind: "keyreq" }
+        ],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let url = Runtime.argument(__swill_bound, "url");
+      let schema_hash = Runtime.argument(__swill_bound, "schema_hash");
+      return Runtime.configureData(url, schema_hash);
+    }
     constructor() {
       super();
       this._stores = Runtime.cast(
@@ -5167,6 +5253,15 @@
       );
       contents.id = object.id;
       let value = await this.request("COMMAND", contents, null, true);
+      return this.wrapResult(value, result_kind);
+    }
+    async classCommand(model, name, positional, keywords, result_kind) {
+      let value = await this.request(
+        "COMMAND",
+        this.operation(model, name, positional, keywords),
+        null,
+        true
+      );
       return this.wrapResult(value, result_kind);
     }
     async create(object, attributes) {
@@ -5360,6 +5455,21 @@
         record2,
         "$date"
       ))) return record2["$date"];
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$value"
+      ))) {
+        let tagged = Runtime.cast(record2["$value"], "T::Array[T.untyped]");
+        let klass = Runtime.resolve(Runtime.read(tagged[0], "to_s"));
+        let attributes = Runtime.cast(
+          this.decodeValue(tagged[1], response_generation),
+          "T::Hash[String, T.untyped]"
+        );
+        let object = new klass();
+        Object.entries(attributes).forEach(([name, item]) => Runtime.write(object, name, item));
+        return object;
+      }
+      ;
       let result = Runtime.cast({}, "T::Hash[String, T.untyped]");
       Object.entries(record2).forEach(([name, item]) => result[name] = this.decodeValueWithPreferred(
         item,
@@ -5512,7 +5622,7 @@
         });
       });
       return Object.keys(this._tombstones).forEach((model) => {
-        if (Runtime.isEmpty(this._tombstones[model])) {
+        if (Runtime.isEmpty(Runtime.must(this._tombstones[model]))) {
           Runtime.deleteKey(this._tombstones, model);
         }
       });
@@ -5694,12 +5804,12 @@
     }
     async applyDraft(copy) {
       if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (!Runtime.isTruthy(copy.isDraftFrom(this))) {
+      if (!copy.isDraftFrom(this)) {
         throw new Error("apply_draft requires a draft created from this distant object");
       }
       ;
       let attributes = copy.collectDirtyAttributes();
-      if (Runtime.read(attributes, "empty?")) return this;
+      if (Runtime.isEmpty(attributes)) return this;
       await Swill__Model__DistantClient.default().update(this, attributes);
       copy.markClean();
       return this;
@@ -6860,6 +6970,15 @@
           }
         }
       },
+      "Swill::Control::Button": {
+        constructor: Swill__Control__Button,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          }
+        }
+      },
       "Swill::Control::TextField": {
         constructor: Swill__Control__TextField,
         properties: {
@@ -7563,6 +7682,10 @@
             "arity": 0,
             "js": "arrangedObjects"
           },
+          "observe_collection": {
+            "arity": 1,
+            "js": "observeCollection"
+          },
           "container": {
             "arity": 0
           },
@@ -7874,6 +7997,10 @@
             "arity": 3,
             "js": "commitEdit"
           },
+          "commit_distant_edit": {
+            "arity": 3,
+            "js": "commitDistantEdit"
+          },
           "apply_edit": {
             "arity": 3,
             "js": "applyEdit"
@@ -7893,6 +8020,10 @@
           "editing_did_fail_validation": {
             "arity": 1,
             "js": "editingDidFailValidation"
+          },
+          "editing_did_fail_save": {
+            "arity": 1,
+            "js": "editingDidFailSave"
           },
           "row_element?": {
             "arity": 1,
@@ -8075,6 +8206,10 @@
           },
           "command": {
             "arity": 5
+          },
+          "class_command": {
+            "arity": 5,
+            "js": "classCommand"
           },
           "create": {
             "arity": 2

@@ -39,8 +39,8 @@ module Swill
 
     sig { params(controller: Controller).void }
     def self.load(controller)
-      controller.view_did_load
       Connections::Outlets.establish(controller)
+      controller.view_did_load
       Connections::Bindings.establish(controller)
       Connections::Actions.establish(controller)
       controller.awake_from_dom

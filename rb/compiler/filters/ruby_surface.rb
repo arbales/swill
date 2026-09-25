@@ -120,6 +120,9 @@ module Swill
           # Built-in filters introduce JS intrinsics as locationless nodes. Source
           # constants still use the spike's namespace rules, even with these names.
           return node if !node.loc && JS_INTRINSICS.include?(name)
+          if (member = @knowledge.constant_member(name, @scope, @entry))
+            return s(:const, s(:const, nil, Knowledge.identifier(member[0]).to_sym), member[1].to_sym)
+          end
           resolved = begin
             @knowledge.resolve(name, @scope)
           rescue CompileError

@@ -1,4 +1,4 @@
-// Optional real-browser check using Node's built-in WebSocket and Chrome's CDP.
+// Optional real-browser check using Deno's built-in WebSocket and Chrome's CDP.
 // No npm packages, browser downloads, or access to the user's browser profile.
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
