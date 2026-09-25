@@ -39,6 +39,12 @@ Current implementation status:
   collections, explicit hydration, and command patches.
 - Command validation and projection serialization run inside the transaction;
   invalid results roll back the mutation.
+- Commands may target the model class and may explicitly opt out of Swill's
+  transaction. An unwrapped command owns its transaction boundary, including
+  the consequence that a later result-encoding failure cannot roll back work
+  it already committed.
+- Typed value objects carry operation metadata and other structured results
+  without attaching invocation-specific state to canonical models.
 - Generated distant objects now create, update, apply detached drafts, and
   delete through authoritative transactional patches. Deleted objects are
   observable tombstones and stale responses cannot resurrect them.
@@ -72,7 +78,7 @@ class User
 end
 ```
 
-Sorbet or `Swill::Sig` signatures supply parameter and return types. Without either, the declaration must specify the result shape:
+Real Sorbet or the `swill/server` `T::Sig` facade supplies parameter and return types. Without a signature, the declaration must specify the result shape:
 
 ```ruby
 query :search,
@@ -93,7 +99,14 @@ post = posts.first
 await post.publish!
 ```
 
-Generated query and resolver methods are async class methods. Generated commands are async instance methods.
+Generated query and resolver methods are async class methods. Commands are
+instance methods by default and may be declared with `on: :class` for actions
+such as a remote lookup and upsert.
+
+The query/resolver/command names currently preserve the distinction between
+dataset, class, and instance dispatch. Reconsider a single operation macro
+with an explicit target after application ports show whether that distinction
+helps consumers or merely exposes server mechanics.
 
 A query returning many produces a loaded `ResultSet[T]`. One and optional-one results return canonical model instances or nil.
 
@@ -127,6 +140,12 @@ record persistence. The server accepts only fields listed in the model's
 `client_model writable:` declaration and returns authoritative patches after
 commit. Named commands remain the API for domain actions such as `publish!`.
 
+The compiled Ruby model and `DistantClient` own lifecycle policy, canonical
+identity, private partial-field state, patch application, demand batching, and
+stale-response coordination. The JavaScript data client is a browser transport
+adapter: it owns the WebSocket, MessagePack frames, request correlation, and
+connection lifecycle notifications.
+
 Existing JSON:API and plain JSON consumers continue to use
 `Swill::Model::Resource`, including `where`, `save`, `delete`, codecs, datasets,
 and relationship URLs. The two strategies share attributes, observation, and
@@ -149,7 +168,7 @@ Set an execution-local Swill connection context while dispatching. Resolver impl
 
 Create an immutable Swill protocol type representation supporting primitives, optional, array, result set, model reference, union, and enum types.
 
-Normalize Sorbet signatures and `Swill::Sig` into this representation. Reject unsupported or contradictory types during generation.
+Normalize real Sorbet signatures and facade `T::Sig` signatures into this representation. Reject unsupported or contradictory types during generation.
 
 Add:
 
@@ -164,6 +183,7 @@ deterministic artifacts:
 
 ```text
 client/models/generated/schema.json
+client/models/generated/schema.rb
 client/models/generated/<model>.rb
 sorbet/rbi/shims/generated/<model>.rbi
 ```
@@ -221,7 +241,8 @@ The transport maintains one read loop and one ordered write queue. A disconnect 
 Dispatch only operations declared in the generated schema.
 
 - Queries invoke the named method on `Model.for_vc(vc)`.
-- Commands load their receiver through the same privacy-aware dataset and invoke the declared instance method.
+- Instance commands load their receiver through the same privacy-aware dataset.
+  Class commands invoke the declared class method inside the connection context.
 - Resolvers invoke the declared class method inside the connection context.
 - Hydration GETs resolve requested fields and relationships on privacy-aware records.
 - Creates, updates, and deletes construct or load records through the same
@@ -229,11 +250,22 @@ Dispatch only operations declared in the generated schema.
 
 Treat `query` read-only behavior as trusted application code rather than attempting to sandbox it.
 
+Commands use a database transaction by default. `transaction: false` leaves
+the complete consistency boundary to the command body, allowing it to perform
+slow network work before opening a short application-owned transaction. Swill
+still validates and encodes the result afterward; failures in that phase do
+not undo an application transaction that has already committed.
+
 Validate arguments and return values when a Sorbet or Swill signature supplies types. Return structured remote errors with a stable code, message, and optional validation details.
 
 Evaluate projections through privacy-aware model access. Every requested scalar field is included in the patch; a privacy-denied read therefore becomes a present nil. Record-level privacy may remove entire records.
 
-Execute commands inside a database transaction. After the method succeeds, serialize its typed return value and the receiver fields named by `changes:`. Send the response only after commit. Cross-model mutation capture and arbitrary affected-object projections remain future work.
+After the method succeeds, serialize its typed return value using `preload:`
+and independently refresh receiver fields named by `changes:`. Class commands
+reject `changes:`. Validate projections against the return type and receiver
+type respectively. With the default transaction wrapper, send the response
+only after commit. `transaction: false` leaves transaction boundaries to the
+method body. Cross-model mutation capture remains future work.
 
 Execute generic persistence inside a database transaction as well. Create and
 update responses project all exposed scalar fields so server defaults,
@@ -272,7 +304,7 @@ explicit/background error split.
 
 ## Test Plan
 
-- Verify Sorbet and `Swill::Sig` normalize to identical schemas.
+- Verify real Sorbet and facade `T::Sig` normalize to identical schemas.
 - Reject missing untyped `returns:`, invalid declarations, schema mismatches, and undeclared operations.
 - Verify generation is deterministic and `swill data check` detects drift.
 - Round-trip every protocol type, model reference, nil, error, and partial patch through MessagePack.

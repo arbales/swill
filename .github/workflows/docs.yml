@@ -1,0 +1,20 @@
+name: Documentation
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      # Fails on any RDoc warning, including a link that does not resolve.
+      - run: bundle exec rake rdoc
+        env:
+          STRICT: "1"
+      # Fails if undocumented public API grew past DOC_COVERAGE_BASELINE.
+      - run: bundle exec rake doc_coverage

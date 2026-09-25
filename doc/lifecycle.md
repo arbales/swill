@@ -6,7 +6,7 @@ hooks. Markup awakened at launch, content loaded into a window, a presented
 window, and any subtree inserted into the document after launch all take this
 same path.
 
-## Activation Order
+## Activation order
 
 Awakening a region has two phases with an optional restoration step between
 them.
@@ -14,8 +14,8 @@ them.
 The load phase runs on each new controller, innermost first, so a parent sees
 its children already wired:
 
-1. `view_did_load`
-2. outlets connected
+1. outlets connected
+2. `view_did_load`
 3. bindings wired
 4. actions wired
 5. `awake_from_dom`
@@ -33,14 +33,21 @@ Each pass completes for every controller before the next begins:
 `controller_did_load` has run on the whole region before any
 `view_will_appear`.
 
-- `view_did_load` — Object setup that depends on nothing outside the controller. Outlets are still nil and no binding has fired.
-- `awake_from_dom` — The first point at which outlets are connected, bindings have pushed their initial values, actions are live, and child controllers are wired. Decoded JSON outlet data is available here.
-- `controller_did_load` — The whole region, including any restored values, is in place. Runs once per controller instance.
-- `view_will_appear, view_did_appear` — Appearance. Run each time a region is awakened.
+- `view_did_load` — Outlets are connected, decoded JSON outlet data included,
+  and no binding has fired yet: state set here is what bindings push first.
+- `awake_from_dom` — Bindings have pushed their initial values, actions are
+  live, and child controllers are wired.
+- `controller_did_load` — The whole region, including any restored values, is in
+  place. Runs once per controller instance.
+- `view_will_appear`, `view_did_appear` — The view is about to appear, and has.
+  Swill shows a controller's view by awakening it and hides it by unloading it,
+  so these run once, at load, and `view_will_disappear` and
+  `view_did_disappear` once, at [teardown](#teardown). A view hidden by other
+  means, such as `bind-hidden`, runs none of them.
 
-Outlets are nilable until the load phase connects them. A controller reached
-before its own `awake_from_dom` — by a child, or by a binding — must
-tolerate that.
+Outlets are nilable until the load phase connects them. Children load first,
+so a child that reaches its parent from its own hooks finds the parent's
+outlets still nil.
 
 ## Restoration
 
@@ -116,13 +123,12 @@ detached — and so unloaded — automatically.
 observing the fragment and the document, releases every window, unloads every
 launch-time controller, and drops the first responder. It is idempotent.
 
-## Direct Ownership
+## Direct ownership
 
 Manage only what you own.
 
-- A controller owns its root view, its outlets, and the region between its root
-  and the next nested `[controller]` boundary. A nested controller root
-  and everything under it belong to that controller.
+- A controller owns its root view, its outlets, and its region — see
+  [Awakening](awakening.md#regions-and-ownership) for where that region ends.
 - A view owns the subviews adopted into it.
 - The application owns windows, the first responder, and the URL fragment.
 
@@ -134,30 +140,10 @@ DOM.
 To replace a region, ask its owner. Do not remove a controller's element and
 leave the controller behind.
 
-## Focus and First Responder
+## Focus and first responder
 
-The application holds the first responder and is itself the first responder
-when nothing more specific is. `Application#make_first_responder` is the
-only way to set it deliberately.
-
-- A responder that answers false to `accepts_first_responder?` is refused
-  up front; `make_first_responder` returns false and nothing changes.
-- The current first responder may refuse by returning false from
-  `resign_first_responder`, which also fails the change.
-- A responder that refuses to become first responder leaves the application
-  holding it.
-
-A controller accepts the first responder only when its region contains a
-focusable element. Becoming first responder focuses the first one; resigning
-blurs it.
-
-Browser focus and the first responder are kept in agreement: focus moving
-within the application reassigns the first responder without re-running
-`become_first_responder`, and focus leaving the application's root
-returns it to the application. Focus moving into the browser's own chrome
-leaves it alone.
-
-Loading window content hands the first responder to the new controller unless
-that content already claimed it — a field focused in `controller_did_load`
-stands. A presented window remembers the first responder it displaced and
-restores it on dismissal, if that responder is still in the document.
+Focus and first-responder policy are part of the responder chain rather than the
+lifecycle; see [Responders](responders.md#first-responder). The one lifecycle
+detail: loading window content hands the first responder to the new controller
+unless that content already claimed it, so a field focused in
+`controller_did_load` stands.

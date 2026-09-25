@@ -2,17 +2,23 @@
 # frozen_string_literal: true
 
 module Swill
-  # Owns a region of the document and the objects behind it.
+  # Controllers in Swill are perhaps most accurately described as View
+  # Controllers. They represent an Object, via `represented_object` to a View
+  # or region of Elements, and relationships to other controllers.
   #
-  # A controller's region runs from its root element down to the next element
-  # carrying a `controller` attribute, which belongs to that controller
-  # instead. Within its own region it connects outlets, wires bindings and
-  # actions, and answers to the responder chain.
+  # Implementations of Controller also blend management of objects and collections
+  # of objects -- something Cocoa does with its Array and Object Controllers.
   #
-  # A subclass declares what it needs and overrides the hooks it cares about:
+  # Ruby supports the inclusion of modules and re-opening classes more easily
+  # than Objective-C did, so co-locating these behaviors obviates the need for
+  # intermediate classes and Controllers.
+  #
+  # Controllers declare properties that applications may use to manage user interface
+  # elements, like a search query. And Outlets that allow the easy connection of
+  # Views and Elements to the controller.
   #
   #     class SearchController < Swill::Controller
-  #       outlet :results, type: Swill::View
+  #       outlet :results, type: tSwill::View
   #       property :query, type: String, default: ""
   #       restorable :query, key: :q
   #
@@ -149,14 +155,13 @@ module Swill
       value
     end
 
-    # Object setup that depends on nothing outside the controller. Outlets are
-    # still nil and no binding has fired.
+    # Outlets are connected, and no binding has fired yet: state set here is
+    # what bindings push first.
     sig { void }
     def view_did_load; end
 
-    # Outlets are connected, bindings have pushed their initial values, actions
-    # are live, and child controllers are wired. Decoded JSON outlet data is
-    # available here.
+    # Bindings have pushed their initial values, actions are live, and child
+    # controllers are wired.
     sig { void }
     def awake_from_dom; end
 

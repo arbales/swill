@@ -2,10 +2,12 @@
 # frozen_string_literal: true
 
 module Swill
-  # NSControl analog: a view over a form element. Its delegate may keep it
-  # from resigning first responder, as NSControlTextEditingDelegate's
-  # control:textShouldEndEditing: does, so an editor can hold focus in a
-  # control until the edit is accepted.
+  # A Control is a small View that manages a single control from a user-perspective.
+  # This may involve a number of HTML elements that the view coordinates, but they act
+  # as one discrete package. If you're tempted to create a subview of a Control, then
+  # you're probably exceeding its intended scope.
+  #
+  # Control is somewhat thin at the moment, but I imagine it growing over time.
   class Control < View
     extend T::Sig
 

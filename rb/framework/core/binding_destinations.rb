@@ -2,8 +2,9 @@
 # frozen_string_literal: true
 
 module Swill
-  # Where a binding writes: an element, or an object and the name of one of its
-  # properties. `key` is that name, and is nil for an element's own value.
+  # How a binding reaches its receiver: an element, or an object. `binding` is
+  # the binding's name on the receiver — a property of an object, or a DOM
+  # property of an element — and is nil for an element's own value.
   #
   # Transformers, placeholders and direction are the binding's options, and
   # Binding applies them before a value arrives here.
@@ -13,19 +14,19 @@ module Swill
   class BindingDestination
     extend T::Sig
 
-    sig { params(target: T.untyped, key: T.nilable(String), value: T.untyped).void }
-    def write(target, key, value)
+    sig { params(receiver: T.untyped, binding: T.nilable(String), value: T.untyped).void }
+    def write(receiver, binding, value)
       raise "BindingDestination subclasses implement write"
     end
 
-    sig { params(target: T.untyped, key: T.nilable(String)).returns(T.untyped) }
-    def read(target, key)
+    sig { params(receiver: T.untyped, binding: T.nilable(String)).returns(T.untyped) }
+    def read(receiver, binding)
       raise "BindingDestination subclasses implement read"
     end
 
     # Whether this destination feeds the model as well as showing it.
-    sig { params(target: T.untyped, key: T.nilable(String)).returns(T::Boolean) }
-    def two_way?(target, key)
+    sig { params(receiver: T.untyped, binding: T.nilable(String)).returns(T::Boolean) }
+    def two_way?(receiver, binding)
       false
     end
 
@@ -49,10 +50,10 @@ module Swill
     # hands over its value; the binding decides what to do with it. Answers the
     # disposer that stops the reporting.
     sig do
-      params(target: T.untyped, key: T.nilable(String),
+      params(receiver: T.untyped, binding: T.nilable(String),
              callback: T.proc.params(value: T.untyped).void).returns(T.proc.void)
     end
-    def listen(target, key, callback)
+    def listen(receiver, binding, callback)
       ->() {}
     end
 
@@ -102,14 +103,14 @@ module Swill
   class TextBindingDestination < BindingDestination
     extend T::Sig
 
-    sig { override.params(target: Element, key: T.nilable(String), value: T.untyped).void }
-    def write(target, key, value)
-      target.textContent = value
+    sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
+    def write(receiver, binding, value)
+      receiver.textContent = value
     end
 
-    sig { override.params(target: Element, key: T.nilable(String)).returns(T.untyped) }
-    def read(target, key)
-      target.textContent
+    sig { override.params(receiver: Element, binding: T.nilable(String)).returns(T.untyped) }
+    def read(receiver, binding)
+      receiver.textContent
     end
   end
 
@@ -118,31 +119,31 @@ module Swill
   class FieldBindingDestination < BindingDestination
     extend T::Sig
 
-    sig { override.params(target: Element, key: T.nilable(String), value: T.untyped).void }
-    def write(target, key, value)
-      target.value = value
+    sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
+    def write(receiver, binding, value)
+      receiver.value = value
     end
 
-    sig { override.params(target: Element, key: T.nilable(String)).returns(T.untyped) }
-    def read(target, key)
-      target.value
+    sig { override.params(receiver: Element, binding: T.nilable(String)).returns(T.untyped) }
+    def read(receiver, binding)
+      receiver.value
     end
 
     # A readonly control shows the value without answering back.
-    sig { override.params(target: Element, key: T.nilable(String)).returns(T::Boolean) }
-    def two_way?(target, key)
-      !target.hasAttribute("readonly")
+    sig { override.params(receiver: Element, binding: T.nilable(String)).returns(T::Boolean) }
+    def two_way?(receiver, binding)
+      !receiver.hasAttribute("readonly")
     end
 
     sig do
-      override.params(target: Element, key: T.nilable(String),
+      override.params(receiver: Element, binding: T.nilable(String),
                       callback: T.proc.params(value: T.untyped).void).returns(T.proc.void)
     end
-    def listen(target, key, callback)
+    def listen(receiver, binding, callback)
       name = event_name
-      handler = ->(event) { callback.(read(target, key)) }
-      target.addEventListener(name, handler)
-      ->() { target.removeEventListener(name, handler) }
+      handler = ->(event) { callback.(read(receiver, binding)) }
+      receiver.addEventListener(name, handler)
+      ->() { receiver.removeEventListener(name, handler) }
     end
 
     # The DOM event that means "the user changed me".
@@ -167,14 +168,14 @@ module Swill
   class CheckboxBindingDestination < FieldBindingDestination
     extend T::Sig
 
-    sig { override.params(target: Element, key: T.nilable(String), value: T.untyped).void }
-    def write(target, key, value)
-      target.checked = Runtime.isTruthy(value)
+    sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
+    def write(receiver, binding, value)
+      receiver.checked = Runtime.isTruthy(value)
     end
 
-    sig { override.params(target: Element, key: T.nilable(String)).returns(T.untyped) }
-    def read(target, key)
-      target.checked
+    sig { override.params(receiver: Element, binding: T.nilable(String)).returns(T.untyped) }
+    def read(receiver, binding)
+      receiver.checked
     end
 
     sig { override.returns(T::Boolean) }
@@ -199,25 +200,25 @@ module Swill
   class ElementPropertyBindingDestination < BindingDestination
     extend T::Sig
 
-    sig { override.params(target: Element, key: T.nilable(String), value: T.untyped).void }
-    def write(target, key, value)
-      property = T.must(key)
+    sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
+    def write(receiver, binding, value)
+      property = T.must(binding)
       # A data attribute is a flag or a value: false, nil, and "" remove it.
       # ARIA attributes keep "false", which is a state of its own.
       if property.start_with?("data-") || property.start_with?("aria-")
         if value == nil || value == "" || (value == false && property.start_with?("data-"))
-          target.removeAttribute(property)
+          receiver.removeAttribute(property)
         else
-          target.setAttribute(property, value)
+          receiver.setAttribute(property, value)
         end
         return
       end
       if (property == "href" || property == "src") && value == nil
-        target.removeAttribute(property)
-        target[property] = ""
+        receiver.removeAttribute(property)
+        receiver[property] = ""
         return
       end
-      target[property] = boolean_property?(property) ? Runtime.isTruthy(value) : value
+      receiver[property] = boolean_property?(property) ? Runtime.isTruthy(value) : value
     end
 
     sig { params(property: String).returns(T::Boolean) }
@@ -240,7 +241,7 @@ module Swill
     end
   end
 
-  # A declared property on a Swill object, named by key. A control's value and a
+  # A declared property on a Swill object, named by the binding. A control's value and a
   # child controller's represented object are both this; they differ only in the
   # options the binding is established with.
   #
@@ -249,18 +250,18 @@ module Swill
   class ObjectPropertyBindingDestination < BindingDestination
     extend T::Sig
 
-    sig { override.params(target: Swill::Object, key: T.nilable(String), value: T.untyped).void }
-    def write(target, key, value)
-      Runtime.write(target, T.must(key), value)
+    sig { override.params(receiver: Swill::Object, binding: T.nilable(String), value: T.untyped).void }
+    def write(receiver, binding, value)
+      Runtime.write(receiver, T.must(binding), value)
     end
 
-    sig { override.params(target: Swill::Object, key: T.nilable(String)).returns(T.untyped) }
-    def read(target, key)
-      Runtime.read(target, T.must(key))
+    sig { override.params(receiver: Swill::Object, binding: T.nilable(String)).returns(T.untyped) }
+    def read(receiver, binding)
+      Runtime.read(receiver, T.must(binding))
     end
 
-    sig { override.params(target: Swill::Object, key: T.nilable(String)).returns(T::Boolean) }
-    def two_way?(target, key)
+    sig { override.params(receiver: Swill::Object, binding: T.nilable(String)).returns(T::Boolean) }
+    def two_way?(receiver, binding)
       true
     end
 
@@ -271,14 +272,14 @@ module Swill
     end
 
     sig do
-      override.params(target: Swill::Object, key: T.nilable(String),
+      override.params(receiver: Swill::Object, binding: T.nilable(String),
                       callback: T.proc.params(value: T.untyped).void).returns(T.proc.void)
     end
-    def listen(target, key, callback)
+    def listen(receiver, binding, callback)
       # The runtime primitive, not Observable#observe: this disposer belongs to
       # whatever wired the region — a controller, or a list row released and
       # rewired on every render — not to the object being watched.
-      Runtime.observe(target, T.must(key), ->(value) { callback.(value) })
+      Runtime.observe(receiver, T.must(binding), ->(value) { callback.(value) })
     end
   end
 end

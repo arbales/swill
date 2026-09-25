@@ -129,12 +129,12 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_match(/Swill__Connections__Bindings\.establishIn\(\s*element,\s*item\s*\)/, js)
     assert_match(/Swill__Connections__Actions\.establishIn\(\s*element,\s*this\s*\)/, js)
     # Establishing a binding and reporting an edit are both compiled from the
-    # framework's Ruby: the first lives in Binding, the second in the endpoint
+    # framework's Ruby: the first lives in Binding, the second in the destination
     # that knows what an edit means for its kind of element.
     assert_includes js, "Runtime.observePath(object, key_path, push)"
     assert_includes js, "Runtime.isTruthy(value)"
-    assert_includes js, "target.addEventListener(name, handler)"
-    assert_includes js, "target.removeEventListener(name, handler)"
+    assert_includes js, "receiver.addEventListener(name, handler)"
+    assert_includes js, "receiver.removeEventListener(name, handler)"
 
     assert_includes js, "controller.performAction(action_name, element, event)"
     assert_includes js, "Swill__Connections__Bindings.establish(controller)"

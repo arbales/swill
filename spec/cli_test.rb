@@ -160,6 +160,39 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_documented_data_form_builds_and_validates_a_save
+    Dir.mktmpdir do |dir|
+      blocks = File.read(File.join(ROOT, "doc/data_form.md")).scan(/```(?:ruby|html|yaml)\n(.*?)```/m).flatten
+      %w[setup.rb server.rb config.ru client/app.rb public/index.html swill.yml].each do |name|
+        source = blocks.find { |block| block.lines.first.include?(name) }
+        refute_nil source, name
+        file = File.join(dir, name)
+        FileUtils.mkdir_p(File.dirname(file))
+        File.write(file, source)
+      end
+      output, status = Open3.capture2e(RbConfig.ruby, File.join(dir, "setup.rb"))
+      assert status.success?, output
+      output, status = Open3.capture2e({"RUBYLIB" => File.join(ROOT, "rb")},
+                                      RbConfig.ruby, File.join(ROOT, "exe/swill"), "build", chdir: dir)
+      assert status.success?, output
+      assert File.file?(File.join(dir, "public/assets/app.js"))
+      assert File.file?(File.join(dir, "public/assets/swill.js"))
+      script = <<~RUBY
+        require #{File.join(dir, "server.rb").inspect}
+        schema = Swill::Data::Schema.new([Notes::Note])
+        dispatcher = Swill::Data::Dispatcher.new(schema: schema, viewer_context: nil, actor: nil, scope_token: "test")
+        dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => schema.hash)
+        create = {"type" => "CREATE", "model" => "Notes::Note", "request_id" => 1, "generation" => 1}
+        invalid = dispatcher.call(create.merge("attributes" => {"title" => ""}))
+        abort invalid.inspect unless invalid.dig("error", "code") == "validation_failed"
+        valid = dispatcher.call(create.merge("attributes" => {"title" => "A note"}))
+        abort valid.inspect unless valid["type"] == "RETURN" && Notes::Note.count == 1
+      RUBY
+      output, status = Open3.capture2e(RbConfig.ruby, "-I#{File.join(ROOT, 'rb')}", "-e", script)
+      assert status.success?, output
+    end
+  end
+
   def test_project_watch_recovers_when_a_missing_source_is_created
     Dir.mktmpdir do |dir|
       File.write(File.join(dir, "app.rb"), "require_relative 'extra'\n")

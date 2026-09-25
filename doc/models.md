@@ -91,20 +91,26 @@ end
 ```
 
 Generated queries and resolvers are async class methods. Commands are async
-instance methods. Applications add browser-only behavior by reopening the
+instance methods by default; `on: :class` generates a class method. Applications add browser-only behavior by reopening the
 generated class in a later handwritten source file.
 
 ## Identity, partial fields, and collections
 
-The data connection keeps one canonical distant object for each `(model, id)`.
-Queries, relationships, resolvers, commands, hydration, and persistence
-patches all update that object. Per-field generations prevent older responses
-from replacing newer values.
+The compiled Ruby `DistantClient` keeps one canonical distant object for each
+`(model, id)`. Queries, relationships, resolvers, commands, hydration, and
+persistence patches all update that object. Per-field generations prevent
+older responses from replacing newer values, while a background patch leaves
+a locally dirty field alone.
 
 Unknown and known-nil fields both read as nil. Presence remains available
 through `field_loaded?`, `field_loading?`, and `field_error`; explicit code can
 call `load_field` or `reload_field`. Reading an unknown field queues a batched
 hydration request.
+
+This loading behavior does not force all declared types to be nilable.
+Applications choose their loaded-value types; Sequel::Privacy's denied-read
+nils are an integration-specific consideration. See
+[types, loading, and authorization](server_data.md#types-loading-and-authorization).
 
 A to-many relationship is a stable `Collection`; hydration replaces its
 records without replacing the collection. Many-valued queries return a loaded
@@ -132,7 +138,8 @@ await contact.apply_draft(draft)
 A distant draft requires a saved original and copies only scalar fields already
 present on it. It does not enter the canonical store or hydrate missing fields.
 `apply_draft` sends only its dirty values and changes the canonical object only
-after the server accepts them. Discarding the draft abandons the edit.
+after the server accepts them. `draft?` distinguishes the detached copy from a
+canonical object. Discarding the draft abandons the edit.
 
 After an accepted `delete`, `deleted?` becomes true, the object leaves the
 canonical store, cached values remain readable by existing bindings, and

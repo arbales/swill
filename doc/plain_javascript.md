@@ -1,4 +1,4 @@
-# Plain JavaScript, without a build step
+# Plain JavaScript
 
 Load `swill.js`, register ordinary JavaScript classes, then start the
 application explicitly. Put these scripts at the end of `body` so the default

@@ -1,5 +1,9 @@
 # Swill data layer plan
 
+For exploratory work on overlapping collections, cached objects, and live
+updates, see [Data exchange design](DATA_EXCHANGE_DESIGN.md). That companion
+records open API and protocol choices rather than an implementation commitment.
+
 ## 1. Define the model split
 
 Use four model locations with distinct responsibilities:
@@ -58,23 +62,23 @@ Boolean
 Time
 Date
 
-Optional[T]
-Array[T]
+optional[T]
+array[T]
 ResultSet[T]
 ModelRef[T]
 
-Union[...]
+union[...]
 Enum[...]
 ```
 
-Support three sources of type information:
+Support two sources of type information behind the same declaration syntax:
 
 ```text
-Sorbet T::Sig
+Sorbet's T::Sig
     ↓
 Swill protocol types
 
-Swill::Sig
+Swill's T::Sig facade
     ↓
 Swill protocol types
 
@@ -83,16 +87,17 @@ No signature
 dynamic MessagePack values + Ruby method-shape introspection
 ```
 
-A non-Sorbet application should be able to write something like:
+A non-Sorbet application writes the same surface through `swill/server`:
 
 ```ruby
-extend Swill::Sig
+extend T::Sig
 
-sig { params(email: String).returns(Optional[User]) }
+sig { params(email: String).returns(T.nilable(User)) }
 query :first_by_email
 ```
 
-Sorbet users keep their existing `T::Sig`.
+If Sorbet was loaded first, these are its real types and signatures. Otherwise
+Swill supplies only the protocol subset and records the same schema metadata.
 
 Swill should use Ruby reflection to infer argument names, positional/keyword structure, and requiredness regardless of typing. Reflection does not expose default expressions; generated clients preserve omission and let the server method evaluate its defaults.
 
@@ -193,7 +198,7 @@ The protocol should distinguish:
 ```ruby
 ResultSet[Post]
 Post
-Optional[Post]
+T.nilable(Post)
 ```
 
 rather than adding unnecessary query categories.

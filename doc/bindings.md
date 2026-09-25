@@ -1,71 +1,75 @@
 # Bindings
 
-## View Bindings
+A binding keeps something equal to a value somewhere else, without glue code,
+without re-rendering a tree, and without you thinking very much about state. Data
+flows — often in two directions — through your application and even to the
+server.
 
-Bindings provide a means of keeping a Swill object and a View or HTML Element
-synchronized without having to write a lot of glue code, re-render a whole tree
-of stuff, or think very much about state. Data flows, often in two ways, through
-your application and even to the server. 
+A binding connects a **receiver** to a **key path** on an **observed object**.
+The receiver is kept up to date, and the binding's **name** says which of its
+properties.
 
-
-### Binding to Elements
-
-The most common type of binding is a "value binding", where the semantic "value" 
-of an HTML Element is bound to a variable or property you provide. 
-
-For form elements, this usually means literally its `value`, but for paragraphs it 
-means its content. HTML elements have special cases to generally try and do what 
-you (or rather I!) expect. 
-
-```html
-<input bind="address">
-<span bind="name"></span>
-<section controller="MailingListDetail" bind="selected_object"></section>
+```ruby
+bind(:menu_recipes, to: self, key_path: "selected_menu.recipes")
 ```
 
-Direction depends on the endpoint:
+That reads: keep my `menu_recipes` equal to `selected_menu.recipes`, and keep it
+equal as things change.
 
-- A form control (`input`, `textarea`, `select`) is
-  two-way, unless it carries `readonly`. A checkbox binds to a Boolean value. 
-- Selects binding mutation happens on `change`, all the others happen on `input`. 
-- A `Control` subclass binds its own `value` property, two-way.
-- Any other element receives the value as text, one-way.
-- An element carrying `controller` is a child controller root: the
-  value becomes that child's `represented_object`, one-way.
+## Markup is a spelling of the same thing
 
-A two-way binding requires a writable target: a (non-computed) declared property, or a key present in a Hash. 
-
-`bind-*` creates a one-way binding for an HTML attribute/property. 
+`bind="selected_menu.recipes"` in markup is not a separate feature. It establishes
+the same binding, with the element as the receiver. `bind` is the element's
+value binding, and `bind-disabled` its `disabled` binding:
 
 ```html
-<input bind-readonly="id.present?">
-<button bind-disabled="member_list.selected_indexes.empty?">Remove</button>
+<span bind="selected_menu.recipes"></span>
 ```
 
-* `disabled`, `checked`, `hidden`, `readonly`, `required`, and `open` are bound to the truthiness of the target.
-* `data-*` attributes are removed for nil, `""`, and false;
-* `aria-*` attributes are removed for nil and `""` but keep `"false"`.
-* A nil `href` or `src` removes the attribute.
-* `bind-*` on a controller root belongs to that controller, not its
-parent. (TODO: This is maybe sloppy, will maybe reconsider)
+This is the arrangement Cocoa uses, where wiring a binding in Interface Builder is
+exactly equivalent to sending `bind:toObject:withKeyPath:options:` yourself. The
+attribute is a spelling; the binding is the thing.
 
-### Key Paths
+Everything below describes the binding. For the exact attribute syntax — which
+element binds to what, and the DOM rules — see the [markup
+reference](markup.md#bind).
+
+## Establishing and releasing
+
+```ruby
+bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
+     null_placeholder: [])
+
+unbind(:menu_recipes)
+unbind_all
+```
+
+One binding per name: binding a name that is already bound replaces the previous
+one. `unbind_all` releases every binding on the object, which is what a
+controller does when it unloads.
+
+The name must be a declared property or a generated writer.
+
+## Key paths
 
 A path is dot-separated property names, read through the property system.
-Path segments may name a plain object's key, which reads nil when absent, and may end in a value reader applied to whatever the preceding segment produced: `blank?`, `present?`, `empty?`, `nil?`,
-`zero?`, `positive?`, `negative?`, `size`,
-`length`, `first`, `last`, `strip`,
-`upcase`, `downcase`, and other value methods.
 
-Nil values support: `nil?`, `blank?`, `present?`, `to_s`,
-`to_i`, and `to_f` because they're special-cased by the compiler. 
-This is kind of magical and could lead to you being surprised if you try to 
-call something else on `nil` that you can from Ruby, but I like it so its there.
+Path segments may name a plain object's key, which reads nil when absent, and may
+end in a value reader applied to whatever the preceding segment produced:
+`blank?`, `present?`, `empty?`, `nil?`, `zero?`, `positive?`, `negative?`,
+`size`, `length`, `first`, `last`, `min`, `max`, `sum`, `compact`, `uniq`,
+`reverse`, `dup`, `strip`, `upcase`, `downcase`, `capitalize`, `to_s`, `to_sym`,
+`to_i`, and `to_f`.
 
-### Binding Roots
+Nil values support: `nil?`, `blank?`, `present?`, `to_s`, `to_i`, and `to_f`
+because they're special-cased by the runtime. This is kind of magical and could
+lead to you being surprised if you try to call something else on `nil` that you
+can from Ruby, but I like it so its there.
 
-A controller declares a default prefix by overriding `binding_root`,
-which answers a property name or nil.
+## Binding roots
+
+A controller can declare a default prefix for the paths in its region by
+overriding `binding_root`, which answers a property name or nil.
 
 ```ruby
 def binding_root
@@ -73,39 +77,104 @@ def binding_root
 end
 ```
 
-With that root, `bind="address"` resolves to
-`represented_object.address` and `bind=""` resolves to the root
-itself.
+With that root, a path of `address` resolves to `represented_object.address`.
+It is how an editor controller points its whole region at one object without
+repeating the prefix everywhere. Markup can opt out of the root per binding; see
+[path spellings](markup.md#path-spellings).
 
-A leading `@` ignores the root and resolves against the controller.
+## Value transformers
 
-```html
-<button bind-disabled="@saving">Save</button>
-```
+A transformer formats a value on the way out and parses it on the way back, so
+the model can hold a number while a text field holds text.
 
-### Value Transformers
+| Name | Behaviour |
+| --- | --- |
+| `string` | the value's string form; nil formats as `""`; parses text unchanged |
+| `number` | parses to a float; blank text parses to nil, so clearing a field clears the value |
+| `boolean` | formats as `"true"`/`"false"`; parses `"true"`, `"1"` and `"on"` as true |
 
-`transform="name"` on a bound element formats the value for display and
-parses the control's text back into the model. Registered names:
-
-- `string` — The value's string form; nil formats as `""`. Parses text unchanged.
-- `number` — Parses to a float; blank text parses to nil, so an emptied field clears the value.
-- `boolean` — Formats as `"true"` or `"false"`; parses `"true"`, `"1"`, and `"on"` as true.
-
-Register others by name before views awaken:
+Register your own before views awaken:
 
 ```ruby
 Swill::ValueTransformer.register("currency", CurrencyTransformer.new)
 ```
 
+## Null placeholders
+
+`null_placeholder:` is what the receiver is given when the path has no value.
+It lets a path that runs through a nilable object feed a property that is not
+nilable:
+
+```ruby
+bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
+     null_placeholder: [])
+```
+
+One placeholder serves every fall-back, so treat it as immutable. Omitting it
+means nil.
+
+## How bindings work
+
+Two parts: watching the path, and reacting to a change. Nothing re-renders, and
+nothing polls.
+
+### Watching walks the path and re-subscribes
+
+A path like `selected_menu.recipes` is not a single subscription. The runtime
+walks it segment by segment from the observed object and subscribes to each segment
+that is **a declared property on the object it was read from**. The walk stops at
+the first nil.
+
+When a subscription in the chain fires, everything *below* it is rebuilt before
+your code runs, and only then is the full path read again and handed to the
+binding. Only below it: the segments above were read from the same objects as
+before, so their subscriptions are still correct, and a change in the last
+segment — a leaf binding, the common case — rebinds nothing at all. Three things
+fall out of that:
+
+- Replacing an intermediate object re-points the rest of the chain automatically.
+  Assign a new `selected_menu` and the binding starts watching the new menu's
+  `recipes` without being told.
+- A segment that is not a declared property — a Hash key, a plain JavaScript
+  object — is read but never subscribed. The value shows up, and later changes to
+  it do not.
+- A nil in the middle is not an error. The walk simply stops there, and the
+  subscription on the segment that produced the nil is what wakes the binding when
+  it becomes something.
+
+### Writing a property notifies in a fixed order
+
+A write always runs: coerce, compare, will-change, store, notify. The compare is
+why an assignment that doesn't change the value is free — observers never hear
+about it.
+
+Notification then runs in one order: computed properties that depend on it are
+invalidated first, then `<name>_did_change`, then observers and the bindings built
+on them. Dependents go first so that a `_did_change` hook or an observer reading a
+computed property gets the new value rather than a stale one.
+
+Computed properties work out their own dependencies. The first read runs the block
+and records every property read while it ran; those become its dependencies, and
+any of them changing invalidates it. The value is recomputed on the next read, not
+eagerly. That's why a computed property never declares what it depends on — and
+why a dependency read conditionally is only tracked on the passes where it's
+actually read.
+
+### Writing back
+
+A two-way binding does the reverse trip: read the receiver, run it through the
+transform if there is one, and write down the path. If an owner along the way has
+gone nil, the write is dropped rather than raising.
+
+A two-way binding needs a writable path — a declared, non-computed property, or a
+key already present in a Hash. That is checked when the binding is established,
+so a binding pointed at a computed property raises then rather than silently
+failing the first time someone types.
+
 ## Observers
 
-Bindings observe every declared property along the path and rewire when an
-intermediate value changes. A path segment that is not a declared property is 
-read but not observed, so changes to it do not propagate.
-
 TODO: It's possible that allowing observers on a chain with an undeclared
-property is good, but it also sounds like it could be confusing/bad. 
+property is good, but it also sounds like it could be confusing/bad.
 
 Observe a property directly with `observe`, on self or another object:
 
@@ -114,55 +183,42 @@ observe(:query, ->(value) { reload })
 observe(document, :selection, ->(value) { reload })
 ```
 
-The receiver of `observe` is the observer, and retains a connection to the observed
-object (or itself). It's responsible for destroying those connections 
+The receiver of `observe` is the observer, and retains a connection to the
+observed object (or itself). It's responsible for destroying those connections
 when it's unloaded.
 
-A property notifies only when its new value differs from the previous one,
-after `coerce_property_value` has run. A class may also define
-`name_did_change(previous, value)` to be called on each change.
+A class may also define `name_did_change(previous, value)` to hear about one of
+its own properties without registering an observer.
 
-Computed properties — `property` declared with a block — track the
-properties read while computing and invalidate when any of them changes. They
-are read-only: a binding to one must be one-way.
+Computed properties — `property` declared with a block — are read-only, so a
+binding to one must be one-way.
 
-## Object Bindings
+## Restoration bindings
 
-`bind` keeps one of the receiver's properties equal to a path on
-another object.
-
-```ruby
-bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
-     null_placeholder: [])
-```
-
-The target must be a declared property or a generated writer. One binding per
-target; rebinding disposes the previous one. `null_placeholder:` is the
-value the target receives when the path has no value, so a path running
-through a nilable object can feed a property that is not nilable; the single
-placeholder value is reused for every fall-back and must be treated as
-immutable. Omitting it means nil.
-
-`unbind(:target)` releases one binding; `unbind_all` releases
-all of them, as a controller does when it unloads.
-
-## Restoration Bindings
-
-`restorable` declares a path whose value the application keeps in the
-window's URL fragment.
+`restorable` declares a path whose value the application keeps in the window's URL
+fragment — a binding whose other end is the address bar.
 
 ```ruby
 restorable :query, key: :q
 restorable "source_list.selected_object_id"
 ```
 
-The path must be dotted property names and must begin with a property declared
-on the class. `key:` defaults to the path, and is scoped by window.
+The path must be dotted property names and must begin with a property declared on
+the class. `key:` defaults to the path, and is scoped by window.
 
 On launch, fragment values are written through the path before
-`controller_did_load`; `controller_did_restore(restored)` then
-runs on the window controller, with `restored` true when at least one
-value was applied. A fragment key that is absent, or whose text does not
-decode to the path's leaf type, leaves the property at its declared value.
-Thereafter the path is observed and each change rewrites the fragment,
-replacing history rather than pushing it.
+`controller_did_load`; `controller_did_restore(restored)` then runs on the window
+controller, with `restored` true when at least one value was applied. A fragment
+key that is absent, or whose text does not decode to the path's leaf type, leaves
+the property at its declared value. Thereafter the path is observed and each
+change rewrites the fragment, replacing history rather than pushing it.
+
+## Bindings in list rows
+
+A list row is bound against its item rather than against a controller. Paths in a
+row resolve directly on the item, with no binding root in play — so a row's
+bindings read the object they display rather than the list that owns them.
+
+Rows are re-created wholesale when the list's arranged objects change, so a row's
+bindings are established and released on every render rather than being updated
+in place.

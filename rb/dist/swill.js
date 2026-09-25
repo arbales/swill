@@ -1927,18 +1927,18 @@
     }
   };
   var Swill__BindingDestination = class extends Object {
-    write(target, key, value) {
+    write(receiver, binding, value) {
       return (() => {
         throw new Error("BindingDestination subclasses implement write");
       })();
     }
-    read(target, key) {
+    read(receiver, binding) {
       return (() => {
         throw new Error("BindingDestination subclasses implement read");
       })();
     }
     // Whether this destination feeds the model as well as showing it.
-    isTwoWay(target, key) {
+    isTwoWay(receiver, binding) {
       return false;
     }
     // Whether a transformer means anything here. A checkbox shows the truth of
@@ -1956,7 +1956,7 @@
     // Reports edits. The destination decides what "changed" means for its kind and
     // hands over its value; the binding decides what to do with it. Answers the
     // disposer that stops the reporting.
-    listen(target, key, callback) {
+    listen(receiver, binding, callback) {
       return () => null;
     }
     static forElement(element) {
@@ -1994,29 +1994,29 @@
     }
   };
   var Swill__TextBindingDestination = class extends Swill__BindingDestination {
-    write(target, key, value) {
-      return target.textContent = value;
+    write(receiver, binding, value) {
+      return receiver.textContent = value;
     }
-    read(target, key) {
-      return target.textContent;
+    read(receiver, binding) {
+      return receiver.textContent;
     }
   };
   var Swill__FieldBindingDestination = class extends Swill__BindingDestination {
-    write(target, key, value) {
-      return target.value = value;
+    write(receiver, binding, value) {
+      return receiver.value = value;
     }
-    read(target, key) {
-      return target.value;
+    read(receiver, binding) {
+      return receiver.value;
     }
     // A readonly control shows the value without answering back.
-    isTwoWay(target, key) {
-      return !target.hasAttribute("readonly");
+    isTwoWay(receiver, binding) {
+      return !receiver.hasAttribute("readonly");
     }
-    listen(target, key, callback) {
+    listen(receiver, binding, callback) {
       let name = this.eventName();
-      let handler = (event) => callback(this.read(target, key));
-      target.addEventListener(name, handler);
-      return () => target.removeEventListener(name, handler);
+      let handler = (event) => callback(this.read(receiver, binding));
+      receiver.addEventListener(name, handler);
+      return () => receiver.removeEventListener(name, handler);
     }
     // The DOM event that means "the user changed me".
     eventName() {
@@ -2029,11 +2029,11 @@
     }
   };
   var Swill__CheckboxBindingDestination = class extends Swill__FieldBindingDestination {
-    write(target, key, value) {
-      return target.checked = Runtime.isTruthy(value);
+    write(receiver, binding, value) {
+      return receiver.checked = Runtime.isTruthy(value);
     }
-    read(target, key) {
-      return target.checked;
+    read(receiver, binding) {
+      return receiver.checked;
     }
     isTransforms() {
       return false;
@@ -2046,25 +2046,25 @@
     }
   };
   var Swill__ElementPropertyBindingDestination = class extends Swill__BindingDestination {
-    write(target, key, value) {
-      let property = Runtime.must(key);
+    write(receiver, binding, value) {
+      let property = Runtime.must(binding);
       if (property.startsWith("data-") || property.startsWith("aria-")) {
         if (Runtime.isTruthy(value == null || value === "" || value === false && property.startsWith("data-"))) {
-          target.removeAttribute(property);
+          receiver.removeAttribute(property);
         } else {
-          target.setAttribute(property, value);
+          receiver.setAttribute(property, value);
         }
         ;
         return;
       }
       ;
       if (Runtime.isTruthy((property === "href" || property === "src") && value == null)) {
-        target.removeAttribute(property);
-        target[property] = "";
+        receiver.removeAttribute(property);
+        receiver[property] = "";
         return;
       }
       ;
-      return target[property] = this.isBooleanProperty(property) ? Runtime.isTruthy(value) : value;
+      return receiver[property] = this.isBooleanProperty(property) ? Runtime.isTruthy(value) : value;
     }
     isBooleanProperty(property) {
       switch (property) {
@@ -2088,43 +2088,43 @@
     }
   };
   var Swill__ObjectPropertyBindingDestination = class extends Swill__BindingDestination {
-    write(target, key, value) {
-      return Runtime.write(target, Runtime.must(key), value);
+    write(receiver, binding, value) {
+      return Runtime.write(receiver, Runtime.must(binding), value);
     }
-    read(target, key) {
-      return Runtime.read(target, Runtime.must(key));
+    read(receiver, binding) {
+      return Runtime.read(receiver, Runtime.must(binding));
     }
-    isTwoWay(target, key) {
+    isTwoWay(receiver, binding) {
       return true;
     }
     // A property takes the nil. Substituting "" would store a different value.
     nullPlaceholder() {
       return null;
     }
-    listen(target, key, callback) {
+    listen(receiver, binding, callback) {
       return Runtime.observe(
-        target,
-        Runtime.must(key),
+        receiver,
+        Runtime.must(binding),
         (value) => callback(value)
       );
     }
   };
   var Swill__Binding = class extends Object {
-    static establish(destination, target, key, object, key_path, transformer, placeholder, one_way) {
+    static establish(destination, receiver, binding, object, key_path, transformer, placeholder, one_way) {
       let transforms = transformer != null && destination.isTransforms();
-      let two_way = !one_way && destination.isTwoWay(target, key);
+      let two_way = !one_way && destination.isTwoWay(receiver, binding);
       if (Runtime.isTruthy(two_way)) Runtime.assertWritablePath(object, key_path);
       let push = (_value) => {
         let value = Runtime.readPath(object, key_path);
         value = Runtime.isTruthy(transforms) ? Runtime.must(transformer).format(value) : (() => {
           return value == null ? placeholder : value;
         })();
-        return destination.write(target, key, value);
+        return destination.write(receiver, binding, value);
       };
       push(null);
       let release_push = Runtime.observePath(object, key_path, push);
       if (!Runtime.isTruthy(two_way)) return release_push;
-      let release_pull = destination.listen(target, key, (value) => Runtime.writePath(
+      let release_pull = destination.listen(receiver, binding, (value) => Runtime.writePath(
         object,
         key_path,
         Runtime.isTruthy(transforms) ? Runtime.must(transformer).parse(value) : value
@@ -2137,12 +2137,14 @@
   };
   function Swill__ObjectBindings(Superclass) {
     class Swill__ObjectBindings_Layer extends Superclass {
-      // Keeps +target+ equal to +key_path+ on +to+, writing +null_placeholder+
-      // whenever the path has no value. Replaces any existing binding on
-      // +target+. Answers self.
+      // Keeps the property named by **binding** equal to **key_path** on **to**,
+      // writing **null_placeholder** whenever the path has no value. Replaces any
+      // existing binding of that name.
+      //
+      // Returns self.
       bind(...__swill_arguments) {
         let __swill_bound = Runtime.bindArguments(__swill_arguments, {
-          positional: [{ name: "target", kind: "req" }],
+          positional: [{ name: "binding", kind: "req" }],
           keywords: [
             { name: "to", kind: "keyreq" },
             { name: "key_path", kind: "keyreq" },
@@ -2152,7 +2154,7 @@
           keywordRest: null,
           block: "__swill_block"
         });
-        let target = Runtime.argument(__swill_bound, "target");
+        let binding = Runtime.argument(__swill_bound, "binding");
         let to = Runtime.argument(__swill_bound, "to");
         let key_path = Runtime.argument(__swill_bound, "key_path");
         let null_placeholder = Runtime.argument(
@@ -2165,16 +2167,16 @@
         ;
         let transform = Runtime.argument(__swill_bound, "transform");
         if (Runtime.isTruthy(Runtime.isOmittedArgument(transform))) transform = null;
-        this.unbind(target);
+        this.unbind(binding);
         let transformer = transform != null ? Swill__ValueTransformer.named(transform) : null;
         if (Runtime.isTruthy(transform != null ? !transformer : transform)) {
           throw new Error(`unknown transform ${transform}`);
         }
         ;
-        this.objectBindings()[target] = Swill__Binding.establish(
+        this.objectBindings()[binding] = Swill__Binding.establish(
           Swill__BindingDestination.objectProperty(),
           this,
-          target,
+          binding,
           to,
           key_path,
           transformer,
@@ -2183,21 +2185,23 @@
         );
         return this;
       }
-      // Releases the binding on +target+, if any. Answers self.
-      unbind(target) {
-        let dispose = this.objectBindings()[target];
+      // Releases the binding named **binding,** if any.
+      //
+      // Returns self.
+      unbind(binding) {
+        let dispose = this.objectBindings()[binding];
         if (!Runtime.isTruthy(dispose)) return this;
         dispose();
-        Runtime.deleteKey(this.objectBindings(), target);
+        Runtime.deleteKey(this.objectBindings(), binding);
         return this;
       }
       // Releases every binding, as a controller does when it unloads.
       unbindAll() {
-        Object.entries(this.objectBindings()).forEach(([_target, dispose]) => dispose());
+        Object.entries(this.objectBindings()).forEach(([_binding, dispose]) => dispose());
         this._object_bindings = {};
         return this;
       }
-      // Keyed by target: binding a target replaces whatever was bound there.
+      // Keyed by binding name: binding a name replaces whatever was bound there.
       objectBindings() {
         if (!this._object_bindings) this._object_bindings = {};
         return this._object_bindings;
@@ -2554,18 +2558,23 @@
       this.renderOptions();
       this.applyOpen(false);
     }
+    // Called by KVO when the options have changed, rerenders the options.
     optionsDidChange(_previous, _options) {
       return this.renderOptions();
     }
+    // Called when the value of the control changes,
+    // updating the button and selection state of the control.
     valueDidChange(_previous, _value) {
       this.syncButton();
       return this.syncSelectedOption();
     }
+    // Called when a user presses Escape, closing the control.
     cancelOperation(event) {
       if (!this._open) return super.cancelOperation(event);
       event.preventDefault();
       return this.close();
     }
+    // Called when the user types, handling arrow keys and Enter.
     keyDown(event) {
       switch (event.key) {
         case "ArrowDown":
@@ -2585,7 +2594,6 @@
           return super.keyDown(event);
       }
     }
-    // ---- chrome ----
     installChrome() {
       let root = this._element;
       root.classList.add("custom-select");
@@ -2620,8 +2628,7 @@
         (event) => this.focusOut(event)
       );
     }
-    // A keyboard "click" on the button is Enter or Space, which key_down
-    // already handles.
+    // Called when a user clicks on the button to open or close the control.
     buttonClicked(event) {
       if (event.detail !== 0) return this.toggle();
     }
@@ -2683,6 +2690,7 @@
       this.syncButton();
       return this.syncSelectedOption();
     }
+    // Returns the currently selected option or nil if nothing is selected.
     selectedOption() {
       return this.options.find((option) => this.optionValue(option) === this.value);
     }
@@ -2844,14 +2852,13 @@
     decodeOutletData(name, value) {
       return value;
     }
-    // Object setup that depends on nothing outside the controller. Outlets are
-    // still nil and no binding has fired.
+    // Outlets are connected, and no binding has fired yet: state set here is
+    // what bindings push first.
     viewDidLoad() {
       return null;
     }
-    // Outlets are connected, bindings have pushed their initial values, actions
-    // are live, and child controllers are wired. Decoded JSON outlet data is
-    // available here.
+    // Bindings have pushed their initial values, actions are live, and child
+    // controllers are wired.
     awakeFromDOM() {
       return null;
     }

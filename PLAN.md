@@ -393,9 +393,121 @@ Stop or narrow the experiment if production features repeatedly require
 application-specific lowering, general reflection, runtime source
 interpretation, or duplicated framework protocols.
 
+## Design Notes
+
+### Composable controllers (22 September 2026, not started)
+
+The controllers are one inheritance chain — `Controller` → `List` →
+`SortableList` → `EditableList`, and `Controller` → `Editor` →
+`InlineEditor` — while the model layer composes the same kind of behaviour
+from modules: `Editable` includes `DirtyTracking` and `Drafts`, `Resource`
+includes `Relationships` and `Identity`. The chain has a cost already:
+`EditableList < SortableList`, so in-place editing cannot be had without
+sorting.
+
+The direction is fewer intermediate classes and more modules. `Controller`
+keeps what awakening needs on every controller — the view and `attach`,
+`parent` and `child_controllers`, `next_responder`, the lifecycle hooks and
+`unload`, `represented_object`, `binding_root`, outlets and
+`decode_outlet_data`, first-responder acceptance. Candidates to move into
+modules, each named for the Cocoa concept it carries:
+
+| Module | Taken from | Cocoa concept |
+| --- | --- | --- |
+| `Selection` | `List`'s selection state | `NSArrayController` selection |
+| `Sorting` | `SortableList` | `sortDescriptors` |
+| `Editing` | `Editor` | `NSEditor` |
+| `InlineEditing` | `EditableList` | — |
+| `Restoration` | `restorable`, `controller_did_restore` | `restorableStateKeyPaths` |
+
+`List` would keep rows, templates, rendering, and click and key handling —
+the `NSTableView` part. `ObjectBindings` is a module already.
+
+What Cocoa's separate `NSArrayController` gives — two views sharing one
+selection object — is covered by binding to another controller's selection
+(`bind="source_list.selected_object"`).
+
+Before moving anything, confirm in compiler specs:
+
+1. a module body can call `outlet`, a macro defined on `Controller` that the
+   module only has once included;
+2. `super` passes through several modules overriding the same hook
+   (`key_down` and `awake_from_dom` are overridden at more than one level
+   today);
+3. a module that requires another — `Sorting` keeps the selection through a
+   reorder — either includes it or fails clearly when included alone.
+
+"General Ruby module semantics and arbitrary `included` hooks" are
+explicitly deferred below; this needs only the subset the model mixins
+already use, plus whatever these three checks turn up.
+
+### Delegates for views and controls (24 September 2026, not started)
+
+Controllers are subclassed; views and controls are configured. A control
+announces through bindings (its value) and actions (the user did something),
+which Swill has. A delegate covers what those cannot: questions whose answer
+changes what the control does (`tab_bar_should_select`) and content the
+control asks for (a tab's title). Will/did notifications stay with observation
+of the bound value. Segmented controls and tab bars are the expected first
+users beyond `Control`.
+
+Today there is one delegate, `Control#delegate` (`T.untyped`), asked
+`control_should_resign_first_responder` through `respond_to?`, and set only by
+`EditableList`'s loop over the editor's direct subviews — so a control nested
+deeper never gets it. `InlineEditor#editing_host` is a second delegate in all
+but name, found by position rather than assigned.
+
+The design:
+
+- **A protocol is an `abstract!` module.** Abstract methods are required, and
+  `srb tc` fails on a delegate missing one; ordinary methods are optional and
+  carry the default answer. Including the module means every method exists,
+  so every call dispatches directly and `respond_to?` disappears.
+- **The delegate is a typed property on the view** (`T.nilable(TabBar::Delegate)`).
+  Direct dispatch on a module-typed receiver already works: a probe compiled
+  `d.tab_bar_should_select(self, index)` to `d.tabBarShouldSelect(this, index)`.
+- **At awakening, a view's delegate is its owning controller when that
+  controller conforms.** The conformance check is what makes the default
+  safe — a controller becomes a delegate only by including the protocol.
+  Ruby can assign another.
+
+Needed, in order:
+
+1. The compiler accepts `abstract!` and `interface!` as declarations and emits
+   nothing for an `abstract` sig's method; it currently raises
+   "unsupported class body: abstract!".
+2. `Runtime.conforms` and `is_a?` answer for modules. Conformance looks up
+   registered classes only (`types.mjs:49`), and modules are not registered
+   (see Known Gaps), so a module-typed outlet fails with "Unknown class". Class
+   metadata already records included mixins; conformance walks it.
+3. Delegate connection at awakening.
+4. Migrate `Control#delegate` to `Control::Delegate`, with
+   `control_should_resign_first_responder` defaulting to true. `InlineEditor`
+   includes it and owns its controls, which deletes `EditableList`'s loop and
+   the nested-control gap with it.
+5. New controls.
+
+A tab view that hides its panes rather than unloading them would be the first
+thing to run `view_will_appear`/`view_will_disappear` apart from load and
+unload. Today Swill shows a view only by awakening it and hides one only by
+unloading it, so those hooks run exactly once each.
+
+This meets the composable-controllers note: once the list family is modules,
+its editing hooks (`editor_should_end_editing`, `confirm_edit?`, …) can become
+a protocol of this kind rather than methods on a subclass.
+
 ## Known Gaps
 
 Recorded so they are fixed deliberately rather than rediscovered:
+
+- `Responder#action_target` asks `Runtime.respondsTo`, which answers true for a
+  declared property as well as a method (22 September 2026). A controller with
+  a property named like an action therefore claims it, and
+  `Runtime.performAction`, which looks only at methods, raises "Unknown action
+  or wrong arity" where the search should have continued up the chain. The
+  target search should ask the method table alone — the same one
+  `performAction` uses. Visibility is not recorded either, so a private method
+  is an action candidate.
 
 - JavaScript classes registered with `Swill.register` cannot use
   `name_did_change` hooks: the runtime dispatches hooks from the installed

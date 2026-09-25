@@ -25,17 +25,21 @@ module Swill
       apply_open(false)
     end
 
+    # Called by KVO when the options have changed, rerenders the options.
     sig { params(_previous: T.untyped, _options: T.untyped).void }
     def options_did_change(_previous, _options)
       render_options
     end
 
+    # Called when the value of the control changes,
+    # updating the button and selection state of the control.
     sig { params(_previous: T.untyped, _value: String).void }
     def value_did_change(_previous, _value)
       sync_button
       sync_selected_option
     end
 
+    # Called when a user presses Escape, closing the control.
     sig { override.params(event: KeyboardEvent).void }
     def cancel_operation(event)
       return super(event) unless @open
@@ -43,6 +47,7 @@ module Swill
       close
     end
 
+    # Called when the user types, handling arrow keys and Enter.
     sig { override.params(event: KeyboardEvent).void }
     def key_down(event)
       case event.key
@@ -59,8 +64,6 @@ module Swill
         super(event)
       end
     end
-
-    # ---- chrome ----
 
     sig { void }
     def install_chrome
@@ -83,8 +86,7 @@ module Swill
       root.addEventListener("focusout", ->(event) { focus_out(event) })
     end
 
-    # A keyboard "click" on the button is Enter or Space, which key_down
-    # already handles.
+    # Called when a user clicks on the button to open or close the control.
     sig { params(event: MouseEvent).void }
     def button_clicked(event)
       toggle unless event.detail == 0
@@ -130,6 +132,7 @@ module Swill
       sync_selected_option
     end
 
+    # Returns the currently selected option or nil if nothing is selected.
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
     def selected_option
       options.find { |option| option_value(option) == value }

@@ -529,4 +529,3 @@ end
 
 require_relative "emit/meta"
 require_relative "emit/sorbet"
-require_relative "emit/doc"

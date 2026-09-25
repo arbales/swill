@@ -133,22 +133,11 @@ rescue Gem::LoadError
   # Stock RDoc renders the same content without hanna's styling.
 end
 
-# The declaration reference is read from the compiler rather than written by
-# hand, so a new macro or property appears in the docs without anyone
-# remembering to add it. Committed, so a declaration change shows up in review.
-desc "Regenerate doc/declarations.md from the compiler's knowledge"
-task :declarations do
-  Dir.chdir(ROOT) do
-    framework = Swill::Ruby2JS::Compiler.new(loader: Swill::Ruby2JS::Loader.framework)
-    Swill::Ruby2JS::FRAMEWORK_SOURCES.each { |path| framework.add(File.read(path), file: path) }
-    File.write("doc/declarations.md", framework.declaration_reference)
-  end
-end
-
 # Undocumented public API under rb/framework/. A ratchet, not a gate: it
 # fails when the number grows, and the baseline comes down as the framework
 # gets documented. Internals drop out of the count as they are marked :nodoc:.
-DOC_COVERAGE_BASELINE = 204
+# Declared properties and outlets count as they do on the class page.
+DOC_COVERAGE_BASELINE = 269
 
 desc "Report undocumented public framework API (fails if it grew)"
 task :doc_coverage do
@@ -167,6 +156,9 @@ task :doc_coverage do
           next unless method.visibility == :public
           gaps << "#{mod.full_name}##{method.name}" unless method.documented?
         end
+        mod.attributes.each do |attribute|
+          gaps << "#{mod.full_name}##{attribute.name}" unless attribute.documented?
+        end
       end
     end
 
@@ -180,14 +172,31 @@ task :doc_coverage do
   end
 end
 
-desc "Generate HTML documentation into rdoc/"
-task rdoc: :declarations do
+# RDoc reports an unresolved link or a parse problem as a warning and carries
+# on. STRICT=1 fails the build on any, which is how CI runs it.
+desc "Generate HTML documentation into rdoc/ (STRICT=1 fails on warnings)"
+task :rdoc do
   Dir.chdir(ROOT) do
     require_relative "rakelib/sorbet_rdoc"
     require "rdoc/rdoc"
+    require "stringio"
     FileUtils.rm_rf("rdoc")
     files = ["README.md", "LICENSE"] + Dir["doc/*.md"] + Dir["rb/**/*.rb"]
-    RDoc::RDoc.new.document(RDOC_OPTS + ["-o", "rdoc"] + files)
+
+    options = RDOC_OPTS + ["-o", "rdoc"] + files
+    next RDoc::RDoc.new.document(options) unless ENV["STRICT"]
+
+    # Quiet, RDoc writes nothing but its warnings, and it writes an unresolved
+    # link to standard output rather than standard error, so both are caught.
+    reported = StringIO.new
+    stdout, stderr = $stdout, $stderr
+    $stdout = $stderr = reported
+    begin
+      RDoc::RDoc.new.document(options + ["-q"])
+    ensure
+      $stdout, $stderr = stdout, stderr
+    end
+    abort "#{reported.string}rdoc: failed on the warnings above" unless reported.string.strip.empty?
   end
 end
 

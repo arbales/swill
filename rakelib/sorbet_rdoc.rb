@@ -117,3 +117,99 @@ end
 
 RDoc::Parser::Ruby.prepend(SwillRDoc::NameImplicitSuperclass)
 
+# Documents `property`, `outlet` and `attribute` declarations as RDoc handles
+# `attr_accessor`: the comment above the declaration becomes its description,
+# and it is listed on the class page. The declaration's keywords are kept, so
+# the page can show the type and default as they were written.
+module SwillRDoc
+  class Declaration < RDoc::Attr
+    # "property", "outlet" or "attribute".
+    attr_accessor :declared_as
+
+    # The type: argument, as written.
+    attr_accessor :declared_type
+
+    # The default: argument, as written, or nil.
+    attr_accessor :default
+
+    attr_accessor :optional, :computed
+
+    def outlet?
+      declared_as == "outlet"
+    end
+  end
+
+  module DeclaredProperties
+    MACROS = %i[property outlet attribute].freeze
+
+    def visit_call_node(node)
+      return super unless node.receiver.nil? && MACROS.include?(node.name)
+
+      @scanner.process_comments_until(node.location.start_line - 1)
+      return if @scanner.in_proc_block
+      name = node.arguments&.arguments&.first
+      return super unless name.is_a?(Prism::SymbolNode)
+
+      keywords = declaration_keywords(node)
+      declaration = Declaration.new(name.value, node.block ? "R" : "RW", nil, singleton: false)
+      declaration.declared_as = node.name.to_s
+      declaration.declared_type = keywords["type"]
+      declaration.default = keywords["default"]
+      declaration.optional = keywords["optional"] == "true"
+      declaration.computed = !node.block.nil?
+      @scanner.add_declaration(declaration, node.location.start_line)
+    end
+
+    private
+
+    def declaration_keywords(node)
+      hash = node.arguments.arguments.find { |argument| argument.is_a?(Prism::KeywordHashNode) }
+      return {} unless hash
+      hash.elements.each_with_object({}) do |element, keywords|
+        next unless element.is_a?(Prism::AssocNode) && element.key.is_a?(Prism::SymbolNode)
+        keywords[element.key.value] = element.value.slice
+      end
+    end
+  end
+
+  module DeclarationScanner
+    # add_attributes, for one declaration built by the visitor.
+    def add_declaration(declaration, line_no)
+      comment, directives, = consecutive_comment(line_no)
+      handle_code_object_directives(@container, directives) if directives
+      return unless @container.document_children
+
+      declaration.comment = comment
+      declaration.store = @store
+      declaration.line = line_no
+      record_location(declaration)
+      handle_modifier_directive(declaration, line_no)
+      @container.add_attribute(declaration) if should_document?(declaration)
+      declaration.visibility = visibility
+    end
+  end
+end
+
+RDoc::Parser::Ruby.prepend(SwillRDoc::DeclarationScanner)
+RDoc::Parser::Ruby::RDocVisitor.prepend(SwillRDoc::DeclaredProperties)
+
+# Hanna reads its templates from its own directory. A template of the same name
+# in rakelib/rdoc_templates/ is used instead, so Swill overrides only the page
+# fragments it needs to change.
+begin
+  require "hanna"
+  module SwillRDoc
+    module Templates
+      DIRECTORY = File.expand_path("rdoc_templates", __dir__)
+
+      def templjoin(name)
+        local = File.join(DIRECTORY, name)
+        File.exist?(local) ? local : super
+      end
+    end
+  end
+  RDoc::Generator::Hanna.prepend(SwillRDoc::Templates)
+rescue LoadError
+  # Stock RDoc lists declarations as ordinary attributes.
+end
+
