@@ -109,8 +109,8 @@ try {
   // view, controller; focusing the badge's button moves the first responder.
   assert.deepEqual(await evaluate(`(() => {
     const application = Swill.Application.shared();
-    const parent = application.controllers()[0];
-    const badge = application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge"));
+    const parent = application.controllers[0];
+    const badge = application.controllers.find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge"));
     const input = document.querySelector("input");
     const results = [document.activeElement === input, application.firstResponder() === parent.nameField];
     input.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
@@ -147,12 +147,12 @@ try {
     badge.querySelector("[data-action=bump]").click();
     badge.querySelector("[data-action=reset]").click();
     const application = Swill.Application.shared();
-    const [parent, child] = application.controllers();
+    const [parent, child] = application.controllers;
     return [document.querySelector("p[bind]").textContent, badge.querySelector("p[bind]").textContent,
       application.constructor === Swill.Runtime.resolve("Demo::Application"), application.launched,
-      application.controllers().length,
-      parent.nameField.element() === document.querySelector("input"),
-      parent.badge === application.controllers().find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge")),
+      application.controllers.length,
+      parent.nameField.element === document.querySelector("input"),
+      parent.badge === application.controllers.find(c => c.constructor === Swill.Runtime.resolve("Demo::Badge")),
       parent.seed.name, parent.missing];
   })()`), ["Hello ", "Badge 0", true, true, 5, true, true, "Ada", null]);
   // The editor is a child controller bound to the parent's person: its own
@@ -177,7 +177,7 @@ try {
     const application = Swill.Application.shared();
     const container = document.querySelector("[window=main]");
     const results = [container.getAttribute("name"), container.querySelector(".note").textContent,
-      container.querySelector("p[bind]").textContent, application.controllers().length];
+      container.querySelector("p[bind]").textContent, application.controllers.length];
     document.querySelector("[data-action=swap_window]").click();
     results.push(container.getAttribute("name"), container.querySelector(".note").textContent, container.children.length,
       location.hash);
@@ -185,7 +185,7 @@ try {
     const dialog = document.querySelector("dialog");
     results.push(dialog.open, application.firstResponder() === dialog.__swill_view__.controllerValue());
     dialog.querySelector("[data-action=close]").click();
-    results.push(document.querySelector("dialog") === null, application.firstResponder() === application.controllers()[0].nameField);
+    results.push(document.querySelector("dialog") === null, application.firstResponder() === application.controllers[0].nameField);
     return results;
   })()`), ["farewell", "Farewell", "Badge 0", 5, "welcome", "Welcome", 1, "#main=welcome&main.n=0&people.selected=2", true, true, true, true]);
   // Back returns to the previous window content and its restored state.
@@ -294,10 +294,10 @@ try {
     main.appendChild(late);
     await new Promise(resolve => setTimeout(resolve, 0));
     const controller = late.__swill_view__.controllerValue();
-    const awakened = [late.querySelector("p").textContent, controller.parent() === Swill.Application.shared().controllers()[0]];
+    const awakened = [late.querySelector("p").textContent, controller.parent() === Swill.Application.shared().controllers[0]];
     late.remove();
     await new Promise(resolve => setTimeout(resolve, 0));
-    return [...awakened, controller.view().controllerValue() === null];
+    return [...awakened, controller.view.controllerValue() === null];
   })()`), ["Badge 0", true, true]);
   assert.deepEqual(await evaluate(`(() => {
     document.querySelector("button").click();
@@ -417,7 +417,7 @@ try {
     poll();
   })`);
   assert.deepEqual(await evaluate(`(() => {
-    const controller = application.controllers()[0];
+    const controller = application.controllers[0];
     const another = new controller.constructor();
     return [
       application instanceof Swill.Application,

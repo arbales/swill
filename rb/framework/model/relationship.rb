@@ -19,14 +19,10 @@ module Swill
       end
 
       sig { returns(String) }
-      def name
-        @name
-      end
+      attr_reader :name
 
       sig { returns(String) }
-      def key
-        @key
-      end
+      attr_reader :key
 
       sig { returns(T::Boolean) }
       def many?

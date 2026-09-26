@@ -23,8 +23,10 @@ module Swill
       # Ruby members in JavaScript spelling: snake_case becomes camelCase
       # with these acronyms upper-cased; a predicate gains an is prefix unless
       # it is phrased as a verb (acceptsFirstResponder, rowsAreViews), and a
-      # bang is dropped. A name starting with an underscore is JavaScript's
-      # own (an expando such as __swill_view__) and is left alone.
+      # bang becomes Bang (saveBang), so save and save! are both possible and
+      # neither's name depends on the other. A name starting with an underscore
+      # is JavaScript's own (an expando such as __swill_view__) and is left
+      # alone.
       ACRONYMS = %w[dom url json html].freeze
       PREDICATE_VERBS = %w[accepts allow allows can confirm contains has holds includes matches needs requires should supports].freeze
       PREDICATE_LINKS = %w[are is has].freeze
@@ -40,7 +42,8 @@ module Swill
         if suffix == "?" && !PREDICATE_VERBS.include?(words.first) && (words.drop(1) & PREDICATE_LINKS).empty?
           camel = "is#{camel[0].upcase}#{camel[1..]}"
         end
-        suffix == "=" ? "#{camel}=" : camel
+        return "#{camel}=" if suffix == "="
+        suffix == "!" ? "#{camel}Bang" : camel
       end
     end
   end

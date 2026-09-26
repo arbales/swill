@@ -70,9 +70,7 @@ module Swill
 
     # The root view of this controller's region.
     sig { returns(View) }
-    def view
-      @view
-    end
+    attr_reader :view
 
     # Ownership is derived from the sparse view tree and never stored twice.
     sig { returns(T.nilable(Controller)) }
@@ -124,7 +122,7 @@ module Swill
     # Blurs the focused element. Answers false to refuse the change.
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
     def resign_first_responder(next_responder)
-      return false unless super(next_responder)
+      return false unless super
       @view.blur_element
       true
     end

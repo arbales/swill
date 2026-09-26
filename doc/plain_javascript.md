@@ -31,7 +31,7 @@ root, `document.body`, is ready.
     }
 
     awakeFromDOM() {
-      this.status.element().textContent = "Ready";
+      this.status.element.textContent = "Ready";
     }
 
     clearName() {
@@ -54,8 +54,8 @@ Outlets are required unless their descriptor has `optional: true`.
 Controller subclasses may override `bindingRoot`, `decodeOutletData`,
 `viewDidLoad`, `awakeFromDOM`, `controllerDidRestore`, `controllerDidLoad`,
 `viewWillAppear`, `viewDidAppear`, `viewWillDisappear`, and
-`viewDidDisappear`. Outlets are connected after `viewDidLoad` and before
-`awakeFromDOM`. Application subclasses may override `applicationDidLaunch`
+`viewDidDisappear`. Outlets are connected before `viewDidLoad`; bindings push
+after it and before `awakeFromDOM`. Application subclasses may override `applicationDidLaunch`
 and `applicationWillTerminate`. `Swill.List` subclasses may override
 `makeRowElement`, `configureRow`, `rowsAreViews`, `isRowElement`,
 `selectedObjectDidChange`, and `activateSelection`.

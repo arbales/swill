@@ -198,8 +198,15 @@ module Swill
     sig { returns(T::Array[T.untyped]) }
     def arranged_objects
       objects = self.represented_object
-      objects = objects.records if objects.is_a?(Model::Collection)
+      objects = objects.records if collection?(objects)
       T.let(objects || [], T::Array[T.untyped])
+    end
+
+    # A collection object, such as a Model::Collection, shows and follows its
+    # records. Asked by shape rather than class, so a list needs no model layer.
+    sig { params(objects: T.untyped).returns(T::Boolean) }
+    def collection?(objects)
+      objects != nil && !objects.is_a?(Array) && objects.respond_to?(:records)
     end
 
     sig { params(objects: T.untyped).void }
@@ -207,7 +214,7 @@ module Swill
       observer = @collection_observer
       observer.() if observer
       @collection_observer = nil
-      return unless objects.is_a?(Model::Collection)
+      return unless collection?(objects)
       @collection_observer = Runtime.observe(objects, "records", ->(_value) do
         @selection_anchor = nil
         render_all if @awakened

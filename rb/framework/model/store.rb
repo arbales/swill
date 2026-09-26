@@ -11,7 +11,7 @@ module Swill
 
       sig { void }
       def initialize
-        super()
+        super
         @instances = T.let({}, T::Hash[String, Resource])
       end
 

@@ -111,7 +111,7 @@ export function browserAPI(definitions, Runtime) {
   const NotificationCenter = definitions.Swill__NotificationCenter;
   const Wire = definitions.Swill__Wire;
   const ValueTransformer = definitions.Swill__ValueTransformer;
-  const Model = Object.freeze({
+  const Model = definitions.Swill__Model__Base && Object.freeze({
     Base: definitions.Swill__Model__Base,
     Editable: definitions.Swill__Model__Editable,
     Resource: definitions.Swill__Model__Resource,
@@ -125,7 +125,7 @@ export function browserAPI(definitions, Runtime) {
     ResultSet: definitions.Swill__Model__ResultSet
   });
   const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList,
-    Control, TextField, Select, CustomSelect]);
+    Control, TextField, Select, CustomSelect].filter(Boolean));
 
   function register(name, klass) {
     if (arguments.length === 1) {
@@ -169,7 +169,9 @@ export function browserAPI(definitions, Runtime) {
     return application;
   }
 
-  return Object.freeze({
+  // A slim build carries only the UI classes: the names it lacks are left out,
+  // not present as undefined.
+  return Object.freeze(Object.fromEntries(Object.entries({
     ...definitions,
     Runtime,
     install: meta => Runtime.install(meta),
@@ -191,5 +193,5 @@ export function browserAPI(definitions, Runtime) {
     Model,
     register,
     start
-  });
+  }).filter(([, value]) => value !== undefined)));
 }

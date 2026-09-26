@@ -16,19 +16,13 @@ module Swill
     end
 
     sig { returns(String) }
-    def name
-      @name
-    end
+    attr_reader :name
 
     sig { returns(T.untyped) }
-    def object
-      @object
-    end
+    attr_reader :object
 
     sig { returns(T.untyped) }
-    def user_info
-      @user_info
-    end
+    attr_reader :user_info
   end
 
   # NSNotificationCenter analog: observers by name, each observation returning
@@ -49,7 +43,7 @@ module Swill
 
     sig { void }
     def initialize
-      super()
+      super
       @observers = T.let({}, T::Hash[String, T::Array[T.proc.params(notification: Notification).void]])
     end
 

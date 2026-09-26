@@ -25,7 +25,7 @@ module Swill
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
     def resign_first_responder(next_responder)
       return false unless allow_resignation_to?(next_responder)
-      super(next_responder)
+      super
     end
 
     # Focus moving within the editor is free; leaving it asks the host. No

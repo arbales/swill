@@ -201,7 +201,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes js, 'Runtime.cast(value, "Person").name', "T.cast types the receiver as the class"
     assert_includes js, 'items = Runtime.cast(value, "T::Array[String]")'
     assert_includes js, 'Runtime.append(items, "x")', "a T.let local is typed from its declaration"
-    assert_includes js, 'Runtime.read(value, "length")', "T.unsafe forgets the type; the send is dynamic"
+    assert_includes js, 'Runtime.send(value, "length")', "T.unsafe forgets the type; the send is dynamic"
     assert_includes js, "Runtime.absurd(flag)"
     refute_match(/\bT\.(?:must|cast|let|unsafe|absurd)\(/, js, "no sorbet-runtime call survives")
     javascript_result = execute(js + <<~JS)
@@ -256,18 +256,18 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     RUBY
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
     assert_includes js, "Runtime.warn(`oops ${x}`)"
-    assert_includes js, 'Runtime.read(x, "dirty?")'
+    assert_includes js, 'Runtime.send(x, "dirty?")'
     assert_match(/x ===? null/, js)
-    assert_includes js, 'Runtime.read(x, "empty?")'
+    assert_includes js, 'Runtime.send(x, "empty?")'
     assert_includes js, 'Runtime.respondsTo(x, "draft")'
-    assert_includes js, 'Runtime.read(x, "dup")'
+    assert_includes js, 'Runtime.send(x, "dup")'
     assert_includes js, "x instanceof Probe"
     assert_includes js, 'Runtime.invoke(x, "between?", 1, 2)'
     assert_includes js, 'Runtime.invoke(x, "index", 1)', "a Ruby core method JavaScript lacks keeps Ruby's meaning"
-    assert_includes js, 'Runtime.read(x, "first")'
-    assert_includes js, 'Runtime.read(x, "to_s")'
-    assert_includes js, 'Runtime.read(x, "some_member")', "a zero-argument send reads through metadata, method or property"
-    assert_includes js, 'Runtime.read(x, "some_property")'
+    assert_includes js, 'Runtime.send(x, "first")'
+    assert_includes js, 'Runtime.send(x, "to_s")'
+    assert_includes js, 'Runtime.invoke(x, "some_member")', "parentheses make a zero-argument send a call"
+    assert_includes js, 'Runtime.send(x, "some_property")'
     assert_includes js, 'Runtime.write(x, "other_property", 1)'
     shared = javascript("def go; warn(\"shared\"); end")
     assert_includes shared, 'Runtime.warn("shared")'
@@ -339,6 +339,63 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
   # the compiler's knowledge, not from parentheses; a DOM-typed receiver is
   # native, with the DOM table deciding listed members and the source's
   # parentheses deciding unlisted ones.
+  # A bang becomes Bang, so save and save! are separate members. Ruby names
+  # that still come out the same, such as save_bang and save!, cannot share a
+  # class: within one it is plainly a collision, and across a class and its
+  # ancestor it would silently replace the ancestor's member.
+  def test_ruby_names_sharing_a_javascript_name_are_refused
+    js = javascript("def save; true; end\ndef save!; end")
+    assert_includes js, "save() {"
+    assert_includes js, "saveBang() {"
+
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript("def save_bang; end\ndef save!; end")
+    end
+    assert_includes error.message, "Example#save_bang and Example#save! are both saveBang in JavaScript"
+
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~RUBY).javascript(runtime: "../rb/runtime/runtime.mjs")
+        class Record < TestObject
+          def save!; end
+        end
+        class Post < Record
+          def save_bang; end
+        end
+      RUBY
+    end
+    assert_includes error.message, "Post#save_bang and Record#save! are both saveBang in JavaScript"
+
+    js = compiler_with_test_object.add(<<~RUBY).javascript(runtime: "../rb/runtime/runtime.mjs")
+      class Record < TestObject
+        def save!; end
+      end
+      class Post < Record
+        def save!; end
+        def save; true; end
+      end
+    RUBY
+    assert_includes js, "class Post extends Record", "an override of the same Ruby name is not a collision"
+  end
+
+  # A browser member the DOM table does not list still compiles: called when
+  # the source says so, and resolved when it runs when the source does not.
+  def test_unlisted_dom_members_are_called_or_resolved_when_they_run
+    js = compiler_with_test_object.add(<<~RUBY).javascript(runtime: "../rb/runtime/runtime.mjs")
+      class Popover < TestObject
+        extend T::Sig
+        sig { params(element: Element).void }
+        def show(element)
+          element.showPopover
+          element.showPopover()
+          element.togglePopover(true)
+        end
+      end
+    RUBY
+    assert_includes js, 'Runtime.send(element, "showPopover");'
+    assert_includes js, "element.showPopover();"
+    assert_includes js, "element.togglePopover(true);"
+  end
+
   def test_typed_receivers_resolve_from_knowledge_and_dom_receivers_from_the_table
     compiler = Swill::Ruby2JS::Compiler.new
     compiler.add(<<~RUBY)
@@ -383,7 +440,9 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes js, "this._widget.count = this._widget.tally() + found.tally();", "an ivar assigned one class, and a local typed by a static method's signature"
     assert_includes js, "this._element.tally();", "a DOM-typed ivar is native"
     assert_includes js, "found.count,", "a declared property reads"
-    assert_includes js, "      node.parentElement,\n      node.tally(),\n      node.tally,\n", "a listed DOM member reads; an unlisted one follows the parentheses"
+    assert_includes js, "      node.parentElement,\n      node.tally(),\n      Runtime.send(node, \"tally\"),\n",
+                    "a listed DOM member reads; an unlisted one is called with parentheses, and otherwise the element says which it is"
+    assert_includes js, 'return Runtime.send(element, "__widget__");', "an unlisted expando is resolved the same way"
     assert_includes js, "other.nextWidget()", "a member the class does not declare falls back to an explicit call"
     # A computed block is converted on its own, so its instance variables are
     # typed from the class it belongs to, not from the source handed over.
@@ -699,7 +758,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     compiler.add("class Leaf\nextend T::Sig\nsig { returns(Integer) }\ndef size; 1; end\nend\nclass Holder\ndef pick(value, node); T.cast(value, Leaf).size; T.must(node).size; end\nend")
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
     assert_includes js, 'Runtime.cast(value, "Leaf").size()', "a cast receiver calls its collected method"
-    assert_includes js, 'Runtime.read(Runtime.must(node), "size")', "an untyped receiver stays dynamic after T.must"
+    assert_includes js, 'Runtime.send(Runtime.must(node), "size")', "an untyped receiver stays dynamic after T.must"
   end
 
   # Safe navigation is JavaScript's own ?. wherever the compiler resolves the
@@ -819,6 +878,65 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes error.message, "T.bind binds self"
   end
 
+  def test_attribute_accessors_compile_to_native_accessors
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Tally < TestObject
+        extend T::Sig
+        def initialize
+          super
+          @count = 2
+          @selected_label = "a"
+        end
+        sig { returns(Integer) }
+        attr_reader :count
+        sig { returns(String) }
+        attr_accessor :selected_label
+        sig { params(total: Integer).returns(Integer) }
+        attr_writer :total
+        sig { returns(Integer) }
+        def doubled; count * 2; end
+        sig { params(other: Tally).returns(String) }
+        def relabel(other)
+          other.selected_label = "b"
+          other.selected_label + selected_label
+        end
+        sig { params(other: T.untyped).returns(T.untyped) }
+        def untyped_count(other); other.count; end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_includes js, "get count() {\n    return this._count;"
+    assert_includes js, "get selectedLabel() {"
+    assert_includes js, "set selectedLabel(selected_label) {"
+    assert_includes js, "set total(total) {"
+    assert_includes js, "return this.count * 2", "a reader on self is read, not called"
+    assert_includes js, "other.selectedLabel + this.selectedLabel"
+    assert_includes js, 'Runtime.send(other, "count")'
+    assert_equal [4, "ba", 2, true, 2], execute(js + <<~JS)
+      const tally = new Tally();
+      console.log(JSON.stringify([tally.doubled(), tally.relabel(new Tally()), tally.untypedCount(tally),
+        Runtime.respondsTo(tally, "total="), Runtime.invoke(tally, "count")]));
+    JS
+
+    error = assert_raises(Swill::Ruby2JS::CompileError) { javascript("attr_reader name") }
+    assert_includes error.message, "attr_reader takes literal symbol names"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript("attr_reader :count\ndef go; count(1); end")
+    end
+    assert_includes error.message, "count is an attribute reader and takes no arguments"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compiler_with_test_object.add(<<~RUBY).javascript(runtime: "./runtime.mjs")
+        class Counter < TestObject
+          attr_reader :count
+        end
+        class Recount < Counter
+          def count; 3; end
+        end
+      RUBY
+    end
+    assert_includes error.message, "Recount#count must be declared as the member it overrides is"
+  end
+
   def test_other_sorbet_constructs_and_uncheckable_types_are_rejected
     [
       ["def name; T::Struct.new; end", "unsupported runtime Sorbet construct T::Struct"],
@@ -898,10 +1016,10 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
     # The widest variant carries the body; the shorter ones hand it the defaults.
     assert_includes js, "greetWithGreeting(greeting, name) {"
-    assert_includes js, "greet(name) {\n    return this.greetWithGreeting(\"Hello\", name);"
+    assert_includes js, "greet(name) {\n    return Greeter.prototype.greetWithGreeting.call(this, \"Hello\", name);"
     assert_includes js, "spanWithBAndC(a, b, c) {"
-    assert_includes js, "span(a) {\n    return this.spanWithBAndC(a, 2, 3);"
-    assert_includes js, "spanWithB(a, b) {\n    return this.spanWithBAndC(a, b, 3);"
+    assert_includes js, "span(a) {\n    return Greeter.prototype.spanWithBAndC.call(this, a, 2, 3);"
+    assert_includes js, "spanWithB(a, b) {\n    return Greeter.prototype.spanWithBAndC.call(this, a, b, 3);"
     # The argument count says which member of the family a send means.
     assert_includes js, 'this.greet("Ada")'
     assert_includes js, 'this.greetWithGreeting("Hi", "Grace")'
@@ -938,7 +1056,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       end
     RUBY
     assert_includes js, "return Runtime.upcase(super.greetWithGreeting(greeting, name));"
-    assert_includes js, "greet(name) {\n    return this.greetWithGreeting(\"Hey\", name);"
+    assert_includes js, "greet(name) {\n    return Loud.prototype.greetWithGreeting.call(this, \"Hey\", name);"
     assert_equal ["Hello, Ada", "HEY, ADA", "HI, ADA"], execute(js + <<~JS)
       const loud = new (Runtime.resolve("Loud"))();
       const plain = new (Runtime.resolve("Greeter"))();
@@ -1545,6 +1663,106 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_equal ["A(B(x))", "B(A(x))"], JSON.parse(ruby)
   end
 
+  def test_bare_super_forwards_bound_parameters_and_empty_super_uses_parent_defaults
+    source = <<~'RUBY'
+      class Parent < TestObject
+        def initialize(value); super(); @value = value; end
+        def value; @value; end
+        def pair(left, right); [left, right]; end
+        def optional(value = "parent"); value; end
+        def empty(value = "parent"); value; end
+        def self.option(value = "parent"); value; end
+      end
+      module ForwardPair
+        def pair(left, right); super; end
+      end
+      class Child < Parent
+        include ForwardPair
+        def initialize(value); value = "constructor"; super; end
+        def pair(left, right); left = "changed"; super; end
+        def optional(value = "child"); super; end
+        def empty(value = "child"); super(); end
+        def self.option(value = "child"); super; end
+      end
+    RUBY
+    js = compiler_with_test_object.add(source).javascript(runtime: "../rb/runtime/runtime.mjs")
+    actual = execute(js + <<~JS)
+      const child = new Child("original");
+      console.log(JSON.stringify([child.value(), child.pair("left", "right"),
+        Runtime.invoke(child, "optional"), Runtime.invoke(child, "empty"), Child.option()]));
+    JS
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-e", <<~RUBY)
+      class TestObject; end
+      #{source}
+      child = Child.new("original")
+      puts JSON.generate([child.value, child.pair("left", "right"), child.optional, child.empty, Child.option])
+    RUBY
+    assert status.success?, ruby
+    assert_equal JSON.parse(ruby), actual
+  end
+
+  def test_bare_super_forwards_rest_keywords_and_the_original_block
+    source = <<~'RUBY'
+      class Parent < TestObject
+        def gather(value = "parent", *rest, label: "parent", **options, &block)
+          [value, rest, label, options, block ? block.call(value) : nil]
+        end
+        def defaults(value = "parent", *rest, label: "parent")
+          [value, rest, label]
+        end
+        def omit(value = "parent", &block)
+          [value, block ? block.call(value) : nil]
+        end
+        def implicit(value = "parent")
+          yield value
+        end
+        def self.keywords(required:, optional: "parent")
+          [required, optional]
+        end
+      end
+      class Child < Parent
+        def gather(value = "child", *rest, label: "child", **options, &block)
+          value = "changed"
+          rest = ["replacement"]
+          label = "new label"
+          options = {extra: "new option"}
+          block = nil
+          super
+        end
+        def defaults(value = "child", *rest, label: "child")
+          super
+        end
+        def omit(value = "child", &block)
+          super()
+        end
+        def implicit(value = "child")
+          super if block_given?
+        end
+        def self.keywords(required:, optional: "child")
+          required = "changed"
+          super
+        end
+      end
+    RUBY
+    js = compiler_with_test_object.add(source).javascript(runtime: "../rb/runtime/runtime.mjs")
+    actual = execute(js + <<~JS)
+      const child = new Child();
+      console.log(JSON.stringify([child.gather(), child.gather("given", "tail",
+        Runtime.keywordArguments({label: "given", extra: "given"}), Runtime.blockArgument(value => value)),
+        child.defaults(), child.omit("given", Runtime.blockArgument(value => value)),
+        child.implicit(Runtime.blockArgument(value => value)), Child.keywords(Runtime.keywordArguments({required: "given"}))]));
+    JS
+    ruby, status = Open3.capture2e("ruby", "-rjson", "-e", <<~RUBY)
+      class TestObject; end
+      #{source}
+      child = Child.new
+      puts JSON.generate([child.gather, child.gather("given", "tail", label: "given", extra: "given") { |value| value },
+        child.defaults, child.omit("given") { |value| value }, child.implicit { |value| value }, Child.keywords(required: "given")])
+    RUBY
+    assert status.success?, ruby
+    assert_equal JSON.parse(ruby), actual
+  end
+
   def test_value_semantics_are_lowered_in_executable_code
     js = javascript(<<~RUBY)
       def choose(value); value && "yes"; end
@@ -1563,6 +1781,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       sig { params(text: String, items: T::Array[String], thing: T.nilable(TestObject)).returns(T::Array[T::Boolean]) }
       def readers(text, items, thing); [text.present?, text.empty?, items.empty?, items.blank?, thing.nil?, text.nil?]; end
       def dynamic_readers(value); [value.present?, value.empty?, value.nil?]; end
+      def nil_readers(value); [value.present?, value.nil?, value.to_s]; end
     RUBY
     assert_includes js, "Runtime.isTruthy("
     assert_includes js, "Runtime.logicalOr("
@@ -1570,23 +1789,29 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes js, "Runtime.upcase(Runtime.strip(value))"
     assert_includes js, "Runtime.isBlank(value)"
     # Untyped receivers use the one dynamic reader instead of a name-based rewrite.
-    assert_includes js, 'Runtime.read(Runtime.read(value, "strip"), "upcase")'
-    assert_includes js, 'Runtime.read(value, "blank?")'
+    assert_includes js, 'Runtime.send(Runtime.send(value, "strip"), "upcase")'
+    assert_includes js, 'Runtime.send(value, "blank?")'
     assert_includes js, "Runtime.isPresent(text)"
     assert_includes js, "Runtime.isEmpty(text)"
     assert_includes js, "Runtime.isEmpty(items)"
     assert_includes js, "Runtime.isBlank(items)"
     assert_includes js, "thing == null"
     assert_includes js, "text == null"
-    assert_includes js, 'Runtime.read(value, "present?")'
+    assert_includes js, 'Runtime.send(value, "present?")'
     assert_includes js, "value == null", "nil? never needs the runtime"
     refute_includes js, "let $T ="
     refute_includes js, "let $ror ="
     refute_includes js, "let $rand ="
     refute_includes js, "Runtime.valueRead("
-    assert_equal [[true, false, true, true, true, false], [false, true, false], [false, nil, true]], execute(js + <<~JS)
+    # nil answers the readers Ruby's nil has; any other send to it raises, as
+    # in Ruby, rather than answering nil.
+    assert_equal [[true, false, true, true, true, false], [false, true, false], [false, true, ""],
+                  "Cannot call empty? on nil"], execute(js + <<~JS)
       const example = new (Runtime.resolve("Example"))();
-      console.log(JSON.stringify([example.readers("Ada", [], null), example.dynamicReaders(""), example.dynamicReaders(null)]));
+      let raised;
+      try { example.dynamicReaders(null); } catch (error) { raised = error.message; }
+      console.log(JSON.stringify([example.readers("Ada", [], null), example.dynamicReaders(""),
+        example.nilReaders(null), raised]));
     JS
     js += <<~JS
       const object = new (Runtime.resolve("Example"))();
@@ -1676,7 +1901,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
     assert_includes js, "other.strip()"
     assert_includes js, "Runtime.strip(text)"
-    assert_includes js, 'Runtime.read(value, "strip")'
+    assert_includes js, 'Runtime.send(value, "strip")'
     assert_equal ["trimmed", "Ada", "trimmed", "Ada"], execute(js + <<~JS)
       const object = new (Runtime.resolve("Trimmer"))();
       console.log(JSON.stringify([...object.readers(object, " Ada ", object), object.readers(object, "x", " Ada ")[2]]));
@@ -1802,9 +2027,13 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
         sig { params(prefix: String).returns(String) }
         def greet(prefix); "\#{prefix} \#{name}"; end
         def initials; name.slice(0, 1); end
+        def rename!; self.name = "Renamed"; end
       end
       class Caller < TestObject
         def read_name(thing); thing.name; end
+        def called_name(thing); thing.name(); end
+        def called_initials(thing); thing.initials(); end
+        def renamed(thing); thing.rename!; thing.name; end
         def write_name(thing); thing.name = "Grace"; end
         def greet(thing); thing.greet("Hello"); end
         def plain_call(thing); thing.initials; end
@@ -1818,13 +2047,18 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
     # Nothing about an untyped receiver is decided by name: every send is
     # resolved through metadata at run time, as Ruby itself would resolve it.
-    assert_includes js, 'Runtime.read(thing, "name")'
+    assert_includes js, 'Runtime.send(thing, "name")'
     assert_includes js, 'Runtime.write(thing, "name", "Grace")'
     assert_includes js, 'Runtime.invoke(thing, "greet", "Hello")'
-    assert_includes js, 'Runtime.read(thing, "initials")'
+    assert_includes js, 'Runtime.send(thing, "initials")'
+    # Parentheses or a bang say the send is a call; no property can be one.
+    assert_includes js, 'Runtime.invoke(thing, "initials")'
+    assert_includes js, 'Runtime.invoke(thing, "name")'
+    assert_includes js, 'Runtime.invoke(thing, "rename!")'
     assert_includes js, 'person.greet("Hi")', "constructing a collected class types the local"
-    assert_includes js, 'value[0] + Runtime.read(value, "length")', "indexing and operators stay native; length is a value reader"
-    assert_equal ["Ada", "Grace", "Hello Grace", "G", "Hi Ada", 3, "Unknown method or wrong arity: greet", "plain"], execute(js + <<~JS)
+    assert_includes js, 'value[0] + Runtime.send(value, "length")', "indexing and operators stay native; length is a value reader"
+    assert_equal ["Ada", "Grace", "Hello Grace", "G", "Hi Ada", 3, "Unknown method or wrong arity: greet", "plain",
+                  "Grace", "G", "Renamed", "Cannot call name on nil"], execute(js + <<~JS)
       const caller = new (Runtime.resolve("Caller"))();
       const person = new (Runtime.resolve("Person"))();
       const results = [caller.readName(person)];
@@ -1833,6 +2067,10 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       try { caller.greet({}); } catch (error) { results.push(error.message); }
       results.push(caller.readName({name: "plain"}), "a plain object is a Hash: reads are key-value coding");
       results.pop();
+      // A reader called with parentheses is still the reader; a bang method
+      // is called; nil is not a receiver.
+      results.push(caller.calledName(person), caller.calledInitials(person), caller.renamed(person));
+      try { caller.readName(null); } catch (error) { results.push(error.message); }
       console.log(JSON.stringify(results));
     JS
   end
@@ -2375,7 +2613,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
   private
 
   def execute(js)
-    path = "build/compiler-test.mjs"
+    path = "build/compiler-test-#{Process.pid}.mjs"
     File.write(path, js)
     output, status = Open3.capture2e("deno", "run", "-A", path)
     assert status.success?, output
@@ -2386,7 +2624,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
 
   # The bundle's own failure output, for checks that must fail at load time.
   def execute_failing(js)
-    path = "build/compiler-test.mjs"
+    path = "build/compiler-test-#{Process.pid}.mjs"
     File.write(path, js)
     output, status = Open3.capture2e("deno", "run", "-A", path)
     refute status.success?, "expected the bundle to fail while installing"

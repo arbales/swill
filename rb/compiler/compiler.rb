@@ -79,6 +79,16 @@ module Swill
       rb/framework/model/resource.rb
     ].freeze
 
+    # The UI framework alone, in the same order: views, controllers, bindings,
+    # the responder chain, and List, without models, remote data, the concrete
+    # controls, or the list controllers built on List.
+    UI_FRAMEWORK_SOURCES = FRAMEWORK_SOURCES.reject do |path|
+      path.start_with?("rb/framework/model/") ||
+        (path.start_with?("rb/framework/control/") && !path.end_with?("/base.rb")) ||
+        %w[core/wire.rb controller/sortable_list.rb controller/editor.rb
+           controller/inline_editor.rb controller/editable_list.rb].any? { |name| path.end_with?(name) }
+    end.freeze
+
     # Orchestration: collect facts, validate the graph, convert each entry
     # with its surface, and emit definitions. Metadata emission lives in
     # compiler/meta.rb and Sorbet artifacts in compiler/sorbet.rb.
@@ -274,9 +284,13 @@ module Swill
             resolve_outlet_types(entry)
             resolve_relationship_types(entry)
             canonicalize_signatures(entry)
-            members = entry["properties"].map { |p| [p["js"], p["name"]] } +
-              entry["methods"].flat_map { |m| Knowledge.variants(m).map { |v| [v["js"], v["name"]] } }
-            raise CompileError, "colliding members in #{entry['name']}" unless members.map(&:first).uniq.length == members.length
+            members = javascript_members(entry)
+            members.group_by(&:first).each_value do |same|
+              next if same.length == 1
+              raise CompileError, "#{same.map { |_, name| "#{entry['name']}##{name}" }.join(' and ')} " \
+                "are #{same.length == 2 ? 'both' : 'all'} #{same.first.first} in JavaScript"
+            end
+            check_inherited_members!(entry, parent_name, members)
             statics = entry.fetch("static_methods", []).flat_map do |method|
               Knowledge.variants(method).map { |variant| [variant["js"], variant["name"]] }
             end
@@ -299,6 +313,13 @@ module Swill
           entry["methods"].each do |method|
             inherited = inherited_method_entry(entry, parent_name, method["name"])
             next unless inherited
+            # A reader is a getter or a method in JavaScript, and a call site
+            # compiled against one cannot reach the other.
+            unless method["accessor"] == inherited["accessor"]
+              raise CompileError,
+                "#{entry['name']}##{method['name']} must be declared as the member it overrides is, " \
+                "with attr_reader or def"
+            end
             if method["complex"] || inherited["complex"]
               unless call_shape(inherited) == call_shape(method)
                 raise CompileError,
@@ -344,6 +365,37 @@ module Swill
             formal["kind"].start_with?("key") ? [formal["kind"], formal["name"]] : formal["kind"]
           end
           [shape, method["implicit_block"] == true]
+        end
+
+        # [JavaScript name, Ruby name] for every property and method variant.
+        def javascript_members(entry)
+          entry["properties"].map { |property| [property["js"], property["name"]] } +
+            entry["methods"].flat_map { |method| Knowledge.variants(method).map { |variant| [variant["js"], variant["name"]] } }
+        end
+
+        # A member may not take an ancestor's JavaScript name under another
+        # Ruby name: save! and save are both save, so a subclass's save would
+        # replace its parent's save! in JavaScript without overriding either.
+        def check_inherited_members!(entry, parent_name, members)
+          inherited = {}
+          pending = entry["includes"].map { |name| knowledge.resolve(name, entry["scope"]) }
+          pending << parent_name if parent_name
+          seen = {}
+          until pending.empty?
+            name = pending.shift
+            next if seen[name]
+            seen[name] = true
+            ancestor = knowledge.entries.find { |candidate| candidate["name"] == name }
+            next unless ancestor
+            javascript_members(ancestor).each { |javascript, ruby| inherited[javascript] ||= [ruby, name] }
+            pending.concat(ancestor["includes"].map { |included| knowledge.resolve(included, ancestor["scope"]) })
+            pending << knowledge.resolve(ancestor["parent"], ancestor["scope"]) if ancestor["parent"]
+          end
+          members.each do |javascript, ruby|
+            other, owner = inherited[javascript]
+            next if other.nil? || other == ruby
+            raise CompileError, "#{entry['name']}##{ruby} and #{owner}##{other} are both #{javascript} in JavaScript"
+          end
         end
 
         def inherited_method_entry(entry, parent_name, name)
@@ -472,7 +524,9 @@ module Swill
                 seen <= variant["taken"] ? formal["name"] : formal["default"]
               end
               parameters = Knowledge.variant_formals(method, variant["taken"]).map { |formal| formal["name"] }
-              call = "#{widest['name']}(#{arguments.join(', ')})"
+              # A parent's default shim must reach its own body, not dispatch
+              # back into the override that called it through super().
+              call = "__swill_variant_body(:#{widest['js']}, #{arguments.join(', ')})"
               static = entry.fetch("static_methods", []).include?(method)
               header = "def #{static ? 'self.' : ''}#{variant['name']}(#{parameters.join(', ')})"
               method["async"] ? "async #{header}\nawait #{call}\nend" : "#{header}\n#{call}\nend"

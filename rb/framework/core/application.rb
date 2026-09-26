@@ -39,7 +39,7 @@ module Swill
     # Creates the application. Call #launch to start it.
     sig { void }
     def initialize
-      super()
+      super
       @windows = T.let([], T::Array[Window])
       @controllers = T.let([], T::Array[Controller])
       @templates = T.let({}, T::Hash[String, Element])
@@ -87,15 +87,11 @@ module Swill
 
     # Every controller awakened at launch, in document order.
     sig { returns(T::Array[Controller]) }
-    def controllers
-      @controllers
-    end
+    attr_reader :controllers
 
     # The element the application was launched at.
     sig { returns(Element) }
-    def root
-      @root
-    end
+    attr_reader :root
 
     # Idempotent: a page may see more than one pagehide before it is unloaded.
     sig { void }

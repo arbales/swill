@@ -41,7 +41,7 @@ module Swill
       def apply_attributes(source)
         @dirty_suspensions = (@dirty_suspensions || 0) + 1
         begin
-          super(source)
+          super
         ensure
           @dirty_suspensions = @dirty_suspensions - 1
         end
@@ -51,7 +51,7 @@ module Swill
       sig { params(name: T.any(Symbol, String), previous: T.untyped, value: T.untyped).void }
       def property_will_change(name, previous, value)
         T.bind(self, Swill::Model::Editable)
-        super(name, previous, value)
+        super
         return if (@dirty_suspensions || 0) > 0
         attributes = T.cast(self.class.model_attributes, T::Hash[String, T.untyped])
         return unless attributes.key?("#{name}")

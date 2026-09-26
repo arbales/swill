@@ -500,6 +500,13 @@ a protocol of this kind rather than methods on a subclass.
 
 Recorded so they are fixed deliberately rather than rediscovered:
 
+- `List` re-renders every row whenever its collection changes (25 September
+  2026). The documentation navigator, the first list of this size in real
+  use, measures about 0.13 ms per row in Chrome: 5 ms narrowing its method
+  index to two rows, 110–120 ms restoring all ~900 when the query is cleared
+  (`rake doc_browser` prints the numbers). Reconciling rows by object
+  identity, keeping those that survive, is the fix.
+
 - `Responder#action_target` asks `Runtime.respondsTo`, which answers true for a
   declared property as well as a method (22 September 2026). A controller with
   a property named like an action therefore claims it, and

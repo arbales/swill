@@ -52,35 +52,23 @@ module Swill
     end
 
     sig { returns(String) }
-    def name
-      @name
-    end
+    attr_reader :name
 
     sig { returns(Element) }
-    def root
-      @root
-    end
+    attr_reader :root
 
     sig { returns(T.nilable(Controller)) }
-    def controller
-      @controller
-    end
+    attr_reader :controller
 
     sig { returns(T.nilable(String)) }
-    def content_name
-      @content_name
-    end
+    attr_reader :content_name
 
     # Resolves with nil when the window is dismissed.
     sig { returns(Promise) }
-    def closed
-      @closed
-    end
+    attr_reader :closed
 
     sig { returns(T.nilable(Responder)) }
-    def saved_first_responder
-      @saved_first_responder
-    end
+    attr_reader :saved_first_responder
 
     sig { params(responder: T.nilable(Responder)).void }
     def save_first_responder(responder)

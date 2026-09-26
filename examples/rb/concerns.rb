@@ -14,7 +14,7 @@ module NameTracking
 
   sig { params(name: String, previous: T.untyped, value: T.untyped).void }
   def property_will_change(name, previous, value)
-    super(name, previous, value)
+    super
     if name == "name"
       if baseline == nil
         self.baseline = previous
@@ -29,7 +29,7 @@ module NameValidation
 
   sig { params(name: String, value: T.untyped, previous: T.untyped).returns(T.untyped) }
   def coerce_property_value(name, value, previous)
-    value = super(name, value, previous)
+    value = super
     if name == "name"
       value = value.strip
       if value == ""

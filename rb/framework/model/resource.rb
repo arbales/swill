@@ -13,7 +13,7 @@ module Swill
       # Creates an empty resource with no relationship requests in flight.
       sig { void }
       def initialize
-        super()
+        super
         @relationship_requests = T.let({}, T::Hash[String, T.untyped])
       end
 
@@ -170,7 +170,7 @@ module Swill
 
       sig { params(name: String).void }
       def property_will_access(name)
-        super(name)
+        super
         return if id == nil
         return unless self.class.model_relationships[name]
         return if relationship_loaded?(name)

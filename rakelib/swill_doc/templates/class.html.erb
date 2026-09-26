@@ -1,0 +1,111 @@
+<%-
+  includes = klass.includes
+  derived = klass.module? ? [] : subclasses(klass)
+  constants = klass.constants.sort_by(&:name)
+  properties = declarations(klass, false)
+  outlets = declarations(klass, true)
+  attributes = plain_attributes(klass)
+  class_methods = public_methods(klass, true)
+  instance_methods = public_methods(klass, false)
+  relations = [
+    ["Includes", includes.map { |included| class_link(included.module, short: true) }],
+    ["Derivatives", derived.map { |subclass| class_link(subclass) }]
+  ].reject { |_, links| links.empty? }
+-%>
+    <header class="page-header">
+      <h1><span class="kind"><%= klass.module? ? "Module" : "Class" %></span><span class="title"><%= h klass.full_name %></span></h1>
+<%- klass.in_files.each do |file| -%>
+      <a class="source" href="<%= h href_to(file) %>"><%= h file.relative_name %></a>
+<%- end -%>
+<%- unless klass.module? -%>
+      <div class="superclass"><span class="label">Superclass: </span><%= class_link(superclass_of(klass), short: true) %></div>
+<%- end -%>
+    </header>
+    <div class="content">
+      <article class="body">
+<%- unless klass.description.strip.empty? -%>
+        <div class="description"><%= klass.description %></div>
+<%- end -%>
+<%- unless relations.empty? -%>
+        <hr class="divider">
+        <div class="relations">
+<%- relations.each do |title, links| -%>
+          <div class="relation">
+            <h2 class="label"><%= title %></h2>
+<%- links.each do |link| -%>
+            <%= link %>
+<%- end -%>
+          </div>
+<%- end -%>
+<%- if relations.size == 1 -%>
+          <div class="relation"></div>
+<%- end -%>
+        </div>
+<%- end -%>
+<%- unless constants.empty? -%>
+        <h2 class="section-title">Constants</h2>
+<%- constants.each_with_index do |constant, index| -%>
+<%- if index.positive? -%>
+        <hr class="row-divider">
+<%- end -%>
+        <div class="constant" id="<%= h constant.name %>">
+          <span class="constant-name"><%= h constant.name %></span>
+          <pre class="constant-value"><%= h constant_value(constant) %></pre>
+<%- unless constant.description.strip.empty? -%>
+          <div class="constant-comment"><%= constant.description %></div>
+<%- end -%>
+        </div>
+<%- end -%>
+<%- end -%>
+<%- [["Properties", properties], ["Outlets", outlets]].each do |title, list| -%>
+<%- next if list.empty? -%>
+        <h2 class="section-title"><%= title %></h2>
+<%- list.each do |declaration| -%>
+        <div class="property" id="<%= h declaration.aref %>">
+          <div class="property-signature"><span class="property-name"><%= h declaration.name %></span><span class="property-meta"><%= type_html(declaration.declared_type, klass) %></span></div>
+<%- unless declaration.description.strip.empty? -%>
+          <div class="property-description"><%= declaration.description %></div>
+<%- end -%>
+        </div>
+<%- end -%>
+<%- end -%>
+<%- unless attributes.empty? -%>
+        <h2 class="section-title">Attributes</h2>
+        <div class="attributes">
+<%- attributes.each do |attribute| -%>
+          <div class="property" id="<%= h attribute.aref %>">
+            <div class="property-signature"><span class="property-name"><%= h attribute.name %></span><span class="property-meta"><%= attribute_meta(attribute) %></span></div>
+<%- unless attribute.description.strip.empty? -%>
+            <div class="property-description"><%= attribute.description %></div>
+<%- end -%>
+          </div>
+<%- end -%>
+        </div>
+<%- end -%>
+<%- [["Public class methods", class_methods, "class-method"], ["Public instance methods", instance_methods, "instance-method"]].each do |title, list, kind| -%>
+<%- next if list.empty? -%>
+        <h2 class="section-title"><%= title %></h2>
+<%- list.each do |method| -%>
+        <section class="method <%= kind %>" id="<%= h method.aref %>">
+          <h3 class="method-header"><%= signature_html(method) %></h3>
+<%- unless method.description.strip.empty? -%>
+          <div class="method-body"><%= method.description %></div>
+<%- end -%>
+        </section>
+<%- end -%>
+<%- end -%>
+      </article>
+<%- index = [["Public class methods", class_methods], ["Outlets", outlets], ["Public instance methods", instance_methods]].reject { |_, list| list.empty? } -%>
+<%- unless index.empty? -%>
+      <aside class="page-index">
+<%- index.each do |title, list| -%>
+        <header class="pane-header"><%= title %></header>
+        <ul class="index">
+<%- list.each do |entry| -%>
+          <li><a href="#<%= h entry.aref %>"><%= h entry.name %></a></li>
+<%- end -%>
+        </ul>
+<%- end -%>
+      </aside>
+<%- end -%>
+    </div>

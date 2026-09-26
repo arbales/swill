@@ -19,7 +19,7 @@ module Swill
       if current && current.respond_to?(:control_should_resign_first_responder)
         return false unless current.control_should_resign_first_responder(self, next_responder)
       end
-      super(next_responder)
+      super
     end
   end
 end

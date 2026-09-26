@@ -27,19 +27,13 @@ module Swill
     end
 
     sig { returns(Controller::InlineEditor) }
-    def editor
-      @editor
-    end
+    attr_reader :editor
 
     sig { returns(Integer) }
-    def index
-      @index
-    end
+    attr_reader :index
 
     sig { returns(T.untyped) }
-    def original
-      @original
-    end
+    attr_reader :original
   end
 
   class Controller::EditableList < Controller::SortableList
@@ -132,20 +126,20 @@ module Swill
       if editing?
         end_editing(false)
       else
-        super(event)
+        super
       end
     end
 
     sig { override.params(key: String).void }
     def toggle_sort(key)
-      super(key) if commit_editing_if_needed
+      super if commit_editing_if_needed
     end
 
     # A new collection ends an edit without committing: its row is gone.
     sig { override.params(previous: T.untyped, objects: T.untyped).void }
     def represented_object_did_change(previous, objects)
       end_editing(false) if editing?
-      super(previous, objects)
+      super
     end
 
     # ---- policy hooks ----
@@ -225,7 +219,7 @@ module Swill
     # The editor sits among the rows while editing, but is not one.
     sig { override.params(element: Element).returns(T::Boolean) }
     def row_element?(element)
-      return false unless super(element)
+      return false unless super
       edit = @edit
       edit == nil || edit.editor.view.element != element
     end

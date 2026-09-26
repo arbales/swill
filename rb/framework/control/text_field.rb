@@ -12,7 +12,7 @@ module Swill
 
     sig { params(element: Element).void }
     def initialize(element)
-      super(element)
+      super
       input = input_element
       return unless input
       initial = input.value

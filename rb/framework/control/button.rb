@@ -8,7 +8,7 @@ module Swill
 
     sig { params(element: Element).void }
     def initialize(element)
-      super(element)
+      super
       ensure_focusable
     end
   end

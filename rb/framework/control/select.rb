@@ -13,7 +13,7 @@ module Swill
 
     sig { params(element: Element).void }
     def initialize(element)
-      super(element)
+      super
       @template_option_count = element.children.length
       initial = element.value
       initial = element.getAttribute("value").to_s if initial.empty? && element.hasAttribute("value")

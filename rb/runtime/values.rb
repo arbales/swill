@@ -18,8 +18,10 @@ class Object
   end
 end
 
+# Extensions to the String class that applications may use.
 class String
   unless instance_methods(false).include?(:blank?)
+    # If the string contains only whitespace, it's empty.
     def blank?
       strip.empty?
     end

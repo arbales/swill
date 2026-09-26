@@ -156,7 +156,7 @@
       coercePropertyValue(name, value, previous) {
         value = super.coercePropertyValue(name, value, previous);
         if (name === "name") {
-          value = Runtime.read(value, "strip");
+          value = Runtime.send(value, "strip");
           if (value === "") throw new Error("name must not be blank");
         }
         ;
@@ -252,7 +252,7 @@
     // Alternate the main window between two templates.
     swapWindow() {
       let current = this.windowNamed("main");
-      let name = Runtime.isTruthy(current && current.contentName() === "welcome") ? "farewell" : "welcome";
+      let name = Runtime.isTruthy(current && current.contentName === "welcome") ? "farewell" : "welcome";
       return this.loadWindowContent("main", name);
     }
     openPalette() {
@@ -261,9 +261,9 @@
     // Clears every awakened controller that handles clear; the metadata
     // query is the explicit stand-in for respond_to?.
     reset() {
-      return this.controllers().forEach((controller) => {
+      return this.controllers.forEach((controller) => {
         if (Runtime.isTruthy(Runtime.respondsTo(controller, "clear"))) {
-          Runtime.read(controller, "clear");
+          Runtime.send(controller, "clear");
         }
       });
     }
@@ -298,10 +298,10 @@
     controllerDidLoad() {
       this.observeNotification(
         "example_did_change",
-        (notification) => this.syncSelectedExample(notification.userInfo())
+        (notification) => this.syncSelectedExample(notification.userInfo)
       );
       let main = this.application().windowNamed("main");
-      let name = main ? main.contentName() : null;
+      let name = main ? main.contentName : null;
       if (name != null) return this.syncSelectedExample(name);
     }
     showExample(sender) {
@@ -326,7 +326,7 @@
       );
     }
     syncSelectedExample(name) {
-      return this.view().element().querySelectorAll("[data-example]").forEach((button) => button.setAttribute(
+      return this.view.element.querySelectorAll("[data-example]").forEach((button) => button.setAttribute(
         "aria-pressed",
         button.getAttribute("data-example") === name ? "true" : "false"
       ));
@@ -359,10 +359,10 @@
     }
     controllerDidLoad() {
       super.controllerDidLoad();
-      this.observeNotification("counter_changed", (notification) => this.lastNotification = `Counter changed to ${notification.userInfo()}`);
+      this.observeNotification("counter_changed", (notification) => this.lastNotification = `Counter changed to ${notification.userInfo}`);
       this.observeNotification(
         "first_responder_did_change",
-        (notification) => this.updateFirstResponderDebug(notification.userInfo())
+        (notification) => this.updateFirstResponderDebug(notification.userInfo)
       );
       Runtime.must(this.draftEditor).representedObject = this.draft;
       this.application().makeFirstResponder(Runtime.must(this.nameField));
@@ -379,7 +379,7 @@
         () => "Object"
       );
       if (!(responder instanceof Swill__View)) return name;
-      let element = Runtime.cast(responder, "Swill::View").element();
+      let element = Runtime.cast(responder, "Swill::View").element;
       let tag = Runtime.downcase(element.tagName);
       let id = element.getAttribute("id");
       let outlet = element.getAttribute("outlet");
@@ -395,13 +395,13 @@
     }
     fakeSave() {
       this.saving = true;
-      return Runtime.must(this.user).markClean();
+      return Runtime.must(this.user).markCleanBang();
     }
     // The draft is a detached buffer: nothing reaches the user until applied.
     applyDraft() {
       let current = Runtime.must(this.user);
       current.applyDraft(this.draft);
-      current.markClean();
+      current.markCleanBang();
       return this.resetDraft();
     }
     resetDraft() {
@@ -480,7 +480,7 @@
     }
     activateSelection(sender) {
       let selected = sender.selectedObject;
-      return this.activatedPerson = Runtime.isTruthy(selected) ? Runtime.read(
+      return this.activatedPerson = Runtime.isTruthy(selected) ? Runtime.send(
         selected,
         "name"
       ) : "None";
@@ -497,7 +497,7 @@
   var Static__IntroPane = class extends Swill__Controller {
     // The number input writes text; the property holds a number.
     coercePropertyValue(name, value, previous) {
-      return name === "page" ? Runtime.read(value, "to_i") : value;
+      return name === "page" ? Runtime.send(value, "to_i") : value;
     }
     controllerDidLoad() {
       return this.application().makeFirstResponder(Runtime.must(this.field));
@@ -1484,7 +1484,7 @@
             attribute: false,
             compute: function compute_selectedPeople() {
               let list = this.peopleList;
-              return list ? list.selectedObjects.map((contact) => Runtime.read(contact, "name")).join(", ") : "";
+              return list ? list.selectedObjects.map((contact) => Runtime.send(contact, "name")).join(", ") : "";
             }
           }
         },

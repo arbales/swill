@@ -16,7 +16,7 @@ module Swill
       # Gives each to-many relationship its stable collection.
       sig { void }
       def initialize
-        super()
+        super
         @data_field_states = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
         @data_draft_source = T.let(nil, T.nilable(DistantObject))
         self.class.data_fields.each do |name, descriptor|
@@ -28,7 +28,7 @@ module Swill
       # Schedules hydration when a declared member is unknown.
       sig { params(name: String).void }
       def property_will_access(name)
-        super(name)
+        super
         return if draft? || deleted?
         DistantClient.default.demand(self, name) if self.class.data_fields.key?(name)
       end

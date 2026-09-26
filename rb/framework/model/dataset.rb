@@ -22,14 +22,10 @@ module Swill
       end
 
       sig { returns(String) }
-      def url
-        @url
-      end
+      attr_reader :url
 
       sig { returns(T::Hash[String, T.untyped]) }
-      def params
-        @params
-      end
+      attr_reader :params
 
       sig { returns(Dataset) }
       async def reload

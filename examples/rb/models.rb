@@ -14,7 +14,7 @@ module StripName
 
   sig { params(value: String).returns(String) }
   def normalize(value)
-    super(value).strip
+    super.strip
   end
 end
 
@@ -23,7 +23,7 @@ module DecorateName
 
   sig { params(value: String).returns(String) }
   def normalize(value)
-    "<#{super(value)}>"
+    "<#{super}>"
   end
 end
 
@@ -51,7 +51,7 @@ module Demo
 
     sig { params(value: String).returns(String) }
     def normalize(value)
-      "[#{super(value)}]"
+      "[#{super}]"
     end
 
     sig { returns(String) }

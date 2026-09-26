@@ -93,7 +93,7 @@ test("generated clients cross the real WebSocket boundary", {timeout: 20_000}, a
     const comment = comments.first();
     await comment.loadField("author");
     assert.equal(comment.author, grace);
-    assert.equal(await post.publish(), true);
+    assert.equal(await post.publishBang(), true);
     assert.equal(post.published, true);
     assert.equal(post.publishedAt.toISOString(), "2026-01-02T03:04:05.000Z");
     const lookup = await Post.lookupTitle("Distributed Objects");

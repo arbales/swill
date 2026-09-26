@@ -21,7 +21,7 @@ module Swill
 
       sig { void }
       def initialize
-        super()
+        super
         @stores = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
         @tombstones = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
         @queued_demands = T.let({}, T::Hash[String, T.untyped])

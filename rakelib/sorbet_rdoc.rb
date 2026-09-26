@@ -26,14 +26,13 @@ module SwillRDoc
       @unprocessed_comments&.each { |entry| entry[0] = advance_past_sigs(entry[0]).first }
     end
 
-    # The types are already declared, so the argument list can carry them
-    # instead of repeating the method in a separate signature block. RDoc
-    # renders this as the method's arguments, which keeps it on one line.
+    # Records the method's signature for the generator, which renders its
+    # types. A method is found again by its file and first line.
     def add_method(method_name, **opts)
       sig = (@swill_sigs ||= {})[opts[:start_line]]
-      typed = sig && typed_params(sig)
-      opts = opts.merge(params: typed) if typed
-      super(method_name, **opts)
+      signature = sig && signature_of(sig)
+      Signatures.record(@top_level.relative_name, opts[:start_line], signature) if signature
+      super
     end
 
     private
@@ -54,9 +53,10 @@ module SwillRDoc
       node.is_a?(Prism::CallNode) && node.name == :sig
     end
 
-    # "(name: String, callback: Proc) → void", read from the sig's own AST so
-    # that a nested generic's commas cannot be mistaken for argument breaks.
-    def typed_params(sig)
+    # The parameter names with their types, and the return type, each as
+    # written, read from the sig's own AST so that a nested generic's commas
+    # cannot be mistaken for argument breaks. "void" when it returns nothing.
+    def signature_of(sig)
       statement = sig.block&.body&.body&.first
       return nil unless statement
 
@@ -72,8 +72,7 @@ module SwillRDoc
         node = node.receiver
       end
 
-      arguments = params ? "(#{params.map { |n, t| "#{n}: #{t}" }.join(', ')})" : "()"
-      returns ? "#{arguments} → #{returns}" : arguments
+      Signature.new(params || [], returns)
     rescue StandardError
       nil
     end
@@ -85,6 +84,25 @@ module SwillRDoc
         next unless element.is_a?(Prism::AssocNode)
         [element.key.slice.delete_suffix(":"), element.value.slice]
       end
+    end
+  end
+end
+
+module SwillRDoc
+  Signature = Struct.new(:params, :returns)
+
+  # Signatures by source file and line, filled while parsing.
+  module Signatures
+    def self.record(file, line, signature)
+      table[[file, line]] = signature
+    end
+
+    def self.for(method)
+      method.file && table[[method.file.relative_name, method.line]]
+    end
+
+    def self.table
+      @table ||= {}
     end
   end
 end
@@ -192,24 +210,3 @@ end
 
 RDoc::Parser::Ruby.prepend(SwillRDoc::DeclarationScanner)
 RDoc::Parser::Ruby::RDocVisitor.prepend(SwillRDoc::DeclaredProperties)
-
-# Hanna reads its templates from its own directory. A template of the same name
-# in rakelib/rdoc_templates/ is used instead, so Swill overrides only the page
-# fragments it needs to change.
-begin
-  require "hanna"
-  module SwillRDoc
-    module Templates
-      DIRECTORY = File.expand_path("rdoc_templates", __dir__)
-
-      def templjoin(name)
-        local = File.join(DIRECTORY, name)
-        File.exist?(local) ? local : super
-      end
-    end
-  end
-  RDoc::Generator::Hanna.prepend(SwillRDoc::Templates)
-rescue LoadError
-  # Stock RDoc lists declarations as ordinary attributes.
-end
-

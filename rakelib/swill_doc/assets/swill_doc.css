@@ -1,0 +1,479 @@
+/* Swill's documentation. Tokens are the Figma file's variables; the fonts are
+   IBM Plex, built by `rake doc_fonts` (fonts/OFL.txt). */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("fonts/IBMPlexSans-Variable.woff2") format("woff2");
+  font-weight: 100 700;
+  font-stretch: 85% 100%;
+  font-style: normal;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("fonts/IBMPlexSans-Italic-Variable.woff2") format("woff2");
+  font-weight: 100 700;
+  font-stretch: 85% 100%;
+  font-style: italic;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("fonts/IBMPlexMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("fonts/IBMPlexMono-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("fonts/IBMPlexMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("fonts/IBMPlexMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+}
+@font-face {
+  font-family: "IBM Plex Serif";
+  src: url("fonts/IBMPlexSerif-Medium.woff2") format("woff2");
+  font-weight: 500;
+}
+
+:root {
+  color-scheme: light dark;
+
+  --sans: "IBM Plex Sans", sans-serif;
+  --serif: "IBM Plex Serif", serif;
+  --mono: "IBM Plex Mono", monospace;
+
+  /* The Figma file's variables, light mode. */
+  --background: #fff;
+  --black: #000;
+  --link: #1f4fae;
+  --half-grey: rgba(0, 0, 0, 0.5);
+  --grey-33: rgba(0, 0, 0, 0.33);
+  --grey-18: rgba(0, 0, 0, 0.18);
+  --grey-04: rgba(0, 0, 0, 0.04);
+  --white-50: rgba(255, 255, 255, 0.5);
+  --highlight-yellow: #fffdd0;
+  --blue-bg: #4164a9;
+  --bleige-57: rgba(237, 241, 249, 0.57);
+
+  /* A card's border, the same in both modes. */
+  --card-border: rgba(0, 0, 0, 0.24);
+
+  /* Code: Atom One Light. */
+  --code-text: #383a42;
+  --code-background: #fafafa;
+  --code-comment: #a0a1a7;
+  --code-keyword: #a626a4;
+  --code-string: #50a14f;
+  --code-number: #986801;
+  --code-class: #c18401;
+  --code-tag: #e45649;
+  --code-function: #4078f2;
+  --code-literal: #0184bc;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* The Figma file's variables, dark mode. */
+    --background: #1f1f1f;
+    --black: #fff;
+    --link: #68a4ff;
+    --half-grey: rgba(255, 255, 255, 0.5);
+    --grey-33: rgba(255, 255, 255, 0.33);
+    --grey-18: rgba(255, 255, 255, 0.18);
+    --grey-04: rgba(255, 255, 255, 0.04);
+    --white-50: rgba(255, 255, 255, 0.5);
+    --highlight-yellow: #5a5a4c;
+    --blue-bg: #9cbdff;
+    --bleige-57: rgba(83, 83, 83, 0.57);
+
+    /* Code: Atom One Dark. */
+    --code-text: #abb2bf;
+    --code-background: #282c34;
+    --code-comment: #5c6370;
+    --code-keyword: #c678dd;
+    --code-string: #98c379;
+    --code-number: #d19a66;
+    --code-class: #e6c07b;
+    --code-tag: #e06c75;
+    --code-function: #61aeee;
+    --code-literal: #56b6c2;
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* Author display rules would otherwise override the attribute. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--black);
+  font: 430 15px/normal var(--sans);
+}
+
+a { color: var(--link); text-decoration: none; }
+
+/* UI Header: every pane and section label. */
+.pane-header,
+.section-title,
+.relation .label,
+.kind {
+  font: 500 12px/normal var(--mono);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+/* ---- left pane ---- */
+
+.navigator {
+  position: sticky;
+  top: 0;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 220px;
+  max-width: 320px;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--grey-04);
+  border-right: 1px solid var(--grey-18);
+}
+
+/* The three indexes share the screen, each scrolling within its share: the
+   file and class indexes up to a cap, the method index the rest. */
+.navigator .pane-header { flex: none; }
+.navigator .index {
+  flex: none;
+  min-height: 3.5em;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* Dragging the right edge sets the pane's width; dragging a header sets
+   the height of the index above it. Both are remembered across pages. */
+.width-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+.navigator [data-resizes] { cursor: row-resize; user-select: none; touch-action: none; }
+
+.navigator .file-index { max-height: 20vh; }
+.navigator .class-index { max-height: 35vh; }
+.navigator .method-index { flex: 1 1 0; }
+/* Rows keep their height; the list scrolls instead. */
+.navigator .index li { flex: none; overflow: hidden; text-overflow: ellipsis; }
+.navigator .index li.selected { background: var(--grey-18); }
+.navigator .index li:last-child { margin-bottom: 8px; }
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--grey-18);
+  color: var(--black);
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--black);
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  outline: none;
+}
+.search input::placeholder {
+  color: var(--black);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.search input::-webkit-search-cancel-button { display: none; }
+
+kbd {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding-bottom: 3px;
+  background: var(--background);
+  border: 1px solid var(--half-grey);
+  border-radius: 2px;
+  filter: drop-shadow(0 1px 0.5px var(--grey-18));
+  color: var(--half-grey);
+  font: 700 12px/1 var(--mono);
+}
+
+.index {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  list-style: none;
+  font: 500 13px/normal var(--sans);
+  white-space: nowrap;
+}
+.index:focus { outline: none; }
+
+.class-index { gap: 5px; font-size: 15px; }
+.class-index .leaf { font-weight: 700; }
+
+.method-index li { display: flex; gap: 4px; }
+.method-index a { flex: none; }
+.method-index .owner { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--grey-33); }
+
+/* ---- page ---- */
+
+.page {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 24px;
+}
+.page-header h1 { margin: 0; font-weight: inherit; }
+.kind { color: var(--half-grey); margin-right: 1ch; }
+.title { font: 500 26px/normal var(--serif); }
+.source,
+.superclass {
+  color: var(--link);
+  font: 400 13px/normal var(--mono);
+}
+.superclass .label { color: var(--half-grey); }
+.superclass a { font-weight: 500; }
+
+.content {
+  flex: 1 0 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 12px 24px;
+}
+
+.body {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Rich text: descriptions, comments, and method bodies. A link to code is
+   code, a mono dotted link; a link to a page or elsewhere is an underlined
+   word. */
+.description p { margin: 0 0 15px; }
+.description > :last-child { margin-bottom: 0; }
+:is(.description, .method-body, .property-description, .constant-comment) a {
+  color: inherit;
+  text-decoration: underline solid;
+  text-decoration-skip-ink: none;
+  text-underline-position: from-font;
+}
+:is(.description, .method-body, .property-description, .constant-comment) code { font: 500 1em var(--mono); }
+:is(.description, .method-body, .property-description, .constant-comment) a:has(code) {
+  color: var(--link);
+  text-decoration-style: dotted;
+}
+
+/* Divider, and Title and Divider. */
+.divider {
+  width: 100%;
+  margin: 12px 0 0;
+  border: 0;
+  border-top: 1px solid var(--grey-18);
+}
+.section-title {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--grey-18);
+  color: var(--half-grey);
+}
+.row-divider {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 1px dashed var(--grey-18);
+}
+
+/* 2 Columns: Includes and Derivatives. */
+.relations { display: flex; gap: 12px; }
+.relation {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.relation .label { margin: 0; color: var(--half-grey); }
+.relation a {
+  font: 500 15px/normal var(--mono);
+  text-decoration: underline dotted;
+  text-underline-position: from-font;
+}
+
+/* Constant Block. */
+.constant { display: flex; align-items: center; gap: 12px; }
+.constant-name { flex: none; width: 175px; font: 500 15px/normal var(--mono); }
+.constant-value {
+  flex: none;
+  width: 341px;
+  margin: 0;
+  color: var(--half-grey);
+  font: 400 13px/normal var(--mono);
+  white-space: pre-wrap;
+}
+.constant-comment { flex: 1 0 0; min-width: 0; }
+.constant-comment p { margin: 0; }
+
+/* Property or Attribute. */
+.attributes { display: flex; flex-direction: column; gap: 8px; }
+.property { display: flex; flex-direction: column; gap: 2px; }
+.property-signature { display: flex; align-items: center; gap: 10px; font: 500 15px/normal var(--mono); }
+.property-meta { color: var(--half-grey); font-weight: 400; }
+.property-meta a { color: inherit; text-decoration: underline dotted; }
+.property-description { font-weight: 400; }
+.property-description p { margin: 0; }
+
+/* Method cards. */
+.method {
+  width: 100%;
+  background: var(--background);
+  border: 1px solid var(--card-border);
+}
+.method-header {
+  margin: 0;
+  padding: 4px 8px;
+  font: 400 15px/normal var(--mono);
+}
+.signature-name { font-weight: 500; }
+.signature-returns { color: var(--half-grey); }
+.method-header a { color: inherit; text-decoration: underline dotted; text-underline-position: from-font; }
+.method-body { padding: 8px; font-weight: 400; }
+.method-body p { margin: 0 0 15px; }
+.method-body > :last-child { margin-bottom: 0; }
+
+.class-method .method-header { background: var(--grey-18); color: var(--black); }
+.class-method .method-body { background: var(--highlight-yellow); }
+.instance-method .method-header { background: var(--blue-bg); color: var(--background); }
+.instance-method .signature-returns { color: var(--white-50); }
+.instance-method .method-body { background: var(--bleige-57); }
+
+/* In-page index. */
+.page-index {
+  position: sticky;
+  top: 12px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 220px;
+  padding-bottom: 8px;
+  overflow: clip;
+  background: var(--grey-04);
+  border: 1px solid var(--grey-18);
+}
+.page-index .index li { line-height: 20px; }
+.page-index .index { gap: 0; }
+
+/* Guides. */
+.guide h1 { margin: 0 0 15px; font: 500 26px/normal var(--serif); }
+.guide h2 { margin: 24px 0 12px; font: 500 20px/normal var(--serif); }
+.guide h3 { margin: 18px 0 8px; font: 600 16px/normal var(--sans); }
+/* Code blocks, in guides and in descriptions. */
+:is(.description, .method-body) pre {
+  margin: 0 0 15px;
+  padding: 8px;
+  overflow: auto;
+  background: var(--code-background);
+  border: 1px solid var(--grey-18);
+  color: var(--code-text);
+  font: 400 13px/1.4 var(--mono);
+}
+:is(.description, .method-body) pre code { font: inherit; }
+.guide table { margin: 0 0 15px; border-collapse: collapse; }
+.guide th,
+.guide td {
+  padding: 4px 8px;
+  border-bottom: 1px dashed var(--grey-18);
+  text-align: left;
+  vertical-align: top;
+}
+.guide th { font: 500 12px/normal var(--mono); letter-spacing: 0.6px; text-transform: uppercase; color: var(--half-grey); }
+.guide ul,
+.guide ol { margin: 0 0 15px; padding-left: 24px; }
+/* RDoc links each heading to itself; that link is not a cross-reference. */
+.guide :is(h1, h2, h3, h4) a { color: inherit; text-decoration: none; }
+
+/* Source pages. */
+.source-listing {
+  margin: 0;
+  padding: 8px 0;
+  overflow-x: auto;
+  background: var(--code-background);
+  color: var(--code-text);
+  font: 400 13px/1.5 var(--mono);
+}
+.line-number {
+  display: inline-block;
+  width: 5ch;
+  margin-right: 2ch;
+  color: var(--grey-33);
+  text-align: right;
+  user-select: none;
+}
+.source-line:target { background: var(--highlight-yellow); }
+
+/* Highlighting. RDoc marks Ruby with ruby-* classes and Rouge marks the
+   other languages with its short token classes; a token of the same kind is
+   the same color in either. */
+.ruby-comment, pre .c, pre .c1, pre .cm, pre .ch, pre .cs, pre .cd, pre .cp, pre .cpf {
+  color: var(--code-comment);
+  font-style: italic;
+}
+.ruby-keyword, pre .k, pre .kd, pre .kn, pre .kp, pre .kr, pre .kv, pre .ow {
+  color: var(--code-keyword);
+}
+.ruby-string, .ruby-regexp, pre .s, pre .s1, pre .s2, pre .sb, pre .sc, pre .sd,
+pre .sh, pre .sx, pre .sr, pre .dl {
+  color: var(--code-string);
+}
+.ruby-value, .ruby-ivar, pre .m, pre .mb, pre .mf, pre .mh, pre .mi, pre .il, pre .mo,
+pre .na, pre .nv, pre .vc, pre .vg, pre .vi {
+  color: var(--code-number);
+}
+.ruby-constant, pre .nc, pre .no, pre .nn, pre .nb, pre .ne, pre .kt {
+  color: var(--code-class);
+}
+pre .nt { color: var(--code-tag); }
+pre .nf, pre .fm, pre .ss { color: var(--code-function); }
+pre .kc, pre .se { color: var(--code-literal); }

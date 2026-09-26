@@ -21,9 +21,7 @@ module Swill
 
     # The element this view wraps.
     sig { returns(Element) }
-    def element
-      @element
-    end
+    attr_reader :element
 
     # The controller rooted here, or nil when this view is not a controller
     # root. Use #owner to find the controller a view belongs to.
@@ -33,21 +31,15 @@ module Swill
     end
 
     sig { params(controller: T.nilable(Controller)).returns(T.nilable(Controller)) }
-    def controller=(controller) # :nodoc:
-      @controller = controller
-    end
+    attr_writer :controller # :nodoc:
 
     # The view that adopted this one, or nil.
     sig { returns(T.nilable(View)) }
-    def superview
-      @superview
-    end
+    attr_reader :superview
 
     # Adopted child views in adoption order.
     sig { returns(T::Array[View]) }
-    def subviews
-      @subviews
-    end
+    attr_reader :subviews
 
     # The nearest controller through the sparse tree: this view's own
     # controller when it is a controller root, else the superview's owner.

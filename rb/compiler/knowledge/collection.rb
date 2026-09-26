@@ -35,6 +35,8 @@ module Swill
             child = async ? statement.children[2] : statement
             if child.type == :def
               validate_expression!(child.children.last)
+            elsif attribute_accessor?(child)
+              next
             elsif child.type == :defs
               # An included hook contains declaration calls whose type
               # arguments are data, and is checked structurally after load.
@@ -209,6 +211,9 @@ module Swill
                 collected["optionals"] = optionals.map { |formal| formal["name"] }
               end
               entry["methods"] << collected
+              pending_signature = nil
+            elsif attribute_accessor?(child)
+              entry["methods"].concat(collect_attribute_accessors(child, pending_signature))
               pending_signature = nil
             elsif signature?(child)
               # Sorbet checks these; executable definitions omit annotations.
@@ -426,6 +431,45 @@ module Swill
           declared = signature_parameters(signature).keys
           return if declared.empty? || declared == formals.map { |formal| formal["name"] }
           raise CompileError, "signature parameters must match #{name}'s parameters in order"
+        end
+
+        # attr_reader, attr_writer, and attr_accessor with literal names. They
+        # compile to native accessors, as def name=(value) already does, so a
+        # reader is read rather than called.
+        def attribute_accessor?(node)
+          return false unless node.type == :send && node.children.first.nil? &&
+                              %i[attr_reader attr_writer attr_accessor].include?(node.children[1])
+          names = node.children[2..]
+          unless names.any? && names.all? { |name| name.type == :sym && name.children.first.match?(/\A[a-z_]\w*\z/) }
+            raise CompileError, "#{node.children[1]} takes literal symbol names: #{node.loc.expression.source}"
+          end
+          true
+        end
+
+        # A signature above an accessor declaration types each of its names,
+        # as Sorbet reads it: returns(T) for a reader, params(name: T) for a
+        # writer.
+        def collect_attribute_accessors(node, signature)
+          kind = node.children[1]
+          returns = signature_return(signature)
+          node.children[2..].flat_map do |name_node|
+            name = name_node.children.first.to_s
+            reader = {
+              "name" => name, "js" => self.class.member(name), "arity" => 0, "maximum" => 0,
+              "parameters" => {}, "returns" => returns, "async" => false, "formals" => [], "accessor" => true
+            }
+            type = signature_parameters(signature)[name] || returns
+            writer = {
+              "name" => "#{name}=", "js" => self.class.member("#{name}="), "arity" => 1, "maximum" => 1,
+              "parameters" => type ? {name => type} : {}, "returns" => type, "async" => false,
+              "formals" => [{"name" => name, "kind" => "req"}]
+            }
+            case kind
+            when :attr_reader then [reader]
+            when :attr_writer then [writer]
+            else [reader, writer]
+            end
+          end
         end
 
         # Whether a class-body statement is a declaration: the property

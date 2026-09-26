@@ -146,7 +146,7 @@ test("Swill.start manually launches and terminates a JavaScript application", ()
     viewDidLoad() { lifecycle.push("viewDidLoad"); }
     awakeFromDOM() {
       lifecycle.push("awakeFromDOM");
-      this.status.element().title = "Ready";
+      this.status.element.title = "Ready";
     }
     controllerDidLoad() { lifecycle.push("controllerDidLoad"); }
     viewDidDisappear() { lifecycle.push("viewDidDisappear"); }
@@ -211,7 +211,7 @@ test("JavaScript lists extend Swill.List and override row hooks in camel case", 
   const document = element("#document", {}, [body]);
   document.defaultView = new Browser();
   const application = Swill.start({root: body});
-  const [controller] = application.controllers();
+  const [controller] = application.controllers;
   assert.ok(controller instanceof Swill.List);
   controller.representedObject = [{name: "Ada"}, {name: "Grace"}];
   assert.deepEqual(list.children.map(row => [row.textContent, row.getAttribute("data-name")]), [["Ada", "Ada"], ["Grace", "Grace"]]);
@@ -221,4 +221,45 @@ test("JavaScript lists extend Swill.List and override row hooks in camel case", 
   assert.equal(controller.selectedObjectId, null, "plain objects carry no id");
   application.terminate();
   assert.equal(list.children.length, 0);
+});
+
+test("the UI build carries the UI framework without models or remote data", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill-ui");
+  for (const name of ["Controller", "Application", "View", "List", "Control", "NotificationCenter", "ValueTransformer"]) {
+    assert.equal(typeof Swill[name], "function", `${name} is present`);
+  }
+  for (const name of ["Model", "Wire", "TextField", "Select", "CustomSelect", "SortableList", "Editor", "EditableList"]) {
+    assert.equal(name in Swill, false, `${name} is absent rather than undefined`);
+  }
+  assert.equal(Swill.Runtime.configureData, undefined, "no remote data client");
+  assert.throws(() => Swill.Runtime.resolve("Swill::Model::Base"), /Unknown class/);
+});
+
+test("a plain JavaScript application filters a bound list on the UI build", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill-ui");
+  const entries = [{name: "Swill::Application"}, {name: "Swill::Binding"}, {name: "Swill::Controller"}];
+  class Finder extends Swill.Controller {
+    static properties = {query: {default: ""}};
+    get matches() {
+      const query = this.query.toLowerCase();
+      return entries.filter(entry => entry.name.toLowerCase().includes(query));
+    }
+  }
+  Swill.register(Finder);
+  const search = element("input", {bind: "query"});
+  const template = element("template", {for: "row"}, [element("li", {bind: "name"})]);
+  const results = element("ul", {controller: "Swill::Controller::List", bind: "matches"}, [template]);
+  const main = element("main", {controller: "Finder"}, [search, results]);
+  const body = element("body", {}, [main]);
+  const document = element("#document", {}, [body]);
+  document.defaultView = new Browser();
+  const application = Swill.start({root: body});
+  const rows = () => results.children.filter(child => child.tagName !== "TEMPLATE").map(row => row.textContent);
+  assert.deepEqual(rows(), ["Swill::Application", "Swill::Binding", "Swill::Controller"]);
+  search.value = "bind";
+  search.dispatchEvent(new Event("input", {bubbles: true}));
+  assert.deepEqual(rows(), ["Swill::Binding"], "the list follows the computed filter");
+  application.terminate();
 });

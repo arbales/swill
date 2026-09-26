@@ -1,19 +1,6 @@
 # typed: false
 # frozen_string_literal: true
 
-# The MRI host for Swill. Swill is not meant to run on MRI; MRI hosts two
-# narrow things, and this host is sized to them:
-#
-#   * Declarations, for the compiler. Every source's class bodies are
-#     evaluated so the compiler can reflect on what they declared. Method
-#     bodies never run.
-#   * The model and data subset, for the shared examples. Attributes,
-#     validation, dirty tracking, drafts, and the codecs are genuinely
-#     portable, and build/mri-*.json keeps MRI and JavaScript agreeing.
-#
-# One protocol, two hosts: ask where Runtime.collect_attributes lives and the
-# answer is attributes.mjs for the browser and attributes.rb here. This host
-# grows only when a shared example needs it.
 require "sorbet-runtime"
 require "time"
 require_relative "declarations"
@@ -22,6 +9,19 @@ require_relative "attributes"
 require_relative "values"
 
 module Swill
+  # The MRI host for Swill. Swill is not meant to run on MRI; MRI hosts two
+  # narrow things, and this host is sized to them:
+  #
+  #   * Declarations, for the compiler. Every source's class bodies are
+  #     evaluated so the compiler can reflect on what they declared. Method
+  #     bodies never run.
+  #   * The model and data subset, for the shared examples. Attributes,
+  #     validation, dirty tracking, drafts, and the codecs are genuinely
+  #     portable, and build/mri-*.json keeps MRI and JavaScript agreeing.
+  #
+  # One protocol, two hosts: ask where Runtime.collect_attributes lives and the
+  # answer is attributes.mjs for the browser and attributes.rb here. This host
+  # grows only when a shared example needs it.
   module Runtime
     OMITTED_ARGUMENT = Object.new.freeze
 

@@ -66,11 +66,26 @@ export function read(object, name) {
   if (property) return object[property.js];
 
   const method = resolveMethod(declarations(object.constructor, "methods"), name, 0);
-  if (method) return object[method.js]();
+  if (method) return method.accessor ? object[method.js] : object[method.js]();
   if (name === "dup" && hasInstalledMetadata(object.constructor)) return duplicateObject(object);
   if (VALUE_READERS.includes(name)) return valueRead(object, name);
+  if (!hasInstalledMetadata(object.constructor)) return nativeMember(object, name, [], false);
 
   throw new Error(`Unknown reader: ${name}`);
+}
+
+// An object Swill did not install, such as an element or an event, answers
+// with its own JavaScript members, by the name as written: a function is
+// called, anything else is read. A read of a member it lacks is nil, as
+// JavaScript reads an absent property, so an expando can be checked; a call
+// to one is an error. A Swill object has no such fallback, so a misspelled
+// member on one is still an error.
+function nativeMember(object, name, args, call) {
+  const member = object[name];
+  if (typeof member === "function") return member.apply(object, args);
+  if (call && !(name in object)) throw new Error(`Unknown method: ${name}`);
+  if (args.length > 0) throw new Error(`Not a method: ${name}`);
+  return member;
 }
 
 // Ruby dup for a framework object: a new instance of its class with the
@@ -258,6 +273,16 @@ export function methodAccepts(object, name, count) {
 }
 
 // Invoke an untyped receiver through metadata.
+// A message with no arguments to an untyped receiver, whose name may be a
+// property or a method: as read, except that nil is not a receiver, as in
+// Ruby, beyond the readers nil answers.
+export function send(object, name) {
+  if (object == null && !NIL_READERS.includes(name)) {
+    throw new Error(`Cannot call ${name} on nil`);
+  }
+  return read(object, name);
+}
+
 export function invoke(object, name, ...args) {
   if (object == null) {
     throw new Error(`Cannot call ${name} on nil`);
@@ -268,6 +293,10 @@ export function invoke(object, name, ...args) {
 
   const method = resolveMethod(methods, name, positionalArgumentCount(args));
   if (!method) {
+    // A reader called with parentheses, post.title(), is still the reader.
+    const property = args.length === 0 && declarations(object.constructor, "properties").get(name);
+    if (property) return object[property.js];
+    if (!hasInstalledMetadata(object.constructor) && !isPlainObject(object)) return nativeMember(object, name, args, true);
     throw new Error(`Unknown method or wrong arity: ${name}`);
   }
   if (method.minimum == null && args.some(isKeywordArguments)) {
@@ -277,6 +306,7 @@ export function invoke(object, name, ...args) {
     throw new Error(`Method does not accept a block: ${name}`);
   }
 
+  if (method.accessor) return object[method.js];
   return object[method.js](...args);
 }
 
@@ -284,7 +314,7 @@ export function performAction(object, name, sender, event) {
   // The runtime has a sender and an event to give, and gives as many of them
   // as the widest variant will take.
   const method = widestMethod(declarations(object.constructor, "methods"), name, 2);
-  if (!method) {
+  if (!method || method.accessor) {
     throw new Error(`Unknown action or wrong arity: ${name}`);
   }
 

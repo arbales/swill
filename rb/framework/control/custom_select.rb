@@ -17,7 +17,7 @@ module Swill
 
     sig { params(element: Element).void }
     def initialize(element)
-      super(element)
+      super
       @open = T.let(false, T::Boolean)
       @document_pointer_down = ->(event) { document_pointer_down(event) }
       install_chrome
@@ -42,7 +42,7 @@ module Swill
     # Called when a user presses Escape, closing the control.
     sig { override.params(event: KeyboardEvent).void }
     def cancel_operation(event)
-      return super(event) unless @open
+      return super unless @open
       event.preventDefault
       close
     end
@@ -61,7 +61,7 @@ module Swill
         event.preventDefault
         toggle
       else
-        super(event)
+        super
       end
     end
 

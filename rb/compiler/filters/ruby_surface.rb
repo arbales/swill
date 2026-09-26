@@ -37,8 +37,8 @@ module Swill
           # resolve in Ruby's source scope, not against implementation-local names.
           # Declarations have already been collected. Keep the original source and
           # locations so Pragma sees comments, including those on the final line.
-          body = @knowledge.statements(node.children.last).select do |statement|
-            class_body_statement?(statement)
+          body = @knowledge.statements(node.children.last).flat_map do |statement|
+            attribute_accessors(statement) || (class_body_statement?(statement) ? [statement] : [])
           end.map { |statement| process(statement) }
           body.reject! { |statement| statement.type == :begin && statement.children.empty? }
           s(:class, s(:const, nil, @compiled_class.to_sym),
@@ -47,6 +47,27 @@ module Swill
 
         def on_module(node)
           on_class(node)
+        end
+
+        # attr_reader :name is a native getter and attr_writer :name a native
+        # setter, the form def name=(value) already takes. They are spelled
+        # here rather than by the converter so the getter carries the
+        # member's JavaScript name.
+        def attribute_accessors(statement)
+          return nil unless statement.type == :send && statement.children.first.nil?
+          kind = statement.children[1]
+          return nil unless %i[attr_reader attr_writer attr_accessor].include?(kind)
+          statement.children[2..].flat_map do |symbol|
+            name = symbol.children.first
+            ivar = :"@#{name}"
+            reader = statement.updated(:defget, [Knowledge.member(name).to_sym, s(:args), s(:ivar, ivar)])
+            writer = statement.updated(:def, [:"#{name}=", s(:args, s(:arg, name)), s(:ivasgn, ivar, s(:lvar, name))])
+            case kind
+            when :attr_reader then [reader]
+            when :attr_writer then [writer]
+            else [reader, writer]
+            end
+          end
         end
 
         def on_def(node)
@@ -101,6 +122,14 @@ module Swill
 
         # The argument count says which member of a method's family a send
         # means, and which of its parameters the arguments land on.
+        # A reader declared with attr_reader or attr_accessor is a native
+        # getter; anything else collected is a method and is called.
+        def accessor?(entry, args)
+          return false unless entry["accessor"]
+          raise CompileError, "#{entry['name']} is an attribute reader and takes no arguments" unless args.empty?
+          true
+        end
+
         def dispatched(entry, args)
           if entry["complex"]
             return [entry["js"].to_sym, *complex_call_arguments(entry, args)]
@@ -133,6 +162,41 @@ module Swill
             raise
           end
           s(:const, nil, Knowledge.identifier(resolved).to_sym)
+        end
+
+        # Bare super forwards bound locals, including defaults and reassignment.
+        # The incoming block is forwarded even when a named &block was replaced.
+        def on_zsuper(node)
+          return super unless @current_method && @current_method["complex"]
+
+          arguments = []
+          keywords = []
+          @current_method.fetch("formals").each do |formal|
+            value = s(:lvar, formal["name"].to_sym)
+            case formal["kind"]
+            when "req", "opt" then arguments << value
+            when "rest" then arguments << s(:splat, value)
+            when "keyreq", "key" then keywords << s(:pair, s(:sym, formal["name"].to_sym), value)
+            when "keyrest" then keywords << s(:kwsplat, value)
+            end
+          end
+          unless keywords.empty?
+            arguments << s(:call, s(:const, nil, :Runtime), :keywordArguments, process(s(:hash, *keywords)))
+          end
+          arguments << forwarded_super_block
+          node.updated(:super, arguments)
+        end
+
+        def on_super(node)
+          return super unless @current_method
+          # Constructors have one native entry, rather than an arity family.
+          return super if @current_method["name"] == "initialize"
+
+          name, *arguments = dispatched(@current_method, node.children)
+          if @current_method["complex"] && node.children.none? { |arg| arg.type == :block_pass }
+            arguments << forwarded_super_block
+          end
+          s(:call, s(:lvar, :super), name, *arguments)
         end
 
         def on_if(node)
@@ -265,6 +329,12 @@ module Swill
               "guard #{receiver.loc.expression.source} with a local"
           end
           return lower_async(node) if Knowledge.async_wrapper?(node)
+          if receiver.nil? && method == :__swill_variant_body
+            name, *values = args
+            owner = s(:const, nil, @compiled_class.to_sym)
+            owner = s(:attr, owner, :prototype) unless @in_class_method
+            return s(:call, s(:attr, owner, name.children.first), :call, s(:self), *process_all(values))
+          end
           return lower_await(args) if receiver.nil? && method == :await
           return lower_sorbet(node) if SorbetOperations.operation?(node)
           return lower_raise(args) if receiver.nil? && method == :raise
@@ -309,6 +379,7 @@ module Swill
           # passed to it.
           if !@in_class_method && !NATIVE_SENDS.include?(method) && !OPERATORS.include?(method) &&
              (entry = @knowledge.method_entry(@entry["name"], method))
+            return s(:attr, receiver ? process(receiver) : s(:self), entry["js"].to_sym) if accessor?(entry, args)
             return s(:call, receiver ? process(receiver) : s(:self), *dispatched(entry, args))
           end
           # A browser function called bare, as Kernel's are.
@@ -324,6 +395,13 @@ module Swill
         end
 
     private
+
+        def forwarded_super_block
+          block = @current_method.fetch("formals").find { |formal| formal["kind"] == "block" }
+          value = s(:call, s(:const, nil, :Runtime), :argument,
+                    s(:lvar, :__swill_bound), s(:str, block ? block["name"] : "__swill_block"))
+          s(:call, s(:const, nil, :Runtime), :blockArgument, value)
+        end
 
         def complex_call_arguments(entry, args)
           values = args.dup
@@ -505,7 +583,7 @@ module Swill
             return s(:attr, process(receiver), :constructor) if method == :class && args.empty?
             # Ruby's dup of a framework object is the runtime's copy.
             if method == :dup && args.empty?
-              return s(:call, s(:const, nil, :Runtime), :read, process(receiver), s(:str, "dup"))
+              return s(:call, s(:const, nil, :Runtime), :send, process(receiver), s(:str, "dup"))
             end
             if args.empty? && @knowledge.property_entry(klass, name)
               member = Knowledge.member(method).to_sym
@@ -516,6 +594,11 @@ module Swill
               return s(:send, process(receiver), Knowledge.member(method).to_sym, process(args.first))
             end
             if (entry = @knowledge.method_entry(klass, name))
+              # attr_reader compiles to a native getter, which is read.
+              if accessor?(entry, args)
+                return safely(s(:cattr, guarded(receiver), entry["js"].to_sym)) if node.type == :csend
+                return s(:attr, process(receiver), entry["js"].to_sym)
+              end
               # A location-less node is a call to the converter, whatever the
               # source's parentheses: a collected method is always called.
               if node.type == :csend
@@ -545,7 +628,8 @@ module Swill
 
         # A DOM or JavaScript receiver. The DOM table says whether a member is
         # a property or a method, whatever the source's parentheses; a member
-        # it does not list follows them. Operators and indexing stay with the
+        # it does not list is called when the source has parentheses or
+        # arguments, and otherwise resolved when it runs, by Runtime.send. Operators and indexing stay with the
         # converter. Safe navigation is JavaScript's own here.
         def lower_native(node, receiver, method, args, type)
           return nil if OPERATORS.include?(method) || NATIVE_SENDS.include?(method)
@@ -561,7 +645,13 @@ module Swill
           member = DOM.native?(inner) ? DOM.member(inner, name) : nil
           kind = member ? member[0] : nil
           return s(:attr, target, method) if %i[attr accessor].include?(kind)
-          return s(:attr, target, method) if kind.nil? && args.empty? && !node.is_method?
+          # A member the table does not list, with no arguments or parentheses,
+          # may be a property or a method; the object says which when it runs.
+          # Safe navigation keeps JavaScript's own read.
+          if kind.nil? && args.empty? && !node.is_method?
+            return s(:attr, target, method) if node.type == :csend
+            return s(:call, s(:const, nil, :Runtime), :send, target, s(:str, name))
+          end
           # Safe navigation is JavaScript's own; the source's parentheses stay.
           return node.updated(:csend, [target, method, *args]) if node.type == :csend
           s(:call, target, method, *args)
@@ -621,7 +711,10 @@ module Swill
         end
 
         # An untyped receiver is resolved by name at run time, as Ruby would:
-        # a read, a write, or an invocation checked against installed metadata.
+        # a write, a send, or an invocation checked against installed
+        # metadata. A send has no arguments and no parentheses, so its name may
+        # be a property or a method; parentheses, arguments, or a bang make it
+        # a call. Runtime.read is key-value coding, for key paths, not this.
         # Operators, indexing, construction, and pragma-typed sends stay with
         # the converter, which knows their JavaScript form.
         def dynamic_send(node, receiver, name, setter, base, args)
@@ -633,7 +726,9 @@ module Swill
           return nil if %i[array hash string].any? { |kind| pragma?(node, kind) }
           runtime = s(:const, nil, :Runtime)
           return s(:call, runtime, :write, process(receiver), s(:str, base), process(args.first)) if setter
-          return s(:call, runtime, :read, process(receiver), s(:str, name)) if args.empty?
+          if args.empty? && !node.is_method? && !name.end_with?("!")
+            return s(:call, runtime, :send, process(receiver), s(:str, name))
+          end
           s(:call, runtime, :invoke, process(receiver), s(:str, name), *dynamic_call_arguments(args))
         end
 

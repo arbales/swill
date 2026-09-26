@@ -21,7 +21,7 @@ function launched(body) {
   if (Application.isRunning()) Application.shared().terminate();
   const application = new DemoApplication();
   application.launch(body);
-  return application.controllers();
+  return application.controllers;
 }
 const Bindings = swill.Swill__Connections__Bindings;
 const Actions = swill.Swill__Connections__Actions;
@@ -101,7 +101,7 @@ test("dirty tracking and validation agree with MRI", () => {
   steps.push([person.name, person.isDirty, [...person.dirty()]]);
   const draft = person.draft();
   steps.push([draft.name, draft.role, draft.isDirty]);
-  person.markClean();
+  person.markCleanBang();
   steps.push([person.isDirty, [...person.dirty()]]);
   person.role = "editor";
   steps.push([person.isDirty, [...person.dirty()]]);
@@ -237,6 +237,33 @@ test("dynamic writers mirror dynamic readers and primitives skip metadata", () =
   assert.equal(Runtime.read(null, "strip"), null);
   assert.throws(() => Runtime.read(42, "strip"), /requires a string/);
   assert.throws(() => Runtime.read("Ada", "name"), /Unknown value reader/);
+});
+
+test("an object Swill did not install answers with its own JavaScript members", () => {
+  // An element found in the page, say: no Swill metadata, only its own shape.
+  class Paragraph {
+    constructor() { this.tagName = "P"; this.open = false; }
+    showPopover() { this.open = true; return "shown"; }
+    toggleClass(name, on) { return `${name}:${on}`; }
+  }
+  const paragraph = new Paragraph();
+  assert.equal(Runtime.invoke(paragraph, "tagName"), "P", "a property called with parentheses reads");
+  assert.equal(Runtime.send(paragraph, "tagName"), "P");
+  assert.equal(Runtime.send(paragraph, "showPopover"), "shown", "a method without parentheses is called");
+  assert.equal(paragraph.open, true);
+  assert.equal(Runtime.invoke(paragraph, "toggleClass", "open", true), "open:true");
+  assert.equal(Runtime.send(paragraph, "__widget__"), undefined, "an absent member reads as nil, as an expando does");
+  assert.throws(() => Runtime.invoke(paragraph, "missing"), /Unknown method: missing/, "calling an absent member raises");
+  assert.throws(() => Runtime.invoke(paragraph, "tagName", 1), /Not a method: tagName/);
+  assert.throws(() => Runtime.send(null, "tagName"), /Cannot call tagName on nil/);
+
+  // A Swill object keeps strict lookup; plain objects stay dictionaries; and
+  // an array keeps Ruby's readers ahead of its own members.
+  assert.throws(() => Runtime.send(new (Runtime.resolve("Swill::View"))({}), "missing"), /Unknown reader/);
+  assert.equal(Runtime.send({tagName: "div"}, "tagName"), "div");
+  assert.throws(() => Runtime.invoke({}, "missing"), /Unknown method or wrong arity/);
+  assert.equal(Runtime.send([1, 2], "first"), 1);
+  assert.equal(Runtime.send([1, 2], "length"), 2);
 });
 
 test("drafts copy inherited attributes but never observers or computed state", () => {
@@ -619,9 +646,9 @@ test("awakening builds a sparse view tree that defines ownership", () => {
   assert.equal(f.parent.parent(), null);
   assert.equal(f.child.nextResponder(), f.parent);
   assert.equal(f.parent.nextResponder(), Application.shared(), "a root controller answers to the application");
-  assert.equal(f.child.view().superview(), f.parent.view());
-  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.nameField, f.child.view()]);
-  assert.equal(f.grandchild.view().owner(), f.grandchild);
+  assert.equal(f.child.view.superview, f.parent.view);
+  assert.deepEqual(Array.from(f.parent.view.subviews), [f.parent.nameField, f.child.view]);
+  assert.equal(f.grandchild.view.owner(), f.grandchild);
   assert.equal(f.grandchildRoot.parentElement.__swill_view__, undefined, "plain elements never become views");
   assert.equal(f.parentTitle.__swill_view__, undefined, "bind-only elements never become views");
   assert.equal(f.parentClear.__swill_view__, undefined, "action-only elements never become views");
@@ -651,10 +678,10 @@ test("view_did_load runs after outlets connect and before bindings push", () => 
 test("outlets connect to their direct owner as views, controllers, and data", () => {
   const f = nestedFixture();
   assert.ok(f.parent.nameField instanceof View);
-  assert.equal(f.parent.nameField.element(), f.nameInput);
+  assert.equal(f.parent.nameField.element, f.nameInput);
   assert.equal(f.parent.nameField.owner(), f.parent);
-  assert.equal(f.parent.nameField.superview(), f.parent.view());
-  assert.deepEqual(Array.from(f.parent.view().subviews()), [f.parent.nameField, f.child.view()]);
+  assert.equal(f.parent.nameField.superview, f.parent.view);
+  assert.deepEqual(Array.from(f.parent.view.subviews), [f.parent.nameField, f.child.view]);
   assert.equal(f.parent.badge, f.child);
   assert.deepEqual({...f.parent.seed}, {name: "Ada"});
   assert.equal(f.parent.missing, null);
@@ -973,10 +1000,10 @@ test("unloading the parent releases every descendant exactly once", () => {
     "grandchild:viewWillDisappear", "grandchild:viewDidDisappear",
     "child:viewDidDisappear", "parent:viewDidDisappear"
   ]);
-  assert.equal(f.child.view().controllerValue(), null);
+  assert.equal(f.child.view.controllerValue(), null);
   assert.equal(f.child.parent(), null);
   assert.deepEqual(Array.from(f.parent.childControllers()), []);
-  assert.deepEqual(Array.from(f.parent.view().subviews()), []);
+  assert.deepEqual(Array.from(f.parent.view.subviews), []);
   f.childBump.click();
   assert.equal(f.child.count, 0, "child listeners are gone");
   assert.equal(f.childTitle.textContent, "Badge 0");
@@ -1033,8 +1060,8 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   assert.equal(new Launcher().launch(f.document), application, "an attached root is not launched twice");
   assert.equal(application.launched, true);
   assert.deepEqual(log, ["launch"]);
-  assert.equal(application.root(), f.body);
-  const [parent, badge] = application.controllers();
+  assert.equal(application.root, f.body);
+  const [parent, badge] = application.controllers;
   assert.ok(parent instanceof Controller);
   assert.ok(badge instanceof Badge);
   assert.equal(f.parentTitle.textContent, "Hello Ada", "the example sets its own initial state");
@@ -1052,8 +1079,8 @@ test("the launcher launches the declared application once the DOM is parsed", ()
   f.document.defaultView.dispatchEvent(new Event("pagehide"));
   assert.deepEqual(log, ["launch", "terminate"]);
   assert.equal(Application.isRunning(), false);
-  assert.equal(parent.view().controllerValue(), null);
-  assert.equal(badge.view().controllerValue(), null);
+  assert.equal(parent.view.controllerValue(), null);
+  assert.equal(badge.view.controllerValue(), null);
   assert.throws(() => parent.application(), /No application is running/);
   assert.throws(() => parent.nextResponder(), /No application is running/);
   application.terminate();
@@ -1064,7 +1091,7 @@ test("unhandled root actions reach the application; a ready document launches at
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
   assert.ok(application instanceof DemoApplication);
-  const [parent, badge] = application.controllers();
+  const [parent, badge] = application.controllers;
   parent.person.name = "Grace";
   badge.count = 3;
   assert.deepEqual([f.parentTitle.textContent, f.badgeTitle.textContent], ["Hello Grace", "Badge 3"]);
@@ -1116,10 +1143,10 @@ test("klass awakens View subclasses, alone or together with a controller", () =>
   const root = element("main", {controller: name}, [panel, both, proto]);
   const [host, badge] = launched(element("body", {}, [root]));
   assert.ok(host.panel instanceof Highlight);
-  assert.equal(host.panel.element(), panel);
+  assert.equal(host.panel.element, panel);
   assert.equal(host.panel.owner(), host);
   assert.equal(host.both, badge);
-  assert.ok(badge.view() instanceof Highlight, "klass wraps the element and the controller uses that view");
+  assert.ok(badge.view instanceof Highlight, "klass wraps the element and the controller uses that view");
   assert.equal(badge.parent(), host);
   assert.equal(host.proto, proto);
   assert.equal(proto.__swill_view__, undefined, "templates are inert");
@@ -1366,7 +1393,7 @@ test("a binding made in Ruby takes a transformer, as transform= does in markup",
 test("the application owns the first responder and moves focus with it", () => {
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
-  const [parent, badge] = application.controllers();
+  const [parent, badge] = application.controllers;
   assert.equal(application.firstResponder(), parent.nameField, "awake_from_dom made the field first responder");
   assert.equal(f.document.activeElement, f.nameInput);
   assert.equal(f.nameInput.focusOptions.preventScroll, true, "first responder changes do not scroll the page");
@@ -1401,7 +1428,7 @@ test("the application owns the first responder and moves focus with it", () => {
 test("a refusing first responder keeps focus", () => {
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
-  const [parent, badge] = application.controllers();
+  const [parent, badge] = application.controllers;
   badge.resignFirstResponder = () => false;
   application.makeFirstResponder(badge);
   assert.equal(application.makeFirstResponder(parent.nameField), false);
@@ -1414,7 +1441,7 @@ test("a refusing first responder keeps focus", () => {
 test("key events route from the first responder up the chain", () => {
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
-  const [parent] = application.controllers();
+  const [parent] = application.controllers;
   parent.person.name = "Grace";
   assert.equal(f.parentTitle.textContent, "Hello Grace");
   f.nameInput.dispatchEvent(keyEvent("keydown", "x"));
@@ -1469,16 +1496,16 @@ function windowedPage(hash = "") {
 
 test("window containers fill from templates at launch and keep pre-rendered content", () => {
   const f = windowedPage();
-  const [parent, , windowBadge, sideBadge] = f.application.controllers();
+  const [parent, , windowBadge, sideBadge] = f.application.controllers;
   assert.equal(f.mainWindow.children.length, 1);
   assert.equal(f.mainWindow.getAttribute("name"), "welcome");
   assert.equal(f.mainWindow.children[0].children[0].textContent, "Badge 0", "cloned content awakened in the launch pass");
   assert.ok(windowBadge instanceof Badge);
   assert.equal(windowBadge.parent(), parent, "window content nests under the containing controller");
-  assert.equal(f.application.windowNamed("main").controller(), windowBadge);
-  assert.equal(f.application.windowNamed("main").contentName(), "welcome");
+  assert.equal(f.application.windowNamed("main").controller, windowBadge);
+  assert.equal(f.application.windowNamed("main").contentName, "welcome");
   assert.equal(f.sideWindow.children[0], f.prerendered, "pre-rendered content stays in place");
-  assert.equal(f.application.windowNamed("side").controller(), sideBadge);
+  assert.equal(f.application.windowNamed("side").controller, sideBadge);
   assert.equal(f.application.isWindowContent("side"), true, "pre-rendered content is captured under the window name");
   assert.equal(f.application.isWindowContent("farewell"), true, "a root-level template counts");
   assert.equal(f.application.isWindowContent("ignored"), false, "a nested template without for=window does not");
@@ -1489,19 +1516,19 @@ test("window containers fill from templates at launch and keep pre-rendered cont
 
 test("load_window_content replaces, tears down, awakens, and moves focus", () => {
   const f = windowedPage();
-  const [parent, , welcomeBadge] = f.application.controllers();
+  const [parent, , welcomeBadge] = f.application.controllers;
   const teardown = [];
   welcomeBadge.viewDidDisappear = () => teardown.push("welcome");
   const farewellBadge = f.application.loadWindowContent("main", "farewell");
   assert.deepEqual(teardown, ["welcome"]);
-  assert.equal(welcomeBadge.view().controllerValue(), null);
+  assert.equal(welcomeBadge.view.controllerValue(), null);
   assert.ok(farewellBadge instanceof Badge);
   assert.notEqual(farewellBadge, welcomeBadge);
   assert.equal(f.mainWindow.getAttribute("name"), "farewell");
   assert.equal(f.mainWindow.children.length, 1);
   assert.equal(f.mainWindow.children[0].children[0].textContent, "Badge 0");
   assert.equal(farewellBadge.parent(), parent);
-  assert.equal(f.application.windowNamed("main").controller(), farewellBadge);
+  assert.equal(f.application.windowNamed("main").controller, farewellBadge);
   assert.equal(f.application.firstResponder(), parent.nameField, "content without a focusable element leaves focus alone");
   const back = f.application.loadWindowContent("main", "welcome");
   assert.equal(f.application.firstResponder(), back, "focusable content takes the first responder");
@@ -1515,25 +1542,25 @@ test("load_window_content replaces, tears down, awakens, and moves focus", () =>
 
 test("show_window presents a dialog whose dismissal restores the first responder", async () => {
   const f = windowedPage();
-  const [parent] = f.application.controllers();
+  const [parent] = f.application.controllers;
   const window = f.application.showWindow("palette");
-  const dialog = window.root();
+  const dialog = window.root;
   assert.equal(dialog.parentElement, f.body);
   assert.equal(dialog.open, true, "a dialog root is shown");
-  assert.ok(window.controller() instanceof Badge);
+  assert.ok(window.controller instanceof Badge);
   assert.equal(window.isContainer(), false);
-  assert.equal(f.application.firstResponder(), window.controller());
-  assert.equal(window.savedFirstResponder(), parent.nameField);
+  assert.equal(f.application.firstResponder(), window.controller);
+  assert.equal(window.savedFirstResponder, parent.nameField);
   let resolved = false;
-  window.closed().then(() => { resolved = true; });
+  window.closed.then(() => { resolved = true; });
   dialog.querySelector("[data-action=close]").click();
-  await window.closed();
+  await window.closed;
   assert.equal(resolved, true);
   assert.equal(dialog.parentElement, null, "dismiss removes the root");
   assert.equal(dialog.open, false);
-  assert.equal(window.controller().view().controllerValue(), null, "dismiss tears down the controller");
+  assert.equal(window.controller.view.controllerValue(), null, "dismiss tears down the controller");
   assert.equal(f.application.firstResponder(), parent.nameField, "the saved first responder returns");
-  assert.equal(f.application.dismiss(window.controller()), false, "a dismissed window is gone");
+  assert.equal(f.application.dismiss(window.controller), false, "a dismissed window is gone");
   assert.throws(() => f.application.showWindow("ignored"), /No window content template: ignored/);
   const plain = element("template", {for: "window", name: "plain"}, [
     element("div", {}, [element("section", {controller: "Demo::Badge"})])
@@ -1546,31 +1573,31 @@ test("show_window presents a dialog whose dismissal restores the first responder
   const host = element("div", {});
   f.body.append(host);
   const hosted = f.application.showWindow("palette", Runtime.keywordArguments({into: host}));
-  assert.equal(hosted.root().parentElement, host, "show_window into: presents into a chosen element");
-  f.application.dismiss(hosted.controller());
+  assert.equal(hosted.root.parentElement, host, "show_window into: presents into a chosen element");
+  f.application.dismiss(hosted.controller);
   assert.equal(host.children.length, 0);
 });
 
 test("detach tears down a removed subtree and terminate releases windows", () => {
   const f = windowedPage();
-  const [parent, badge, welcomeBadge, sideBadge] = f.application.controllers();
+  const [parent, badge, welcomeBadge, sideBadge] = f.application.controllers;
   assert.deepEqual(Array.from(Awakening.controllersWithin(f.main)), [parent, badge, welcomeBadge, sideBadge]);
   f.badge.remove();
   Awakening.detach(f.badge);
-  assert.equal(badge.view().controllerValue(), null);
+  assert.equal(badge.view.controllerValue(), null);
   assert.deepEqual(Array.from(parent.childControllers()), [welcomeBadge, sideBadge]);
   const window = f.application.showWindow("palette");
   f.application.terminate();
-  assert.equal(window.root().parentElement, null, "terminate dismisses dialogs");
-  assert.equal(welcomeBadge.view().controllerValue(), null, "terminate tears down window content");
-  assert.equal(parent.view().controllerValue(), null);
+  assert.equal(window.root.parentElement, null, "terminate dismisses dialogs");
+  assert.equal(welcomeBadge.view.controllerValue(), null, "terminate tears down window content");
+  assert.equal(parent.view.controllerValue(), null);
 });
 
 // ---- URL restoration ----
 
 test("window content and restorable state round-trip through the fragment", () => {
   const f = windowedPage("#main=farewell&main.n=3&main.junk=x");
-  const [, , badge] = f.application.controllers();
+  const [, , badge] = f.application.controllers;
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "the fragment chose the content at launch");
   assert.equal(badge.count, 3, "an Integer path decoded its value");
   assert.equal(badge.restored, true, "controller_did_restore saw the applied value");
@@ -1589,26 +1616,26 @@ test("window content and restorable state round-trip through the fragment", () =
   assert.equal(f.browser.location.hash, "#main=welcome&main.n=9&main.junk=x", "the replaced controller no longer writes");
   f.browser.back();
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "Back restores the content");
-  const restoredBadge = f.application.windowNamed("main").controller();
+  const restoredBadge = f.application.windowNamed("main").controller;
   assert.equal(restoredBadge.count, 4, "Back restores the state that was in that entry");
   assert.equal(f.browser.entries.length, 1, "Back/Forward routing writes no history");
   f.browser.navigate("#main=farewell&main.n=oops");
-  assert.equal(f.application.windowNamed("main").controller().count, 4, "a value that is not an Integer is ignored");
+  assert.equal(f.application.windowNamed("main").controller.count, 4, "a value that is not an Integer is ignored");
   f.browser.navigate("#main=missing");
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "unknown content is reported and ignored");
 });
 
 test("restoration state is scoped per window and pruned when content changes", () => {
   const f = windowedPage("#side=side&side.n=2");
-  const sideBadge = f.application.windowNamed("side").controller();
+  const sideBadge = f.application.windowNamed("side").controller;
   assert.equal(sideBadge.count, 2);
-  const mainBadge = f.application.windowNamed("main").controller();
+  const mainBadge = f.application.windowNamed("main").controller;
   assert.equal(mainBadge.count, 0, "another window's key does not apply");
   const dialog = f.application.showWindow("palette");
-  dialog.controller().count = 7;
+  dialog.controller.count = 7;
   assert.match(f.browser.location.hash, /palette\.n=7/, "a dialog's state is scoped under its name");
-  f.application.dismiss(dialog.controller());
-  dialog.controller().count = 8;
+  f.application.dismiss(dialog.controller);
+  dialog.controller.count = 8;
   assert.doesNotMatch(f.browser.location.hash, /palette\.n=8/, "a dismissed window stops writing");
   assert.equal(f.application.isWindowContent("side"), true);
 });
@@ -1617,7 +1644,7 @@ test("fragment routing is inert without a browser window", () => {
   const f = pageFixture({readyState: "complete"});
   f.document.defaultView = new EventTarget();
   const application = new Launcher().launch(f.document);
-  assert.ok(application.controllers().length > 0);
+  assert.ok(application.controllers.length > 0);
   application.terminate();
 });
 
@@ -1666,7 +1693,7 @@ function peoplePage(hash = "", rowTemplate = null, listController = "Demo::Peopl
   document.readyState = "complete";
   document.defaultView = new Browser(hash);
   const application = new Launcher().launch(document);
-  const [parent, , controller] = application.controllers();
+  const [parent, , controller] = application.controllers;
   const rowsOf = () => rows.children.filter(child => child.tagName === "TR");
   return {application, document, browser: document.defaultView, parent, controller, list, rows, header, template,
     editorTemplate, stale, selected, edit, title, rowsOf, nameHeader, roleHeader, nameInput};
@@ -1686,7 +1713,7 @@ function bareList(listController = "Demo::PeopleList") {
   document.readyState = "complete";
   document.defaultView = new Browser();
   const application = new Launcher().launch(document);
-  const [badge, controller] = application.controllers();
+  const [badge, controller] = application.controllers;
   const items = () => list.children.filter(child => child.tagName === "LI");
   return {application, document, list, controller, badge, template, items};
 }
@@ -1702,10 +1729,10 @@ test("a list renders a row per object from its template, binds cells to the obje
   assert.equal(f.stale.parentElement, null, "pre-rendered rows are replaced");
   assert.equal(f.template.parentElement, f.rows, "the template stays inert in place");
   assert.equal(f.list.getAttribute("tabindex"), "0", "the list is focusable");
-  assert.equal(f.controller.rows.element(), f.rows);
-  assert.equal(f.controller.headerView.element(), f.header);
-  const rowViews = Array.from(f.controller.rows.subviews());
-  assert.deepEqual(rowViews.map(view => view.element()), f.rowsOf(), "rows are views under the rows outlet");
+  assert.equal(f.controller.rows.element, f.rows);
+  assert.equal(f.controller.headerView.element, f.header);
+  const rowViews = Array.from(f.controller.rows.subviews);
+  assert.deepEqual(rowViews.map(view => view.element), f.rowsOf(), "rows are views under the rows outlet");
   assert.equal(rowViews[0].owner(), f.controller);
   assert.equal(f.controller.rowFor(f.rowsOf()[1].children[0]), 1, "an element inside a row knows its row");
   assert.equal(f.controller.rowFor(f.list), -1);
@@ -1721,7 +1748,7 @@ test("a list renders a row per object from its template, binds cells to the obje
   ada.name = "Ada";
   assert.equal(oldRow.children[0].textContent, "Ada Lovelace", "released rows stop observing");
   assert.equal(f.rowsOf()[1].children[0].textContent, "Ada");
-  assert.equal(f.controller.rows.subviews().length, 2, "released row views leave the tree");
+  assert.equal(f.controller.rows.subviews.length, 2, "released row views leave the tree");
   assert.equal(f.parent.people.length, 2);
   f.template.remove();
   assert.throws(() => { f.parent.people = [grace]; }, /no <template for="row">/);
@@ -1814,7 +1841,7 @@ test("row actions dispatch from the list knowing their row, and activation reach
   assert.equal(f.controller.actionTarget("vanish"), null);
   f.controller.unload();
   assert.equal(f.rowsOf().length, 0, "teardown removes the rows");
-  assert.equal(f.controller.rows.subviews().length, 0);
+  assert.equal(f.controller.rows.subviews.length, 0);
   f.parent.people = [ada];
   assert.equal(f.rowsOf().length, 0, "a torn-down list no longer renders");
 });
@@ -1862,7 +1889,7 @@ test("without a rows outlet rows mount in the list itself, and an unhandled acti
   const people = ["Ada", "Grace"].map(name => { const person = new Person(); person.name = name; return person; });
   f.controller.representedObject = people;
   assert.deepEqual(f.items().map(item => item.textContent), ["Ada", "Grace"], "bind on the row root binds to the object");
-  assert.deepEqual(Array.from(f.controller.view().subviews()).map(view => view.element()), f.items());
+  assert.deepEqual(Array.from(f.controller.view.subviews).map(view => view.element), f.items());
   f.items()[0].click();
   assert.equal(f.controller.selectedObject, people[0]);
   assert.equal(f.controller.selectedObjectId, null, "an object without an id gives the selection none");
@@ -1885,7 +1912,7 @@ test("a controller inside a row belongs to the list and is fed the row's object"
   assert.ok(editors[0] instanceof PersonEditor);
   assert.equal(editors[0].representedObject, ada, 'bind="@" hands the row controller its object');
   assert.equal(editors[0].parent(), f.controller);
-  assert.equal(editors[0].view().element(), f.rowsOf()[0], "the row view is the row controller's root");
+  assert.equal(editors[0].view.element, f.rowsOf()[0], "the row view is the row controller's root");
   const input = f.rowsOf()[0].children[0].children[0];
   assert.equal(input.value, "Ada");
   input.value = "Ada L";
@@ -2249,16 +2276,16 @@ test("the notification center observes by name until the observation ends, and c
   const center = NotificationCenter.default();
   assert.equal(NotificationCenter.default(), center, "one default center");
   const seen = [];
-  const stop = center.addObserver("ping", notification => seen.push([notification.name(), notification.object(), notification.userInfo()]));
+  const stop = center.addObserver("ping", notification => seen.push([notification.name, notification.object, notification.userInfo]));
   const posted = center.post("ping", "poster", {count: 1});
   assert.deepEqual(seen, [["ping", "poster", {count: 1}]]);
-  assert.equal(posted.name(), "ping");
+  assert.equal(posted.name, "ping");
   center.post("other", null, null);
   stop();
   center.post("ping", "poster", {count: 2});
   assert.equal(seen.length, 1, "an ended observation hears nothing");
   const f = peoplePage();
-  f.parent.observeNotification("ping", notification => seen.push(notification.userInfo()));
+  f.parent.observeNotification("ping", notification => seen.push(notification.userInfo));
   center.post("ping", null, "alive");
   f.parent.unload();
   center.post("ping", null, "gone");
@@ -2269,7 +2296,7 @@ test("first responder changes are posted as notifications", () => {
   const f = peoplePage();
   const changes = [];
   const stop = Runtime.resolve("Swill::NotificationCenter").default().addObserver("first_responder_did_change", notification => {
-    changes.push([notification.object() === f.application, notification.userInfo()]);
+    changes.push([notification.object === f.application, notification.userInfo]);
   });
   f.application.makeFirstResponder(f.controller);
   f.application.makeFirstResponder(f.controller);
@@ -2369,7 +2396,7 @@ test("JSON:API documents pool records by type and hydrate relationships from inc
   assert.ok(Author.store() !== Book.store(), "each class has its own store");
   assert.ok(ModelResource.classForType("books") === Book && ModelResource.classForType("pages") === null);
   assert.deepEqual(plain([ada.isDirty, Author.isPooled("2"), Author.values().length]), [false, true, 2], "applied attributes are clean");
-  assert.deepEqual(plain(ada.relationships().map(relationship => [relationship.name(), relationship.key(), relationship.isMany()])), [["books", "books", true]]);
+  assert.deepEqual(plain(ada.relationships().map(relationship => [relationship.name, relationship.key, relationship.isMany()])), [["books", "books", true]]);
 });
 
 test("save posts a new record, patches only dirty attributes, and delete leaves the pool", async () => {

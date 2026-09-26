@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" data-root="<%= root %>">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= h page_title(context) %> — <%= h options.title %></title>
+  <link rel="stylesheet" href="<%= root %>swill_doc.css">
+</head>
+<body>
+  <nav class="navigator" controller="DocNavigator">
+    <header class="pane-header search">
+      <input type="search" bind="query" placeholder="Global search" aria-label="Search" autocomplete="off" spellcheck="false">
+      <kbd>~</kbd>
+    </header>
+    <header class="pane-header" bind-hidden="files.empty?">File index</header>
+    <ul class="index file-index" controller="Swill::Controller::List" outlet="fileList" bind="files" bind-hidden="represented_object.empty?">
+      <template for="row"><li><a bind-href="href" bind="name"></a></li></template>
+    </ul>
+    <header class="pane-header" data-resizes="file-index" bind-hidden="classes.empty?">Class index</header>
+    <ul class="index class-index" controller="Swill::Controller::List" outlet="classList" bind="classes" bind-hidden="represented_object.empty?">
+      <template for="row"><li><a bind-href="href"><span class="namespace" bind="namespace"></span><span class="leaf" bind="leaf"></span></a></li></template>
+    </ul>
+    <header class="pane-header" data-resizes="class-index" bind-hidden="methods.empty?">Method index</header>
+    <ul class="index method-index" controller="Swill::Controller::List" outlet="methodList" bind="methods" bind-hidden="represented_object.empty?">
+      <template for="row"><li><a bind-href="href" bind="label"></a><span class="owner" bind="owner"></span></li></template>
+    </ul>
+    <div class="width-handle" aria-hidden="true"></div>
+  </nav>
+  <main class="page">
+<%= body -%>
+  </main>
+  <script src="<%= root %>swill-ui.min.js"></script>
+  <script src="<%= root %>search_index.js"></script>
+  <script src="<%= root %>navigator.js"></script>
+</body>
+</html>
