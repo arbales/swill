@@ -69,6 +69,17 @@ in `viewDidLoad`, or `this.observeWithObject(other, "name", ...)` for another
 object's; both are released at `unload`. Closing the gap means registering hook methods in the
 table; their names already match, since compiled members are camelCase.
 
+A registered class extends one of the framework's public classes:
+`Swill.Object`, for an observable object of the application's own;
+`Swill.Controller`, `Swill.Application`, `Swill.View`, and the lists and
+editors; `Swill.Control` and its subclasses; `Swill.ValueTransformer`, whose
+instances `Swill.ValueTransformer.register` makes available to markup by name;
+and `Swill.Model.Base`, `Swill.Model.Resource`, and `Swill.Model.DistantObject`.
+A model's `static properties` are observable properties, not persisted
+attributes; attributes are declared in Ruby. The other public classes, such as
+`Swill.NotificationCenter` and `Swill.Model.DistantClient`, are used as they
+are.
+
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
 Register a JavaScript parent before its subclasses. For another root or a
 custom registered application class, use

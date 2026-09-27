@@ -1,0 +1,58 @@
+    <header class="page-header">
+      <h1><span class="kind"><%= h page.kind %></span><span class="title"><%= h page.title %></span></h1>
+      <a class="source" href="<%= h link_to_path(page.source.tr('.', '_') + '.html') %>"><%= h page.source %></a>
+    </header>
+    <div class="content">
+      <article class="body">
+<%- unless overview.strip.empty? -%>
+        <div class="description"><%= markdown_html(overview) %></div>
+<%- end -%>
+<%- unless classes.empty? -%>
+        <h2 class="section-title">Classes</h2>
+        <div class="attributes">
+<%- classes.each do |name, klass| -%>
+          <div class="property">
+            <div class="property-signature"><span class="property-name">Swill.<%= h name %></span><span class="property-meta"><%= klass ? %(<a href="#{h href_to(klass)}">#{h klass.full_name}</a>) : "" %></span></div>
+          </div>
+<%- end -%>
+        </div>
+<%- end -%>
+<%- groups.each do |title, functions| -%>
+        <h2 class="section-title" id="<%= h title.downcase.tr(' ', '-') %>"><%= h title %></h2>
+<%- functions.each do |function| -%>
+        <section class="method class-method" id="<%= h function.anchor %>">
+          <h3 class="method-header"><%= js_signature_html(function) %></h3>
+          <div class="method-body">
+            <%= markdown_html(function.doc) %>
+<%- params = js_tags(function, "param") -%>
+<%- unless params.empty? -%>
+            <dl class="parameters">
+<%- params.each do |tag| -%>
+              <dt><code><%= h tag["name"] %></code></dt>
+              <dd><%= markdown_html(tag["doc"]) %></dd>
+<%- end -%>
+            </dl>
+<%- end -%>
+<%- js_tags(function, "return").each do |tag| -%>
+<%- next if tag["doc"].to_s.strip.empty? -%>
+            <p class="returns"><span class="label">Returns</span> <%= inline_markdown_html(tag["doc"]) %></p>
+<%- end -%>
+<%- js_tags(function, "throws").each do |tag| -%>
+            <p class="throws"><span class="label">Throws</span> <code><%= h tag.dig("tsType", "repr") %></code> <%= inline_markdown_html(tag["doc"]) %></p>
+<%- end -%>
+          </div>
+        </section>
+<%- end -%>
+<%- end -%>
+      </article>
+      <aside class="page-index">
+<%- groups.each do |title, functions| -%>
+        <header class="pane-header"><%= h title %></header>
+        <ul class="index">
+<%- functions.each do |function| -%>
+          <li><a href="#<%= h function.anchor %>"><%= h function.name %></a></li>
+<%- end -%>
+        </ul>
+<%- end -%>
+      </aside>
+    </div>

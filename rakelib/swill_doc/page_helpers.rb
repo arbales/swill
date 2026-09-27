@@ -18,6 +18,7 @@ module SwillDoc
     end
 
     def page_title(context)
+      return context.title if context.respond_to?(:title)
       context.is_a?(RDoc::ClassModule) ? context.full_name : page_name(context)
     end
 
@@ -103,6 +104,95 @@ module SwillDoc
         token.text.split(/(\n)/).each do |part|
           next lines << +"" if part == "\n"
           lines.last << RDoc::TokenStream.to_html([RDoc::Parser::RubyColorizer::ColoredToken.new(token.kind, part)])
+        end
+      end
+      lines.pop if lines.last.empty?
+      lines
+    end
+
+    # --- JavaScript ---
+
+    # name(params): returns, from deno doc: a parameter's type is its JSDoc
+    # type, a default is shown as written, and a rest parameter is spread.
+    def js_signature_html(function)
+      # A constant, such as NIL_READERS, is a value rather than a call.
+      return %(<span class="signature-name">#{h function.name}</span>) if function.constant?
+      types = function.tags.select { |tag| tag["kind"] == "param" }.to_h { |tag| [tag["name"], tag.dig("tsType", "repr")] }
+      params = function.params.map { |param| js_param_html(param, types) }
+      returns = function.tags.find { |tag| tag["kind"] == "return" }&.dig("tsType", "repr")
+      %(<span class="signature-name">#{h function.name}</span>) +
+        %(<span class="signature-params">(#{params.join(', ')})</span>) +
+        (returns ? %( <span class="signature-returns">→ #{h returns}</span>) : "")
+    end
+
+    def js_param_html(param, types)
+      case param["kind"]
+      when "rest"
+        name = param.dig("arg", "name")
+        "...#{h name}#{js_type(types[name])}"
+      when "assign"
+        # deno doc cannot print every default (new Map(), {}); such a
+        # parameter reads as optional.
+        name = param.dig("left", "name")
+        default = param["right"]
+        return "#{h name}?#{js_type(types[name])}" if default.nil? || default.include?("UNSUPPORTED")
+        "#{h name}#{js_type(types[name])} = #{h default}"
+      else
+        name = param["name"]
+        "#{h name}#{param['optional'] ? '?' : ''}#{js_type(types[name])}"
+      end
+    end
+
+    def js_type(type)
+      type ? %(: <span class="signature-type">#{h type}</span>) : ""
+    end
+
+    # A parameter's, a result's, or an error's own description.
+    def js_tags(function, kind)
+      function.tags.select { |tag| tag["kind"] == kind && (tag["doc"].to_s.strip != "" || kind != "param") }
+    end
+
+    # Markdown from JSDoc, through RDoc's own formatter, so a class it names in
+    # backticks links to the class page as it would in Ruby.
+    def markdown_html(text)
+      return "" if text.to_s.strip.empty?
+      options = @store.options
+      formatter = RDoc::Markup::ToHtmlCrossref.new(
+        @context.path, @store.find_class_or_module("Swill") || @store.all_classes_and_modules.first,
+        pipe: options.pipe, output_decoration: options.output_decoration,
+        hyperlink_all: options.hyperlink_all, show_hash: options.show_hash,
+        autolink_excluded_words: options.autolink_excluded_words || [],
+        warn_missing_rdoc_ref: options.warn_missing_rdoc_ref
+      )
+      RDoc::Markdown.parse(text).accept(formatter)
+    end
+
+    # Markdown for a line that continues a label: no paragraph of its own.
+    def inline_markdown_html(text)
+      markdown_html(text).gsub(%r{</?p>}, "").strip
+    end
+
+    # Both spellings of a piece of a page; the language switch shows one.
+    def spelled(ruby, javascript)
+      return ruby if javascript.nil? || javascript == ruby
+      %(<span class="lang-ruby">#{ruby}</span><span class="lang-javascript">#{javascript}</span>)
+    end
+
+    # A relative link from this page to another path in the output.
+    def link_to_path(path)
+      RDoc::Markup::ToHtml.gen_relative_url(@context.path, path)
+    end
+
+    # A JavaScript file as highlighted HTML, one string per line: Rouge's
+    # tokens, split at each newline as the Ruby lines are.
+    def highlighted_javascript_lines(source)
+      lines = [+""]
+      Rouge::Lexers::Javascript.new.lex(source).each do |token, value|
+        css = token.shortname
+        value.split(/(\n)/).each do |part|
+          next lines << +"" if part == "\n"
+          next if part.empty?
+          lines.last << (css.empty? ? h(part) : %(<span class="#{css}">#{h part}</span>))
         end
       end
       lines.pop if lines.last.empty?

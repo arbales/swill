@@ -9,16 +9,23 @@
   instance_methods = public_methods(klass, false)
   relations = [
     ["Includes", includes.map { |included| class_link(included.module, short: true) }],
-    ["Derivatives", derived.map { |subclass| class_link(subclass) }]
+    ["Derivatives", derived.map { |subclass| spelled(class_link(subclass), javascript_class_link(subclass)) }]
   ].reject { |_, links| links.empty? }
 -%>
     <header class="page-header">
-      <h1><span class="kind"><%= klass.module? ? "Module" : "Class" %></span><span class="title"><%= h klass.full_name %></span></h1>
+<%- javascript_name = public_javascript_name(klass.full_name) -%>
+<%- compiled = compiled?(klass) -%>
+      <h1><span class="kind"><%= klass.module? ? "Module" : "Class" %></span><span class="title"><%= spelled(h(klass.full_name), h(javascript_name || klass.full_name)) %></span></h1>
 <%- klass.in_files.each do |file| -%>
       <a class="source" href="<%= h href_to(file) %>"><%= h file.relative_name %></a>
 <%- end -%>
 <%- unless klass.module? -%>
-      <div class="superclass"><span class="label">Superclass: </span><%= class_link(superclass_of(klass), short: true) %></div>
+      <div class="superclass"><span class="label">Superclass: </span><%= spelled(class_link(superclass_of(klass), short: true), javascript_class_link(superclass_of(klass))) %></div>
+<%- end -%>
+<%- if compiled && !javascript_name -%>
+      <div class="language-note lang-javascript">Not reachable by a public name from plain JavaScript.</div>
+<%- elsif !compiled -%>
+      <div class="language-note lang-javascript">Not compiled to JavaScript: this runs only in Ruby.</div>
 <%- end -%>
     </header>
     <div class="content">
@@ -62,7 +69,7 @@
         <h2 class="section-title"><%= title %></h2>
 <%- list.each do |declaration| -%>
         <div class="property" id="<%= h declaration.aref %>">
-          <div class="property-signature"><span class="property-name"><%= h declaration.name %></span><span class="property-meta"><%= type_html(declaration.declared_type, klass) %></span></div>
+          <div class="property-signature"><span class="property-name"><%= spelled(h(declaration.name), h(javascript_property(klass, declaration.name))) %></span><span class="property-meta"><%= spelled(type_html(declaration.declared_type, klass), ts_type_html(declaration.declared_type, klass) + (declaration.computed ? " (read-only)" : "")) %></span></div>
 <%- unless declaration.description.strip.empty? -%>
           <div class="property-description"><%= declaration.description %></div>
 <%- end -%>
@@ -74,7 +81,7 @@
         <div class="attributes">
 <%- attributes.each do |attribute| -%>
           <div class="property" id="<%= h attribute.aref %>">
-            <div class="property-signature"><span class="property-name"><%= h attribute.name %></span><span class="property-meta"><%= attribute_meta(attribute) %></span></div>
+            <div class="property-signature"><span class="property-name"><%= spelled(h(attribute.name), compiled ? h(javascript_member(attribute.name)) : nil) %></span><span class="property-meta"><%= spelled(attribute_meta(attribute), attribute.rw == "R" ? "getter" : attribute_meta(attribute)) %></span></div>
 <%- unless attribute.description.strip.empty? -%>
             <div class="property-description"><%= attribute.description %></div>
 <%- end -%>
@@ -87,7 +94,11 @@
         <h2 class="section-title"><%= title %></h2>
 <%- list.each do |method| -%>
         <section class="method <%= kind %>" id="<%= h method.aref %>">
-          <h3 class="method-header"><%= signature_html(method) %></h3>
+<%- javascript = macro?(klass, method) ? [] : javascript_signatures(klass, method) -%>
+          <h3 class="method-header"><%= spelled(signature_html(method), javascript.empty? ? nil : javascript.join("<br>")) %></h3>
+<%- if macro?(klass, method) -%>
+          <div class="method-body language-note lang-javascript">A declaration in Ruby. Plain JavaScript declares with static fields instead; see <a href="<%= h link_to_path('doc/plain_javascript_md.html') %>">Plain JavaScript</a>.</div>
+<%- end -%>
 <%- unless method.description.strip.empty? -%>
           <div class="method-body"><%= method.description %></div>
 <%- end -%>
@@ -102,7 +113,7 @@
         <header class="pane-header"><%= title %></header>
         <ul class="index">
 <%- list.each do |entry| -%>
-          <li><a href="#<%= h entry.aref %>"><%= h entry.name %></a></li>
+          <li><a href="#<%= h entry.aref %>"><%= spelled(h(entry.name), compiled ? h(entry.is_a?(RDoc::AnyMethod) ? javascript_member(entry.name) : javascript_property(klass, entry.name)) : nil) %></a></li>
 <%- end -%>
         </ul>
 <%- end -%>

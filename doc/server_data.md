@@ -101,6 +101,71 @@ for example keeping an external HTTP request outside the database transaction.
 These declarations export trusted application methods; they do not sandbox
 query or resolver implementations.
 
+### Effects on related objects
+
+Server method bodies can describe affected objects explicitly:
+
+```ruby
+command :change_author, returns: T::Boolean
+
+def change_author(new_author)
+  previous_author = author
+  update(author_id: new_author.id)
+
+  context = Swill::Data.context
+  context.refresh(self, :author_id, :author)
+  context.invalidate(previous_author, :posts)
+  context.invalidate(new_author, :posts)
+  true
+end
+```
+
+`context.refresh(record, *fields)` includes authoritative scalar fields or
+complete relationship membership in the response. `context.invalidate(record,
+*relationships)` marks cached relationships stale without sending membership.
+Both require a saved model and schema-exposed member names. For a small
+relationship, replace the last invalidation with `context.refresh(new_author,
+:posts)` to avoid a subsequent fetch. Refresh wins if the same relationship is
+both refreshed and invalidated in one response.
+
+Effects are collected per invocation, including effects declared by persistence
+hooks. They cannot leak between operations sharing a connection or between
+fibers. The dispatcher re-fetches effect targets under the current viewer
+context, avoiding stale association caches and privileged source objects.
+Refresh uses ordinary Sequel relationship access, preserving conditions,
+ordering, limits, and privacy. Effects do not infer inverse membership.
+
+Validation and serialization run within the command's default transaction.
+A failed command or invalid effect returns no effects; the default transaction
+rolls back. With `transaction: false`, the application still owns rollback and
+may already have committed before effect serialization fails. Effects update
+the calling client, not other connected clients; subscriptions remain separate
+work. Arbitrary database changes outside Swill operations are not captured.
+
+On the client, invalidation keeps the collection and its rows:
+
+```ruby
+posts = author.posts
+posts.loaded?   # Has authoritative membership ever been received?
+posts.stale?    # Does that membership need refreshing?
+posts.loading?  # Is a load queued or in flight?
+posts.error     # Last load error, if any
+author.field_stale?(:posts) # Also available for to-one relationships
+```
+
+A relationship observed directly or through an actively observed computed
+property refreshes through the normal batched demand path. An unused
+relationship waits until accessed; reading a retained collection's records
+also counts as access. Disposing observers ends that automatic demand. Loading
+and freshness are separate from availability: refresh and failure retain
+`loaded?` and the previous contents. `load_field` refreshes stale fields;
+`reload_field` forces a refresh. An older response or load failure cannot clear
+a newer invalidation or replace newer state.
+
+Invalidation messages use protocol version 2. Regenerate schema/client files
+and deploy matching server and browser runtimes; old clients fail the handshake
+instead of silently ignoring membership invalidations.
+
 `changes:` refreshes fields on an instance command's receiver. `preload:`
 projects fields on the returned value. They are independent:
 

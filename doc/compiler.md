@@ -193,6 +193,7 @@ outlet :extra, type: T.untyped, optional: true
 | `type:` | A Sorbet type, or its text when the class it names is defined later |
 | `default:` | Literal string, number, symbol, `nil`, `true`, `false`, or an empty `[]` or `{}`; the emitted default is a function, so each instance gets its own collection. Anything mutable is rejected |
 | Block | A computed property: no block arguments, no `default:` |
+| `writer:` | Optional method name for a computed property's setter; the method updates its source state, and the getter remains computed |
 | `attribute:`, `key:` | Marks the property as local model data with an external key, used by validation, dirty tracking, and attribute collection |
 | `outlet:`, `optional:` | Marks the property an outlet, connected at awakening |
 | `will_access:` | The getter calls `property_will_access(name)` before it resolves |
@@ -208,8 +209,8 @@ The framework's own macros:
 | `Resource.has_one :name, ...` | The endpoint-backed nilable form of the same declaration |
 | `DistantObject.model_name "Name"` | The authoritative server model name as a class setting |
 | `DistantObject.attribute :name, type:` | A partial scalar whose reads participate in data demand collection |
-| `DistantObject.has_one :name, model:` | A partial nilable canonical model reference |
-| `DistantObject.has_many :name, model:` | A partial stable `Collection` of canonical model references |
+| `DistantObject.many_to_one`, `one_to_one`, `one_through_one` with `class:` | A read-only partial nilable canonical model reference |
+| `DistantObject.one_to_many`, `many_to_many` with `class:` | A read-only partial stable `RelationshipCollection` of canonical model references |
 
 An outlet or resource relationship may name a class defined later by writing
 its name as a string. Generated distant relationship declarations use
@@ -611,7 +612,7 @@ nil-safe (`Runtime.stringify`) because `nil.to_s` is `""`.
 | `Integer` | `zero?`, `positive?`, `negative?`, `even?`, `odd?` (comparisons); `abs` (`Math.abs`); `to_i`, `to_f` (identity) | `to_s`, `clamp`, `between?`; `/` and `%` with an Integer divisor floor and take the divisor's sign (`intDiv`, `modulo`) |
 | `Float` | `floor`, `ceil`, `round`, `to_i` (`Math`); `zero?`, `positive?`, `negative?`, `abs` | `to_s`, `clamp`, `between?` |
 | `T::Boolean`, `NilClass` | `nil.to_a` (`[]`), `nil.to_i` (`0`) | `to_s` (`nil.to_s` is `""`) |
-| `Array` | `length`/`size`/`count` (`.length`); `first` (`[0]`); `last` (`at(-1)`); `include?` (`includes`); `pop`, `shift`; `join` (default `""`); `take`, `drop` (`slice`); `dup` (`slice()`); `to_a`; `+` (`concat`) | `blank?`, `present?`, `empty?`, `index` (Ruby equality, nil when absent), `push` and `<<` (return the array), `unshift`, `reverse`, `sort` (copy, Ruby ordering), `uniq`, `compact`, `flatten`, `sum`, `min`, `max` (nil when empty), `-` (Ruby equality) |
+| `Array` | `length`/`size`/`count` (`.length`); `first` (`[0]`); `last` (`at(-1)`); `include?` (`includes`); `pop`, `shift`; `join` (default `""`); `take`, `drop` (`slice`); `dup` (`slice()`); `freeze` (`Object.freeze`, shallow); `to_a`; `+` (`concat`) | `blank?`, `present?`, `empty?`, `index` (Ruby equality, nil when absent), `push` and `<<` (return the array), `unshift`, `reverse`, `sort` (copy, Ruby ordering), `uniq`, `compact`, `flatten`, `sum`, `min`, `max` (nil when empty), `-` (Ruby equality) |
 | `Hash` | `length`/`size`/`count`, `keys`, `values`, `key?`/`has_key?`/`include?` (`Object.keys`, `Object.values`, `Object.hasOwn`); `merge`, `dup` (`Object.assign`); `to_h` | `blank?`, `present?`, `empty?`, `fetch` (default or error), `delete` (the value or nil) |
 
 Blocks on arrays and hashes:
@@ -688,8 +689,9 @@ untyped.
 ### Exceptions
 
 `raise "message"` and `raise "interpolated #{message}"` compile to
-`throw new Error(...)`. Bare `raise`, `raise SomeClass`, `raise SomeClass, msg`,
-and `raise variable` are rejected. `begin`/`rescue => error`/`ensure` is the
+`throw new Error(...)`. `raise error` rethrows a rescued (statically typed
+`Error`) object unchanged. Bare `raise`, exception class forms, and raising
+arbitrary untyped variables are rejected. `begin`/`rescue => error`/`ensure` is the
 converter's `try`/`catch`/`finally`; the rescued variable is typed `Error`,
 so `error.message` is a native read. Rescuing a named class is outside the
 boundary: a thrown value is whatever JavaScript threw.
@@ -893,7 +895,7 @@ where it is raised:
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
 | Expressions | Any `T` construct in an executable body other than `T.must`, `T.cast`, `T.let`, `T.assert_type!`, `T.unsafe`, `T.absurd`, and `T.bind(self, ...)` with the right number of arguments; a type argument outside the checkable types, or naming a mixin or an unknown constant; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments; safe navigation (`&.`) on the shared surface |
-| Exceptions | Any `raise` form other than a literal message string |
+| Exceptions | Any `raise` form other than a literal message or a typed rescued error |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |
 | Members | Two members with the same encoded JavaScript name |
 | Build | Application compilation without a framework import; missing `esbuild`; unformattable output |

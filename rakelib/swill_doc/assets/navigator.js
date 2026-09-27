@@ -4,18 +4,29 @@
 // each bound to a computed property that follows the query. Entries are
 // ordinary links, so choosing one loads that page.
 //
+// Read as Ruby, the class index lists every class. Read as JavaScript, it
+// lists the classes JavaScript has a name for; the rest are the
+// implementation, and follow under one row that opens and closes, and opens
+// by itself while a query matches any of them.
+//
 // Keys: ~ moves to the search; arrows move through the results, in the order
-// they appear; Enter opens the selected result, or the first; Escape abandons
+// they appear; Enter opens the selected result, or the first, or opens or
+// closes the implementation; Escape abandons
 // the query and leaves the search.
 //
 // The pane's width and the first two indexes' heights can be dragged, and are
-// remembered from page to page.
+// remembered from page to page, as is whether the implementation is open.
+//
+// The language switch chooses whether pages read as Ruby or as JavaScript; the
+// choice is remembered, and the indexes follow it.
 (() => {
   const root = document.documentElement.dataset.root ?? "";
   const index = globalThis.SwillDocIndex;
   const linked = entries => entries.map(entry => ({...entry, href: root + entry.url}));
   const files = linked(index.files);
   const classes = linked(index.classes);
+  const publicClasses = classes.filter(entry => !entry.internal);
+  const internalClasses = classes.filter(entry => entry.internal);
   const methods = linked(index.methods);
 
   const matching = (entries, query, key) => {
@@ -53,20 +64,45 @@
     return () => handle.removeEventListener("pointerdown", down);
   };
 
+  const languageKey = "swill-doc-language";
+  const internalKey = "swill-doc-internal";
+  const currentLanguage = () => document.documentElement.dataset.language === "javascript" ? "javascript" : "ruby";
+
+  // An entry as it reads in a language: its JavaScript spelling, where it has
+  // one, replaces its Ruby one.
+  const spelled = (entries, language) =>
+    language === "javascript" ? entries.map(entry => entry.js ? {...entry, ...entry.js} : entry) : entries;
+
   // A field keeps the keys typed into it.
   const typing = target => target?.closest?.("input, textarea, select, [contenteditable]");
 
   class DocNavigator extends Swill.Controller {
-    static properties = {query: {default: ""}};
+    static properties = {query: {default: ""}, language: {default: "ruby"}, internalOpen: {default: false}};
     static outlets = {fileList: {}, classList: {}, methodList: {}};
+    static actions = ["toggleInternal"];
 
     get files() { return matching(files, this.query, "name"); }
-    get classes() { return matching(classes, this.query, "name"); }
-    get methods() { return matching(methods, this.query, "search"); }
+
+    // Every class in Ruby; in JavaScript, the named classes, then the
+    // implementation under its row.
+    get classes() {
+      if (this.language !== "javascript") return matching(classes, this.query, "search");
+      const shown = spelled(matching(publicClasses, this.query, "search"), this.language);
+      const internal = matching(internalClasses, this.query, "search");
+      if (internal.length === 0) return shown;
+      const open = this.internalOpen || this.query.trim() !== "";
+      return [...shown, {group: true, label: "Implementation", open}, ...(open ? internal : [])];
+    }
+    get methods() { return spelled(matching(methods, this.query, "search"), this.language); }
 
     viewDidLoad() {
       this.cursor = -1;
+      try { this.internalOpen = localStorage.getItem(internalKey) === "open"; } catch { /* private browsing */ }
+      this.language = currentLanguage();
       this.observe("query", () => this.select(-1));
+      this.observeNotification("language_did_change", notification => {
+        this.language = notification.userInfo;
+      });
     }
 
     awakeFromDOM() {
@@ -106,6 +142,11 @@
       }
     }
 
+    toggleInternal() {
+      this.internalOpen = !this.internalOpen;
+      try { localStorage.setItem(internalKey, this.internalOpen ? "open" : "closed"); } catch { /* private browsing */ }
+    }
+
     // Every result, in the order the lists show them.
     results() {
       return [this.fileList, this.classList, this.methodList].flatMap(list =>
@@ -138,7 +179,8 @@
       const chosen = this.results()[this.cursor]?.entry ?? this.classes[0] ?? this.methods[0] ?? this.files[0];
       if (!chosen) return;
       event.preventDefault();
-      window.location.href = chosen.href;
+      if (chosen.group) this.toggleInternal();
+      else window.location.href = chosen.href;
     }
 
     // Escape abandons the query and leaves the search; the application holds
@@ -147,6 +189,28 @@
       event.preventDefault();
       this.query = "";
       this.application().makeFirstResponder(null);
+    }
+  }
+
+  // Ruby or JavaScript, for every page: the choice is the document's
+  // data-language, which the stylesheet follows, and it is remembered.
+  class LanguageSwitch extends Swill.Controller {
+    static properties = {language: {default: "ruby"}};
+    static actions = ["useRuby", "useJavaScript"];
+
+    get ruby() { return this.language === "ruby"; }
+    get javascript() { return this.language === "javascript"; }
+
+    viewDidLoad() { this.language = currentLanguage(); }
+
+    useRuby() { this.choose("ruby"); }
+    useJavaScript() { this.choose("javascript"); }
+
+    choose(language) {
+      this.language = language;
+      document.documentElement.dataset.language = language;
+      try { localStorage.setItem(languageKey, language); } catch { /* private browsing */ }
+      Swill.NotificationCenter.default().post("language_did_change", this, language);
     }
   }
 
@@ -166,6 +230,7 @@
   }
 
   Swill.register(DocNavigator);
+  Swill.register(LanguageSwitch);
   Swill.register(DocApplication);
   Swill.start({application: DocApplication});
 })();

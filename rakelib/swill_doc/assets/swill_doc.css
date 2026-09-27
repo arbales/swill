@@ -55,6 +55,7 @@
   --link: #1f4fae;
   --half-grey: rgba(0, 0, 0, 0.5);
   --grey-33: rgba(0, 0, 0, 0.33);
+  --grey-08: rgba(0, 0, 0, 0.08);
   --grey-18: rgba(0, 0, 0, 0.18);
   --grey-04: rgba(0, 0, 0, 0.04);
   --white-50: rgba(255, 255, 255, 0.5);
@@ -241,6 +242,23 @@ kbd {
 
 .class-index { gap: 5px; font-size: 15px; }
 .class-index .leaf { font-weight: 700; }
+html[data-language="javascript"] .class-index li[data-internal] { padding-left: 12px; }
+
+/* A collapsed group of rows: its name, then a triangle that turns down when
+   the group is open. */
+.disclosure {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+.disclosure::after { content: "⯈"; color: var(--half-grey); transition: transform 0.1s; }
+.disclosure[aria-expanded="true"]::after { transform: rotate(90deg); }
 
 .method-index li { display: flex; gap: 4px; }
 .method-index a { flex: none; }
@@ -397,11 +415,16 @@ kbd {
   flex-direction: column;
   gap: 10px;
   min-width: 220px;
+  max-height: calc(100vh - 24px);
   padding-bottom: 8px;
-  overflow: clip;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--grey-04);
   border: 1px solid var(--grey-18);
 }
+/* Headers and lists keep their size; the whole index scrolls. */
+.page-index .pane-header,
+.page-index .index { flex: none; }
 .page-index .index li { line-height: 20px; }
 .page-index .index { gap: 0; }
 
@@ -477,3 +500,51 @@ pre .na, pre .nv, pre .vc, pre .vg, pre .vi {
 pre .nt { color: var(--code-tag); }
 pre .nf, pre .fm, pre .ss { color: var(--code-function); }
 pre .kc, pre .se { color: var(--code-literal); }
+
+/* JavaScript function cards: parameters, the result, and what they throw. */
+.parameters {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+}
+.parameters dt { font: 500 13px/1.6 var(--mono); }
+.parameters dd { margin: 0; }
+.parameters dd p { margin: 0; }
+.method-body .returns,
+.method-body .throws { margin: 8px 0 0; }
+.method-body .label {
+  margin-right: 1ch;
+  color: var(--half-grey);
+  font: 500 12px/normal var(--mono);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.signature-type { color: var(--half-grey); }
+.instance-method .signature-type { color: var(--white-50); }
+
+/* The language switch: a page reads as Ruby or as JavaScript. A placeholder
+   until the design has one. */
+html:not([data-language="javascript"]) .lang-javascript,
+html[data-language="javascript"] .lang-ruby { display: none !important; }
+.page { position: relative; }
+.language-switch {
+  position: absolute;
+  top: 12px;
+  right: 24px;
+  display: flex;
+  border: 1px solid var(--grey-18);
+}
+.language-switch button {
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--half-grey);
+  font: 500 12px/normal var(--mono);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.language-switch button[aria-pressed="true"] { background: var(--grey-18); color: var(--black); }
+.language-note { color: var(--half-grey); font: 400 13px/normal var(--mono); }
+.method-body.language-note { font: 400 15px/normal var(--sans); }

@@ -7,6 +7,8 @@ require "rdoc"
 require "rdoc/generator/markup"
 require "rouge"
 require_relative "page_helpers"
+require_relative "javascript"
+require_relative "javascript_spelling"
 
 module SwillDoc
   # A link to code reads as code, whether the source named it in backticks,
@@ -53,6 +55,7 @@ class RDoc::Generator::Swill
 
   include ERB::Util
   include SwillDoc::PageHelpers
+  include SwillDoc::JavaScriptSpelling
 
   attr_reader :store, :options
 
@@ -74,10 +77,41 @@ class RDoc::Generator::Swill
     pages.each { |page| write(page.path, render_page("page", page, page: page)) }
     sources.each do |file|
       source = File.read(File.expand_path(file.relative_name, @source_root))
-      write(file.path, render_page("source", file, file: file, source: source))
+      defined = file.classes_or_modules.select(&:display?).sort_by(&:full_name)
+      page = SwillDoc::JavaScript::Page.new(file.path, file.relative_name, "File", nil)
+      write(file.path, render_source(page, source, defined) { |klass| class_link(klass) })
     end
-    write("search_index.js", search_index(classes, pages))
+
+    javascript = SwillDoc::JavaScript.new
+    write_javascript(javascript)
+    write("search_index.js", search_index(classes, pages, javascript))
     copy_assets
+  end
+
+  def render_source(page, source, defined, &link)
+    @context = page
+    lines = page.path.end_with?("_mjs.html") ? highlighted_javascript_lines(source) : highlighted_lines(source)
+    language = page.path.end_with?("_mjs.html") ? "javascript" : "ruby"
+    body = partial("source", path_text: page.title, lines: lines, language: language, defined: link ? defined.map(&link) : [])
+    partial("layout", context: page, root: "../" * page.path.count("/"), body: body)
+  end
+
+  # Swill.Runtime and the Swill global, and a source page for each module
+  # they come from.
+  def write_javascript(javascript)
+    swill = @store.find_class_or_module("Swill")
+    classes = ::Swill::Ruby2JS::JAVASCRIPT_NAMES.map { |name, ruby| [name, @store.find_class_or_module(ruby)] }
+    [[javascript.global_page, "browser_api", [["Functions", javascript.global_functions]], classes],
+     [javascript.runtime_page, "runtime_ui", javascript.runtime_groups, []]].each do |page, name, groups, listed|
+      write(page.path, render_page("javascript", page, page: page, overview: javascript.overview(name),
+                                                      groups: groups, classes: listed))
+    end
+    SwillDoc::JavaScript::MODULES.each do |name|
+      relative = "rb/runtime/#{name}.mjs"
+      page = SwillDoc::JavaScript::Page.new(relative.tr(".", "_") + ".html", relative, "File", nil)
+      write(page.path, render_source(page, File.read(File.join(@source_root, relative)), []))
+    end
+    swill
   end
 
   # The Ruby files that define something documented; each gets a page of
@@ -116,21 +150,41 @@ class RDoc::Generator::Swill
 
   # The navigator's data. A script rather than JSON, so pages opened from disk
   # can load it: browsers refuse fetch() on file:// but not <script>.
-  def search_index(classes, pages)
+  def search_index(classes, pages, javascript)
     index = {
       files: pages.map { |page| {name: page_name(page), url: page.path} },
       classes: classes.map do |klass|
         namespace, _, leaf = klass.full_name.rpartition("::")
-        {name: klass.full_name, namespace: namespace.empty? ? "" : "#{namespace}::", leaf: leaf, url: klass.path}
+        javascript_name = public_javascript_name(klass.full_name)
+        js_space, _, js_leaf = javascript_name.to_s.rpartition(".")
+        {name: klass.full_name, namespace: namespace.empty? ? "" : "#{namespace}::", leaf: leaf, url: klass.path,
+         search: [klass.full_name, javascript_name].compact.join(" "),
+         internal: !javascript_name,
+         js: javascript_name && {name: javascript_name, namespace: "#{js_space}.", leaf: js_leaf}}
       end,
       methods: classes.flat_map do |klass|
+        owner = public_javascript_name(klass.full_name) || klass.full_name
         klass.method_list.select { |method| method.visibility == :public }.map do |method|
-          label = "#{method.singleton ? '.' : '#'}#{method.name}"
-          {label: label, owner: klass.full_name, search: "#{method.name} #{klass.full_name}",
-           url: "#{klass.path}##{method.aref}"}
+          prefix = method.singleton ? "." : "#"
+          names = javascript_names(klass, method)
+          {label: "#{prefix}#{method.name}", owner: klass.full_name,
+           search: ([method.name, klass.full_name, owner] + names).uniq.join(" "),
+           url: "#{klass.path}##{method.aref}",
+           js: {label: "#{prefix}#{names.first}", owner: owner}}
         end
-      end.sort_by { |entry| [entry[:label].delete_prefix("#").delete_prefix("."), entry[:owner]] }
+      end.concat(javascript.all_functions.map do |function|
+        page = function.owner == "Swill" ? javascript.global_page : javascript.runtime_page
+        {label: ".#{function.name}", owner: function.owner, search: "#{function.name} #{function.owner}",
+         url: "#{page.path}##{function.anchor}"}
+      end).sort_by { |entry| [entry[:label].delete_prefix("#").delete_prefix("."), entry[:owner]] }
     }
+    index[:classes].concat([
+      {name: "Swill", namespace: "", leaf: "Swill (JavaScript global)", url: javascript.global_page.path,
+       search: "Swill global"},
+      {name: "Swill.Runtime", namespace: "Swill.", leaf: "Runtime", url: javascript.runtime_page.path,
+       search: "Swill.Runtime"}
+    ])
+    index[:classes].sort_by! { |entry| entry[:name] }
     "globalThis.SwillDocIndex = #{JSON.generate(index)};\n"
   end
 
