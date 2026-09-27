@@ -16,6 +16,30 @@ module Swill
   # id yet, once the collection changes. That is the path to restore.
   class Controller::List < Controller
     extend T::Sig
+    include CollectionArrangement
+
+    # bind accepts either content or an explicit arrangement owner.
+    property :represented_object, type: T.untyped, writer: :set_represented_object do
+      array_controller || content
+    end
+
+    sig { params(objects: T.untyped).void }
+    def set_represented_object(objects)
+      return if represented_object == objects
+      @setting_content = true
+      begin
+        if objects.is_a?(ArrayController)
+          self.content = nil
+          self.array_controller = T.cast(objects, ArrayController)
+        else
+          self.array_controller = nil
+          self.content = objects
+        end
+      ensure
+        @setting_content = false
+      end
+      render_all if @awakened
+    end
 
     # NSTableHeaderView analog; never a row.
     outlet :header_view, type: Swill::View, optional: true
@@ -26,49 +50,6 @@ module Swill
     # Shift-click extends the selection from the last plain click. A multiple
     # attribute on the root turns this on from markup.
     property :allows_multiple_selection, type: T::Boolean, default: false
-
-    property :selected_objects, type: T::Array[T.untyped], default: []
-
-    property :selected_object_id, type: T.nilable(String), default: nil
-
-    # Indexes of the selected objects among the arranged objects, ascending.
-    property :selected_indexes, type: T::Array[Integer] do
-      selection = current_selection
-      found = T.let([], T::Array[Integer])
-      arranged_objects.each_with_index { |object, index| found << index if selection.include?(object) }
-      found
-    end
-
-    property :selected_object, type: T.untyped do
-      leading(current_selection)
-    end
-
-    # ---- selection ----
-
-    sig { params(indexes: T::Array[Integer]).void }
-    def select_indexes(indexes)
-      arranged = arranged_objects
-      objects = T.let([], T::Array[T.untyped])
-      indexes.each do |index|
-        objects << arranged[index] if index >= 0 && index < arranged.length
-      end
-      self.selected_objects = objects
-    end
-
-    sig { params(object: T.untyped).void }
-    def select_object(object)
-      self.selected_objects = object == nil ? [] : [object]
-    end
-
-    sig { void }
-    def deselect_all
-      self.selected_objects = []
-    end
-
-    sig { void }
-    def select_first_if_nothing_selected
-      select_indexes([0]) if current_selection.empty? && !arranged_objects.empty?
-    end
 
     # Enter and double-click. By default the owner receives an
     # activate_selection target-action with this list as the sender; when no
@@ -85,13 +66,6 @@ module Swill
     # hook exists, and dispatches it before selected_objects_did_change.
     sig { params(_previous: T.untyped, _object: T.untyped).void }
     def selected_object_did_change(_previous, _object); end
-
-    # The arranged object at index, or nil.
-    sig { params(index: Integer).returns(T.untyped) }
-    def object_at(index)
-      arranged = arranged_objects
-      index >= 0 && index < arranged.length ? arranged[index] : nil
-    end
 
     # The index of the row containing element, or -1 when it is in none; the
     # way an action handler learns which row its sender sits in.
@@ -117,31 +91,21 @@ module Swill
       super
       install_selection
       @awakened = true
-      observe_collection(self.represented_object)
       render_all
     end
 
     sig { params(_previous: T.untyped, _objects: T.untyped).void }
-    def represented_object_did_change(_previous, _objects)
-      observe_collection(_objects)
+    def represented_object_did_change(_previous, _objects); end
+
+    sig { params(_previous: T.untyped, _objects: T.untyped).void }
+    def arranged_content_did_change(_previous, _objects)
       @selection_anchor = nil
-      render_all if @awakened
-      reconcile_selection
+      render_all if @awakened && !@setting_content
     end
 
-    sig { params(_previous: T.untyped, objects: T.untyped).void }
-    def selected_objects_did_change(_previous, objects)
-      sync_selected_rows
-      return if @syncing_selection
-      syncing_selection { self.selected_object_id = identifier_for(leading(objects)) }
-    end
-
-    # An id nobody carries clears the selection and stays pending.
-    sig { params(_previous: T.untyped, identifier: T.nilable(String)).void }
-    def selected_object_id_did_change(_previous, identifier)
-      return if @syncing_selection
-      object = object_with_id(identifier)
-      syncing_selection { self.selected_objects = object ? [object] : [] }
+    sig { params(_previous: T.untyped, _objects: T.untyped).void }
+    def selected_objects_did_change(_previous, _objects)
+      sync_selected_rows unless @setting_content
     end
 
     # ---- keyboard ----
@@ -193,34 +157,6 @@ module Swill
     end
 
     # ---- rows ----
-
-    # The objects the rows show, in order; subclasses may sort or filter.
-    sig { returns(T::Array[T.untyped]) }
-    def arranged_objects
-      objects = self.represented_object
-      objects = objects.records if collection?(objects)
-      T.let(objects || [], T::Array[T.untyped])
-    end
-
-    # A collection object, such as a Model::Collection, shows and follows its
-    # records. Asked by shape rather than class, so a list needs no model layer.
-    sig { params(objects: T.untyped).returns(T::Boolean) }
-    def collection?(objects)
-      objects != nil && !objects.is_a?(Array) && objects.respond_to?(:records)
-    end
-
-    sig { params(objects: T.untyped).void }
-    def observe_collection(objects)
-      observer = @collection_observer
-      observer.() if observer
-      @collection_observer = nil
-      return unless collection?(objects)
-      @collection_observer = Runtime.observe(objects, "records", ->(_value) do
-        @selection_anchor = nil
-        render_all if @awakened
-        reconcile_selection
-      end)
-    end
 
     # Where rows mount.
     sig { returns(Element) }
@@ -350,9 +286,6 @@ module Swill
         stop_mouse_down.()
         stop_click.()
         stop_double_click.()
-        observer = @collection_observer
-        observer.() if observer
-        @collection_observer = nil
         clear_rows
         @awakened = false
       end)
@@ -403,60 +336,5 @@ module Swill
       select_indexes(indexes)
     end
 
-    # ---- identity ----
-
-    # The model id of object as a string, or nil when it has none.
-    sig { params(object: T.untyped).returns(T.nilable(String)) }
-    def identifier_for(object)
-      return nil unless object && object.respond_to?(:id)
-      value = object.id
-      value == nil ? nil : "#{value}"
-    end
-
-    sig { params(identifier: T.nilable(String)).returns(T.untyped) }
-    def object_with_id(identifier)
-      return nil if identifier == nil || identifier == ""
-      arranged_objects.find { |candidate| identifier_for(candidate) == identifier }
-    end
-
-    # Selection survivors after the collection changed; when none remain, the
-    # id that is still wanted may now resolve.
-    sig { void }
-    def reconcile_selection
-      arranged = arranged_objects
-      survivors = current_selection.select { |object| arranged.include?(object) }
-      if survivors.empty?
-        requested = object_with_id(self.selected_object_id)
-        survivors = [requested] if requested
-      end
-      syncing_selection { self.selected_objects = survivors }
-    end
-
-    # A write from one side of the selection to the other is marked so the
-    # other side's hook does not write back.
-    sig { params(block: T.proc.void).void }
-    def syncing_selection(&block)
-      @syncing_selection = true
-      begin
-        yield
-      ensure
-        @syncing_selection = false
-      end
-    end
-
-    sig { params(objects: T.untyped).returns(T.untyped) }
-    def leading(objects)
-      objects && objects.length > 0 ? objects[0] : nil
-    end
-
-    sig { returns(T::Array[T.untyped]) }
-    def current_selection
-      self.selected_objects
-    end
-
-    sig { returns(T::Array[Integer]) }
-    def current_indexes
-      self.selected_indexes
-    end
   end
 end

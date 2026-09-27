@@ -1,5 +1,134 @@
 # Swill Data Layer Implementation Plan
 
+## Next milestone: relationships and collection controllers
+
+This milestone takes priority over the remaining implementation sequence below.
+It records planned behavior; the implementation status and older API examples
+below describe the existing system until these steps land.
+
+Step 1 is implemented in the working tree for review: Sequel association
+declarations, reflected cardinality, read-only relationship membership, and
+consistent loading/error state. Step 2 is also implemented for review:
+invocation-local `context.refresh`/`context.invalidate` effects, versioned
+invalidations, and observed/access-driven refresh. The effects use protocol
+version 2; regenerate clients and deploy matching server/runtime versions.
+Step 3 is implemented in the working tree: shared `CollectionArrangement`,
+optional `ArrayController`, ordinary List binding to either content or its
+controller, and lazy relationship `_controller` accessors. The
+[sortable/filterable table examples](doc/collection_controller_examples.md)
+show the before/after API and lifetime and selection policies.
+
+### 1. Align relationship declarations and make their contract truthful
+
+- Generate the original Sequel association names on distant client models:
+  `many_to_one`, `one_to_one`, `one_to_many`, `many_to_many`, and
+  `one_through_one`, with `class:` naming the destination. Do not introduce
+  abbreviated `to_one`/`to_many` declarations. Foreign keys, join tables, and
+  query options remain server-owned.
+- Preserve association type in the schema separately from value cardinality.
+  Derive cardinality through Sequel's `reflection.returns_array?`, rather than
+  a hardcoded list. Unsupported plugin association types must produce a clear
+  generation error until their client declaration mapping is supported.
+- Make distant relationships read-only to application code. Hydration owns
+  replacement of references and collection membership; ordinary setters,
+  exposed backing arrays, or `replace` must not suggest that `save` persists
+  relationship changes. Named, explicitly exposed server operations perform
+  mutations. Keep local presentation collections independently editable.
+- Give owner field state and relationship collection state one authoritative
+  source for loading, loaded, and error transitions. A loaded empty collection
+  differs from one that has never loaded. Preserve stable collection identity.
+- Preserve JSON:API/plain JSON support and its existing declaration API. This
+  milestone does not merge endpoint and distant loading or persistence paths.
+- Regenerate Ruby, RBI, and schema artifacts together; test declaration
+  cardinality, rejected client writes, stable identity, failures, and retries.
+
+### 2. Authoritative mutation effects and relationship invalidation
+
+- Extend the existing command-effects machinery to address related canonical
+  objects, including both old and new owners when a relationship changes.
+  Specify effects explicitly in operation declarations or server method code;
+  do not attempt to infer arbitrary Ruby mutations.
+- A response may replace a relationship's complete membership or invalidate
+  its cached membership. Both forms name the owner and relationship and obey
+  generation ordering. Older hydration must not clear a newer invalidation.
+- Invalidation retains the collection and its current contents. Track stale
+  separately from loaded, loading, and failed. Actively observed relationships
+  refresh through batched demand; otherwise refresh on next access. Define an
+  explicit observation/demand lifecycle so internal reads do not create
+  permanent subscriptions or refresh loops.
+- Small relationships can return authoritative membership in the mutation
+  response. Otherwise invalidation avoids speculative inverse edits that
+  would be incorrect for filtered, limited, ordered, or privacy-scoped results.
+- Sequel reciprocal metadata can identify candidates, but does not grant
+  exposure or prove that two visible associations are exact inverses.
+- Keep effect serialization within the existing transaction/response rules.
+  This covers the calling client's response, not cross-client subscriptions.
+- Test moving a record between owners, overlapping mailing lists, scoped
+  associations, failed mutations, stale responses, and observed versus unused
+  collections. Settle the concrete effects API before implementing this step.
+
+### 3. Shared arrangement behavior and List integration
+
+Extract reusable, DOM-independent collection management into a module. A
+standalone `ArrayController` includes it; a view controller may include the
+same module to avoid an intermediate object. Final module naming and binding
+syntax should be settled against working examples before implementation.
+
+Responsibilities:
+
+| Component | Owns |
+| --- | --- |
+| Relationship collection / result set | Fetched membership, returned order, loading and freshness |
+| Arrangement module / ArrayController | `content`, observable `arranged_objects`, local sort/filter policy, identity-based selection |
+| List controller and view | Rows, DOM lifecycle, focus/responder behavior, keyboard/mouse input, scrolling, header actions |
+
+The current `Controller::List` already combines collection observation,
+arrangement, identity-based selection, and rendering. `SortableList` adds
+sorting and header actions. Extract those existing behaviors instead of adding
+a competing arrangement or selection system. A standalone ArrayController
+must not require a view or enter the responder chain merely to manage data.
+
+- `content` accepts an array or observable collection. `arranged_objects`
+  contains references to the same models and never mutates authoritative
+  membership to sort or filter. Cache arrangement between relevant changes;
+  define observation of sort/filter keys, batching, and observer teardown.
+- Select exactly one arrangement/selection owner per list: an external
+  ArrayController, or the module included by the view controller. List input
+  delegates selection changes to that owner; DOM focus stays with the list.
+  Selection is stored by object identity and indexes derive from arrangement.
+  Specify behavior when selected objects are filtered out or removed.
+- Support direct collection binding as the convenient existing path, with
+  the list using its included behavior. Add external-controller binding
+  without ambiguously treating a controller as a row or arranging twice.
+  Preserve existing `represented_object` bindings and selection hooks through
+  a deliberate compatibility mapping to `content`.
+- Generate `list.members_controller` alongside a to-many `list.members`
+  relationship, analogous in discoverability to Sequel's `members_dataset`.
+  It lazily returns a stable, cached ArrayController whose content is the
+  stable relationship collection. Merely constructing it must not eagerly
+  fetch membership. These accessors must not introduce DOM dependencies into
+  the data model implementation.
+- The convenience controller has shared presentation/selection state across
+  consumers of that accessor. Independent views may construct their own
+  ArrayControllers over `list.members`, or include the module and use that
+  collection as content. Do not cache one global controller per model class.
+  Define disposal/reset behavior and check generated accessor name collisions.
+- Sorting a mailing-list display is local arrangement. Reordering a persisted
+  playlist is a server operation. Make that distinction explicit when adapting
+  sortable/editable lists and drag-and-drop behavior.
+- Movies is the integration example: show a created movie first and select
+  it through presentation state. Explicitly model any temporary inclusion
+  outside fetched query membership; do not pretend the query returned it.
+  Define when temporary placement clears (at least on a query change) and
+  how it interacts with sorting, refreshes, and removal.
+
+Review the complete examples for direct list binding, a shared
+relationship controller, independently arranged views of the same collection,
+and a view controller including the module. Cover selection bindings, sort
+header actions, filtering, focus, and cleanup in each path. Validate with the
+Movies app and collection/list tests; compare existing list benchmarks for
+sorting, hydration, and selection without redundant arrangement or rendering.
+
 ## Summary
 
 Build a server-driven data layer from `DATA_DESIGN.md` around declared client

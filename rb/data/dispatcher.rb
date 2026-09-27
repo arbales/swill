@@ -92,7 +92,7 @@ module Swill
             raise RemoteError.new("unauthorized", "Cannot delete #{klass}")
           end
           record.destroy
-          envelope(message, "RETURN").merge("value" => nil, "patches" => [])
+          response(message, "RETURN", nil, [], Integer(message.fetch("generation")))
         end
       end
 
@@ -193,7 +193,39 @@ module Swill
         patches = []
         encoded = encode_value(value, projection, generation, patches)
         patches << patch(receiver, changes, generation, patches) if receiver && !changes.empty?
-        envelope(message, type).merge("value" => encoded, "patches" => patches.uniq)
+        invalidations = encode_effects(generation, patches)
+        result = envelope(message, type).merge("value" => encoded, "patches" => patches.uniq)
+        result["invalidations"] = invalidations unless invalidations.empty?
+        result
+      end
+
+      # Re-fetch under the current viewer context so cached associations cannot
+      # turn a declared refresh into a stale or privileged membership patch.
+      def encode_effects(generation, patches)
+        invalidations = []
+        context.effects.group_by { |effect| [effect[:model], effect[:id]] }.each do |(model, id), effects|
+          definition = schema.models.fetch(model)
+          fields = definition.fetch("fields").keys
+          relationships = definition.fetch("relationships").keys
+          effects.each do |effect|
+            allowed = effect[:kind] == :invalidate ? relationships : fields + relationships
+            unknown = effect[:fields] - allowed
+            unless unknown.empty?
+              raise RemoteError.new("unknown_field", "unknown effect field #{model}.#{unknown.first}")
+            end
+          end
+          record = privacy_dataset(schema.model_class(model)).with_pk(id)
+          next unless record
+
+          refresh = effects.select { |effect| effect[:kind] == :refresh }.flat_map { |effect| effect[:fields] }.uniq
+          stale = effects.select { |effect| effect[:kind] == :invalidate }
+          stale = stale.flat_map { |effect| effect[:fields] }.uniq - refresh
+          patches << patch(record, refresh, generation, patches) unless refresh.empty?
+          unless stale.empty?
+            invalidations << { "model" => model, "id" => id, "generation" => generation, "fields" => stale }
+          end
+        end
+        invalidations
       end
 
       def encode_value(value, projection, generation, patches)

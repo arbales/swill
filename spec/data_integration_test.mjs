@@ -99,7 +99,30 @@ test("generated clients cross the real WebSocket boundary", {timeout: 20_000}, a
     const lookup = await Post.lookupTitle("Distributed Objects");
     assert.equal(lookup.post, post);
     assert.equal(lookup.status, "found");
+    const shared = current.postsController();
+    assert.equal(shared, current.postsController(), "the relationship controller is cached per owner");
+    assert.equal(current.isFieldLoaded("posts"), false, "constructing a controller does not fetch membership");
+    const oldPosts = await current.loadField("posts");
+    assert.equal(shared.content, oldPosts);
+    const newPosts = await grace.loadField("posts");
+    assert.equal(oldPosts.first(), post);
+    assert.equal(newPosts.size(), 0);
+    let resolveRefresh;
+    const refreshed = new Promise(resolve => { resolveRefresh = resolve; });
+    const stop = Runtime.observe(oldPosts, "records", records => {
+      if (records.length === 0) resolveRefresh();
+    });
+    await post.moveToAuthorBang(2);
+    assert.equal(post.author, grace);
+    assert.equal(newPosts.isStale(), true, "unused membership waits for access");
+    await refreshed;
+    assert.equal(oldPosts.isLoaded(), true);
+    assert.equal(oldPosts.isStale(), false);
+    assert.equal(await grace.loadField("posts"), newPosts);
+    assert.equal(newPosts.first(), post);
+    stop();
     Runtime.closeData();
+    assert.equal(shared.content, null, "connection reset releases cached controllers");
   } catch (error) {
     error.message += `\nFalcon output:\n${output}`;
     throw error;

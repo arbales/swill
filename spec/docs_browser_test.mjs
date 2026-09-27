@@ -1,7 +1,7 @@
 // The generated documentation in headless Chrome, opened from disk: the
 // navigator (plain JavaScript on the UI build) renders the indexes, filters
 // them as the query changes, answers ~, arrows, Enter, and Escape, and
-// remembers the pane sizes dragged. Run `rake rdoc`
+// remembers the pane sizes dragged and the language chosen. Run `rake rdoc`
 // first.
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
@@ -92,6 +92,30 @@ try {
   assert.ok((await rows("class-index")).includes("Swill::Controller"));
   assert.ok((await rows("method-index")).length > 500, "every public method is listed");
   assert.equal(await evaluate(`document.querySelector(".class-index a").getAttribute("href").startsWith("../")`), true);
+
+  // Read as Ruby, the class index lists every class. Read as JavaScript, the
+  // classes JavaScript cannot name are the implementation: closed under one
+  // row, which opens and closes, and remembers which.
+  const rubyRows = await rows("class-index");
+  assert.ok(rubyRows.includes("Swill::Launcher") && rubyRows.includes("Swill::Ruby2JS::Compiler"));
+  assert.ok(!rubyRows.includes("Implementation"), "Ruby has no implementation row");
+  await evaluate(`document.querySelector('[data-action="useJavaScript"]').click()`);
+  const javascriptRows = await rows("class-index");
+  assert.equal(javascriptRows.at(-1), "Implementation", "the implementation follows the rest, closed");
+  assert.ok(javascriptRows.includes("Swill.Object"));
+  assert.ok(!javascriptRows.includes("Swill::Launcher") && !javascriptRows.includes("Swill::Data::Schema"));
+  await evaluate(`document.querySelector(".class-index .disclosure:not([hidden])").click()`);
+  assert.ok((await rows("class-index")).includes("Swill::Launcher"), "the row opens");
+  assert.equal(await evaluate(`document.querySelector(".class-index .disclosure:not([hidden])").getAttribute("aria-expanded")`), "true");
+  await call("Page.reload");
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await loaded();
+  assert.ok((await rows("class-index")).includes("Swill::Launcher"), "the open row is remembered");
+  await evaluate(`document.querySelector(".class-index .disclosure:not([hidden])").click()`);
+  assert.ok(!(await rows("class-index")).includes("Swill::Launcher"), "the row closes");
+  await evaluate(`document.querySelector('[data-action="useRuby"]').click()`);
+  await evaluate(`localStorage.removeItem("swill-doc-internal")`);
+  await evaluate(`localStorage.removeItem("swill-doc-language")`);
 
   // ~ moves to the search, which the application routes through the
   // responder chain to the navigator.
@@ -186,6 +210,23 @@ try {
   const [kept, keptHeight] = await sizes();
   assert.ok(Math.abs(kept - widened) <= 1 && Math.abs(keptHeight - taller) <= 1, "the layout is remembered");
   await evaluate(`localStorage.removeItem("swill-doc-layout")`);
+
+  // The language switch re-spells the page and the indexes, and the choice
+  // carries to the next page.
+  const visibleTitle = () => evaluate(`[...document.querySelectorAll(".title, .title span")]
+    .filter(node => node.offsetParent && !node.querySelector("span")).map(node => node.textContent).join("")`);
+  assert.equal(await visibleTitle(), "Swill::View");
+  await evaluate(`document.querySelector('[data-action="useJavaScript"]').click()`);
+  assert.equal(await evaluate(`document.documentElement.dataset.language`), "javascript");
+  assert.equal(await visibleTitle(), "Swill.View");
+  assert.ok((await rows("method-index")).some(text => text.startsWith("#awakeFromDOM")), "the method index is re-spelled");
+  await call("Page.navigate", {url: pathToFileURL(resolve(root, "rdoc/Swill/Controller.html")).href});
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await loaded();
+  assert.equal(await visibleTitle(), "Swill.Controller", "the language is remembered");
+  await evaluate(`document.querySelector('[data-action="useRuby"]').click()`);
+  assert.equal(await visibleTitle(), "Swill::Controller");
+  await evaluate(`localStorage.removeItem("swill-doc-language")`);
 
   // ~ returns to the search, and Enter opens the selected result.
   await press("~", "Backquote", 192, "~");

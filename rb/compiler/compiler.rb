@@ -41,6 +41,7 @@ module Swill
       rb/framework/core/binding_destinations.rb
       rb/framework/core/binding.rb
       rb/framework/core/object_bindings.rb
+      rb/framework/core/collection_arrangement.rb
       rb/framework/core/responder.rb
       rb/framework/core/view.rb
       rb/framework/control/base.rb

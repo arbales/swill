@@ -9,6 +9,7 @@ module DataFixture
   class Post
     query :search, returns: Swill::Data::ResultSet[Post],
                    preload: [:title, :excerpt, { author: %i[name avatar] }]
+    command :move_to_author!, returns: T::Boolean
     command :publish!, changes: %i[published published_at]
     command :invalid_publish!, returns: T::Boolean, changes: [:published]
     command :publish_author!, returns: User, changes: [:published], preload: [:name]
@@ -19,6 +20,24 @@ module DataFixture
     def self.lookup_title(title)
       post = for_vc(Swill::Data.context.viewer_context).first(title: title)
       PostLookup.new(post: post, status: post ? :found : :missing)
+    end
+
+    def move_to_author!(author_id, replace: false, fail: false, hidden: false)
+      context = Swill::Data.context
+      old_author = author
+      new_author = User.for_vc(context.viewer_context).with_pk!(author_id)
+      update(author_id: new_author.id)
+      context.refresh(self, :author_id, :author)
+      context.invalidate(old_author, :posts)
+      if replace
+        context.refresh(new_author, :posts, :published_posts, :avatar)
+      else
+        context.invalidate(new_author, :posts)
+      end
+      context.refresh(new_author, :surprise) if hidden
+      raise "move rejected" if fail
+
+      true
     end
 
     def publish_author!

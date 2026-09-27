@@ -1,8 +1,15 @@
-// JavaScript authoring over the Ruby2JS-generated framework. This module only
-// describes JavaScript classes to the existing runtime; framework behavior
-// remains in the compiled Ruby classes, whose members already carry their
-// JavaScript spelling (viewDidLoad, makeRowElement, isRowElement), so a
-// subclass overrides them directly.
+/**
+ * The `Swill` global: what a page using plain JavaScript reaches. It offers the
+ * public framework classes by name, such as `Swill.Controller`, and the
+ * functions below to register classes and start the application.
+ *
+ * It only describes JavaScript classes to the runtime; framework behavior
+ * stays in the compiled Ruby classes, whose members already carry their
+ * JavaScript spelling (`viewDidLoad`, `makeRowElement`, `isRowElement`), so
+ * a subclass overrides them directly.
+ *
+ * @module
+ */
 
 const registered = new WeakSet();
 
@@ -95,103 +102,129 @@ function declarationsFor(klass) {
   return {properties, methods};
 }
 
-export function browserAPI(definitions, Runtime) {
-  const Controller = definitions.Swill__Controller;
-  const Application = definitions.Swill__Application;
-  const View = definitions.Swill__View;
-  const List = definitions.Swill__Controller__List;
-  const SortableList = definitions.Swill__Controller__SortableList;
-  const Editor = definitions.Swill__Controller__Editor;
-  const InlineEditor = definitions.Swill__Controller__InlineEditor;
-  const EditableList = definitions.Swill__Controller__EditableList;
-  const Control = definitions.Swill__Control;
-  const TextField = definitions.Swill__Control__TextField;
-  const Select = definitions.Swill__Control__Select;
-  const CustomSelect = definitions.Swill__Control__CustomSelect;
-  const NotificationCenter = definitions.Swill__NotificationCenter;
-  const Wire = definitions.Swill__Wire;
-  const ValueTransformer = definitions.Swill__ValueTransformer;
-  const Model = definitions.Swill__Model__Base && Object.freeze({
-    Base: definitions.Swill__Model__Base,
-    Editable: definitions.Swill__Model__Editable,
-    Resource: definitions.Swill__Model__Resource,
-    DistantObject: definitions.Swill__Model__DistantObject,
-    Store: definitions.Swill__Model__Store,
-    Codec: definitions.Swill__Model__Codec,
-    PlainJSON: definitions.Swill__Model__PlainJSON,
-    JSONAPI: definitions.Swill__Model__JSONAPI,
-    Dataset: definitions.Swill__Model__Dataset,
-    Collection: definitions.Swill__Model__Collection,
-    ResultSet: definitions.Swill__Model__ResultSet
+// The framework this page runs, set once by browserAPI: one per page, as one
+// application runs per page.
+let framework = null;
+
+/**
+ * Registers a plain JavaScript class with the framework, so markup can name it
+ * and the runtime can reach its declarations.
+ *
+ * The class declares what Ruby declares with macros, as static fields:
+ * `static properties = {name: {default: value}}` for observable properties,
+ * with a factory for an array or object default; `static outlets = {name: {}}`,
+ * with `optional: true` for one that may be absent; and `static actions =
+ * ["name"]` for the methods markup may send. Every getter is a computed
+ * property, and its dependencies are collected while it runs.
+ *
+ * Register a parent before its subclasses. The parent must be a public
+ * framework class such as `Swill.Controller`, or a class already registered.
+ *
+ * @param {string | Function} name The name markup uses, such as
+ *   `"Admin::Editor"`; or the class itself, registered under its own name.
+ * @param {Function} [klass] The class, when a name is given.
+ * @returns {Function} The class.
+ * @throws {TypeError} When the class or a declaration is malformed.
+ * @throws {Error} When the class is already registered, or its parent is not.
+ */
+export function register(name, klass) {
+  if (arguments.length === 1) {
+    klass = name;
+    name = klass?.name;
+  }
+  if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new TypeError("Registered classes need a name");
+  }
+  if (registered.has(klass)) throw new Error(`Class already registered: ${name}`);
+  const parent = Object.getPrototypeOf(klass);
+  if (!framework.roots.has(parent) && !registered.has(parent)) {
+    throw new Error(`Register the parent class before ${name}`);
+  }
+  const {properties, methods} = declarationsFor(klass);
+  framework.Runtime.install({classes: {[name]: {constructor: klass, properties, methods}}});
+  registered.add(klass);
+  return klass;
+}
+
+/**
+ * Launches the application: awakens the markup under the root, then keeps
+ * running until the page goes away.
+ *
+ * One application runs per page, as one `NSApp` runs per process; while it
+ * runs, `Swill.Application.shared()` answers it.
+ *
+ * @param {object} [options]
+ * @param {Element} [options.root] Where to launch; `document.body` by default.
+ * @param {Function} [options.application] A registered subclass of
+ *   `Swill.Application`; `Swill.Application` by default.
+ * @returns {object} The running application.
+ * @throws {Error} When an application is already running, or there is no root.
+ */
+export function start(options = {}) {
+  const {Application} = framework;
+  if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
+  assertKeys(options, ["root", "application"], "start");
+  const root = options.root ?? globalThis.document?.body;
+  const ApplicationClass = options.application ?? Application;
+  if (!root) throw new Error("Swill.start requires a root element");
+  if (Application.isRunning()) throw new Error("A Swill application is already running");
+  if (typeof ApplicationClass !== "function" ||
+      (ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application))) {
+    throw new TypeError("application must extend Swill.Application");
+  }
+  if (ApplicationClass !== Application && !registered.has(ApplicationClass)) {
+    throw new Error("Register the application class before starting it");
+  }
+  const application = new ApplicationClass();
+  application.launch(root);
+  root.ownerDocument?.defaultView?.addEventListener("pagehide", event => {
+    if (!event.persisted) application.terminate();
   });
-  const roots = new Set([Controller, Application, View, List, SortableList, Editor, InlineEditor, EditableList,
-    Control, TextField, Select, CustomSelect].filter(Boolean));
+  return application;
+}
 
-  function register(name, klass) {
-    if (arguments.length === 1) {
-      klass = name;
-      name = klass?.name;
-    }
-    if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
-    if (typeof name !== "string" || name.trim().length === 0) {
-      throw new TypeError("Registered classes need a name");
-    }
-    if (registered.has(klass)) throw new Error(`Class already registered: ${name}`);
-    const parent = Object.getPrototypeOf(klass);
-    if (!roots.has(parent) && !registered.has(parent)) {
-      throw new Error(`Register the parent class before ${name}`);
-    }
-    const {properties, methods} = declarationsFor(klass);
-    Runtime.install({classes: {[name]: {constructor: klass, properties, methods}}});
-    registered.add(klass);
-    return klass;
+/**
+ * Installs compiled metadata: the classes and mixins an application bundle
+ * defines. A compiled bundle calls this itself; it is here for a bundle
+ * assembled by hand.
+ *
+ * @param {object} meta The `meta` object a compiled bundle exports.
+ * @returns {void}
+ */
+export function install(meta) {
+  return framework.Runtime.install(meta);
+}
+
+/**
+ * Builds the `Swill` global from a build's compiled definitions.
+ *
+ * @param {object} definitions The compiled classes, by generated identifier.
+ * @param {object} Runtime The runtime those classes were compiled against.
+ * @param {Object<string, string>} names Each public name, such as
+ *   `"Model.Base"`, with the identifier of the class it names.
+ * @param {string[]} roots The public names a registered class may extend.
+ * @returns {object} The global, frozen.
+ * @ignore
+ */
+export function browserAPI(definitions, Runtime, names = {}, roots = []) {
+  // A slim build carries only the UI classes: a public name whose class the
+  // build lacks is left out, not present as undefined.
+  const classes = {};
+  for (const [name, identifier] of Object.entries(names)) {
+    const klass = definitions[identifier];
+    if (!klass) continue;
+    const [space, member] = name.split(".");
+    if (member) (classes[space] ??= {})[member] = klass;
+    else classes[space] = klass;
   }
-
-  function start(options = {}) {
-    if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
-    assertKeys(options, ["root", "application"], "start");
-    const root = options.root ?? globalThis.document?.body;
-    const ApplicationClass = options.application ?? Application;
-    if (!root) throw new Error("Swill.start requires a root element");
-    if (Application.isRunning()) throw new Error("A Swill application is already running");
-    if (typeof ApplicationClass !== "function" ||
-        (ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application))) {
-      throw new TypeError("application must extend Swill.Application");
-    }
-    if (ApplicationClass !== Application && !registered.has(ApplicationClass)) {
-      throw new Error("Register the application class before starting it");
-    }
-    const application = new ApplicationClass();
-    application.launch(root);
-    root.ownerDocument?.defaultView?.addEventListener("pagehide", event => {
-      if (!event.persisted) application.terminate();
-    });
-    return application;
+  for (const [name, value] of Object.entries(classes)) {
+    if (typeof value !== "function") classes[name] = Object.freeze(value);
   }
-
-  // A slim build carries only the UI classes: the names it lacks are left out,
-  // not present as undefined.
-  return Object.freeze(Object.fromEntries(Object.entries({
-    ...definitions,
+  framework = {
     Runtime,
-    install: meta => Runtime.install(meta),
-    Controller,
-    Application,
-    View,
-    List,
-    SortableList,
-    Editor,
-    InlineEditor,
-    EditableList,
-    Control,
-    TextField,
-    Select,
-    CustomSelect,
-    NotificationCenter,
-    Wire,
-    ValueTransformer,
-    Model,
-    register,
-    start
-  }).filter(([, value]) => value !== undefined)));
+    Application: definitions.Swill__Application,
+    roots: new Set(roots.map(name => definitions[names[name]]).filter(Boolean))
+  };
+  return Object.freeze({...definitions, Runtime, install, ...classes, register, start});
 }

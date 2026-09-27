@@ -45,6 +45,12 @@ def compile_spike
   File.write("sorbet/checks/declarations.rb", framework.type_probes + application.type_probes.lines.drop(2).join)
 end
 
+# The public names on the Swill global, each with the generated identifier
+# of the class it names.
+def javascript_names
+  Swill::Ruby2JS::JAVASCRIPT_NAMES.transform_values { |name| Swill::Ruby2JS::Names.identifier(name) }
+end
+
 # The entry that becomes a browser script: the framework's definitions behind
 # the global Swill, started on a page that has a document.
 def write_browser_entry(directory, runtime_directory, runtime)
@@ -53,7 +59,7 @@ def write_browser_entry(directory, runtime_directory, runtime)
     import * as definitions from "./framework.mjs";
     import {browserAPI} from "#{runtime_directory}/browser_api.mjs";
     if (globalThis.Swill) throw new Error("Framework already loaded");
-    globalThis.Swill = browserAPI(definitions, Runtime);
+    globalThis.Swill = browserAPI(definitions, Runtime, #{javascript_names.to_json}, #{Swill::Ruby2JS::JAVASCRIPT_ROOTS.to_json});
     if (typeof document !== "undefined") new definitions.Swill__Launcher().install(document);
   JAVASCRIPT
   File.write("#{directory}/browser.mjs", Swill::Ruby2JS::Compiler.format_javascript(browser))

@@ -10,6 +10,8 @@ require_relative "../rb/framework/model/editable"
 require_relative "../rb/framework/model/relationships"
 require_relative "../rb/framework/model/store"
 require_relative "../rb/framework/model/identity"
+require_relative "../rb/framework/core/object_bindings"
+require_relative "../rb/framework/core/collection_arrangement"
 require_relative "../rb/framework/model/collection"
 require_relative "../rb/framework/model/distant_client"
 require_relative "../rb/framework/model/distant_data"
@@ -34,6 +36,107 @@ class DisconnectDependent < Swill::Object
 end
 
 class SharedTest < Minitest::Test
+  class RelatedRecord < Swill::Model::DistantObject
+    many_to_one :parent, class: "SharedTest::RelatedRecord"
+    one_to_many :children, class: "SharedTest::RelatedRecord"
+  end
+
+  def test_distant_relationships_are_read_only_and_observable_on_mri
+    record = RelatedRecord.new
+    children = record.children
+    assert children.records.frozen?
+    assert_raises(RuntimeError) { record.parent = record }
+    assert_raises(RuntimeError) { record.children = [] }
+    assert_raises(RuntimeError) { children.records = [] }
+    assert_raises(RuntimeError) { children.replace([]) }
+    assert_raises(FrozenError) { children.records << record }
+    record.apply_data_field("parent", record, 1, false)
+    assert_same record, record.parent
+    record.begin_data_field_load("children", false)
+    assert children.loading?
+    record.fail_data_field("children", "failed")
+    assert_equal "failed", children.error
+    refute children.loading?
+    record.apply_data_field("children", [record], 1, false)
+    assert_same children, record.children
+    assert_same record, children.first
+    assert children.loaded?
+    assert_nil children.error
+    assert_raises(FrozenError) { children.records.clear }
+  end
+
+  def test_observation_interest_follows_live_computed_observers_on_mri
+    source = DisconnectSource.new
+    dependent = DisconnectDependent.new
+    dependent.source = source
+    assert_equal 2, dependent.doubled
+    refute Swill::Runtime.observed(source, "count")
+    stop = Swill::Runtime.observe(dependent, "doubled", ->(_value) {})
+    assert Swill::Runtime.observed(source, "count")
+    stop.call
+    refute Swill::Runtime.observed(source, "count")
+  end
+
+  def test_invalidated_relationships_keep_loaded_contents_on_mri
+    record = RelatedRecord.new
+    record.apply_data_field("children", [record], 1, false)
+    children = record.children
+    record.invalidate_data_field("children", 3)
+    record.apply_data_field("children", [], 2, false)
+    assert children.loaded?
+    assert children.stale?
+    assert_equal [record], children.records
+    record.begin_data_field_load("children", false)
+    record.data_request_started("children", 4)
+    record.fail_data_field("children", "older failure", 2)
+    assert children.loading?
+    assert_nil children.error
+    record.apply_data_field("children", [], 4, false)
+    refute children.stale?
+    assert children.loaded?
+  end
+
+  class FilteredArray < Swill::ArrayController
+    property :query, type: String, default: ""
+
+    def includes_object?(object)
+      object.name.downcase.include?(query.downcase)
+    end
+  end
+
+  def test_array_controller_filter_selection_and_computed_writers_on_mri
+    ada = Demo::Person.new
+    ada.id = "1"
+    ada.name = "Ada"
+    grace = Demo::Person.new
+    grace.id = "2"
+    grace.name = "Grace"
+    controller = FilteredArray.new
+    controller.content = [grace, ada]
+    controller.sort("name", "ascending")
+    assert_equal [ada, grace], controller.arranged_objects
+    controller.selected_objects = [grace]
+    assert_equal "2", controller.selected_object_id
+    controller.query = "ada"
+    assert_equal [ada], controller.arranged_objects
+    assert_nil controller.selected_object
+    controller.selected_object_id = "1"
+    assert_same ada, controller.selected_object
+    controller.dealloc
+  end
+
+  def test_relationship_controller_is_lazy_shared_and_released_on_mri
+    record = RelatedRecord.new
+    controller = record.children_controller
+    assert_same controller, record.children_controller
+    refute record.field_loaded?(:children)
+    record.apply_data_field("children", [record], 1, false)
+    assert_equal [record], controller.arranged_objects
+    record.reset_data_fields
+    assert_nil controller.content
+    refute_same controller, record.children_controller
+  end
+
   def test_model_strategies_share_only_the_explicit_base_layers
     base = Swill::Model::Base.new
     editable = Swill::Model::Editable.new

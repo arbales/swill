@@ -73,7 +73,8 @@ module Swill
         state(object)[kind][name] ||= []
       end
 
-      def subscribe(object, name, callback, kind)
+      def subscribe(object, name, callback, kind, target = nil)
+        callback.instance_variable_set(:@swill_observation_target, target) if target
         name = name.to_s
         descriptor = property_descriptor(object, name)
         raise "Unknown observable property: #{name}" unless descriptor
@@ -81,6 +82,21 @@ module Swill
         set = listeners(object, name, kind)
         set << callback
         -> { set.delete(callback) }
+      end
+
+      def observed(object, name, visited = {})
+        names = visited[object] ||= []
+        return false if names.include?(name)
+
+        names << name
+        current = object.instance_variable_get(:@__swill_state__)
+        return false unless current
+        return true if !current[:observers].fetch(name, []).empty? || hooked?(object, name)
+
+        current[:dependents].fetch(name, []).any? do |callback|
+          target = callback.instance_variable_get(:@swill_observation_target)
+          target && observed(*target, visited)
+        end
       end
 
       # ---- reads ----
@@ -111,7 +127,7 @@ module Swill
 
         frame.each do |dependency, names|
           names.each do |dependency_name|
-            slot[:disposers] << subscribe(dependency, dependency_name, -> { invalidate(object, descriptor) }, :dependents)
+            slot[:disposers] << subscribe(dependency, dependency_name, -> { invalidate(object, descriptor) }, :dependents, [object, name])
           end
         end
         slot[:value]
@@ -123,6 +139,7 @@ module Swill
         return unless slot && slot[:valid]
         previous = slot[:value]
         slot[:valid] = false
+        slot[:disposers].slice!(0..).each(&:call)
         listeners(object, name, :dependents).dup.each(&:call)
         # Recompute only when a listener needs the result.
         return if listeners(object, name, :observers).empty? && !hooked?(object, name)
@@ -146,6 +163,7 @@ module Swill
       end
 
       def write_property(object, descriptor, value)
+        return object.public_send(descriptor["writer"], value) if descriptor["writer"]
         name = descriptor["name"]
         previous = stored_value(object, descriptor)
         value = object.coerce_property_value(name, value, previous)

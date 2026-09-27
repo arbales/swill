@@ -25,6 +25,8 @@ Runtime.install({classes: {Post: {
   properties: {
     title: {type: "T.nilable(String)", attribute: true, key: "title", willAccess: true, defaultValue: () => null},
     body: {type: "T.nilable(String)", attribute: true, key: "body", willAccess: true, defaultValue: () => null},
+    comment_count: {type: "Integer", compute() { return this.comments.size(); }},
+    author: {type: "T.nilable(Post)", willAccess: true, defaultValue: () => null},
     comments: {type: "Swill::Model::Collection", willAccess: true, defaultValue: () => null}
   },
   registries: {
@@ -36,6 +38,7 @@ Runtime.install({classes: {Post: {
     dataFields: {
       title: {kind: "field", type: "T.nilable(String)"},
       body: {kind: "field", type: "T.nilable(String)"},
+      author: {kind: "one", model: "Post"},
       comments: {kind: "many", model: "Post"}
     }
   },
@@ -87,7 +90,7 @@ class FakeWebSocket {
     this.requests.push(request);
     let response;
     if (request.type === "HELLO") {
-      response = {type: "WELCOME", protocol_version: 1, schema_hash: "schema",
+      response = {type: "WELCOME", protocol_version: 2, schema_hash: "schema",
         actor_scope: FakeWebSocket.actorScope};
     } else if (request.type === "QUERY") {
       if (this.holdNextQuery) {
@@ -241,4 +244,197 @@ test("dirty fields survive background patches and actor changes replace identity
   assert.notEqual(replacement, first);
   assert.equal(replacement.title, "Hello");
   FakeWebSocket.actorScope = "actor-1";
+});
+
+
+test("relationship membership is read-only while query results remain editable", () => {
+  const post = new Post();
+  const comments = post.comments;
+  const author = new Post();
+  assert.throws(() => { post.author = author; }, /read-only/);
+  post.applyDataField("author", author, 1, false);
+  assert.equal(post.author, author);
+  assert.throws(() => { post.comments = []; }, /read-only/);
+  assert.throws(() => { comments.records = []; }, /read-only/);
+  assert.throws(() => comments.replace([]), /read-only/);
+  assert.throws(() => comments.records.push(post), TypeError);
+  const incoming = [new Post()];
+  post.applyDataField("comments", incoming, 1, false);
+  incoming.length = 0;
+  assert.equal(comments.size(), 1, "hydration copies the supplied membership");
+  assert.equal(post.comments, comments);
+  assert.throws(() => comments.records.pop(), TypeError);
+  assert.equal(new ResultSet().replace([post]).first(), post);
+});
+
+test("relationship loading, errors, retry, and reset follow owner state", () => {
+  const post = new Post();
+  const comments = post.comments;
+  assert.equal(comments.isLoaded(), false);
+  const loading = [];
+  const stop = Runtime.observe(comments, "loading", value => loading.push(value));
+  post.beginDataFieldLoad("comments", false);
+  assert.equal(comments.isLoading(), post.isFieldLoading("comments"));
+  post.failDataField("comments", "try again");
+  assert.equal(comments.error, post.fieldError("comments"));
+  assert.equal(comments.isLoading(), false);
+  post.beginDataFieldLoad("comments", false);
+  assert.equal(comments.error, null);
+  post.applyDataField("comments", [], 3, false);
+  assert.equal(comments.isLoaded(), post.isFieldLoaded("comments"));
+  assert.equal(comments.isLoaded(), true);
+  post.applyDataField("comments", [new Post()], 2, false);
+  assert.equal(comments.size(), 0, "stale hydration cannot replace membership");
+  post.resetDataFields();
+  assert.equal(comments.isLoaded(), false);
+  assert.deepEqual(loading, [true, false, true, false]);
+  stop();
+});
+
+
+class EffectsWebSocket extends FakeWebSocket {
+  send(bytes) {
+    const request = unpack(bytes);
+    if (request.type !== "GET" && request.type !== "COMMAND") return super.send(bytes);
+    this.requests.push(request);
+    if (request.type === "GET" && this.failNextGet) {
+      this.failNextGet = false;
+      const error = {type: "ERROR", request_id: request.request_id,
+        error: {code: "refresh_failed", message: "retry later", details: {retry: true}}};
+      queueMicrotask(() => this.emit("message", {data: pack(error).buffer}));
+      return;
+    }
+    const response = {type: "RETURN", request_id: request.request_id, value: true, patches: []};
+    if (request.type === "COMMAND") {
+      response.invalidations = (request.keywords.ids ?? ["1"]).map(id => ({
+        model: "Post", id, generation: request.generation, fields: ["comments"]
+      }));
+      if (request.keywords.replace) response.patches.push({
+        model: "Post", id: "1", generation: request.generation, fields: {comments: []}
+      });
+    } else {
+      response.patches = request.demands.map(demand => ({
+        model: demand.model, id: demand.id, generation: request.generation,
+        fields: Object.fromEntries(demand.fields.map(name => [name, name === "comments" ? [] : null]))
+      }));
+      if (this.holdNextGet) {
+        this.holdNextGet = false;
+        this.heldGet = response;
+        return;
+      }
+    }
+    queueMicrotask(() => this.emit("message", {data: pack(response).buffer}));
+  }
+}
+
+const nextTurn = () => new Promise(resolve => setTimeout(resolve, 0));
+async function effectsFixture() {
+  Runtime.closeData();
+  let transport;
+  Runtime.configureData("ws://effects", "schema", () => (transport = new EffectsWebSocket()));
+  const client = DistantClient.default();
+  const post = (await client.query("Post", "search", [], {}, "result_set")).first();
+  post.applyDataField("comments", [post], 1, false);
+  return {client, post, comments: post.comments, transport};
+}
+
+test("unused invalidations retain membership and refresh when a held collection is read", async () => {
+  const {client, post, comments, transport} = await effectsFixture();
+  await client.command(post, "invalidate", [], {}, "primitive");
+  assert.equal(comments.isLoaded(), true);
+  assert.equal(comments.isStale(), true);
+  assert.equal(comments.isLoading(), false);
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 0);
+  assert.equal(comments.first(), post, "stale membership stays available");
+  await nextTurn();
+  assert.equal(comments.isStale(), false);
+  assert.equal(comments.size(), 0);
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 1);
+});
+
+test("observed overlapping collections refresh in one batch and disposal stops demand", async () => {
+  const {client, post, comments, transport} = await effectsFixture();
+  const other = client.canonical("Post", "2", 1, null);
+  other.applyDataField("comments", [post], 1, false);
+  const stop = Runtime.observe(comments, "records", () => {});
+  const stopOther = Runtime.observe(other.comments, "records", () => {});
+  await client.command(post, "invalidate", [], {ids: ["1", "2", "unseen"]}, "primitive");
+  await nextTurn();
+  const gets = transport.requests.filter(r => r.type === "GET");
+  assert.equal(gets.length, 1);
+  assert.deepEqual(gets[0].demands.map(d => d.id), ["1", "2"]);
+  assert.equal(client.modelStore("Post").unseen, undefined, "invalidation does not create objects");
+  stop(); stopOther();
+  await client.command(post, "invalidate", [], {ids: ["1", "2"]}, "primitive");
+  await nextTurn();
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 1);
+});
+
+test("a replacement patch satisfies an invalidation without an extra GET", async () => {
+  const {client, post, comments, transport} = await effectsFixture();
+  const stop = Runtime.observe(comments, "records", () => {});
+  await client.command(post, "invalidate", [], {replace: true}, "primitive");
+  await nextTurn();
+  assert.equal(comments.isStale(), false);
+  assert.equal(comments.size(), 0);
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 0);
+  stop();
+});
+
+test("older hydration and failures cannot clear newer invalidation or refresh state", async () => {
+  const {client, post, comments, transport} = await effectsFixture();
+  transport.holdNextGet = true;
+  const older = post.reloadField("comments");
+  await nextTurn();
+  const oldGeneration = transport.heldGet.patches[0].generation;
+  await client.command(post, "invalidate", [], {}, "primitive");
+  transport.emit("message", {data: pack(transport.heldGet).buffer});
+  await older;
+  // Explicit load returns through an accessor, which can demand stale contents.
+  await nextTurn();
+  assert.equal(comments.size(), 0);
+  assert.equal(comments.isStale(), false);
+  post.failDataFieldWithGeneration("comments", "old error", oldGeneration);
+  assert.equal(comments.error, null);
+  await client.command(post, "invalidate", [], {}, "primitive");
+  post.applyDataField("comments", [post], oldGeneration, false);
+  assert.equal(comments.isStale(), true);
+  assert.equal(comments.isLoaded(), true);
+});
+
+
+test("only live computed observers keep relationship demand active", async () => {
+  const {client, post, comments, transport} = await effectsFixture();
+  assert.equal(post.comment_count, 1);
+  assert.equal(Runtime.observed(comments, "records"), false, "a cached computation is not a subscription");
+  const stop = Runtime.observe(post, "comment_count", () => {});
+  assert.equal(Runtime.observed(comments, "records"), true);
+  await client.command(post, "invalidate", [], {}, "primitive");
+  await nextTurn();
+  assert.equal(post.comment_count, 0);
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 1);
+  stop();
+  assert.equal(Runtime.observed(comments, "records"), false);
+  await client.command(post, "invalidate", [], {}, "primitive");
+  await nextTurn();
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 1);
+});
+
+
+test("a failed stale refresh preserves availability and remote error details", async () => {
+  const {client, post, comments, transport} = await effectsFixture();
+  await client.command(post, "invalidate", [], {}, "primitive");
+  transport.failNextGet = true;
+  await assert.rejects(post.loadField("comments"), error => {
+    assert.equal(error.code, "refresh_failed");
+    assert.deepEqual(error.details, {retry: true});
+    return true;
+  });
+  assert.equal(comments.isLoaded(), true);
+  assert.equal(comments.isStale(), true);
+  assert.equal(comments.isLoading(), false);
+  assert.equal(comments.error, "retry later");
+  assert.equal(await post.loadField("comments"), comments);
+  assert.equal(comments.isStale(), false);
+  assert.equal(comments.error, null);
 });

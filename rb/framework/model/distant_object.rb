@@ -19,9 +19,64 @@ module Swill
         super
         @data_field_states = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
         @data_draft_source = T.let(nil, T.nilable(DistantObject))
+        @applying_relationship = T.let(false, T::Boolean)
+        @data_controllers = T.let({}, T::Hash[String, ArrayController])
+        @data_collections = T.let({}, T::Hash[String, RelationshipCollection[T.untyped]])
         self.class.data_fields.each do |name, descriptor|
           next unless descriptor["kind"] == "many"
-          Swill::Runtime.write(self, name, Swill::Model::Collection.new)
+          collection = Swill::Model::RelationshipCollection.new
+          collection.attach_relationship(self, name)
+          @data_collections[name] = collection
+          write_data_relationship(name, collection)
+        end
+      end
+
+      # Shared presentation is opt-in; constructing the controller does not load.
+      sig { params(name: String).returns(ArrayController) }
+      def relationship_controller(name)
+        existing = @data_controllers[name]
+        return existing if existing
+        collection = @data_collections[name]
+        raise "Unknown to-many relationship #{name}" unless collection
+        controller = ArrayController.new
+        controller.content = collection
+        @data_controllers[name] = controller
+        controller
+      end
+
+      sig { void }
+      def release_relationship_controllers
+        @data_controllers.each do |_name, controller|
+          controller.content = nil
+          controller.dealloc
+        end
+        @data_controllers = {}
+      end
+
+      sig { override.void }
+      def disconnect
+        release_relationship_controllers
+        super
+      end
+
+      sig { params(name: String, value: T.untyped, previous: T.untyped).returns(T.untyped) }
+      def coerce_property_value(name, value, previous)
+        descriptor = self.class.data_fields[name]
+        if descriptor && descriptor["kind"] != "field" && !@applying_relationship
+          raise "Relationship #{name} is read-only; use a server operation"
+        end
+
+        super
+      end
+
+      # Internal writes still use the ordinary observation machinery.
+      sig { params(name: String, value: T.untyped).void }
+      def write_data_relationship(name, value)
+        @applying_relationship = true
+        begin
+          Swill::Runtime.write(self, name, value)
+        ensure
+          @applying_relationship = false
         end
       end
 
@@ -29,7 +84,7 @@ module Swill
       sig { params(name: String).void }
       def property_will_access(name)
         super
-        return if draft? || deleted?
+        return if @syncing_data_collection || draft? || deleted?
         DistantClient.default.demand(self, name) if self.class.data_fields.key?(name)
       end
 
@@ -136,7 +191,39 @@ module Swill
 
       sig { params(name: String).returns(T::Boolean) }
       def data_field_loaded(name)
-        data_field_state(name)["status"] == "present"
+        data_field_state(name)["loaded"] == true
+      end
+
+      sig { params(name: String).returns(T::Boolean) }
+      def data_field_stale(name)
+        data_field_state(name)["stale"] == true
+      end
+
+      # A generation watermark prevents older hydration from clearing staleness.
+      sig { params(name: String, generation: Integer).void }
+      def invalidate_data_field(name, generation)
+        descriptor = self.class.data_fields[name]
+        return unless descriptor && descriptor["kind"] != "field"
+        state = data_field_state(name)
+        return if generation < T.cast(state["generation"], Integer)
+
+        state["generation"] = generation
+        state["stale"] = true
+        state["status"] = "stale"
+        state["error"] = nil
+        sync_data_collection(name)
+      end
+
+      sig { params(name: String).returns(T::Boolean) }
+      def data_field_observed(name)
+        return true if Runtime.observed(self, name)
+        collection = @data_collections[name]
+        collection != nil && Runtime.observed(collection, "records")
+      end
+
+      sig { params(name: String, generation: Integer).void }
+      def data_request_started(name, generation)
+        data_field_state(name)["request_generation"] = generation
       end
 
       sig { params(name: String).returns(T::Boolean) }
@@ -153,25 +240,34 @@ module Swill
       sig { params(name: String, reload: T::Boolean).returns(T::Boolean) }
       def begin_data_field_load(name, reload)
         state = data_field_state(name)
-        return false if !reload && state["status"] == "present"
+        return false if !reload && state["loaded"] && !state["stale"]
         return false if !reload && state["status"] == "loading"
         state["status"] = "loading"
         state["error"] = nil
+        sync_data_collection(name)
         true
       end
 
-      sig { params(name: String, message: String).void }
-      def fail_data_field(name, message)
+      sig { params(name: String, message: String, generation: T.nilable(Integer)).void }
+      def fail_data_field(name, message, generation = nil)
         state = data_field_state(name)
+        if generation && (generation < T.cast(state["generation"], Integer) ||
+                          generation < T.cast(state["request_generation"], Integer))
+          return
+        end
         state["status"] = "failed"
         state["error"] = message
+        sync_data_collection(name)
       end
 
       sig { params(name: String).void }
       def present_data_field(name)
         state = data_field_state(name)
         state["status"] = "present"
+        state["loaded"] = true
+        state["stale"] = false
         state["error"] = nil
+        sync_data_collection(name)
       end
 
       # Apply one authoritative member unless a newer response already won.
@@ -181,27 +277,55 @@ module Swill
         return if generation < T.cast(state["generation"], Integer)
         state["generation"] = generation
         state["status"] = "present"
+        state["loaded"] = true
+        state["stale"] = false
         state["error"] = nil
         return if !overwrite_dirty && dirty_attributes.include?(name)
 
         descriptor = self.class.data_fields[name]
         if descriptor && descriptor["kind"] == "many"
-          T.cast(Swill::Runtime.read(self, name), Collection[T.untyped]).replace(T.cast(value, T::Array[T.untyped]))
+          collection = T.must(@data_collections[name])
+          collection.apply_membership(T.cast(value || [], T::Array[T.untyped]))
         elsif (descriptor && descriptor["kind"] == "field") || name == "id"
           apply_attributes({name => value})
         else
-          Swill::Runtime.write(self, name, value)
+          write_data_relationship(name, value)
         end
+        sync_data_collection(name)
       end
 
       sig { void }
       def reset_data_fields
+        release_relationship_controllers
         @data_field_states = {}
+        self.class.data_fields.each do |name, descriptor|
+          sync_data_collection(name) if descriptor["kind"] == "many"
+        end
+      end
+
+      # Mirror the owner's authoritative state without demanding another load.
+      sig { params(name: String).void }
+      def sync_data_collection(name)
+        descriptor = self.class.data_fields[name]
+        return unless descriptor && descriptor["kind"] == "many"
+
+        @syncing_data_collection = true
+        begin
+          collection = T.must(@data_collections[name])
+          state = data_field_state(name)
+          collection.loaded = state["loaded"] == true
+          collection.stale = state["stale"] == true
+          collection.loading = state["status"] == "loading"
+          collection.error = T.cast(state["error"], T.nilable(String))
+        ensure
+          @syncing_data_collection = false
+        end
       end
 
       sig { params(name: String).returns(T::Hash[String, T.untyped]) }
       def data_field_state(name)
-        @data_field_states[name] ||= {"status" => "unknown", "error" => nil, "generation" => -1}
+        @data_field_states[name] ||= {"status" => "unknown", "loaded" => false, "stale" => false,
+                                      "error" => nil, "generation" => -1, "request_generation" => -1}
       end
     end
   end

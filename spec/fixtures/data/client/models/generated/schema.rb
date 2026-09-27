@@ -2,6 +2,6 @@
 
 module DataFixture
   module DataSchema
-    HASH = "e1ac7f048ad2d12bb333a3ecf966d4393b1b97f145615e2b974dc69691ea78b1"
+    HASH = "b13f897c051dd21acf5bc82803132a2871214880fe53ccb2bbd31a02b321956d"
   end
 end

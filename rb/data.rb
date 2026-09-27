@@ -16,7 +16,7 @@ require_relative "data/web_socket"
 module Swill
   # Server-side schema, generation, and dispatch for the remote data graph.
   module Data
-    PROTOCOL_VERSION = 1
+    PROTOCOL_VERSION = 2
 
     def self.install(model_base)
       model_base.extend(Declarations) unless model_base.singleton_class < Declarations

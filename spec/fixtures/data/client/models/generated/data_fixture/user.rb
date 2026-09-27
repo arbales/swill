@@ -7,8 +7,9 @@ module DataFixture
     attribute :avatar, type: T.nilable(String)
     attribute :email, type: String
     attribute :name, type: String
-    has_many :comments, model: "DataFixture::Comment"
-    has_many :posts, model: "DataFixture::Post"
+    one_to_many :comments, class: "DataFixture::Comment"
+    one_to_many :posts, class: "DataFixture::Post"
+    one_to_many :published_posts, class: "DataFixture::Post"
 
     sig { returns(T.nilable(DataFixture::User)) }
     async def self.current_user()

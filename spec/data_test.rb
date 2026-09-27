@@ -47,7 +47,7 @@ class DataTest < Minitest::Test
       dispatcher = Swill::Data::Dispatcher.new(
         schema: data_schema, viewer_context: nil, actor: nil, scope_token: "plain"
       )
-      dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => data_schema.hash)
+      dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => data_schema.hash)
       reply = dispatcher.call(
         "type" => "COMMAND", "request_id" => 1, "generation" => 1,
         "model" => "FacadeRecord", "name" => "named", "arguments" => ["missing"], "keywords" => {}
@@ -85,7 +85,12 @@ class DataTest < Minitest::Test
     @dispatcher = Swill::Data::Dispatcher.new(
       schema: @schema, viewer_context: vc, actor: actor, scope_token: "actor-1"
     )
-    @dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => @schema.hash)
+    @dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => @schema.hash)
+  end
+
+  def test_clients_without_invalidation_support_fail_the_handshake
+    response = @dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => @schema.hash)
+    assert_equal "schema_mismatch", response.dig("error", "code")
   end
 
   def test_protocol_round_trips_references_and_temporal_values
@@ -170,7 +175,7 @@ class DataTest < Minitest::Test
     dispatcher = Swill::Data::Dispatcher.new(
       schema: schema, viewer_context: nil, actor: nil, scope_token: "plain"
     )
-    dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => schema.hash)
+    dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => schema.hash)
 
     created = dispatcher.call(
       "type" => "CREATE", "request_id" => 27, "generation" => 27,
@@ -284,6 +289,63 @@ class DataTest < Minitest::Test
     assert_equal "Distributed Objects", response.fetch("patches").first.dig("fields", "title")
   end
 
+  def move_author(**keywords)
+    @dispatcher.call("type" => "COMMAND", "request_id" => 70, "generation" => 70,
+                     "model" => "DataFixture::Post", "id" => "1", "name" => "move_to_author!",
+                     "arguments" => [2], "keywords" => keywords.transform_keys(&:to_s))
+  end
+
+  def test_mutation_effects_address_both_owners_and_refresh_through_privacy
+    DataFixture::DB[:posts].where(id: 1).update(published: false)
+    response = move_author(replace: true)
+    assert_equal "RETURN", response["type"], response.inspect
+    assert_equal [{"model" => "DataFixture::User", "id" => "1", "generation" => 70,
+                   "fields" => ["posts"]}], response["invalidations"]
+    user = response["patches"].find { |patch| patch["model"] == "DataFixture::User" && patch["id"] == "2" && patch["fields"].key?("posts") }
+    assert_equal [Swill::Data::Protocol::Reference.new("DataFixture::Post", "1")], user.dig("fields", "posts")
+    assert_equal [], user.dig("fields", "published_posts"), "scoped membership is queried, not inferred"
+    assert_nil user.dig("fields", "avatar"), "refresh respects denied-read nils"
+    post = response["patches"].find { |patch| patch.dig("fields", "author_id") }
+    assert_equal 2, post.dig("fields", "author_id")
+    assert_equal Swill::Data::Protocol::Reference.new("DataFixture::User", "2"), post.dig("fields", "author")
+  ensure
+    DataFixture::DB[:posts].where(id: 1).update(author_id: 1)
+  end
+
+  def test_failed_effects_roll_back_and_do_not_leak_to_the_next_call
+    [:fail, :hidden].each do |option|
+      response = move_author(**{option => true})
+      assert_equal "ERROR", response["type"], response.inspect
+      refute response.key?("invalidations")
+      assert_equal 1, DataFixture::DB[:posts].where(id: 1).get(:author_id)
+    end
+    response = @dispatcher.call("type" => "COMMAND", "request_id" => 71, "generation" => 71,
+                                "model" => "DataFixture::Post", "id" => "1", "name" => "publish!",
+                                "arguments" => [], "keywords" => {})
+    refute response.key?("invalidations")
+    assert response["patches"].all? { |patch| patch["model"] == "DataFixture::Post" }
+  end
+
+  def test_effect_queues_are_isolated_across_fibers_and_nested_operations
+    context = @dispatcher.context
+    first = Fiber.new do
+      context.use do
+        context.invalidate(DataFixture::User.for_vc(context.viewer_context).with_pk!(1), :posts)
+        Fiber.yield
+        context.effects.map { |effect| effect[:id] }
+      end
+    end
+    first.resume
+    context.use do
+      assert_empty context.effects
+      context.refresh(DataFixture::User.for_vc(context.viewer_context).with_pk!(2), :posts)
+      context.use { assert_empty context.effects }
+      assert_equal ["2"], context.effects.map { |effect| effect[:id] }
+    end
+    assert_equal ["1"], first.resume
+    assert_raises(RuntimeError) { context.effects }
+  end
+
   def test_command_changes_and_preload_follow_different_models
     response = @dispatcher.call("type" => "COMMAND", "request_id" => 40, "generation" => 40,
                                 "model" => "DataFixture::Post", "id" => "1", "name" => "publish_author!",
@@ -342,7 +404,7 @@ class DataTest < Minitest::Test
 
   def test_handshake_and_schema_reject_untrusted_names
     bad = Swill::Data::Dispatcher.new(schema: @schema, viewer_context: nil, actor: nil, scope_token: "x")
-    mismatch = bad.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => "wrong")
+    mismatch = bad.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => "wrong")
     assert_equal "schema_mismatch", mismatch.dig("error", "code")
 
     unknown = @dispatcher.call("type" => "GET", "request_id" => 4, "generation" => 7,
@@ -360,6 +422,29 @@ class DataTest < Minitest::Test
     assert_equal "type_mismatch", invalid.dig("error", "code")
   end
 
+  def test_relationship_schema_preserves_association_type_and_reflected_cardinality
+    reflection_class = Struct.new(:type, :associated_class, :plural) do
+      def returns_array?
+        plural
+      end
+    end
+    reflections = %i[many_to_one one_to_one one_to_many many_to_many one_through_one].to_h do |type|
+      [type, reflection_class.new(type, DataFixture::User, %i[one_to_many many_to_many].include?(type))]
+    end
+    model = Struct.new(:association_reflections, :name).new(reflections, "Example")
+    declaration = {"relationships" => reflections.keys.map(&:to_s)}
+    relationships = @schema.send(:relationships, model, declaration)
+    reflections.each do |type, reflection|
+      assert_equal type.to_s, relationships[type.to_s]["association"]
+      assert_equal(reflection.returns_array? ? "many" : "one", relationships[type.to_s]["kind"])
+    end
+    # Cardinality comes from the reflection, independently of its type name.
+    reflections[:one_to_many].plural = false
+    assert_equal "one", @schema.send(:relationships, model, declaration)["one_to_many"]["kind"]
+    reflections[:one_to_many].type = :unsupported_plugin_type
+    assert_raises(ArgumentError) { @schema.send(:relationships, model, declaration) }
+  end
+
   def test_generation_is_deterministic_and_check_detects_drift
     Dir.mktmpdir do |root|
       generator = Swill::Data::Generator.new(File.expand_path("fixtures/data/server.rb", __dir__), root: root)
@@ -372,8 +457,12 @@ class DataTest < Minitest::Test
       assert_includes proxy_source, "class Post < Swill::Model::DistantObject"
       assert_includes proxy_source, 'model_name "DataFixture::Post"'
       assert_includes proxy_source, "attribute :title"
-      assert_includes proxy_source, "has_one :author"
+      assert_includes proxy_source, 'many_to_one :author, class: "DataFixture::User"'
       refute_includes proxy_source, "remote_"
+      rbi = paths.find { |path| path.end_with?("data_fixture/post.rbi") }
+      assert_includes File.read(rbi), "T.nilable(DataFixture::User)"
+      assert_includes File.read(rbi), "Swill::Model::RelationshipCollection[DataFixture::Comment]"
+      refute_includes File.read(rbi), "def author="
       assert_includes proxy_source,
                       "async def self.search(text, published = Swill::Runtime.omitted_argument)"
       assert_includes proxy_source, "async def self.lookup_title(title)"

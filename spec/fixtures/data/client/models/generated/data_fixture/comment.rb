@@ -7,7 +7,7 @@ module DataFixture
     attribute :author_id, type: Integer
     attribute :body, type: String
     attribute :post_id, type: Integer
-    has_one :author, model: "DataFixture::User"
-    has_one :post, model: "DataFixture::Post"
+    many_to_one :author, class: "DataFixture::User"
+    many_to_one :post, class: "DataFixture::Post"
   end
 end

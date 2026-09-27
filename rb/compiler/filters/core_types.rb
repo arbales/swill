@@ -97,6 +97,7 @@ module Swill
         }.freeze
 
         ARRAY = {
+          freeze: [0, :receiver, [:custom, :freeze_array]],
           to_a: [0, :receiver, [:self]],
           dup: [0, :receiver, [:call, :slice]],
           length: [0, "Integer", [:attr, :length]],
@@ -294,6 +295,11 @@ module Swill
         end
 
     private
+
+        # Freeze the container, leaving referenced model objects mutable.
+        def core_freeze_array(receiver, _args)
+          s(:send, s(:const, nil, :Object), :freeze, receiver)
+        end
 
         def emit_core(form, receiver, args)
           case form.first

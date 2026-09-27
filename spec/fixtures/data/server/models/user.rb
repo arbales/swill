@@ -6,10 +6,11 @@ module DataFixture
     include Sequel::Privacy::IActor
     extend T::Sig
 
-    client_model fields: %i[email name avatar], relationships: %i[comments posts],
+    client_model fields: %i[email name avatar], relationships: %i[comments posts published_posts],
                  writable: %i[email name avatar]
 
     one_to_many :posts, class: "DataFixture::Post", key: :author_id
+    one_to_many :published_posts, class: "DataFixture::Post", key: :author_id, conditions: {published: true}, order: :title, limit: 10
     one_to_many :comments, class: "DataFixture::Comment", key: :author_id
 
     privacy do

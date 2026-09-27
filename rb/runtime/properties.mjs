@@ -4,6 +4,7 @@ import {isEqual} from "./values.mjs";
 
 const states = new WeakMap();
 const captures = [];
+const dependentTargets = new WeakMap();
 
 function state(object) {
   let current = states.get(object);
@@ -47,7 +48,8 @@ function listeners(object, name, kind) {
   return table.get(name);
 }
 
-export function subscribe(object, name, callback, kind) {
+export function subscribe(object, name, callback, kind, target = null) {
+  if (target) dependentTargets.set(callback, target);
   const descriptor = declarations(object.constructor, "properties").get(name);
   if (!descriptor) {
     throw new Error(`Unknown observable property: ${name}`);
@@ -59,6 +61,22 @@ export function subscribe(object, name, callback, kind) {
   set.add(callback);
 
   return () => set.delete(callback);
+}
+
+// Follow computed dependencies only when they lead to a live observer or hook.
+export function observed(object, name, visited = new Map()) {
+  const names = visited.get(object) ?? new Set();
+  if (names.has(name)) return false;
+  names.add(name);
+  visited.set(object, names);
+  const current = states.get(object);
+  if (!current) return false;
+  if (current.observers.get(name)?.size || hooked(object, name)) return true;
+  for (const callback of current.dependents.get(name) ?? []) {
+    const target = dependentTargets.get(callback);
+    if (target && observed(target[0], target[1], visited)) return true;
+  }
+  return false;
 }
 
 export function storedValue(object, descriptor) {
@@ -110,7 +128,8 @@ export function computedValue(object, descriptor) {
           dependency,
           name,
           () => invalidate(object, descriptor),
-          "dependents"
+          "dependents",
+          [object, descriptor.name]
         )
       );
     }
@@ -125,6 +144,8 @@ function invalidate(object, descriptor) {
 
   const previous = slot.value;
   slot.valid = false;
+  // Invalid cached values no longer need to retain their previous inputs.
+  slot.disposers.splice(0).forEach(dispose => dispose());
 
   for (const callback of [
     ...listeners(object, descriptor.name, "dependents")
@@ -152,6 +173,8 @@ function notify(object, name, previous, value) {
 
 // Mutations always follow: coerce, compare, will-change, store, notify.
 export function writeProperty(object, descriptor, value) {
+  if (descriptor.writer) return object[descriptor.writer](value);
+  if (descriptor.computed) throw new Error(`Read-only property: ${descriptor.name}`);
   const previous = storedValue(object, descriptor);
   value = object.coercePropertyValue(descriptor.name, value, previous);
   if (isEqual(previous, value)) return value;
@@ -163,19 +186,43 @@ export function writeProperty(object, descriptor, value) {
   return value;
 }
 
+/**
+ * Calls `callback` with the new and previous values of the property `name`
+ * of `object` whenever it changes, and returns a function that stops
+ * observing. Setting a property to its current value changes nothing, and
+ * calls no observer.
+ *
+ * @param {object} object
+ * @param {string} name The property's Ruby name.
+ * @param {(value: unknown, previous: unknown) => void} callback
+ * @returns {() => void} Stops observing.
+ */
 export function observe(object, name, callback) {
   return subscribe(object, name, callback, "observers");
 }
 
-// Cocoa's retain: the object claims the disposer and is responsible for
-// letting it go, which it does when it deallocs.
+/**
+ * Retains `disposer` for `object`, which calls it when deallocated, and
+ * returns `disposer`. Anything that should end with `object`, such as an
+ * observation, a DOM listener, or a binding, is retained this way.
+ *
+ * @param {object} object
+ * @param {() => void} disposer
+ * @returns {() => void} The disposer.
+ */
 export function retain(object, disposer) {
   state(object).retained.push(disposer);
   return disposer;
 }
 
-// Cocoa's release: give up a claim before the object goes away. A disposer
-// never retained here still ends, as calling it directly would.
+/**
+ * Removes `disposer` from what `object` retains, and calls it. A disposer
+ * `object` never retained is called all the same.
+ *
+ * @param {object} object
+ * @param {() => void} disposer
+ * @returns {void}
+ */
 export function release(object, disposer) {
   const retained = states.get(object)?.retained;
   const index = retained ? retained.indexOf(disposer) : -1;
@@ -183,17 +230,29 @@ export function release(object, disposer) {
   disposer();
 }
 
-// End of life: release everything retained, then leave the observation
-// graph. Draining first means nothing an observer does can re-enter.
+/**
+ * Calls every disposer `object` retains, then removes `object` from the
+ * observation graph. Its disposers are called first, so nothing they do can
+ * reach it again.
+ *
+ * @param {object} object
+ * @returns {void}
+ */
 export function dealloc(object) {
   const current = states.get(object);
   if (current) current.retained.splice(0).forEach(disposer => disposer());
   disconnect(object);
 }
 
-// Leave the observation graph in both directions: the subscriptions this
-// object's computed properties hold on others, and everything watching this
-// object. Stored values are kept, so the object remains usable.
+/**
+ * Removes `object` from the observation graph in both directions: its computed
+ * properties stop observing the properties they read, and its observers stop
+ * observing it. Its stored values are kept, so it remains usable, and its
+ * computed properties observe again when next read.
+ *
+ * @param {object} object
+ * @returns {void}
+ */
 export function disconnect(object) {
   const current = states.get(object);
   if (!current) return;

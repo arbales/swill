@@ -21,6 +21,8 @@
   var Swill__ObjectPropertyBindingDestination = framework.Swill__ObjectPropertyBindingDestination;
   var Swill__Binding = framework.Swill__Binding;
   var Swill__ObjectBindings = framework.Swill__ObjectBindings;
+  var Swill__CollectionArrangement = framework.Swill__CollectionArrangement;
+  var Swill__ArrayController = framework.Swill__ArrayController;
   var Swill__Responder = framework.Swill__Responder;
   var Swill__View = framework.Swill__View;
   var Swill__Control = framework.Swill__Control;
@@ -55,6 +57,7 @@
   var Swill__Model__Identity = framework.Swill__Model__Identity;
   var Swill__Model__Identity_ClassMethods = framework.Swill__Model__Identity_ClassMethods;
   var Swill__Model__Collection = framework.Swill__Model__Collection;
+  var Swill__Model__RelationshipCollection = framework.Swill__Model__RelationshipCollection;
   var Swill__Model__ResultSet = framework.Swill__Model__ResultSet;
   var Swill__Model__DistantClient = framework.Swill__Model__DistantClient;
   var Swill__Model__DistantData = framework.Swill__Model__DistantData;
@@ -279,6 +282,20 @@
     bindingRoot() {
       return "represented_object";
     }
+  };
+  function Demo__PersonFilter(Superclass) {
+    class Demo__PersonFilter_Layer extends Superclass {
+      includesObject(object) {
+        return Runtime.downcase(Runtime.cast(object, "Demo::Person").name).includes(Runtime.downcase(this.filterText));
+      }
+    }
+    return Demo__PersonFilter_Layer;
+  }
+  var Demo__FilteredPeopleList = class extends Swill__Controller__SortableList {
+  };
+  var Demo__PeopleArrayController = class extends Swill__ArrayController {
+  };
+  var Demo__FilteredPeopleController = class extends Swill__Controller {
   };
   var Static__User = class extends Swill__Model__Editable {
     validateEmail(value, _previous) {
@@ -551,6 +568,15 @@
           "coerce_property_value": {
             "arity": 3,
             "js": "coercePropertyValue"
+          }
+        }
+      },
+      "Demo::PersonFilter": {
+        factory: Demo__PersonFilter,
+        methods: {
+          "includes_object?": {
+            "arity": 1,
+            "js": "includesObject"
           }
         }
       }
@@ -1096,6 +1122,171 @@
             "js": "bindingRoot"
           }
         }
+      },
+      "Demo::FilteredPeopleList": {
+        constructor: Demo__FilteredPeopleList,
+        mixins: [Demo__PersonFilter],
+        properties: {
+          "filter_text": {
+            js: "filterText",
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "";
+            }
+          }
+        },
+        methods: {}
+      },
+      "Demo::PeopleArrayController": {
+        constructor: Demo__PeopleArrayController,
+        mixins: [Demo__PersonFilter],
+        properties: {
+          "filter_text": {
+            js: "filterText",
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "";
+            }
+          }
+        },
+        methods: {}
+      },
+      "Demo::FilteredPeopleController": {
+        constructor: Demo__FilteredPeopleController,
+        mixins: [Swill__CollectionArrangement, Demo__PersonFilter],
+        properties: {
+          "content": {
+            type: "T.untyped",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "array_controller": {
+            js: "arrayController",
+            type: "T.nilable(Swill::ArrayController)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "arrangement_options": {
+            js: "arrangementOptions",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
+            }
+          },
+          "selection_state": {
+            js: "selectionState",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
+            }
+          },
+          "arranged_content": {
+            js: "arrangedContent",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            compute: function compute_arrangedContent() {
+              return this.arrangeContent();
+            }
+          },
+          "selected_objects": {
+            js: "selectedObjects",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            writer: "selectObjects",
+            compute: function compute_selectedObjects() {
+              return this.arrangedSelection();
+            }
+          },
+          "selected_object_id": {
+            js: "selectedObjectId",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "selectIdentifier",
+            compute: function compute_selectedObjectId() {
+              let controller = this.arrayController;
+              return controller ? controller.selectedObjectId : Runtime.cast(
+                Runtime.logicalOr(this.selectionState.id, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "selected_object": {
+            js: "selectedObject",
+            type: "T.untyped",
+            attribute: false,
+            compute: function compute_selectedObject() {
+              return Runtime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+            }
+          },
+          "selected_indexes": {
+            js: "selectedIndexes",
+            type: "T::Array[Integer]",
+            attribute: false,
+            compute: function compute_selectedIndexes() {
+              let selected = this.selectedObjects;
+              let indexes = Runtime.cast([], "T::Array[Integer]");
+              this.arrangedObjects().forEach((object, index) => {
+                if (selected.includes(object)) Runtime.append(indexes, index);
+              });
+              return indexes;
+            }
+          },
+          "sort_key": {
+            js: "sortKey",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "changeSortKey",
+            compute: function compute_sortKey() {
+              let controller = this.arrayController;
+              return controller ? controller.sortKey : Runtime.cast(
+                Runtime.logicalOr(this.arrangementOptions.key, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "sort_direction": {
+            js: "sortDirection",
+            type: "String",
+            attribute: false,
+            writer: "changeSortDirection",
+            compute: function compute_sortDirection() {
+              let controller = this.arrayController;
+              return controller ? controller.sortDirection : Runtime.cast(
+                Runtime.logicalOr(
+                  this.arrangementOptions.direction,
+                  () => "ascending"
+                ),
+                "String"
+              );
+            }
+          },
+          "sort_states": {
+            js: "sortStates",
+            type: "T::Hash[String, String]",
+            attribute: false,
+            compute: function compute_sortStates() {
+              let key = this.sortKey;
+              return key != null ? { [key]: this.sortDirection } : {};
+            }
+          },
+          "filter_text": {
+            js: "filterText",
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "";
+            }
+          }
+        },
+        methods: {}
       },
       "Static::User": {
         constructor: Static__User,

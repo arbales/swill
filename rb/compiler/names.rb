@@ -8,6 +8,58 @@ module Swill
     # Intrinsics introduced by built-in filters must not capture source classes.
     JS_INTRINSICS = %w[Object Array String Number Math JSON Error Promise MutationObserver URLSearchParams].freeze
 
+    # The framework classes plain JavaScript reaches by a public name on the
+    # Swill global, such as Swill.Controller or Swill.Model.Base. A class is
+    # named when plain JavaScript subclasses it, constructs it, or calls its
+    # class methods. Machinery the framework drives itself, classes that are
+    # only ever handed to an application (Window, Notification), and modules,
+    # which a JavaScript class cannot include, are not.
+    #
+    # Every class is also on the global under its generated identifier, which
+    # compiled applications link against; that name is private. The browser
+    # build and the documentation both read this, so the names a page offers
+    # and the names the docs show cannot drift.
+    JAVASCRIPT_NAMES = {
+      "Object" => "Swill::Object",
+      "ArrayController" => "Swill::ArrayController",
+      "Controller" => "Swill::Controller",
+      "Application" => "Swill::Application",
+      "View" => "Swill::View",
+      "List" => "Swill::Controller::List",
+      "SortableList" => "Swill::Controller::SortableList",
+      "Editor" => "Swill::Controller::Editor",
+      "InlineEditor" => "Swill::Controller::InlineEditor",
+      "EditableList" => "Swill::Controller::EditableList",
+      "Control" => "Swill::Control",
+      "TextField" => "Swill::Control::TextField",
+      "Button" => "Swill::Control::Button",
+      "Select" => "Swill::Control::Select",
+      "CustomSelect" => "Swill::Control::CustomSelect",
+      "NotificationCenter" => "Swill::NotificationCenter",
+      "Wire" => "Swill::Wire",
+      "ValueTransformer" => "Swill::ValueTransformer",
+      "Model.Base" => "Swill::Model::Base",
+      "Model.Editable" => "Swill::Model::Editable",
+      "Model.Resource" => "Swill::Model::Resource",
+      "Model.DistantObject" => "Swill::Model::DistantObject",
+      "Model.DistantClient" => "Swill::Model::DistantClient",
+      "Model.Store" => "Swill::Model::Store",
+      "Model.Codec" => "Swill::Model::Codec",
+      "Model.PlainJSON" => "Swill::Model::PlainJSON",
+      "Model.JSONAPI" => "Swill::Model::JSONAPI",
+      "Model.Dataset" => "Swill::Model::Dataset",
+      "Model.Collection" => "Swill::Model::Collection",
+      "Model.ResultSet" => "Swill::Model::ResultSet"
+    }.freeze
+
+    # The public classes a plain JavaScript class may extend directly. The
+    # other named classes are used as they are.
+    JAVASCRIPT_ROOTS = %w[
+      Object ArrayController Controller Application View List SortableList Editor InlineEditor EditableList
+      Control TextField Button Select CustomSelect ValueTransformer
+      Model.Base Model.Resource Model.DistantObject
+    ].freeze
+
     # Encoded names shared by the compiler, its metadata, and generated code.
     module Names
       module_function

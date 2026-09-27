@@ -81,8 +81,8 @@ module Swill
           body << "attribute :#{field['name']}, type: #{ruby_type(field['type'])}"
         end
         model.fetch("relationships").each_value do |relationship|
-          macro = relationship["kind"] == "many" ? "has_many" : "has_one"
-          body << "#{macro} :#{relationship['name']}, model: #{relationship['model'].to_json}"
+          macro = relationship.fetch("association")
+          body << "#{macro} :#{relationship['name']}, class: #{relationship['model'].to_json}"
         end
         model.fetch("operations").each_value do |operation|
           body << ""
@@ -125,6 +125,18 @@ module Swill
 
           type = ruby_type(field["type"])
           body.push("sig { returns(#{type}) }", "def #{field['name']}; end")
+        end
+        model.fetch("relationships").each_value do |relationship|
+          target = relationship.fetch("model")
+          type = if relationship["kind"] == "many"
+                   "Swill::Model::RelationshipCollection[#{target}]"
+                 else
+                   "T.nilable(#{target})"
+                 end
+          body.push("sig { returns(#{type}) }", "def #{relationship['name']}; end")
+          if relationship["kind"] == "many"
+            body.push("sig { returns(Swill::ArrayController) }", "def #{relationship['name']}_controller; end")
+          end
         end
         model.fetch("operations").each_value do |operation|
           parameters = operation["parameters"].map { |item| "#{item['name']}: #{ruby_type(item['type'])}" }.join(", ")

@@ -263,3 +263,43 @@ test("a plain JavaScript application filters a bound list on the UI build", () =
   assert.deepEqual(rows(), ["Swill::Binding"], "the list follows the computed filter");
   application.terminate();
 });
+
+test("plain JavaScript extends the object, transformer, and model roots", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  const {Runtime} = Swill;
+  for (const name of ["Object", "Button", "ValueTransformer"]) assert.equal(typeof Swill[name], "function", name);
+  assert.equal(typeof Swill.Model.DistantClient.configure, "function");
+
+  class Contact extends Swill.Object {
+    static properties = {first: {default: "Ada"}, last: {default: "Lovelace"}};
+    get name() { return `${this.first} ${this.last}`; }
+  }
+  Swill.register(Contact);
+  const contact = new Contact();
+  const names = [];
+  contact.observe("name", value => names.push(value));
+  contact.last = "Byron";
+  assert.deepEqual(names, ["Ada Byron"]);
+
+  class Shout extends Swill.ValueTransformer {
+    transformedValue(value) { return String(value).toUpperCase(); }
+  }
+  Swill.register(Shout);
+  Swill.ValueTransformer.register("shout", new Shout());
+  assert.equal(Swill.ValueTransformer.named("shout").transformedValue("hi"), "HI");
+
+  class Note extends Swill.Model.Base {
+    static properties = {title: {default: ""}};
+    get heading() { return this.title.toUpperCase(); }
+  }
+  Swill.register(Note);
+  const note = new Note();
+  note.title = "draft";
+  assert.equal(Runtime.read(note, "heading"), "DRAFT");
+  assert.ok(note instanceof Swill.Model.Base);
+
+  class Primary extends Swill.Button {}
+  Swill.register(Primary);
+  assert.equal(Runtime.resolve("Primary"), Primary);
+});

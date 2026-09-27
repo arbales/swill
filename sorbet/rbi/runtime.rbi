@@ -63,6 +63,10 @@ module Swill
     sig { params(object: T.untyped, name: T.any(Symbol, String), callback: T.proc.params(value: T.untyped).void).returns(T.proc.void) }
     def self.observe(object, name, callback); end
 
+    sig { params(object: T.untyped, name: String).returns(T::Boolean) }
+    def self.observed(object, name); end
+
+
     sig { params(object: T.untyped, disposer: T.proc.void).returns(T.proc.void) }
     def self.retain(object, disposer); end
 
@@ -180,11 +184,11 @@ class Swill::Object
   sig do
     params(name: T.any(Symbol, String), type: T.untyped, default: T.untyped,
            key: T.nilable(T.any(Symbol, String)), attribute: T::Boolean, outlet: T::Boolean,
-           optional: T::Boolean, will_access: T::Boolean,
+           optional: T::Boolean, will_access: T::Boolean, writer: T.nilable(Symbol),
            block: T.nilable(T.proc.bind(T.untyped).returns(T.untyped))).void
   end
   def self.property(name, type:, default: nil, key: nil, attribute: false, outlet: false,
-                    optional: false, will_access: false, &block); end
+                    optional: false, will_access: false, writer: nil, &block); end
 
   # A bindable path the application keeps in the URL fragment. Controller's
   # restorable macro is the spelling.
@@ -294,4 +298,9 @@ class Object
 
   sig { returns(T::Boolean) }
   def present?; end
+end
+
+module Swill::CollectionArrangement
+  extend T::Helpers
+  requires_ancestor { Swill::Object }
 end

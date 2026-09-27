@@ -181,7 +181,7 @@ class CLITest < Minitest::Test
         require #{File.join(dir, "server.rb").inspect}
         schema = Swill::Data::Schema.new([Notes::Note])
         dispatcher = Swill::Data::Dispatcher.new(schema: schema, viewer_context: nil, actor: nil, scope_token: "test")
-        dispatcher.call("type" => "HELLO", "protocol_version" => 1, "schema_hash" => schema.hash)
+        dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => schema.hash)
         create = {"type" => "CREATE", "model" => "Notes::Note", "request_id" => 1, "generation" => 1}
         invalid = dispatcher.call(create.merge("attributes" => {"title" => ""}))
         abort invalid.inspect unless invalid.dig("error", "code") == "validation_failed"

@@ -716,6 +716,26 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes rbi, "sig { params(url: String, init: T.untyped).returns(Response) }\n  def fetch(url, init = nil); end", "the RBI names the awaited value"
   end
 
+  def test_rethrow_preserves_the_rescued_error
+    js = compiler_with_test_object.add(<<~RUBY).javascript(runtime: "../rb/runtime/runtime.mjs")
+      class Relay < TestObject
+        property :captured, type: T.untyped, default: nil
+        def run
+          raise "original"
+        rescue => failure
+          self.captured = failure
+          raise failure
+        end
+      end
+    RUBY
+    assert_includes js, "throw failure;"
+    assert_equal ["original", true], execute(js + <<~JS)
+      const relay = new Relay();
+      try { relay.run(); }
+      catch (error) { console.log(JSON.stringify([error.message, error === relay.captured])); }
+    JS
+  end
+
   # A block of several statements yields its last expression, a hash
   # included, whatever the method it is passed to.
   def test_multi_statement_blocks_yield_their_last_expression
@@ -1498,8 +1518,12 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       module Feature
         def self.included(base)
           base.property :name, type: String, default: "Ada"
+          base.property :greeting, type: String, writer: :rename do
+            "Hello \#{name}"
+          end
         end
         def label; name; end
+        def rename(value); self.name = value; end
       end
     RUBY
     application = Swill::Ruby2JS::Compiler.new(
@@ -1514,7 +1538,10 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       end
     RUBY
     first, second = application.knowledge.local
-    assert_equal ["name"], first["properties"].map { |property| property["name"] }
+    assert_equal ["name", "greeting"], first["properties"].map { |property| property["name"] }
+    assert_equal '"Hello #{name}"', first["properties"].last["expression"].strip
+    assert_equal "rename", first["properties"].last["writer"]
+    assert_includes application.rbi, "def greeting=(value)"
     refute_same first["properties"].first, second["properties"].first
     refute_same first["properties"].first, framework.knowledge.local.first["included_properties"].first
     assert_includes application.rbi, "def name=(value)"
@@ -2475,25 +2502,9 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
 
   def test_readable_class_headers_and_reference_based_wiring
     framework = Swill::Ruby2JS::Compiler.new
-      .add(File.read("rb/framework/core/observable.rb"))
-      .add(File.read("rb/framework/core/object.rb"))
-      .add(File.read("rb/framework/core/wire.rb"))
-      .add(File.read("rb/framework/model/attributes.rb"))
-      .add(File.read("rb/framework/model/dirty_tracking.rb"))
-      .add(File.read("rb/framework/model/drafts.rb"))
-      .add(File.read("rb/framework/model/base.rb"))
-      .add(File.read("rb/framework/model/editable.rb"))
-      .add(File.read("rb/framework/model/relationships.rb"))
-      .add(File.read("rb/framework/model/store.rb"))
-      .add(File.read("rb/framework/model/identity.rb"))
-      .add(File.read("rb/framework/model/collection.rb"))
-      .add(File.read("rb/framework/model/distant_client.rb"))
-      .add(File.read("rb/framework/model/distant_data.rb"))
-      .add(File.read("rb/framework/model/distant_object.rb"))
-      .add(File.read("rb/framework/model/relationship.rb"))
-      .add(File.read("rb/framework/model/codec.rb"))
-      .add(File.read("rb/framework/model/dataset.rb"))
-      .add(File.read("rb/framework/model/resource.rb"))
+    Swill::Ruby2JS::FRAMEWORK_SOURCES.each do |path|
+      framework.add(File.read(path), file: path)
+    end
     compiler = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface)
     compiler.add(File.read("examples/rb/models.rb"))
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs", framework: "./framework.mjs")

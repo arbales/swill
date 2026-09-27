@@ -124,15 +124,10 @@ module Swill
 
       sig { params(object: DistantObject, name: String, reload: T::Boolean).returns(T.untyped) }
       async def load_field(object, name, reload)
-        return Runtime.read(object, name) if !reload && object.data_field_loaded(name)
+        return Runtime.read(object, name) if !reload && object.data_field_loaded(name) && !object.data_field_stale(name)
         object.begin_data_field_load(name, true)
-        begin
-          await request("GET", {"demands" => [demand_hash(object, [name])]}, nil, false)
-          Runtime.read(object, name)
-        rescue => error
-          object.fail_data_field(name, error.message)
-          raise "#{error.message}"
-        end
+        await request("GET", {"demands" => [demand_hash(object, [name])]}, nil, false)
+        Runtime.read(object, name)
       end
 
       # A changed actor or an explicit close invalidates every identity.
@@ -281,13 +276,39 @@ module Swill
         object
       end
 
+      # Invalidations affect cached objects only; they never instantiate a graph.
+      sig { params(effect: T::Hash[String, T.untyped]).void }
+      def apply_invalidation(effect)
+        object = model_store(effect["model"].to_s)[effect["id"].to_s]
+        return unless object
+        distant = T.cast(object, DistantObject)
+        return if distant.deleted?
+        T.cast(effect["fields"], T::Array[String]).each do |name|
+          distant.invalidate_data_field(name, T.cast(effect["generation"], Integer))
+        end
+      end
+
+      sig { params(effect: T::Hash[String, T.untyped]).void }
+      def refresh_observed(effect)
+        object = model_store(effect["model"].to_s)[effect["id"].to_s]
+        return unless object
+        distant = T.cast(object, DistantObject)
+        return if distant.deleted?
+        T.cast(effect["fields"], T::Array[String]).each do |name|
+          demand(distant, name) if distant.data_field_stale(name) && distant.data_field_observed(name)
+        end
+      end
+
       sig do
         params(message: T::Hash[String, T.untyped], response_generation: Integer,
                preferred: T.nilable(DistantObject), overwrite_dirty: T::Boolean).returns(T.untyped)
       end
       def apply_envelope(message, response_generation, preferred, overwrite_dirty)
+        invalidations = T.cast(message["invalidations"] || [], T::Array[T::Hash[String, T.untyped]])
+        invalidations.each { |effect| apply_invalidation(effect) }
         patches = T.cast(message["patches"] || [], T::Array[T::Hash[String, T.untyped]])
         patches.each { |patch| apply_patch(patch, preferred, overwrite_dirty) }
+        invalidations.each { |effect| refresh_observed(effect) }
         decode_value(message["value"], response_generation, preferred)
       end
 
@@ -309,6 +330,7 @@ module Swill
         operation_generation = @generation
         @active_generations << operation_generation
         payload = contents.merge({"generation" => operation_generation})
+        update_demand_state(contents, operation_generation, nil) if type == "GET"
         begin
           raw = await Runtime.data_request(type, payload)
           received = T.cast(raw, T::Hash[String, T.untyped])
@@ -317,9 +339,28 @@ module Swill
           @actor_scope = scope
           message = T.cast(received["message"], T::Hash[String, T.untyped])
           [apply_envelope(message, operation_generation, preferred, overwrite_dirty), operation_generation]
+        rescue => error
+          update_demand_state(contents, operation_generation, error.message) if type == "GET"
+          raise error
         ensure
           @active_generations = @active_generations.reject { |item| item == operation_generation }
           prune_tombstones
+        end
+      end
+
+      sig { params(contents: T::Hash[String, T.untyped], generation: Integer, error: T.nilable(String)).void }
+      def update_demand_state(contents, generation, error)
+        T.cast(contents["demands"], T::Array[T::Hash[String, T.untyped]]).each do |item|
+          object = model_store(item["model"].to_s)[item["id"].to_s]
+          next unless object
+          distant = T.cast(object, DistantObject)
+          T.cast(item["fields"], T::Array[String]).each do |name|
+            if error
+              distant.fail_data_field(name, error, generation)
+            else
+              distant.data_request_started(name, generation)
+            end
+          end
         end
       end
 
@@ -380,12 +421,6 @@ module Swill
               queued = @queued_demands[key] ||= {"object" => object, "fields" => []}
               target = T.cast(queued["fields"], T::Array[String])
               fields.each { |name| target << name unless target.include?(name) }
-            end
-          end
-          batch.each do |item|
-            object = T.cast(item["object"], DistantObject)
-            T.cast(item["fields"], T::Array[String]).each do |name|
-              object.fail_data_field(name, error.message)
             end
           end
           Runtime.warn("data did not load: #{error.message}")

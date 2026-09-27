@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "models": {
     "DataFixture::Comment": {
       "name": "DataFixture::Comment",
@@ -40,11 +40,13 @@
         "author": {
           "name": "author",
           "kind": "one",
+          "association": "many_to_one",
           "model": "DataFixture::User"
         },
         "post": {
           "name": "post",
           "kind": "one",
+          "association": "many_to_one",
           "model": "DataFixture::Post"
         }
       },
@@ -130,11 +132,13 @@
         "author": {
           "name": "author",
           "kind": "one",
+          "association": "many_to_one",
           "model": "DataFixture::User"
         },
         "comments": {
           "name": "comments",
           "kind": "many",
+          "association": "one_to_many",
           "model": "DataFixture::Comment"
         }
       },
@@ -178,6 +182,47 @@
             {
               "name": "title",
               "kind": "req",
+              "type": {
+                "kind": "dynamic"
+              }
+            }
+          ]
+        },
+        "move_to_author!": {
+          "kind": "command",
+          "name": "move_to_author!",
+          "returns": {
+            "kind": "primitive",
+            "name": "Boolean"
+          },
+          "target": "instance",
+          "changes": [],
+          "transaction": true,
+          "parameters": [
+            {
+              "name": "author_id",
+              "kind": "req",
+              "type": {
+                "kind": "dynamic"
+              }
+            },
+            {
+              "name": "replace",
+              "kind": "key",
+              "type": {
+                "kind": "dynamic"
+              }
+            },
+            {
+              "name": "fail",
+              "kind": "key",
+              "type": {
+                "kind": "dynamic"
+              }
+            },
+            {
+              "name": "hidden",
+              "kind": "key",
               "type": {
                 "kind": "dynamic"
               }
@@ -332,11 +377,19 @@
         "comments": {
           "name": "comments",
           "kind": "many",
+          "association": "one_to_many",
           "model": "DataFixture::Comment"
         },
         "posts": {
           "name": "posts",
           "kind": "many",
+          "association": "one_to_many",
+          "model": "DataFixture::Post"
+        },
+        "published_posts": {
+          "name": "published_posts",
+          "kind": "many",
+          "association": "one_to_many",
           "model": "DataFixture::Post"
         }
       },
@@ -477,5 +530,5 @@
       }
     }
   },
-  "schema_hash": "e1ac7f048ad2d12bb333a3ecf966d4393b1b97f145615e2b974dc69691ea78b1"
+  "schema_hash": "b13f897c051dd21acf5bc82803132a2871214880fe53ccb2bbd31a02b321956d"
 }

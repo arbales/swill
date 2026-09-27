@@ -89,10 +89,16 @@ module Swill
           raise ArgumentError, "unknown client relationship #{klass.name}.#{relationship}" unless reflection
 
           target = reflection.associated_class.name
-          many = %i[one_to_many many_to_many].include?(reflection[:type])
+          association = reflection[:type].to_s
+          unless %w[many_to_one one_to_one one_to_many many_to_many one_through_one].include?(association)
+            raise ArgumentError, "unsupported client association #{klass.name}.#{relationship}: #{association}"
+          end
+
+          many = reflection.returns_array?
           [relationship, {
             "name" => relationship,
             "kind" => many ? "many" : "one",
+            "association" => association,
             "model" => target
           }]
         end
@@ -193,7 +199,12 @@ module Swill
             end
           end
 
+          client_names = model.fetch("fields").keys + model.fetch("relationships").keys + model.fetch("operations").keys
           model.fetch("relationships").each_value do |relationship|
+            helper = "#{relationship['name']}_controller"
+            if relationship["kind"] == "many" && client_names.include?(helper)
+              raise ArgumentError, "relationship controller conflicts with client member #{model['name']}.#{helper}"
+            end
             unless models.key?(relationship.fetch("model"))
               raise ArgumentError, "unknown related model #{relationship['model']}"
             end

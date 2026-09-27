@@ -103,6 +103,7 @@ module Swill
             entry["outlet"] = true
             entry["optional"] = descriptor["optional"]
           end
+          entry["writer"] = Knowledge.member(descriptor["writer"]) if descriptor["writer"]
           entry["will_access"] = true if descriptor["will_access"]
           if descriptor["computed"]
             entry["expression"] = blocks.fetch(descriptor["block"])

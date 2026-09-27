@@ -1,5 +1,15 @@
-// Browser runtime surface used by generated and framework code, without the
-// remote data client. runtime.mjs is this plus remote data.
+/**
+ * `Swill.Runtime`: what compiled code calls, and what the framework's own Ruby
+ * reaches as `Runtime`. It installs classes, gives plain JavaScript values
+ * Ruby's semantics, resolves names and key paths against installed
+ * declarations, and carries observation.
+ *
+ * An application seldom calls it directly; plain JavaScript uses
+ * `Swill.register` and the public classes instead. The UI build carries
+ * everything here except the remote data functions.
+ *
+ * @module
+ */
 import {
   install,
   include,
@@ -11,7 +21,7 @@ import {
   resolve,
   nameOf
 } from "./install.mjs";
-import {observe, retain, release, dealloc, disconnect} from "./properties.mjs";
+import {observe, observed, retain, release, dealloc, disconnect} from "./properties.mjs";
 import {
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
   isBlank, isPresent, isEmpty,
@@ -36,6 +46,18 @@ import {
   keywordArguments, blockArgument, omittedArgument, isOmittedArgument,
   bindArguments, argument, yieldBlock
 } from "./arguments.mjs";
+
+/**
+ * Reports a problem that is not an error: input from outside the application,
+ * such as a URL fragment naming content that does not exist, which the
+ * application ignores rather than fails on.
+ *
+ * @param {string} message
+ * @returns {void}
+ */
+export function warn(message) {
+  console.warn(`[Swill] ${message}`);
+}
 
 export const Runtime = {
   // Classes
@@ -64,7 +86,7 @@ export const Runtime = {
   respondsTo, methodAccepts, send, invoke, performAction,
 
   // Observation
-  observe, observePath, retain, release, dealloc, disconnect,
+  observe, observed, observePath, retain, release, dealloc, disconnect,
 
   // Declarations
   restorations, outlets,
@@ -73,8 +95,6 @@ export const Runtime = {
   keywordArguments, blockArgument, omittedArgument, isOmittedArgument,
   bindArguments, argument, yieldBlock,
 
-  // Invalid URL input is reported, not raised.
-  warn(message) {
-    console.warn(`[Swill] ${message}`);
-  }
+  // Reporting
+  warn
 };

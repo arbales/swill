@@ -9,11 +9,33 @@ const pending = new Map();
 let resetCoordinator = () => {};
 let connectionOpened = () => {};
 
+/**
+ * Registers the functions the data client calls when the connection closes,
+ * and when it opens and the server has answered the handshake.
+ *
+ * @param {() => void} reset Called when the connection closes.
+ * @param {() => void} opened Called after the handshake succeeds.
+ * @returns {void}
+ */
 export function registerDataLifecycle(reset, opened) {
   resetCoordinator = reset;
   connectionOpened = opened;
 }
 
+/**
+ * Configures the data connection, which opens on the first request, to reach
+ * `url` with the schema `schemaHash`. An `http` or `https` URL is connected to
+ * as `ws` or `wss`, relative to the page. A different URL or schema closes the
+ * current connection.
+ *
+ * @param {string} url
+ * @param {string} schemaHash The schema the client was generated from, which
+ *   the server checks in the handshake.
+ * @param {(url: string) => WebSocket} [webSocketFactory] Opens the socket;
+ *   `new WebSocket(url)` by default.
+ * @returns {void}
+ * @throws {TypeError} `Unsupported data URL protocol`.
+ */
 export function configureData(
   url,
   schemaHash,
@@ -37,6 +59,12 @@ function websocketURL(value) {
   return url.href;
 }
 
+/**
+ * Closes the data connection. Every request still waiting for a reply is
+ * rejected, and the data client resets.
+ *
+ * @returns {void}
+ */
 export function closeData() {
   const current = socket;
   socket = null;
@@ -50,11 +78,28 @@ export function closeData() {
   current?.close();
 }
 
+/**
+ * Returns whether the data connection is open.
+ *
+ * @returns {boolean}
+ */
 export function dataConnected() {
   return socket?.readyState === WebSocket.OPEN;
 }
 
-// Ruby supplies the protocol payload and receives an uninterpreted envelope.
+/**
+ * Sends a request of `type` with `contents` over the data connection,
+ * opening it first if needed, and returns a promise for the reply and the
+ * actor scope the handshake named. The data client builds the request and
+ * interprets the reply; they travel as MessagePack.
+ *
+ * @param {string} type The request type.
+ * @param {object} contents The request's fields.
+ * @returns {Promise<{message: object, actor_scope: unknown}>}
+ * @throws {Error} When the transport is not configured, the connection fails
+ *   or closes, or the server answers with an error, whose `code` and `details`
+ *   it carries.
+ */
 export async function dataRequest(type, contents) {
   await openSocket();
   const request_id = ++sequence;
@@ -72,7 +117,7 @@ function openSocket() {
     next.binaryType = "arraybuffer";
     next.addEventListener("open", () => {
       socket = next;
-      sendRaw({type: "HELLO", protocol_version: 1, schema_hash: configuration.schemaHash})
+      sendRaw({type: "HELLO", protocol_version: 2, schema_hash: configuration.schemaHash})
         .then(message => {
           actorScope = message.actor_scope;
           resolveConnection(next);
@@ -127,19 +172,43 @@ function remoteError(error) {
   return result;
 }
 
-// Native probes keep browser representations out of protocol policy.
+/**
+ * Returns whether `value` is a date.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
 export function dataTime(value) {
   return value instanceof Date;
 }
 
+/**
+ * Returns `value` as an ISO 8601 string.
+ *
+ * @param {Date} value
+ * @returns {string}
+ */
 export function dataTimeIso(value) {
   return value.toISOString();
 }
 
+/**
+ * Returns the date the ISO 8601 string `value` represents.
+ *
+ * @param {string} value
+ * @returns {Date}
+ */
 export function dataTimeFromIso(value) {
   return new Date(value);
 }
 
+/**
+ * Returns whether `value` is a plain record: an object that is not an array, a
+ * date, or an instance of a class.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
 export function dataRecord(value) {
   if (value == null || typeof value !== "object" || Array.isArray(value) || value instanceof Date) {
     return false;

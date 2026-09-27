@@ -122,11 +122,12 @@ module Swill
     # it resolves, so a value can load itself. attribute:, key:, outlet: and
     # optional: are the marks the macros built on property set.
     def self.property(name, type:, default: UNSET, key: nil, attribute: false,
-                      outlet: false, optional: false, will_access: false, &computed)
+                      outlet: false, optional: false, will_access: false, writer: nil, &computed)
       name = name.to_s
       unless name.match?(/\A[a-z_]\w*\??\z/) && (computed || !name.end_with?("?"))
         raise ArgumentError, "unsupported property name #{name}"
       end
+      raise ArgumentError, "writer requires a computed property" if writer && !computed
       raise ArgumentError, "computed default is ambiguous" if computed && !default.equal?(UNSET)
       raise ArgumentError, "outlets cannot be computed" if computed && outlet
       raise ArgumentError, "duplicate property #{name} in #{self}" if swill_properties.key?(name)
@@ -139,6 +140,7 @@ module Swill
         "computed" => !computed.nil?, "will_access" => will_access,
         "owner" => self, "origin" => Swill::Runtime.declaration_origin
       }
+      descriptor["writer"] = writer.to_s if writer
       descriptor["key"] = (key || name).to_s if attribute
       if outlet
         descriptor["outlet"] = true
@@ -164,7 +166,7 @@ module Swill
         descriptor["computed"] ? Swill::Runtime.computed_value(self, descriptor) : Swill::Runtime.stored_value(self, descriptor)
       end
 
-      unless computed
+      if !computed || writer
         define_method("#{name}=") do |value|
           Swill::Runtime.write_property(self, descriptor, value)
         end

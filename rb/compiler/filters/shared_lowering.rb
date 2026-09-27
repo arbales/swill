@@ -9,9 +9,12 @@ module Swill
       include SorbetOperations
 
         # Ruby exceptions become JavaScript Error objects so browsers keep stack
-        # traces and callers can tell errors from thrown values. Only a literal
-        # message is supported; other forms fail closed.
+        # traces and callers can tell errors from thrown values. Rescued errors
+        # can be rethrown unchanged, preserving their identity and details.
         def lower_raise(args)
+          if args.length == 1 && static_type(args.first) == "Error"
+            return s(:send, nil, :raise, process(args.first))
+          end
           unless args.length == 1 && %i[str dstr].include?(args.first.type)
             raise CompileError, "raise supports only a literal message string"
           end

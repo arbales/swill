@@ -33,16 +33,43 @@ module Swill
           property name, type: type, default: default, attribute: true, key: key, will_access: true
         end
 
-        # Declares a partially loadable to-one relationship.
-        macro def has_one(name, model:)
-          data_fields[name.to_s] = { "kind" => "one", "model" => model }
-          property name, type: "T.nilable(#{model})", default: nil, will_access: true
+        # Names mirror Sequel; persistence options stay on the server.
+        macro def many_to_one(name, **options)
+          declare_data_relationship(name, relationship_class(options), "one", "many_to_one")
         end
 
-        # Declares a partially loadable to-many relationship.
-        macro def has_many(name, model:)
-          data_fields[name.to_s] = { "kind" => "many", "model" => model }
-          property name, type: "Swill::Model::Collection[#{model}]", default: nil, will_access: true
+        macro def one_to_one(name, **options)
+          declare_data_relationship(name, relationship_class(options), "one", "one_to_one")
+        end
+
+        macro def one_to_many(name, **options)
+          declare_data_relationship(name, relationship_class(options), "many", "one_to_many")
+        end
+
+        macro def many_to_many(name, **options)
+          declare_data_relationship(name, relationship_class(options), "many", "many_to_many")
+        end
+
+        macro def one_through_one(name, **options)
+          declare_data_relationship(name, relationship_class(options), "one", "one_through_one")
+        end
+
+        macro def relationship_class(options)
+          unknown = options.keys - [:class]
+          raise ArgumentError, "unknown relationship options: #{unknown.join(', ')}" unless unknown.empty?
+
+          options.fetch(:class)
+        end
+
+        macro def declare_data_relationship(name, model, kind, association)
+          target = Swill::Runtime.class_name(model, self)
+          data_fields[name.to_s] = { "kind" => kind, "model" => target, "association" => association }
+          type = kind == "many" ? "Swill::Model::RelationshipCollection[#{target}]" : "T.nilable(#{target})"
+          property name, type: type, default: nil, will_access: true
+          if kind == "many"
+            forward :"#{name}_controller", to: :relationship_controller, with: [name.to_s],
+                    returns: "Swill::ArrayController"
+          end
         end
       end
 
@@ -50,6 +77,12 @@ module Swill
       sig { params(name: Symbol).returns(T::Boolean) }
       def field_loaded?(name)
         data_field_loaded(name.to_s)
+      end
+
+      # Cached data remains readable while an invalidated relationship refreshes.
+      sig { params(name: Symbol).returns(T::Boolean) }
+      def field_stale?(name)
+        data_field_stale(name.to_s)
       end
 
       # Whether +name+ currently has a request in flight.
@@ -63,7 +96,6 @@ module Swill
       def field_error(name)
         data_field_error(name.to_s)
       end
-
     end
   end
 end

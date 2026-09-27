@@ -60,6 +60,68 @@ module Swill
       end
     end
 
+    # Read-only membership; only authoritative hydration replaces its snapshot.
+    class RelationshipCollection < Collection
+      extend T::Generic
+
+      Element = type_member
+
+      property :records, type: T::Array[T.untyped], default: [], will_access: true
+      property :stale, type: T::Boolean, default: false
+
+      sig { returns(T::Boolean) }
+      def stale?
+        stale
+      end
+
+      sig { params(owner: DistantObject, name: String).void }
+      def attach_relationship(owner, name)
+        @relationship_owner = owner
+        @relationship_name = name
+      end
+
+      sig { params(name: String).void }
+      def property_will_access(name)
+        super
+        owner = @relationship_owner
+        owner.property_will_access(@relationship_name) if owner && name == "records"
+      end
+
+      sig { void }
+      def initialize
+        super
+        @applying_membership = T.let(false, T::Boolean)
+        @relationship_owner = T.let(nil, T.nilable(DistantObject))
+        @relationship_name = T.let("", String)
+        records.freeze
+      end
+
+      sig { override.params(_records: T::Array[T.untyped]).returns(T.self_type) }
+      def replace(_records)
+        raise "Relationship membership is read-only; use a server operation"
+      end
+
+      sig { params(name: String, value: T.untyped, previous: T.untyped).returns(T.untyped) }
+      def coerce_property_value(name, value, previous)
+        if name == "records" && !@applying_membership
+          raise "Relationship membership is read-only; use a server operation"
+        end
+
+        super
+      end
+
+      # Internal hydration entry point. Copy once per patch, never per read.
+      sig { params(records: T::Array[T.untyped]).void }
+      def apply_membership(records)
+        @applying_membership = true
+        begin
+          self.records = records.dup.freeze
+        ensure
+          @applying_membership = false
+        end
+      end
+    end
+
     class ResultSet < Collection
       extend T::Generic
 

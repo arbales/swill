@@ -14,10 +14,18 @@ module DataFixture
     def published_at; end
     sig { returns(String) }
     def title; end
+    sig { returns(T.nilable(DataFixture::User)) }
+    def author; end
+    sig { returns(Swill::Model::RelationshipCollection[DataFixture::Comment]) }
+    def comments; end
+    sig { returns(Swill::ArrayController) }
+    def comments_controller; end
     sig { returns(T::Boolean) }
     def invalid_publish!(); end
     sig { params(title: T.untyped).returns(DataFixture::PostLookup) }
     def self.lookup_title(title); end
+    sig { params(author_id: T.untyped, replace: T.untyped, fail: T.untyped, hidden: T.untyped).returns(T::Boolean) }
+    def move_to_author!(author_id, replace: Swill::Runtime.omitted_argument, fail: Swill::Runtime.omitted_argument, hidden: Swill::Runtime.omitted_argument); end
     sig { returns(T::Boolean) }
     def publish!(); end
     sig { returns(DataFixture::User) }

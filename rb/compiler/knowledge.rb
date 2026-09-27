@@ -70,6 +70,17 @@ module Swill
           # A computed block's source, by the file and line Proc#source_location
           # reports, so a reflected descriptor can find the block it came from.
           @blocks = {}
+          # Imported declaration hooks run in the application's loader, but
+          # their computed bodies were collected by the framework compiler.
+          imports.select { |entry| entry["included_hook"] }.each do |entry|
+            probe = loader.probe(loader.constant(entry["name"]))
+            properties = entry.fetch("included_properties", [])
+            Reflection.own_properties(probe).each do |descriptor|
+              next unless descriptor["computed"]
+              property = properties.find { |candidate| candidate["name"] == descriptor["name"] }
+              @blocks[descriptor["block"]] = property.fetch("expression") if property
+            end
+          end
         end
 
         def collect(source, file)

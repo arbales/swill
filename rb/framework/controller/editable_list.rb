@@ -142,6 +142,13 @@ module Swill
       super
     end
 
+    # An external arrangement or background refresh can also remove the row.
+    sig { override.params(previous: T.untyped, objects: T.untyped).void }
+    def arranged_content_did_change(previous, objects)
+      end_editing(false) if editing?
+      super
+    end
+
     # ---- policy hooks ----
 
     sig { params(copy: T.untyped, original: T.untyped, index: Integer).void }
@@ -172,11 +179,7 @@ module Swill
         original.apply_draft(copy)
         return original
       end
-      source = T.let(self.represented_object || [], T::Array[T.untyped])
-      source_index = source.index(original)
-      values = source.dup
-      values[source_index] = copy if source_index
-      self.represented_object = values
+      replace_object(original, copy)
       copy
     end
 

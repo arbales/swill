@@ -136,11 +136,11 @@
     while (parts.length > 0 && parts.at(-1) === "") parts.pop();
     return parts;
   }
-  function slice(value, start, count) {
+  function slice(value, start2, count) {
     if (typeof value !== "string") {
       throw new TypeError("slice requires a string");
     }
-    const from = start < 0 ? value.length + start : start;
+    const from = start2 < 0 ? value.length + start2 : start2;
     if (count === void 0) {
       return from >= 0 && from < value.length ? value[from] : null;
     }
@@ -227,9 +227,15 @@
     if (right === 0) throw new RangeError("divided by 0");
     return (left % right + right) % right;
   }
-  var isNumber = (value) => typeof value === "number";
-  var isBoolean = (value) => typeof value === "boolean";
-  var compareText = (left, right) => left.localeCompare(right);
+  function isNumber(value) {
+    return typeof value === "number";
+  }
+  function isBoolean(value) {
+    return typeof value === "boolean";
+  }
+  function compareText(left, right) {
+    return left.localeCompare(right);
+  }
   function between(value, low, high) {
     return value >= low && value <= high;
   }
@@ -345,6 +351,7 @@
   // rb/runtime/properties.mjs
   var states = /* @__PURE__ */ new WeakMap();
   var captures = [];
+  var dependentTargets = /* @__PURE__ */ new WeakMap();
   function state(object) {
     let current = states.get(object);
     if (!current) {
@@ -378,7 +385,8 @@
     if (!table.has(name)) table.set(name, /* @__PURE__ */ new Set());
     return table.get(name);
   }
-  function subscribe(object, name, callback, kind) {
+  function subscribe(object, name, callback, kind, target = null) {
+    if (target) dependentTargets.set(callback, target);
     const descriptor = declarations(object.constructor, "properties").get(name);
     if (!descriptor) {
       throw new Error(`Unknown observable property: ${name}`);
@@ -387,6 +395,20 @@
     const set = listeners(object, name, kind);
     set.add(callback);
     return () => set.delete(callback);
+  }
+  function observed(object, name, visited = /* @__PURE__ */ new Map()) {
+    const names2 = visited.get(object) ?? /* @__PURE__ */ new Set();
+    if (names2.has(name)) return false;
+    names2.add(name);
+    visited.set(object, names2);
+    const current = states.get(object);
+    if (!current) return false;
+    if (current.observers.get(name)?.size || hooked(object, name)) return true;
+    for (const callback of current.dependents.get(name) ?? []) {
+      const target = dependentTargets.get(callback);
+      if (target && observed(target[0], target[1], visited)) return true;
+    }
+    return false;
   }
   function storedValue(object, descriptor) {
     const values = state(object).values;
@@ -429,7 +451,8 @@
             dependency,
             name,
             () => invalidate(object, descriptor),
-            "dependents"
+            "dependents",
+            [object, descriptor.name]
           )
         );
       }
@@ -441,6 +464,7 @@
     if (!slot?.valid) return;
     const previous = slot.value;
     slot.valid = false;
+    slot.disposers.splice(0).forEach((dispose) => dispose());
     for (const callback of [
       ...listeners(object, descriptor.name, "dependents")
     ]) callback();
@@ -460,6 +484,8 @@
     ]) callback(value, previous);
   }
   function writeProperty(object, descriptor, value) {
+    if (descriptor.writer) return object[descriptor.writer](value);
+    if (descriptor.computed) throw new Error(`Read-only property: ${descriptor.name}`);
     const previous = storedValue(object, descriptor);
     value = object.coercePropertyValue(descriptor.name, value, previous);
     if (isEqual(previous, value)) return value;
@@ -693,7 +719,7 @@
           if (descriptor.willAccess) this.propertyWillAccess(descriptor.name);
           return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
         },
-        ...descriptor.computed ? {} : {
+        ...descriptor.computed && !descriptor.writer ? {} : {
           set(value) {
             writeProperty(this, descriptor, value);
           }
@@ -881,7 +907,7 @@
     }
     const property = declarations(object.constructor, "properties").get(name);
     if (property) {
-      if (property.computed) {
+      if (property.computed && !property.writer) {
         throw new Error(`Read-only property: ${name}`);
       }
       return writeProperty(object, property, value);
@@ -906,7 +932,7 @@
       return { owner, key: name };
     }
     const descriptor = declarations(owner.constructor, "properties").get(name);
-    if (!descriptor || descriptor.computed) {
+    if (!descriptor || descriptor.computed && !descriptor.writer) {
       throw new Error(`Read-only binding: ${path}`);
     }
     return { owner, descriptor };
@@ -939,13 +965,13 @@
     }
     const owners = [object];
     const disposers = [];
-    const hook = (start) => {
-      for (let index = start; index < disposers.length; index += 1) disposers[index]?.();
-      disposers.length = start;
-      owners.length = start;
-      owners[start] = start === 0 ? object : read(owners[start - 1], names2[start - 1]);
-      let owner = owners[start];
-      for (let index = start; index < names2.length; index += 1) {
+    const hook = (start2) => {
+      for (let index = start2; index < disposers.length; index += 1) disposers[index]?.();
+      disposers.length = start2;
+      owners.length = start2;
+      owners[start2] = start2 === 0 ? object : read(owners[start2 - 1], names2[start2 - 1]);
+      let owner = owners[start2];
+      for (let index = start2; index < names2.length; index += 1) {
         if (owner == null) break;
         const name = names2[index];
         disposers[index] = declarations(owner.constructor, "properties").has(name) ? subscribe(owner, name, () => {
@@ -976,7 +1002,7 @@
     const methods = declarations(object.constructor, "methods");
     if (name.endsWith("=")) {
       const property = properties.get(name.slice(0, -1));
-      return !!property && !property.computed || methods.has(name);
+      return !!property && (!property.computed || property.writer) || methods.has(name);
     }
     return properties.has(name) || methods.has(name);
   }
@@ -1078,6 +1104,9 @@
   }
 
   // rb/runtime/runtime_ui.mjs
+  function warn(message) {
+    console.warn(`[Swill] ${message}`);
+  }
   var Runtime = {
     // Classes
     install,
@@ -1157,6 +1186,7 @@
     performAction,
     // Observation
     observe,
+    observed,
     observePath,
     retain,
     release,
@@ -1173,10 +1203,8 @@
     bindArguments,
     argument,
     yieldBlock,
-    // Invalid URL input is reported, not raised.
-    warn(message) {
-      console.warn(`[Swill] ${message}`);
-    }
+    // Reporting
+    warn
   };
 
   // rb/runtime/message_pack.mjs
@@ -1470,7 +1498,7 @@
       next.binaryType = "arraybuffer";
       next.addEventListener("open", () => {
         socket = next;
-        sendRaw({ type: "HELLO", protocol_version: 1, schema_hash: configuration2.schemaHash }).then((message) => {
+        sendRaw({ type: "HELLO", protocol_version: 2, schema_hash: configuration2.schemaHash }).then((message) => {
           actorScope = message.actor_scope;
           resolveConnection(next);
           connectionOpened();
@@ -1556,11 +1584,13 @@
   var framework_exports = {};
   __export(framework_exports, {
     Swill__Application: () => Swill__Application,
+    Swill__ArrayController: () => Swill__ArrayController,
     Swill__Awakening: () => Swill__Awakening,
     Swill__Binding: () => Swill__Binding,
     Swill__BindingDestination: () => Swill__BindingDestination,
     Swill__BooleanTransformer: () => Swill__BooleanTransformer,
     Swill__CheckboxBindingDestination: () => Swill__CheckboxBindingDestination,
+    Swill__CollectionArrangement: () => Swill__CollectionArrangement,
     Swill__Connections__Actions: () => Swill__Connections__Actions,
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
     Swill__Connections__Outlets: () => Swill__Connections__Outlets,
@@ -1597,6 +1627,7 @@
     Swill__Model__JSONAPI: () => Swill__Model__JSONAPI,
     Swill__Model__PlainJSON: () => Swill__Model__PlainJSON,
     Swill__Model__Relationship: () => Swill__Model__Relationship,
+    Swill__Model__RelationshipCollection: () => Swill__Model__RelationshipCollection,
     Swill__Model__Relationships: () => Swill__Model__Relationships,
     Swill__Model__Relationships_ClassMethods: () => Swill__Model__Relationships_ClassMethods,
     Swill__Model__Resource: () => Swill__Model__Resource,
@@ -2238,6 +2269,254 @@
     }
     return Swill__ObjectBindings_Layer;
   }
+  function Swill__CollectionArrangement(Superclass) {
+    class Swill__CollectionArrangement_Layer extends Superclass {
+      coercePropertyValue(name, value, previous) {
+        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+          name === "content" && value != null,
+          () => this.arrayController
+        ))) throw new Error("Use either content or array_controller, not both");
+        if (Runtime2.isTruthy(name === "array_controller" && value)) {
+          if (this.content != null) {
+            throw new Error("Use either content or array_controller, not both");
+          }
+          ;
+          let cursor = Runtime2.cast(
+            Runtime2.cast(value, "T.nilable(Swill::ArrayController)"),
+            "T.nilable(Swill::ArrayController)"
+          );
+          while (cursor) {
+            if (cursor === this) {
+              throw new Error("An array controller cannot delegate to itself");
+            }
+            ;
+            cursor = cursor.arrayController;
+          }
+        }
+        ;
+        return super.coercePropertyValue(name, value, previous);
+      }
+      // Keep the existing overridable method; the underlying computation is cached.
+      arrangedObjects() {
+        return this.arrangedContent;
+      }
+      arrangeContent() {
+        let controller = this.arrayController;
+        if (controller) return controller.arrangedObjects();
+        let source = this.content;
+        if (this.isCollection(source)) source = Runtime2.send(source, "records");
+        let objects = Runtime2.cast(
+          Runtime2.cast(
+            Runtime2.logicalOr(source, () => []),
+            "T::Array[T.untyped]"
+          ),
+          "T::Array[T.untyped]"
+        );
+        let options = this.arrangementOptions;
+        let leading = Runtime2.isEqual(options.source, this.content) ? Runtime2.cast(
+          Runtime2.logicalOr(options.leading, () => []),
+          "T::Array[T.untyped]"
+        ) : [];
+        leading = leading.filter((object) => this.includesObject(object));
+        objects = objects.filter((object) => Runtime2.isTruthy(!leading.includes(object) && this.includesObject(object)));
+        let key = Runtime2.cast(options.key, "T.nilable(String)");
+        if (key != null) {
+          let direction = options.direction === "descending" ? -1 : 1;
+          let values = Runtime2.cast(
+            objects.map((object) => [Runtime2.read(object, key), object]),
+            "T::Array[T::Array[T.untyped]]"
+          );
+          values = Runtime2.sortWith(
+            values,
+            (left, right) => this.compareSortValues(left[0], right[0]) * direction
+          );
+          objects = values.map((entry) => entry[1]);
+        }
+        ;
+        return leading.concat(objects);
+      }
+      // Property reads in this hook become arrangement dependencies automatically.
+      includesObject(_object) {
+        return true;
+      }
+      contentDidChange(_previous, _value) {
+        let options = this.arrangementOptions;
+        if (!Object.hasOwn(options, "source")) return;
+        return this.arrangementOptions = {
+          key: options.key,
+          direction: options.direction
+        };
+      }
+      isCollection(objects) {
+        return Runtime2.logicalAnd(
+          objects != null && !Array.isArray(objects),
+          () => Runtime2.respondsTo(objects, "records")
+        );
+      }
+      sort(key, direction) {
+        let controller = this.arrayController;
+        if (controller) {
+          return controller.sort(key, direction);
+        } else {
+          if (!["ascending", "descending"].includes(direction)) {
+            throw new Error("Sort direction must be ascending or descending");
+          }
+          ;
+          return this.arrangementOptions = { key, direction };
+        }
+      }
+      toggleSort(key) {
+        let direction = Runtime2.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
+        return this.sort(key, direction);
+      }
+      changeSortKey(key) {
+        return this.sort(key, this.sortDirection);
+      }
+      changeSortDirection(direction) {
+        return this.sort(this.sortKey, direction);
+      }
+      // Temporary presentation inclusion, cleared by new content or explicit sorting.
+      showFirst(object) {
+        let controller = this.arrayController;
+        if (controller) {
+          return controller.showFirst(object);
+        } else {
+          this.arrangementOptions = Object.assign(
+            {},
+            this.arrangementOptions,
+            { source: this.content, leading: [object] }
+          );
+          return this.selectObject(object);
+        }
+      }
+      // Editing a plain row replaces its source object; read-only sources reject it.
+      replaceObject(original, replacement) {
+        let controller = this.arrayController;
+        if (controller) {
+          controller.replaceObject(original, replacement);
+          return;
+        }
+        ;
+        let source = this.content;
+        let records = this.isCollection(source) ? Runtime2.send(
+          source,
+          "records"
+        ) : source;
+        let values = Runtime2.cast(
+          Runtime2.logicalOr(records, () => []),
+          "T::Array[T.untyped]"
+        ).map((object) => Runtime2.isEqual(object, original) ? replacement : object);
+        return this.isCollection(source) ? Runtime2.invoke(
+          source,
+          "replace",
+          values
+        ) : this.content = values;
+      }
+      compareSortValues(left, right) {
+        if (Runtime2.isTruthy(left == null && right == null)) return 0;
+        if (left == null) return 1;
+        if (right == null) return -1;
+        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+          Runtime2.isNumber(left),
+          () => Runtime2.isNumber(right)
+        ))) return left - right;
+        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+          Runtime2.isBoolean(left),
+          () => Runtime2.isBoolean(right)
+        ))) {
+          return (Runtime2.isTruthy(left) ? 1 : 0) - (Runtime2.isTruthy(right) ? 1 : 0);
+        }
+        ;
+        return Runtime2.compareText(
+          Runtime2.send(left, "to_s"),
+          Runtime2.send(right, "to_s")
+        );
+      }
+      arrangedSelection() {
+        let controller = this.arrayController;
+        if (controller) return controller.selectedObjects;
+        let objects = this.arrangedObjects();
+        let requested = Runtime2.cast(
+          Runtime2.logicalOr(this.selectionState.objects, () => []),
+          "T::Array[T.untyped]"
+        );
+        let selected = requested.filter((object) => objects.includes(object));
+        if (Runtime2.isEmpty(selected)) {
+          let identifier = Runtime2.cast(
+            Runtime2.logicalOr(this.selectionState.id, () => null),
+            "T.nilable(String)"
+          );
+          let found = identifier != null ? objects.find((object) => this.identifierFor(object) === identifier) : null;
+          if (Runtime2.isTruthy(found)) selected = [found];
+        }
+        ;
+        return selected;
+      }
+      selectObjects(objects) {
+        let controller = this.arrayController;
+        return controller ? controller.selectedObjects = objects : this.selectionState = {
+          objects: objects.slice(),
+          id: this.identifierFor(objects[0])
+        };
+      }
+      selectIdentifier(identifier) {
+        let controller = this.arrayController;
+        return controller ? controller.selectedObjectId = identifier : this.selectionState = {
+          objects: [],
+          id: identifier
+        };
+      }
+      selectIndexes(indexes) {
+        let arranged = this.arrangedObjects();
+        let objects = Runtime2.cast([], "T::Array[T.untyped]");
+        indexes.forEach((index) => {
+          if (Runtime2.isTruthy(index >= 0 && index < arranged.length)) {
+            Runtime2.append(objects, arranged[index]);
+          }
+        });
+        return this.selectedObjects = objects;
+      }
+      selectObject(object) {
+        return this.selectedObjects = object == null ? [] : [object];
+      }
+      deselectAll() {
+        return this.selectedObjects = [];
+      }
+      selectFirstIfNothingSelected() {
+        if (Runtime2.isTruthy(Runtime2.isEmpty(this.selectedObjects) && !Runtime2.isEmpty(this.arrangedObjects()))) {
+          return this.selectIndexes([0]);
+        }
+      }
+      objectAt(index) {
+        let objects = this.arrangedObjects();
+        return Runtime2.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
+      }
+      identifierFor(object) {
+        if (!Runtime2.isTruthy(object)) return null;
+        if (!Runtime2.isTruthy(Runtime2.respondsTo(object, "id"))) return null;
+        let value = Runtime2.send(object, "id");
+        if (value == null) return null;
+        return Runtime2.send(value, "to_s");
+      }
+      objectWithId(identifier) {
+        if (identifier == null || Runtime2.isEmpty(identifier)) return null;
+        return this.arrangedObjects().find((object) => this.identifierFor(object) === identifier);
+      }
+      currentSelection() {
+        return this.selectedObjects;
+      }
+      currentIndexes() {
+        return this.selectedIndexes;
+      }
+      // Compatibility for subclasses that previously reconciled after arranging.
+      reconcileSelection() {
+        return this.selectedObjects;
+      }
+    }
+    return Swill__CollectionArrangement_Layer;
+  }
+  var Swill__ArrayController = class extends Swill__Object {
+  };
   var Swill__Responder = class extends Swill__Object {
     // The next link in the chain, or nil at the end of it.
     nextResponder() {
@@ -4151,33 +4430,31 @@
     }
   };
   var Swill__Controller__List = class extends Swill__Controller {
+    // bind accepts either content or an explicit arrangement owner.
+    setRepresentedObject(objects) {
+      if (Runtime2.isEqual(this.representedObject, objects)) return;
+      this._setting_content = true;
+      try {
+        if (objects instanceof Swill__ArrayController) {
+          this.content = null;
+          this.arrayController = Runtime2.cast(
+            objects,
+            "Swill::ArrayController"
+          );
+        } else {
+          this.arrayController = null;
+          this.content = objects;
+        }
+      } finally {
+        this._setting_content = false;
+      }
+      ;
+      if (this._awakened) return this.renderAll();
+    }
     // NSTableHeaderView analog; never a row.
     // Where rows mount; without it, rows go into the list's own element.
     // Shift-click extends the selection from the last plain click. A multiple
     // attribute on the root turns this on from markup.
-    // Indexes of the selected objects among the arranged objects, ascending.
-    // ---- selection ----
-    selectIndexes(indexes) {
-      let arranged = this.arrangedObjects();
-      let objects = Runtime2.cast([], "T::Array[T.untyped]");
-      indexes.forEach((index) => {
-        if (Runtime2.isTruthy(index >= 0 && index < arranged.length)) {
-          Runtime2.append(objects, arranged[index]);
-        }
-      });
-      return this.selectedObjects = objects;
-    }
-    selectObject(object) {
-      return this.selectedObjects = object == null ? [] : [object];
-    }
-    deselectAll() {
-      return this.selectedObjects = [];
-    }
-    selectFirstIfNothingSelected() {
-      if (Runtime2.isTruthy(Runtime2.isEmpty(this.currentSelection()) && !Runtime2.isEmpty(this.arrangedObjects()))) {
-        return this.selectIndexes([0]);
-      }
-    }
     // Enter and double-click. By default the owner receives an
     // activate_selection target-action with this list as the sender; when no
     // responder handles it, nothing happens.
@@ -4199,11 +4476,6 @@
     selectedObjectDidChange(_previous, _object) {
       return null;
     }
-    // The arranged object at index, or nil.
-    objectAt(index) {
-      let arranged = this.arrangedObjects();
-      return Runtime2.isTruthy(index >= 0 && index < arranged.length) ? arranged[index] : null;
-    }
     // The index of the row containing element, or -1 when it is in none; the
     // way an action handler learns which row its sender sits in.
     rowFor(element) {
@@ -4224,25 +4496,19 @@
       super.awakeFromDOM();
       this.installSelection();
       this._awakened = true;
-      this.observeCollection(this.representedObject);
       return this.renderAll();
     }
     representedObjectDidChange(_previous, _objects) {
-      this.observeCollection(_objects);
+      return null;
+    }
+    arrangedContentDidChange(_previous, _objects) {
       this._selection_anchor = null;
-      if (this._awakened) this.renderAll();
-      return this.reconcileSelection();
+      if (Runtime2.isTruthy(this._awakened && !this._setting_content)) {
+        return this.renderAll();
+      }
     }
-    selectedObjectsDidChange(_previous, objects) {
-      this.syncSelectedRows();
-      if (this._syncing_selection) return;
-      return this.syncingSelection(Runtime2.blockArgument(() => this.selectedObjectId = this.identifierFor(this.leading(objects))));
-    }
-    // An id nobody carries clears the selection and stays pending.
-    selectedObjectIdDidChange(_previous, identifier) {
-      if (this._syncing_selection) return;
-      let object = this.objectWithId(identifier);
-      return this.syncingSelection(Runtime2.blockArgument(() => this.selectedObjects = Runtime2.isTruthy(object) ? [object] : []));
+    selectedObjectsDidChange(_previous, _objects) {
+      if (!this._setting_content) return this.syncSelectedRows();
     }
     // ---- keyboard ----
     // Taking the keyboard selects the first row when nothing is selected.
@@ -4288,39 +4554,6 @@
       }
     }
     // ---- rows ----
-    // The objects the rows show, in order; subclasses may sort or filter.
-    arrangedObjects() {
-      let objects = this.representedObject;
-      if (this.isCollection(objects)) objects = Runtime2.send(objects, "records");
-      return Runtime2.cast(
-        Runtime2.logicalOr(objects, () => []),
-        "T::Array[T.untyped]"
-      );
-    }
-    // A collection object, such as a Model::Collection, shows and follows its
-    // records. Asked by shape rather than class, so a list needs no model layer.
-    isCollection(objects) {
-      return Runtime2.logicalAnd(
-        objects != null && !Array.isArray(objects),
-        () => Runtime2.respondsTo(objects, "records")
-      );
-    }
-    observeCollection(objects) {
-      let observer = this._collection_observer;
-      if (Runtime2.isTruthy(observer)) observer();
-      this._collection_observer = null;
-      if (!this.isCollection(objects)) return;
-      this._collection_observer = Runtime2.observe(
-        objects,
-        "records",
-        (_value) => {
-          this._selection_anchor = null;
-          if (this._awakened) this.renderAll();
-          return this.reconcileSelection();
-        }
-      );
-      return this._collection_observer;
-    }
     // Where rows mount.
     container() {
       return Runtime2.nilable(this.rows?.element) || this._view.element;
@@ -4445,9 +4678,6 @@
         stop_mouse_down();
         stop_click();
         stop_double_click();
-        let observer = this._collection_observer;
-        if (Runtime2.isTruthy(observer)) observer();
-        this._collection_observer = null;
         this.clearRows();
         this._awakened = false;
         return this._awakened;
@@ -4495,60 +4725,6 @@
       ;
       return this.selectIndexes(indexes);
     }
-    // ---- identity ----
-    // The model id of object as a string, or nil when it has none.
-    identifierFor(object) {
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
-        object,
-        () => Runtime2.respondsTo(object, "id")
-      ))) return null;
-      let value = Runtime2.send(object, "id");
-      return value == null ? null : `${value}`;
-    }
-    objectWithId(identifier) {
-      if (identifier == null || identifier === "") return null;
-      return this.arrangedObjects().find((candidate) => this.identifierFor(candidate) === identifier);
-    }
-    // Selection survivors after the collection changed; when none remain, the
-    // id that is still wanted may now resolve.
-    reconcileSelection() {
-      let arranged = this.arrangedObjects();
-      let survivors = this.currentSelection().filter((object) => arranged.includes(object));
-      if (Runtime2.isEmpty(survivors)) {
-        let requested = this.objectWithId(this.selectedObjectId);
-        if (Runtime2.isTruthy(requested)) survivors = [requested];
-      }
-      ;
-      return this.syncingSelection(Runtime2.blockArgument(() => this.selectedObjects = survivors));
-    }
-    // A write from one side of the selection to the other is marked so the
-    // other side's hook does not write back.
-    syncingSelection(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(
-        __swill_arguments,
-        { positional: [], keywords: [], keywordRest: null, block: "block" }
-      );
-      let block = Runtime2.argument(__swill_bound, "block");
-      let _implicitBlockYield = block;
-      this._syncing_selection = true;
-      try {
-        return Runtime2.yieldBlock(_implicitBlockYield);
-      } finally {
-        this._syncing_selection = false;
-      }
-    }
-    leading(objects) {
-      return Runtime2.isTruthy(Runtime2.logicalAnd(
-        objects,
-        () => Runtime2.send(objects, "length") > 0
-      )) ? objects[0] : null;
-    }
-    currentSelection() {
-      return this.selectedObjects;
-    }
-    currentIndexes() {
-      return this.selectedIndexes;
-    }
   };
   var Swill__Controller__SortableList = class extends Swill__Controller__List {
     // The sort_by action: the sender's column names the key.
@@ -4560,73 +4736,9 @@
     sortKeyFor(sender) {
       return sender.getAttribute("data-column");
     }
-    // The same key flips the direction; a new key sorts ascending.
-    toggleSort(key) {
-      return this.sortKey === key ? this.sortDirection = this.sortDirection === "ascending" ? "descending" : "ascending" : this.sort(
-        key,
-        "ascending"
-      );
-    }
-    // Set the key and direction together, re-rendering once.
-    sort(key, direction) {
-      this._changing_sort = true;
-      try {
-        this.sortKey = key;
-        this.sortDirection = direction;
-      } finally {
-        this._changing_sort = false;
-      }
-      ;
-      return this.sortDidChange();
-    }
-    awakeFromDOM() {
-      super.awakeFromDOM();
-      return this.syncSortStates();
-    }
-    sortKeyDidChange(_previous, _key) {
-      if (!this._changing_sort) return this.sortDidChange();
-    }
-    sortDirectionDidChange(_previous, _direction) {
-      if (!this._changing_sort) return this.sortDidChange();
-    }
-    sortDidChange() {
-      this.syncSortStates();
-      if (this._awakened) return this.renderAll();
-    }
-    // The represented objects in sort order: nil values last when ascending,
-    // numbers and booleans by value, everything else as text.
-    arrangedObjects() {
-      let objects = super.arrangedObjects();
-      let key = this.sortKey;
-      if (key == null) return objects;
-      let sign = this.sortDirection === "descending" ? -1 : 1;
-      return Runtime2.sortWith(objects, (left, right) => this.compareSortValues(
-        Runtime2.read(left, key),
-        Runtime2.read(right, key)
-      ) * sign);
-    }
-    compareSortValues(left, right) {
-      if (Runtime2.isTruthy(left == null && right == null)) return 0;
-      if (left == null) return 1;
-      if (right == null) return -1;
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        Runtime2.isNumber(left),
-        () => Runtime2.isNumber(right)
-      ))) return left - right;
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        Runtime2.isBoolean(left),
-        () => Runtime2.isBoolean(right)
-      ))) {
-        return (Runtime2.isTruthy(left) ? 1 : 0) - (Runtime2.isTruthy(right) ? 1 : 0);
-      }
-      ;
-      return Runtime2.compareText(`${left}`, `${right}`);
-    }
+    // Compatibility for subclasses; sort state is now derived from arrangement.
     syncSortStates() {
-      let key = this.sortKey;
-      let states2 = Runtime2.cast({}, "T::Hash[String, String]");
-      if (key != null) states2[key] = this.sortDirection;
-      return this.sortStates = states2;
+      return this.sortStates;
     }
   };
   var Swill__Controller__Editor = class extends Swill__Controller {
@@ -4806,6 +4918,11 @@
       if (this.isEditing()) this.endEditing(false);
       return super.representedObjectDidChange(previous, objects);
     }
+    // An external arrangement or background refresh can also remove the row.
+    arrangedContentDidChange(previous, objects) {
+      if (this.isEditing()) this.endEditing(false);
+      return super.arrangedContentDidChange(previous, objects);
+    }
     // ---- policy hooks ----
     commitEdit(copy, original, index) {
       if (original instanceof Swill__Model__DistantObject) {
@@ -4832,14 +4949,7 @@
         return original;
       }
       ;
-      let source = Runtime2.cast(
-        Runtime2.logicalOr(this.representedObject, () => []),
-        "T::Array[T.untyped]"
-      );
-      let source_index = Runtime2.indexOf(source, original);
-      let values = source.slice();
-      if (source_index != null) values[source_index] = copy;
-      this.representedObject = values;
+      this.replaceObject(original, copy);
       return copy;
     }
     // An error that refuses the commit, or nil. Attribute validators already
@@ -5227,6 +5337,54 @@
       return this.records[index];
     }
   };
+  var Swill__Model__RelationshipCollection = class extends Swill__Model__Collection {
+    isStale() {
+      return this.stale;
+    }
+    attachRelationship(owner, name) {
+      this._relationship_owner = owner;
+      this._relationship_name = name;
+      return this._relationship_name;
+    }
+    propertyWillAccess(name) {
+      super.propertyWillAccess(name);
+      let owner = this._relationship_owner;
+      if (Runtime2.isTruthy(owner && name === "records")) {
+        return owner.propertyWillAccess(this._relationship_name);
+      }
+    }
+    constructor() {
+      super();
+      this._applying_membership = Runtime2.cast(false, "T::Boolean");
+      this._relationship_owner = Runtime2.cast(
+        null,
+        "T.nilable(Swill::Model::DistantObject)"
+      );
+      this._relationship_name = Runtime2.cast("", "String");
+      Object.freeze(this.records);
+    }
+    replace(_records) {
+      return (() => {
+        throw new Error("Relationship membership is read-only; use a server operation");
+      })();
+    }
+    coercePropertyValue(name, value, previous) {
+      if (Runtime2.isTruthy(name === "records" && !this._applying_membership)) {
+        throw new Error("Relationship membership is read-only; use a server operation");
+      }
+      ;
+      return super.coercePropertyValue(name, value, previous);
+    }
+    // Internal hydration entry point. Copy once per patch, never per read.
+    applyMembership(records) {
+      this._applying_membership = true;
+      try {
+        return this.records = Object.freeze(records.slice());
+      } finally {
+        this._applying_membership = false;
+      }
+    }
+  };
   var Swill__Model__ResultSet = class extends Swill__Model__Collection {
   };
   var Swill__Model__DistantClient = class _Swill__Model__DistantClient extends Swill__Object {
@@ -5367,25 +5525,18 @@
       return this.scheduleDemands();
     }
     async loadField(object, name, reload) {
-      if (Runtime2.isTruthy(!reload && object.dataFieldLoaded(name))) {
-        return Runtime2.read(object, name);
-      }
-      ;
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        !reload && object.dataFieldLoaded(name),
+        () => !object.dataFieldStale(name)
+      ))) return Runtime2.read(object, name);
       object.beginDataFieldLoad(name, true);
-      try {
-        await this.request(
-          "GET",
-          { demands: [this.demandHash(object, [name])] },
-          null,
-          false
-        );
-        return Runtime2.read(object, name);
-      } catch (error) {
-        object.failDataField(name, error.message);
-        return (() => {
-          throw new Error(`${error.message}`);
-        })();
-      }
+      await this.request(
+        "GET",
+        { demands: [this.demandHash(object, [name])] },
+        null,
+        false
+      );
+      return Runtime2.read(object, name);
     }
     // A changed actor or an explicit close invalidates every identity.
     reset() {
@@ -5584,12 +5735,46 @@
       });
       return object;
     }
+    // Invalidations affect cached objects only; they never instantiate a graph.
+    applyInvalidation(effect) {
+      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
+        effect.id,
+        "to_s"
+      )];
+      if (!Runtime2.isTruthy(object)) return;
+      let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
+      if (distant.isDeleted) return;
+      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => distant.invalidateDataField(
+        name,
+        Runtime2.cast(effect.generation, "Integer")
+      ));
+    }
+    refreshObserved(effect) {
+      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
+        effect.id,
+        "to_s"
+      )];
+      if (!Runtime2.isTruthy(object)) return;
+      let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
+      if (distant.isDeleted) return;
+      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => {
+        if (Runtime2.isTruthy(distant.dataFieldStale(name) && distant.dataFieldObserved(name))) {
+          this.demand(distant, name);
+        }
+      });
+    }
     applyEnvelope(message, response_generation, preferred, overwrite_dirty) {
+      let invalidations = Runtime2.cast(
+        Runtime2.logicalOr(message.invalidations, () => []),
+        "T::Array[T::Hash[String, T.untyped]]"
+      );
+      invalidations.forEach((effect) => this.applyInvalidation(effect));
       let patches = Runtime2.cast(
         Runtime2.logicalOr(message.patches, () => []),
         "T::Array[T::Hash[String, T.untyped]]"
       );
       patches.forEach((patch) => this.applyPatch(patch, preferred, overwrite_dirty));
+      invalidations.forEach((effect) => this.refreshObserved(effect));
       return this.decodeValueWithPreferred(
         message.value,
         response_generation,
@@ -5614,6 +5799,10 @@
         contents,
         { generation: operation_generation }
       );
+      if (type === "GET") {
+        this.updateDemandState(contents, operation_generation, null);
+      }
+      ;
       try {
         let raw = await Runtime2.dataRequest(type, payload);
         let received = Runtime2.cast(raw, "T::Hash[String, T.untyped]");
@@ -5636,10 +5825,36 @@
           ),
           operation_generation
         ];
+      } catch (error) {
+        if (type === "GET") {
+          this.updateDemandState(contents, operation_generation, error.message);
+        }
+        ;
+        return (() => {
+          throw error;
+        })();
       } finally {
         this._active_generations = this._active_generations.filter((item) => !(item === operation_generation));
         this.pruneTombstones();
       }
+    }
+    updateDemandState(contents, generation, error) {
+      return Runtime2.cast(
+        contents.demands,
+        "T::Array[T::Hash[String, T.untyped]]"
+      ).forEach((item) => {
+        let object = this.modelStore(Runtime2.send(item.model, "to_s"))[Runtime2.send(
+          item.id,
+          "to_s"
+        )];
+        if (!Runtime2.isTruthy(object)) return;
+        let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
+        return Runtime2.cast(item.fields, "T::Array[String]").forEach((name) => error != null ? distant.failDataFieldWithGeneration(
+          name,
+          error,
+          generation
+        ) : distant.dataRequestStarted(name, generation));
+      });
     }
     modelStore(model) {
       return this._stores[model] ||= {};
@@ -5708,10 +5923,6 @@
           });
         }
         ;
-        batch.forEach((item) => {
-          let object = Runtime2.cast(item.object, "Swill::Model::DistantObject");
-          return Runtime2.cast(item.fields, "T::Array[String]").forEach((name) => object.failDataField(name, error.message));
-        });
         return Runtime2.warn(`data did not load: ${error.message}`);
       }
     }
@@ -5739,11 +5950,14 @@
       // :nodoc:
       // Declares the authoritative server model name used on the wire.
       // Declares a partially loadable scalar field.
-      // Declares a partially loadable to-one relationship.
-      // Declares a partially loadable to-many relationship.
+      // Names mirror Sequel; persistence options stay on the server.
       // Whether +name+ has an authoritative value, including nil.
       isFieldLoaded(name) {
         return this.dataFieldLoaded(name);
+      }
+      // Cached data remains readable while an invalidated relationship refreshes.
+      isFieldStale(name) {
+        return this.dataFieldStale(name);
       }
       // Whether +name+ currently has a request in flight.
       isFieldLoading(name) {
@@ -5768,7 +5982,7 @@
     Object.setPrototypeOf(Swill__Model__DistantData_ClassMethods_Layer.prototype, Superclass);
     return Swill__Model__DistantData_ClassMethods_Layer.prototype;
   }
-  var Swill__Model__DistantObject = class extends Swill__Model__Editable {
+  var Swill__Model__DistantObject = class _Swill__Model__DistantObject extends Swill__Model__Editable {
     // Gives each to-many relationship its stable collection.
     constructor() {
       super();
@@ -5780,15 +5994,70 @@
         null,
         "T.nilable(Swill::Model::DistantObject)"
       );
+      this._applying_relationship = Runtime2.cast(false, "T::Boolean");
+      this._data_controllers = Runtime2.cast(
+        {},
+        "T::Hash[String, ArrayController]"
+      );
+      this._data_collections = Runtime2.cast(
+        {},
+        "T::Hash[String, RelationshipCollection[T.untyped]]"
+      );
       Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
         if (descriptor.kind !== "many") return;
-        return Runtime2.write(this, name, new Swill__Model__Collection());
+        let collection = new Swill__Model__RelationshipCollection();
+        collection.attachRelationship(this, name);
+        this._data_collections[name] = collection;
+        return this.writeDataRelationship(name, collection);
       });
+    }
+    // Shared presentation is opt-in; constructing the controller does not load.
+    relationshipController(name) {
+      let existing = this._data_controllers[name];
+      if (existing) return existing;
+      let collection = this._data_collections[name];
+      if (!collection) throw new Error(`Unknown to-many relationship ${name}`);
+      let controller = new Swill__ArrayController();
+      controller.content = collection;
+      this._data_controllers[name] = controller;
+      return controller;
+    }
+    releaseRelationshipControllers() {
+      Object.entries(this._data_controllers).forEach(([_name, controller]) => {
+        Runtime2.write(controller, "content", null);
+        return Runtime2.send(controller, "dealloc");
+      });
+      this._data_controllers = {};
+      return this._data_controllers;
+    }
+    disconnect() {
+      this.releaseRelationshipControllers();
+      return super.disconnect();
+    }
+    coercePropertyValue(name, value, previous) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        Runtime2.logicalAnd(descriptor, () => descriptor.kind !== "field"),
+        () => !this._applying_relationship
+      ))) {
+        throw new Error(`Relationship ${name} is read-only; use a server operation`);
+      }
+      ;
+      return super.coercePropertyValue(name, value, previous);
+    }
+    // Internal writes still use the ordinary observation machinery.
+    writeDataRelationship(name, value) {
+      this._applying_relationship = true;
+      try {
+        return Runtime2.write(this, name, value);
+      } finally {
+        this._applying_relationship = false;
+      }
     }
     // Schedules hydration when a declared member is unknown.
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
-      if (this.isDraft() || this.isDeleted) return;
+      if (this._syncing_data_collection || this.isDraft() || this.isDeleted) return;
       if (Object.hasOwn(this.constructor.dataFields(), name)) {
         return Swill__Model__DistantClient.default().demand(this, name);
       }
@@ -5910,7 +6179,33 @@
       return this._data_draft_source === original;
     }
     dataFieldLoaded(name) {
-      return this.dataFieldState(name).status === "present";
+      return this.dataFieldState(name).loaded === true;
+    }
+    dataFieldStale(name) {
+      return this.dataFieldState(name).stale === true;
+    }
+    // A generation watermark prevents older hydration from clearing staleness.
+    invalidateDataField(name, generation) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+        descriptor,
+        () => descriptor.kind !== "field"
+      ))) return;
+      let state2 = this.dataFieldState(name);
+      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
+      state2.generation = generation;
+      state2.stale = true;
+      state2.status = "stale";
+      state2.error = null;
+      return this.syncDataCollection(name);
+    }
+    dataFieldObserved(name) {
+      if (Runtime2.isTruthy(Runtime2.observed(this, name))) return true;
+      let collection = this._data_collections[name];
+      return collection != null && Runtime2.observed(collection, "records");
+    }
+    dataRequestStarted(name, generation) {
+      return this.dataFieldState(name).request_generation = generation;
     }
     dataFieldLoading(name) {
       return this.dataFieldState(name).status === "loading";
@@ -5924,21 +6219,35 @@
     // Returns whether a request should be made.
     beginDataFieldLoad(name, reload) {
       let state2 = this.dataFieldState(name);
-      if (Runtime2.isTruthy(!reload && state2.status === "present")) return false;
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        !reload && state2.loaded,
+        () => !Runtime2.isTruthy(state2.stale)
+      ))) return false;
       if (Runtime2.isTruthy(!reload && state2.status === "loading")) return false;
       state2.status = "loading";
       state2.error = null;
+      this.syncDataCollection(name);
       return true;
     }
-    failDataField(name, message) {
+    failDataFieldWithGeneration(name, message, generation) {
       let state2 = this.dataFieldState(name);
+      if (Runtime2.isTruthy(generation != null ? (() => {
+        return generation < Runtime2.cast(state2.generation, "Integer") || generation < Runtime2.cast(
+          state2.request_generation,
+          "Integer"
+        );
+      })() : generation)) return;
       state2.status = "failed";
-      return state2.error = message;
+      state2.error = message;
+      return this.syncDataCollection(name);
     }
     presentDataField(name) {
       let state2 = this.dataFieldState(name);
       state2.status = "present";
-      return state2.error = null;
+      state2.loaded = true;
+      state2.stale = false;
+      state2.error = null;
+      return this.syncDataCollection(name);
     }
     // Apply one authoritative member unless a newer response already won.
     applyDataField(name, value, generation, overwrite_dirty) {
@@ -5946,6 +6255,8 @@
       if (generation < Runtime2.cast(state2.generation, "Integer")) return;
       state2.generation = generation;
       state2.status = "present";
+      state2.loaded = true;
+      state2.stale = false;
       state2.error = null;
       if (Runtime2.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
         return;
@@ -5956,29 +6267,68 @@
         descriptor,
         () => descriptor.kind === "many"
       ))) {
-        return Runtime2.cast(
-          Runtime2.read(this, name),
-          "Swill::Model::Collection"
-        ).replace(Runtime2.cast(value, "T::Array[T.untyped]"));
+        let collection = Runtime2.must(this._data_collections[name]);
+        collection.applyMembership(Runtime2.cast(
+          Runtime2.logicalOr(value, () => []),
+          "T::Array[T.untyped]"
+        ));
       } else if (Runtime2.isTruthy(Runtime2.logicalOr(
         Runtime2.logicalAnd(descriptor, () => descriptor.kind === "field"),
         () => name === "id"
       ))) {
-        return this.applyAttributes({ [name]: value });
+        this.applyAttributes({ [name]: value });
       } else {
-        return Runtime2.write(this, name, value);
+        this.writeDataRelationship(name, value);
       }
+      ;
+      return this.syncDataCollection(name);
     }
     resetDataFields() {
+      this.releaseRelationshipControllers();
       this._data_field_states = {};
-      return this._data_field_states;
+      return Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
+        if (descriptor.kind === "many") this.syncDataCollection(name);
+      });
+    }
+    // Mirror the owner's authoritative state without demanding another load.
+    syncDataCollection(name) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+        descriptor,
+        () => descriptor.kind === "many"
+      ))) return;
+      this._syncing_data_collection = true;
+      try {
+        let collection = Runtime2.must(this._data_collections[name]);
+        let state2 = this.dataFieldState(name);
+        collection.loaded = state2.loaded === true;
+        collection.stale = state2.stale === true;
+        collection.loading = state2.status === "loading";
+        return collection.error = Runtime2.cast(
+          state2.error,
+          "T.nilable(String)"
+        );
+      } finally {
+        this._syncing_data_collection = false;
+      }
     }
     dataFieldState(name) {
       return this._data_field_states[name] ||= {
         status: "unknown",
+        loaded: false,
+        stale: false,
         error: null,
-        generation: -1
+        generation: -1,
+        request_generation: -1
       };
+    }
+    failDataField(name, message) {
+      return _Swill__Model__DistantObject.prototype.failDataFieldWithGeneration.call(
+        this,
+        name,
+        message,
+        null
+      );
     }
   };
   var Swill__Model__Relationship = class extends Swill__Object {
@@ -6448,6 +6798,114 @@
           }
         }
       },
+      "Swill::CollectionArrangement": {
+        factory: Swill__CollectionArrangement,
+        methods: {
+          "coerce_property_value": {
+            "arity": 3,
+            "js": "coercePropertyValue"
+          },
+          "arranged_objects": {
+            "arity": 0,
+            "js": "arrangedObjects"
+          },
+          "arrange_content": {
+            "arity": 0,
+            "js": "arrangeContent"
+          },
+          "includes_object?": {
+            "arity": 1,
+            "js": "includesObject"
+          },
+          "content_did_change": {
+            "arity": 2,
+            "js": "contentDidChange"
+          },
+          "collection?": {
+            "arity": 1,
+            "js": "isCollection"
+          },
+          "sort": {
+            "arity": 2
+          },
+          "toggle_sort": {
+            "arity": 1,
+            "js": "toggleSort"
+          },
+          "change_sort_key": {
+            "arity": 1,
+            "js": "changeSortKey"
+          },
+          "change_sort_direction": {
+            "arity": 1,
+            "js": "changeSortDirection"
+          },
+          "show_first": {
+            "arity": 1,
+            "js": "showFirst"
+          },
+          "replace_object": {
+            "arity": 2,
+            "js": "replaceObject"
+          },
+          "compare_sort_values": {
+            "arity": 2,
+            "js": "compareSortValues"
+          },
+          "arranged_selection": {
+            "arity": 0,
+            "js": "arrangedSelection"
+          },
+          "select_objects": {
+            "arity": 1,
+            "js": "selectObjects"
+          },
+          "select_identifier": {
+            "arity": 1,
+            "js": "selectIdentifier"
+          },
+          "select_indexes": {
+            "arity": 1,
+            "js": "selectIndexes"
+          },
+          "select_object": {
+            "arity": 1,
+            "js": "selectObject"
+          },
+          "deselect_all": {
+            "arity": 0,
+            "js": "deselectAll"
+          },
+          "select_first_if_nothing_selected": {
+            "arity": 0,
+            "js": "selectFirstIfNothingSelected"
+          },
+          "object_at": {
+            "arity": 1,
+            "js": "objectAt"
+          },
+          "identifier_for": {
+            "arity": 1,
+            "js": "identifierFor"
+          },
+          "object_with_id": {
+            "arity": 1,
+            "js": "objectWithId"
+          },
+          "current_selection": {
+            "arity": 0,
+            "js": "currentSelection"
+          },
+          "current_indexes": {
+            "arity": 0,
+            "js": "currentIndexes"
+          },
+          "reconcile_selection": {
+            "arity": 0,
+            "js": "reconcileSelection"
+          }
+        }
+      },
       "Swill::Connections::Bindings": {
         factory: Swill__Connections__Bindings,
         methods: {}
@@ -6551,6 +7009,10 @@
           "field_loaded?": {
             "arity": 1,
             "js": "isFieldLoaded"
+          },
+          "field_stale?": {
+            "arity": 1,
+            "js": "isFieldStale"
           },
           "field_loading?": {
             "arity": 1,
@@ -6826,6 +7288,133 @@
       "Swill::Binding": {
         constructor: Swill__Binding,
         properties: {},
+        methods: {}
+      },
+      "Swill::ArrayController": {
+        constructor: Swill__ArrayController,
+        mixins: [Swill__CollectionArrangement, Swill__ObjectBindings],
+        properties: {
+          "content": {
+            type: "T.untyped",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "array_controller": {
+            js: "arrayController",
+            type: "T.nilable(Swill::ArrayController)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "arrangement_options": {
+            js: "arrangementOptions",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
+            }
+          },
+          "selection_state": {
+            js: "selectionState",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
+            }
+          },
+          "arranged_content": {
+            js: "arrangedContent",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            compute: function compute_arrangedContent() {
+              return this.arrangeContent();
+            }
+          },
+          "selected_objects": {
+            js: "selectedObjects",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            writer: "selectObjects",
+            compute: function compute_selectedObjects() {
+              return this.arrangedSelection();
+            }
+          },
+          "selected_object_id": {
+            js: "selectedObjectId",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "selectIdentifier",
+            compute: function compute_selectedObjectId() {
+              let controller = this.arrayController;
+              return controller ? controller.selectedObjectId : Runtime2.cast(
+                Runtime2.logicalOr(this.selectionState.id, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "selected_object": {
+            js: "selectedObject",
+            type: "T.untyped",
+            attribute: false,
+            compute: function compute_selectedObject() {
+              return Runtime2.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+            }
+          },
+          "selected_indexes": {
+            js: "selectedIndexes",
+            type: "T::Array[Integer]",
+            attribute: false,
+            compute: function compute_selectedIndexes() {
+              let selected = this.selectedObjects;
+              let indexes = Runtime2.cast([], "T::Array[Integer]");
+              this.arrangedObjects().forEach((object, index) => {
+                if (selected.includes(object)) Runtime2.append(indexes, index);
+              });
+              return indexes;
+            }
+          },
+          "sort_key": {
+            js: "sortKey",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "changeSortKey",
+            compute: function compute_sortKey() {
+              let controller = this.arrayController;
+              return controller ? controller.sortKey : Runtime2.cast(
+                Runtime2.logicalOr(this.arrangementOptions.key, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "sort_direction": {
+            js: "sortDirection",
+            type: "String",
+            attribute: false,
+            writer: "changeSortDirection",
+            compute: function compute_sortDirection() {
+              let controller = this.arrayController;
+              return controller ? controller.sortDirection : Runtime2.cast(
+                Runtime2.logicalOr(
+                  this.arrangementOptions.direction,
+                  () => "ascending"
+                ),
+                "String"
+              );
+            }
+          },
+          "sort_states": {
+            js: "sortStates",
+            type: "T::Hash[String, String]",
+            attribute: false,
+            compute: function compute_sortStates() {
+              let key = this.sortKey;
+              return key != null ? { [key]: this.sortDirection } : {};
+            }
+          }
+        },
         methods: {}
       },
       "Swill::Responder": {
@@ -7605,7 +8194,137 @@
       },
       "Swill::Controller::List": {
         constructor: Swill__Controller__List,
+        mixins: [Swill__CollectionArrangement],
         properties: {
+          "content": {
+            type: "T.untyped",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "array_controller": {
+            js: "arrayController",
+            type: "T.nilable(Swill::ArrayController)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "arrangement_options": {
+            js: "arrangementOptions",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
+            }
+          },
+          "selection_state": {
+            js: "selectionState",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
+            }
+          },
+          "arranged_content": {
+            js: "arrangedContent",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            compute: function compute_arrangedContent2() {
+              return this.arrangeContent();
+            }
+          },
+          "selected_objects": {
+            js: "selectedObjects",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            writer: "selectObjects",
+            compute: function compute_selectedObjects2() {
+              return this.arrangedSelection();
+            }
+          },
+          "selected_object_id": {
+            js: "selectedObjectId",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "selectIdentifier",
+            compute: function compute_selectedObjectId2() {
+              let controller = this.arrayController;
+              return controller ? controller.selectedObjectId : Runtime2.cast(
+                Runtime2.logicalOr(this.selectionState.id, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "selected_object": {
+            js: "selectedObject",
+            type: "T.untyped",
+            attribute: false,
+            compute: function compute_selectedObject2() {
+              return Runtime2.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+            }
+          },
+          "selected_indexes": {
+            js: "selectedIndexes",
+            type: "T::Array[Integer]",
+            attribute: false,
+            compute: function compute_selectedIndexes2() {
+              let selected = this.selectedObjects;
+              let indexes = Runtime2.cast([], "T::Array[Integer]");
+              this.arrangedObjects().forEach((object, index) => {
+                if (selected.includes(object)) Runtime2.append(indexes, index);
+              });
+              return indexes;
+            }
+          },
+          "sort_key": {
+            js: "sortKey",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "changeSortKey",
+            compute: function compute_sortKey2() {
+              let controller = this.arrayController;
+              return controller ? controller.sortKey : Runtime2.cast(
+                Runtime2.logicalOr(this.arrangementOptions.key, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "sort_direction": {
+            js: "sortDirection",
+            type: "String",
+            attribute: false,
+            writer: "changeSortDirection",
+            compute: function compute_sortDirection2() {
+              let controller = this.arrayController;
+              return controller ? controller.sortDirection : Runtime2.cast(
+                Runtime2.logicalOr(
+                  this.arrangementOptions.direction,
+                  () => "ascending"
+                ),
+                "String"
+              );
+            }
+          },
+          "sort_states": {
+            js: "sortStates",
+            type: "T::Hash[String, String]",
+            attribute: false,
+            compute: function compute_sortStates2() {
+              let key = this.sortKey;
+              return key != null ? { [key]: this.sortDirection } : {};
+            }
+          },
+          "represented_object": {
+            js: "representedObject",
+            type: "T.untyped",
+            attribute: false,
+            writer: "setRepresentedObject",
+            compute: function compute_representedObject() {
+              return this.arrayController || this.content;
+            }
+          },
           "header_view": {
             js: "headerView",
             type: "T.nilable(Swill::View)",
@@ -7632,61 +8351,12 @@
             defaultValue() {
               return false;
             }
-          },
-          "selected_objects": {
-            js: "selectedObjects",
-            type: "T::Array[T.untyped]",
-            attribute: false,
-            defaultValue() {
-              return [];
-            }
-          },
-          "selected_object_id": {
-            js: "selectedObjectId",
-            type: "T.nilable(String)",
-            attribute: false,
-            defaultValue() {
-              return null;
-            }
-          },
-          "selected_indexes": {
-            js: "selectedIndexes",
-            type: "T::Array[Integer]",
-            attribute: false,
-            compute: function compute_selectedIndexes() {
-              let selection = this.currentSelection();
-              let found = Runtime2.cast([], "T::Array[Integer]");
-              this.arrangedObjects().forEach((object, index) => {
-                if (selection.includes(object)) Runtime2.append(found, index);
-              });
-              return found;
-            }
-          },
-          "selected_object": {
-            js: "selectedObject",
-            type: "T.untyped",
-            attribute: false,
-            compute: function compute_selectedObject() {
-              return this.leading(this.currentSelection());
-            }
           }
         },
         methods: {
-          "select_indexes": {
+          "set_represented_object": {
             "arity": 1,
-            "js": "selectIndexes"
-          },
-          "select_object": {
-            "arity": 1,
-            "js": "selectObject"
-          },
-          "deselect_all": {
-            "arity": 0,
-            "js": "deselectAll"
-          },
-          "select_first_if_nothing_selected": {
-            "arity": 0,
-            "js": "selectFirstIfNothingSelected"
+            "js": "setRepresentedObject"
           },
           "activate_selection": {
             "arity": 0,
@@ -7695,10 +8365,6 @@
           "selected_object_did_change": {
             "arity": 2,
             "js": "selectedObjectDidChange"
-          },
-          "object_at": {
-            "arity": 1,
-            "js": "objectAt"
           },
           "row_for": {
             "arity": 1,
@@ -7716,13 +8382,13 @@
             "arity": 2,
             "js": "representedObjectDidChange"
           },
+          "arranged_content_did_change": {
+            "arity": 2,
+            "js": "arrangedContentDidChange"
+          },
           "selected_objects_did_change": {
             "arity": 2,
             "js": "selectedObjectsDidChange"
-          },
-          "selected_object_id_did_change": {
-            "arity": 2,
-            "js": "selectedObjectIdDidChange"
           },
           "become_first_responder": {
             "arity": 0,
@@ -7735,18 +8401,6 @@
           "insert_newline": {
             "arity": 1,
             "js": "insertNewline"
-          },
-          "arranged_objects": {
-            "arity": 0,
-            "js": "arrangedObjects"
-          },
-          "collection?": {
-            "arity": 1,
-            "js": "isCollection"
-          },
-          "observe_collection": {
-            "arity": 1,
-            "js": "observeCollection"
           },
           "container": {
             "arity": 0
@@ -7818,66 +8472,12 @@
           "select_range": {
             "arity": 2,
             "js": "selectRange"
-          },
-          "identifier_for": {
-            "arity": 1,
-            "js": "identifierFor"
-          },
-          "object_with_id": {
-            "arity": 1,
-            "js": "objectWithId"
-          },
-          "reconcile_selection": {
-            "arity": 0,
-            "js": "reconcileSelection"
-          },
-          "syncing_selection": {
-            "arity": 0,
-            "minimum": 0,
-            "maximum": 0,
-            "js": "syncingSelection"
-          },
-          "leading": {
-            "arity": 1
-          },
-          "current_selection": {
-            "arity": 0,
-            "js": "currentSelection"
-          },
-          "current_indexes": {
-            "arity": 0,
-            "js": "currentIndexes"
           }
         }
       },
       "Swill::Controller::SortableList": {
         constructor: Swill__Controller__SortableList,
-        properties: {
-          "sort_key": {
-            js: "sortKey",
-            type: "T.nilable(String)",
-            attribute: false,
-            defaultValue() {
-              return null;
-            }
-          },
-          "sort_direction": {
-            js: "sortDirection",
-            type: "String",
-            attribute: false,
-            defaultValue() {
-              return "ascending";
-            }
-          },
-          "sort_states": {
-            js: "sortStates",
-            type: "T::Hash[String, String]",
-            attribute: false,
-            defaultValue() {
-              return {};
-            }
-          }
-        },
+        properties: {},
         methods: {
           "sort_by": {
             "arity": 1,
@@ -7886,37 +8486,6 @@
           "sort_key_for": {
             "arity": 1,
             "js": "sortKeyFor"
-          },
-          "toggle_sort": {
-            "arity": 1,
-            "js": "toggleSort"
-          },
-          "sort": {
-            "arity": 2
-          },
-          "awake_from_dom": {
-            "arity": 0,
-            "js": "awakeFromDOM"
-          },
-          "sort_key_did_change": {
-            "arity": 2,
-            "js": "sortKeyDidChange"
-          },
-          "sort_direction_did_change": {
-            "arity": 2,
-            "js": "sortDirectionDidChange"
-          },
-          "sort_did_change": {
-            "arity": 0,
-            "js": "sortDidChange"
-          },
-          "arranged_objects": {
-            "arity": 0,
-            "js": "arrangedObjects"
-          },
-          "compare_sort_values": {
-            "arity": 2,
-            "js": "compareSortValues"
           },
           "sync_sort_states": {
             "arity": 0,
@@ -8057,6 +8626,10 @@
           "represented_object_did_change": {
             "arity": 2,
             "js": "representedObjectDidChange"
+          },
+          "arranged_content_did_change": {
+            "arity": 2,
+            "js": "arrangedContentDidChange"
           },
           "commit_edit": {
             "arity": 3,
@@ -8251,6 +8824,54 @@
           }
         }
       },
+      "Swill::Model::RelationshipCollection": {
+        constructor: Swill__Model__RelationshipCollection,
+        properties: {
+          "records": {
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            willAccess: true,
+            defaultValue() {
+              return [];
+            }
+          },
+          "stale": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          }
+        },
+        methods: {
+          "stale?": {
+            "arity": 0,
+            "js": "isStale"
+          },
+          "attach_relationship": {
+            "arity": 2,
+            "js": "attachRelationship"
+          },
+          "property_will_access": {
+            "arity": 1,
+            "js": "propertyWillAccess"
+          },
+          "initialize": {
+            "arity": 0
+          },
+          "replace": {
+            "arity": 1
+          },
+          "coerce_property_value": {
+            "arity": 3,
+            "js": "coercePropertyValue"
+          },
+          "apply_membership": {
+            "arity": 1,
+            "js": "applyMembership"
+          }
+        }
+      },
       "Swill::Model::ResultSet": {
         constructor: Swill__Model__ResultSet,
         properties: {},
@@ -8339,6 +8960,14 @@
             "arity": 3,
             "js": "applyPatch"
           },
+          "apply_invalidation": {
+            "arity": 1,
+            "js": "applyInvalidation"
+          },
+          "refresh_observed": {
+            "arity": 1,
+            "js": "refreshObserved"
+          },
           "apply_envelope": {
             "arity": 4,
             "js": "applyEnvelope"
@@ -8349,6 +8978,10 @@
           "request_with_generation": {
             "arity": 4,
             "js": "requestWithGeneration"
+          },
+          "update_demand_state": {
+            "arity": 3,
+            "js": "updateDemandState"
           },
           "model_store": {
             "arity": 1,
@@ -8400,6 +9033,25 @@
           "initialize": {
             "arity": 0
           },
+          "relationship_controller": {
+            "arity": 1,
+            "js": "relationshipController"
+          },
+          "release_relationship_controllers": {
+            "arity": 0,
+            "js": "releaseRelationshipControllers"
+          },
+          "disconnect": {
+            "arity": 0
+          },
+          "coerce_property_value": {
+            "arity": 3,
+            "js": "coercePropertyValue"
+          },
+          "write_data_relationship": {
+            "arity": 2,
+            "js": "writeDataRelationship"
+          },
           "property_will_access": {
             "arity": 1,
             "js": "propertyWillAccess"
@@ -8441,6 +9093,22 @@
             "arity": 1,
             "js": "dataFieldLoaded"
           },
+          "data_field_stale": {
+            "arity": 1,
+            "js": "dataFieldStale"
+          },
+          "invalidate_data_field": {
+            "arity": 2,
+            "js": "invalidateDataField"
+          },
+          "data_field_observed": {
+            "arity": 1,
+            "js": "dataFieldObserved"
+          },
+          "data_request_started": {
+            "arity": 2,
+            "js": "dataRequestStarted"
+          },
           "data_field_loading": {
             "arity": 1,
             "js": "dataFieldLoading"
@@ -8457,6 +9125,11 @@
             "arity": 2,
             "js": "failDataField"
           },
+          "fail_data_field_with_generation": {
+            "arity": 3,
+            "js": "failDataFieldWithGeneration",
+            "family": "fail_data_field"
+          },
           "present_data_field": {
             "arity": 1,
             "js": "presentDataField"
@@ -8468,6 +9141,10 @@
           "reset_data_fields": {
             "arity": 0,
             "js": "resetDataFields"
+          },
+          "sync_data_collection": {
+            "arity": 1,
+            "js": "syncDataCollection"
           },
           "data_field_state": {
             "arity": 1,
@@ -8704,116 +9381,73 @@
     }
     return { properties, methods };
   }
-  function browserAPI(definitions, Runtime3) {
-    const Controller = definitions.Swill__Controller;
-    const Application = definitions.Swill__Application;
-    const View = definitions.Swill__View;
-    const List = definitions.Swill__Controller__List;
-    const SortableList = definitions.Swill__Controller__SortableList;
-    const Editor = definitions.Swill__Controller__Editor;
-    const InlineEditor = definitions.Swill__Controller__InlineEditor;
-    const EditableList = definitions.Swill__Controller__EditableList;
-    const Control = definitions.Swill__Control;
-    const TextField = definitions.Swill__Control__TextField;
-    const Select = definitions.Swill__Control__Select;
-    const CustomSelect = definitions.Swill__Control__CustomSelect;
-    const NotificationCenter = definitions.Swill__NotificationCenter;
-    const Wire = definitions.Swill__Wire;
-    const ValueTransformer = definitions.Swill__ValueTransformer;
-    const Model = definitions.Swill__Model__Base && Object.freeze({
-      Base: definitions.Swill__Model__Base,
-      Editable: definitions.Swill__Model__Editable,
-      Resource: definitions.Swill__Model__Resource,
-      DistantObject: definitions.Swill__Model__DistantObject,
-      Store: definitions.Swill__Model__Store,
-      Codec: definitions.Swill__Model__Codec,
-      PlainJSON: definitions.Swill__Model__PlainJSON,
-      JSONAPI: definitions.Swill__Model__JSONAPI,
-      Dataset: definitions.Swill__Model__Dataset,
-      Collection: definitions.Swill__Model__Collection,
-      ResultSet: definitions.Swill__Model__ResultSet
+  var framework = null;
+  function register(name, klass) {
+    if (arguments.length === 1) {
+      klass = name;
+      name = klass?.name;
+    }
+    if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
+    if (typeof name !== "string" || name.trim().length === 0) {
+      throw new TypeError("Registered classes need a name");
+    }
+    if (registered2.has(klass)) throw new Error(`Class already registered: ${name}`);
+    const parent = Object.getPrototypeOf(klass);
+    if (!framework.roots.has(parent) && !registered2.has(parent)) {
+      throw new Error(`Register the parent class before ${name}`);
+    }
+    const { properties, methods } = declarationsFor(klass);
+    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods } } });
+    registered2.add(klass);
+    return klass;
+  }
+  function start(options = {}) {
+    const { Application } = framework;
+    if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
+    assertKeys(options, ["root", "application"], "start");
+    const root = options.root ?? globalThis.document?.body;
+    const ApplicationClass = options.application ?? Application;
+    if (!root) throw new Error("Swill.start requires a root element");
+    if (Application.isRunning()) throw new Error("A Swill application is already running");
+    if (typeof ApplicationClass !== "function" || ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application)) {
+      throw new TypeError("application must extend Swill.Application");
+    }
+    if (ApplicationClass !== Application && !registered2.has(ApplicationClass)) {
+      throw new Error("Register the application class before starting it");
+    }
+    const application = new ApplicationClass();
+    application.launch(root);
+    root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
+      if (!event.persisted) application.terminate();
     });
-    const roots = new Set([
-      Controller,
-      Application,
-      View,
-      List,
-      SortableList,
-      Editor,
-      InlineEditor,
-      EditableList,
-      Control,
-      TextField,
-      Select,
-      CustomSelect
-    ].filter(Boolean));
-    function register(name, klass) {
-      if (arguments.length === 1) {
-        klass = name;
-        name = klass?.name;
-      }
-      if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
-      if (typeof name !== "string" || name.trim().length === 0) {
-        throw new TypeError("Registered classes need a name");
-      }
-      if (registered2.has(klass)) throw new Error(`Class already registered: ${name}`);
-      const parent = Object.getPrototypeOf(klass);
-      if (!roots.has(parent) && !registered2.has(parent)) {
-        throw new Error(`Register the parent class before ${name}`);
-      }
-      const { properties, methods } = declarationsFor(klass);
-      Runtime3.install({ classes: { [name]: { constructor: klass, properties, methods } } });
-      registered2.add(klass);
-      return klass;
+    return application;
+  }
+  function install2(meta2) {
+    return framework.Runtime.install(meta2);
+  }
+  function browserAPI(definitions, Runtime3, names2 = {}, roots = []) {
+    const classes2 = {};
+    for (const [name, identifier] of Object.entries(names2)) {
+      const klass = definitions[identifier];
+      if (!klass) continue;
+      const [space, member] = name.split(".");
+      if (member) (classes2[space] ??= {})[member] = klass;
+      else classes2[space] = klass;
     }
-    function start(options = {}) {
-      if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
-      assertKeys(options, ["root", "application"], "start");
-      const root = options.root ?? globalThis.document?.body;
-      const ApplicationClass = options.application ?? Application;
-      if (!root) throw new Error("Swill.start requires a root element");
-      if (Application.isRunning()) throw new Error("A Swill application is already running");
-      if (typeof ApplicationClass !== "function" || ApplicationClass !== Application && !(ApplicationClass.prototype instanceof Application)) {
-        throw new TypeError("application must extend Swill.Application");
-      }
-      if (ApplicationClass !== Application && !registered2.has(ApplicationClass)) {
-        throw new Error("Register the application class before starting it");
-      }
-      const application = new ApplicationClass();
-      application.launch(root);
-      root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
-        if (!event.persisted) application.terminate();
-      });
-      return application;
+    for (const [name, value] of Object.entries(classes2)) {
+      if (typeof value !== "function") classes2[name] = Object.freeze(value);
     }
-    return Object.freeze(Object.fromEntries(Object.entries({
-      ...definitions,
+    framework = {
       Runtime: Runtime3,
-      install: (meta2) => Runtime3.install(meta2),
-      Controller,
-      Application,
-      View,
-      List,
-      SortableList,
-      Editor,
-      InlineEditor,
-      EditableList,
-      Control,
-      TextField,
-      Select,
-      CustomSelect,
-      NotificationCenter,
-      Wire,
-      ValueTransformer,
-      Model,
-      register,
-      start
-    }).filter(([, value]) => value !== void 0)));
+      Application: definitions.Swill__Application,
+      roots: new Set(roots.map((name) => definitions[names2[name]]).filter(Boolean))
+    };
+    return Object.freeze({ ...definitions, Runtime: Runtime3, install: install2, ...classes2, register, start });
   }
 
   // build/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime2);
+  globalThis.Swill = browserAPI(framework_exports, Runtime2, { "Object": "Swill__Object", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.DistantObject": "Swill__Model__DistantObject", "Model.DistantClient": "Swill__Model__DistantClient", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Model.DistantObject"]);
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();
 //# sourceMappingURL=swill.js.map

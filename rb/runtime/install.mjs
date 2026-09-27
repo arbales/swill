@@ -19,7 +19,20 @@ function configuration(klass) {
   return classConfiguration.get(klass);
 }
 
-// Install parents before children, regardless of key order.
+/**
+ * Installs the classes and mixins a compiled bundle defines: their declared
+ * properties, methods, registries, settings, and restorable paths. Parents are
+ * installed before children, whatever order `meta` lists them in. A compiled
+ * bundle calls this as it loads, and `Swill.register` calls it for a plain
+ * JavaScript class.
+ *
+ * @param {object} meta A bundle's `meta` object: `classes` by installed name,
+ *   and `mixins`.
+ * @returns {void}
+ * @throws {Error} `Duplicate class` for a name already installed; `Unknown
+ *   mixin`; `Unresolvable superclass order` when a parent never installs.
+ * @throws {TypeError} `Missing constructor` for a class entry without one.
+ */
 export function install(meta) {
   const entries = Object.entries(meta.classes ?? {});
   const mixins = Object.values(meta.mixins ?? {});
@@ -101,6 +114,17 @@ export function install(meta) {
   }
 }
 
+/**
+ * Includes `mixins` in `klass`, which is not yet installed: each mixin wraps
+ * the class's parent in turn, so `super` reaches through every module in
+ * order, and a module's `ClassMethods` become static members of `klass`.
+ *
+ * @param {Function} klass The class, not yet installed.
+ * @param {Function[]} mixins The mixin factories, in `include` order.
+ * @param {Map} [incoming] Mixins from the bundle being installed, by factory.
+ * @returns {void}
+ * @throws {Error} When the class is already installed.
+ */
 export function include(klass, mixins, incoming = new Map()) {
   if (hasMetadata(klass)) {
     throw new Error("Mixins must be attached before class installation");
@@ -132,6 +156,16 @@ export function include(klass, mixins, incoming = new Map()) {
   }
 }
 
+/**
+ * Returns `klass`'s own copy of the registry `name`, created on first use from
+ * its parent's, so that adding to it leaves the parent's unchanged.
+ *
+ * @param {Function} klass
+ * @param {string} name The registry, such as `relationships`.
+ * @param {"hash" | "array"} [initial] The empty value when nothing is
+ *   inherited.
+ * @returns {object | Array} The class's registry, which may be changed.
+ */
 export function inheritableRegistry(klass, name, initial = "hash") {
   const own = configuration(klass).registries;
   if (own.has(name)) return own.get(name);
@@ -145,6 +179,17 @@ export function inheritableRegistry(klass, name, initial = "hash") {
   return value;
 }
 
+/**
+ * With no values, returns `klass`'s own setting `name`, or else the nearest
+ * inherited one, or nil; with one value, sets the setting on `klass` and
+ * returns the value.
+ *
+ * @param {Function} klass
+ * @param {string} name
+ * @param {Array} values Zero values to read, or one to set.
+ * @returns {unknown} The setting.
+ * @throws {Error} When given more than one value.
+ */
 export function classSetting(klass, name, values) {
   const own = configuration(klass).settings;
 
@@ -163,8 +208,14 @@ export function classSetting(klass, name, values) {
   return typeof parent?.[name] === "function" ? parent[name]() : null;
 }
 
-// The installed class whose own setting (not an inherited one) has the
-// value, or null: how a JSON:API type finds its model class.
+/**
+ * Returns the installed class whose own setting `name`, not an inherited one,
+ * is `value`, or nil if there is none.
+ *
+ * @param {string} name
+ * @param {unknown} value
+ * @returns {Function | null}
+ */
 export function classWithSetting(name, value) {
   for (const klass of classes.values()) {
     if (classConfiguration.get(klass)?.settings.get(name) === value) return klass;
@@ -172,8 +223,13 @@ export function classWithSetting(name, value) {
   return null;
 }
 
-// One identity store per class, created on first use from the installed
-// Store class, so a subclass never shares its parent's records.
+/**
+ * Returns the identity store for `klass`, created on first use, in which its
+ * records are pooled by id. A subclass has its own store.
+ *
+ * @param {Function} klass
+ * @returns {object} A `Swill.Model.Store`.
+ */
 export function identityStore(klass) {
   let store = identityStores.get(klass);
   if (!store) {
@@ -214,6 +270,24 @@ function rejectProtocolConflicts(klass, properties, restorations) {
   }
 }
 
+/**
+ * Installs one class: its metadata, settings, and registries, and an
+ * observable accessor on its prototype for each declared property. `install`
+ * calls this for each class a bundle defines.
+ *
+ * @param {Function} klass
+ * @param {string} name The installed name, such as `"Swill::View"`.
+ * @param {object[]} properties Property descriptors.
+ * @param {object[]} methods Method descriptors.
+ * @param {object} [registries] Registry values by name.
+ * @param {object[]} [restorations] Restorable path declarations.
+ * @param {object[]} [settings] Class body settings, applied in order.
+ * @returns {void}
+ * @throws {Error} `Duplicate class`; a setter defined for a declared
+ *   property; a restorable path not starting with a declared property, or
+ *   a duplicate restorable key; a setting or registry the class does not
+ *   declare.
+ */
 export function installClass(klass, name, properties, methods, registries = {}, restorations = [],
   settings = []) {
   if (classes.has(name)) {
@@ -260,7 +334,7 @@ export function installClass(klass, name, properties, methods, registries = {}, 
           ? computedValue(this, descriptor)
           : storedValue(this, descriptor);
       },
-      ...(descriptor.computed ? {} : {
+      ...(descriptor.computed && !descriptor.writer ? {} : {
         set(value) {
           writeProperty(this, descriptor, value);
         }
@@ -278,7 +352,13 @@ export function registered(name) {
   return classes.get(name);
 }
 
-// The installed name of an object's nearest installed class, or null.
+/**
+ * Returns the installed name of the nearest installed class of `object`, or
+ * nil if there is none.
+ *
+ * @param {object} object
+ * @returns {string | null}
+ */
 export function nameOf(object) {
   for (let prototype = Object.getPrototypeOf(object); prototype; prototype = Object.getPrototypeOf(prototype)) {
     const name = names.get(prototype.constructor);
@@ -287,6 +367,15 @@ export function nameOf(object) {
   return null;
 }
 
+/**
+ * Returns the installed class named `name`, as markup names it: an installed
+ * name such as `"Swill::View"`, or the name a plain JavaScript class was
+ * registered under.
+ *
+ * @param {string} name
+ * @returns {Function}
+ * @throws {Error} `Unknown class` when nothing is installed under the name.
+ */
 export function resolve(name) {
   if (!classes.has(name)) {
     throw new Error(`Unknown class: ${name}`);

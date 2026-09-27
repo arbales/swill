@@ -2612,3 +2612,132 @@ test("transform= formats and parses through value transformers; predicate reader
   assert.equal(ValueTransformer.named("boolean").parse("on"), true);
   dispose();
 });
+
+test("array controllers cache arrangement and track filter and sort property reads", () => {
+  const ArrayController = Runtime.resolve("Swill::ArrayController");
+  let visits = 0;
+  class Filtered extends ArrayController {
+    includesObject(object) { visits++; return object.name.toLowerCase().includes(this.query); }
+  }
+  Runtime.installClass(Filtered, "Test::FilteredArray", [
+    {name: "query", js: "query", defaultValue: () => ""}
+  ], [{name: "includes_object?", js: "includesObject", arity: 1}]);
+  const ada = new Person(); ada.id = "1"; ada.name = "Ada";
+  const grace = new Person(); grace.id = "2"; grace.name = "Grace";
+  const controller = new Filtered();
+  controller.content = [grace, ada];
+  assert.equal(visits, 0, "constructing or assigning content is lazy");
+  controller.sort("name", "ascending");
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [ada, grace]);
+  const initialVisits = visits;
+  controller.selectObject(grace);
+  for (let i = 0; i < 10; i++) { controller.arrangedObjects(); controller.selectedIndexes; }
+  assert.equal(visits, initialVisits, "selection and index reads do not repeat filtering");
+  controller.query = "ada";
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [ada]);
+  assert.equal(controller.selectedObject, null);
+  controller.query = "";
+  assert.equal(controller.selectedObject, grace, "clearing the filter restores the requested selection");
+  grace.name = "Aaron";
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [grace, ada]);
+  const other = new ArrayController(); other.content = controller.content;
+  other.sort("name", "descending");
+  assert.deepEqual(Array.from(other.arrangedObjects()), [ada, grace]);
+  assert.deepEqual(Array.from(controller.content), [grace, ada], "arrangement does not reorder content");
+  controller.dealloc(); other.dealloc();
+  assert.equal(Runtime.observed(grace, "name"), false);
+});
+
+test("replacing array controller content releases obsolete member dependencies", () => {
+  const ArrayController = Runtime.resolve("Swill::ArrayController");
+  const first = new Person(); first.name = "Ada";
+  const second = new Person(); second.name = "Grace";
+  const controller = new ArrayController();
+  controller.content = [first];
+  controller.sort("name", "ascending");
+  // Two members ensure sorting reads names and subscribes to them.
+  controller.content = [second, first];
+  controller.arrangedObjects();
+  const dispose = controller.observe("arranged_content", () => {});
+  assert.equal(Runtime.observed(first, "name"), true);
+  controller.content = [];
+  assert.equal(Runtime.observed(first, "name"), false);
+  dispose();
+  controller.dealloc();
+});
+
+test("lists accept an array controller through ordinary bind and share one selection", () => {
+  const f = peoplePage();
+  const [ada, grace] = f.parent.people;
+  const ArrayController = Runtime.resolve("Swill::ArrayController");
+  const controller = new ArrayController();
+  controller.content = [grace, ada];
+  // The existing bind="people" supplies the controller just as it supplied an array.
+  f.parent.people = controller;
+  assert.equal(f.controller.arrayController, controller);
+  assert.equal(f.controller.representedObject, controller);
+  assert.equal(f.controller.content, null);
+  controller.selectObject(ada);
+  assert.equal(f.controller.selectedObject, ada);
+  f.controller.selectObject(grace);
+  assert.equal(controller.selectedObject, grace);
+  f.nameHeader.dispatchEvent(new Event("click"));
+  assert.equal(controller.sortKey, "name");
+  assert.deepEqual(f.rowsOf().map(row => row.children[0].textContent), ["Ada", "Grace"]);
+  assert.deepEqual(Array.from(f.controller.selectedIndexes), [1]);
+  assert.throws(() => { f.controller.content = [ada]; }, /either content or array_controller/);
+  let renders = 0;
+  const render = f.controller.renderAll.bind(f.controller);
+  f.controller.renderAll = () => { renders++; render(); };
+  controller.sort("name", "descending");
+  assert.equal(renders, 1, "one sort operation renders once");
+  f.controller.unload();
+  assert.equal(Runtime.observed(controller, "arranged_content"), false);
+  controller.sort("name", "ascending");
+  assert.equal(renders, 1, "unloading the list releases its observations");
+  controller.dealloc();
+});
+
+test("temporary first placement belongs to presentation and clears on sorting or new content", () => {
+  const ArrayController = Runtime.resolve("Swill::ArrayController");
+  const Collection = Runtime.resolve("Swill::Model::Collection");
+  const first = new Person(); first.id = "1"; first.name = "Ada";
+  const added = new Person(); added.id = "2"; added.name = "Zed";
+  const source = new Collection().replace([first]);
+  const controller = new ArrayController(); controller.content = source;
+  controller.showFirst(added);
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [added, first]);
+  assert.equal(controller.selectedObject, added);
+  assert.deepEqual(Array.from(source.records), [first]);
+  controller.sort("name", "ascending");
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [first]);
+  controller.showFirst(added);
+  controller.content = new Collection().replace([first]);
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [first]);
+  controller.content = source;
+  assert.deepEqual(Array.from(controller.arrangedObjects()), [first], "returning to old content does not restore temporary placement");
+  assert.throws(() => { controller.arrayController = controller; }, /either content|delegate to itself/);
+  controller.dealloc();
+});
+
+test("compiled filtering works directly on lists or on an including view controller", () => {
+  const f = bareList("Demo::FilteredPeopleList");
+  const ada = new Person(); ada.id = "1"; ada.name = "Ada";
+  const grace = new Person(); grace.id = "2"; grace.name = "Grace";
+  f.controller.representedObject = [grace, ada];
+  f.controller.selectObject(grace);
+  f.controller.filterText = "ada";
+  assert.deepEqual(f.items().map(item => item.textContent), ["Ada"]);
+  assert.equal(f.controller.selectedObject, null);
+  f.controller.filterText = "";
+  f.controller.sort("name", "ascending");
+  grace.name = "Aaron";
+  assert.deepEqual(f.items().map(item => item.textContent), ["Aaron", "Ada"]);
+  const Owner = Runtime.resolve("Demo::FilteredPeopleController");
+  const owner = new Owner(); owner.content = [ada, grace];
+  owner.filterText = "aaron";
+  assert.deepEqual(Array.from(owner.arrangedObjects()), [grace]);
+  owner.selectObject(grace);
+  assert.equal(owner.selectedObject, grace);
+  owner.dealloc();
+});

@@ -22,7 +22,7 @@ module Swill
                 name, type = property.values_at("name", "type")
                 lines << "  sig { returns(#{type}) }"
                 lines << "  def #{name}; end"
-                unless property["computed"]
+                if !property["computed"] || property["writer"]
                   lines << "  sig { params(value: #{type}).returns(#{type}) }"
                   lines << "  def #{name}=(value); end"
                 end
