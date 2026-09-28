@@ -2495,7 +2495,7 @@
     // a list selection.
     clearTextSelection() {
       let selection = this._element.ownerDocument.getSelection();
-      return selection?.removeAllRanges;
+      return selection?.removeAllRanges();
     }
     // Adds an event listener for `type` on this view's element and returns
     // a callable that removes it. A controller retains the callable so the
@@ -2546,7 +2546,7 @@
     // Blurs `first_focusable_element`, if there is one.
     blurElement() {
       let target = this.firstFocusableElement();
-      return target?.blur;
+      return target?.blur();
     }
     // Returns the controller rooted at this view, or else its superview. The
     // chain leaves the view tree at the first controller it meets.

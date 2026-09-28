@@ -214,7 +214,7 @@ module Swill
     sig { void }
     def clear_text_selection
       selection = @element.ownerDocument.getSelection
-      selection&.removeAllRanges
+      selection&.removeAllRanges()
     end
 
     # Adds an event listener for `type` on this view's element and returns
@@ -263,7 +263,7 @@ module Swill
     sig { void }
     def blur_element
       target = first_focusable_element
-      target&.blur
+      target&.blur()
     end
 
     # Returns the controller rooted at this view, or else its superview. The
