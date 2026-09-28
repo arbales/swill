@@ -1659,11 +1659,12 @@
   };
   function Swill__ObjectBindings(Superclass) {
     class Swill__ObjectBindings_Layer extends Superclass {
-      // Keeps the property named by **binding** equal to **key_path** on **to**,
-      // writing **null_placeholder** whenever the path has no value. Replaces any
-      // existing binding of that name.
-      //
-      // Returns self.
+      // Establishes a binding that keeps the property `binding` equal to
+      // `key_path` on `to`, and returns the object. The property receives
+      // `null_placeholder` whenever the path has no value; the default is nil.
+      // `transform` names a registered `ValueTransformer`, as `transform` does in
+      // markup, and raises when no transformer has that name. A binding already
+      // established under this name is released first.
       bind(...__swill_arguments) {
         let __swill_bound = Runtime.bindArguments(__swill_arguments, {
           positional: [{ name: "binding", kind: "req" }],
@@ -1707,9 +1708,8 @@
         );
         return this;
       }
-      // Releases the binding named **binding,** if any.
-      //
-      // Returns self.
+      // Releases the binding named `binding`, if there is one, and returns the
+      // object.
       unbind(binding) {
         let dispose = this.objectBindings()[binding];
         if (!Runtime.isTruthy(dispose)) return this;
@@ -1717,13 +1717,14 @@
         Runtime.deleteKey(this.objectBindings(), binding);
         return this;
       }
-      // Releases every binding, as a controller does when it unloads.
+      // Releases every binding on the object and returns it. A controller
+      // calls this as it unloads.
       unbindAll() {
         Object.entries(this.objectBindings()).forEach(([_binding, dispose]) => dispose());
         this._object_bindings = {};
         return this;
       }
-      // Keyed by binding name: binding a name replaces whatever was bound there.
+      // The release callable of each binding, by name.
       objectBindings() {
         if (!this._object_bindings) this._object_bindings = {};
         return this._object_bindings;
@@ -1733,6 +1734,46 @@
   }
   function Swill__CollectionArrangement(Superclass) {
     class Swill__CollectionArrangement_Layer extends Superclass {
+      // :nodoc:
+      // :section: Arranging Content
+      // The content, and the filtered and sorted content presented from it.
+      // The collection to arrange: an array, or a `Model::Collection`, whose
+      // `records` are arranged. Nil until assigned. Raises when assigned while
+      // `array_controller` is set.
+      // An `ArrayController` that arranges and selects on this object's
+      // behalf; every property and method here delegates to it while it is
+      // set. Nil by default. Raises when assigned while `content` is set, or
+      // when the controller delegates, directly or through others, back to
+      // this object.
+      // The sort key and direction, and the object `show_first` placed ahead
+      // of the rest, as one value.
+      // :nodoc:
+      // The content after filtering and sorting, in display order; an empty
+      // array when there is no content. Properties read while arranging are
+      // its dependencies, so it rearranges when they change.
+      // :section: Sorting
+      // One key and one direction at a time.
+      // The key path the arranged content is sorted by, or nil when unsorted.
+      // Writing it sorts.
+      // `"ascending"` or `"descending"`. The default is `"ascending"`. Writing
+      // it sorts.
+      // The sort key mapped to its direction, for `bind-aria-sort`; an empty
+      // hash when unsorted.
+      // :section: Selecting
+      // The selection, held by object identity within the arranged content.
+      // The requested selection: the objects, and the id to fall back to.
+      // :nodoc:
+      // The selected objects that are present in the arranged content, in
+      // the order they were selected; an empty array when nothing is
+      // selected. Writing it replaces the selection.
+      // The id of the first selected object, or nil when nothing is selected
+      // or the object has no id. Writing it selects the object with that id
+      // now, or once the content includes it, which is how a restored
+      // selection waits for its record.
+      // The first selected object, or nil when nothing is selected.
+      // The indexes of the selected objects within the arranged content, in
+      // ascending order; an empty array when nothing is selected.
+      // :section: Arranging Content
       coercePropertyValue(name, value, previous) {
         if (Runtime.isTruthy(Runtime.logicalAnd(
           name === "content" && value != null,
@@ -1758,10 +1799,15 @@
         ;
         return super.coercePropertyValue(name, value, previous);
       }
-      // Keep the existing overridable method; the underlying computation is cached.
+      // Returns `arranged_content`.
       arrangedObjects() {
         return this.arrangedContent;
       }
+      // Returns the content filtered by `includes_object?` and sorted by
+      // `sort_key` and `sort_direction`, with the object `show_first` placed
+      // ahead of the rest. Nil values sort last, numbers and booleans by value,
+      // and everything else as text. The default implementation is what
+      // `arranged_content` computes; override it to arrange another way.
       arrangeContent() {
         let controller = this.arrayController;
         if (controller) return controller.arrangedObjects();
@@ -1797,7 +1843,10 @@
         ;
         return leading.concat(objects);
       }
-      // Property reads in this hook become arrangement dependencies automatically.
+      // Returns whether `object` belongs in the arranged content. The default
+      // implementation returns true for every object. Override it to filter;
+      // properties read in the override are dependencies of the arrangement,
+      // so a change to them rearranges.
       includesObject(_object) {
         return true;
       }
@@ -1815,29 +1864,9 @@
           () => Runtime.respondsTo(objects, "records")
         );
       }
-      sort(key, direction) {
-        let controller = this.arrayController;
-        if (controller) {
-          return controller.sort(key, direction);
-        } else {
-          if (!["ascending", "descending"].includes(direction)) {
-            throw new Error("Sort direction must be ascending or descending");
-          }
-          ;
-          return this.arrangementOptions = { key, direction };
-        }
-      }
-      toggleSort(key) {
-        let direction = Runtime.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
-        return this.sort(key, direction);
-      }
-      changeSortKey(key) {
-        return this.sort(key, this.sortDirection);
-      }
-      changeSortDirection(direction) {
-        return this.sort(this.sortKey, direction);
-      }
-      // Temporary presentation inclusion, cleared by new content or explicit sorting.
+      // Places `object` ahead of the arranged content, whether or not the
+      // content includes it, and selects it. `includes_object?` still applies.
+      // Assigning new content or sorting clears the placement.
       showFirst(object) {
         let controller = this.arrayController;
         if (controller) {
@@ -1851,7 +1880,9 @@
           return this.selectObject(object);
         }
       }
-      // Editing a plain row replaces its source object; read-only sources reject it.
+      // Replaces `original` with `replacement` in the content: through
+      // `replace` on a `Model::Collection`, or by assigning a new array.
+      // Editing a plain row ends this way. A read-only collection raises.
       replaceObject(original, replacement) {
         let controller = this.arrayController;
         if (controller) {
@@ -1894,6 +1925,38 @@
           Runtime.send(right, "to_s")
         );
       }
+      // :section: Sorting
+      // Sorts the arranged content by `key` in `direction`, `"ascending"` or
+      // `"descending"`; nil for `key` leaves the content unsorted. Raises for
+      // any other direction. Sorting clears a `show_first` placement.
+      sort(key, direction) {
+        let controller = this.arrayController;
+        if (controller) {
+          return controller.sort(key, direction);
+        } else {
+          if (!["ascending", "descending"].includes(direction)) {
+            throw new Error("Sort direction must be ascending or descending");
+          }
+          ;
+          return this.arrangementOptions = { key, direction };
+        }
+      }
+      // Sorts by `key`: descending when `key` is already the sort key in
+      // ascending order, ascending otherwise. A sort header's action.
+      toggleSort(key) {
+        let direction = Runtime.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
+        return this.sort(key, direction);
+      }
+      // Sorts by `key` in the current direction; the writer of `sort_key`.
+      changeSortKey(key) {
+        return this.sort(key, this.sortDirection);
+      }
+      // Sorts by the current key in `direction`; the writer of
+      // `sort_direction`.
+      changeSortDirection(direction) {
+        return this.sort(this.sortKey, direction);
+      }
+      // :section: Selecting
       arrangedSelection() {
         let controller = this.arrayController;
         if (controller) return controller.selectedObjects;
@@ -1914,6 +1977,9 @@
         ;
         return selected;
       }
+      // Selects `objects`, replacing the current selection; the writer of
+      // `selected_objects`. The array is copied. An object the arranged content
+      // does not include stays requested, and is selected once it appears.
       selectObjects(objects) {
         let controller = this.arrayController;
         return controller ? controller.selectedObjects = objects : this.selectionState = {
@@ -1921,6 +1987,9 @@
           id: this.identifierFor(objects[0])
         };
       }
+      // Selects the object whose id is `identifier`, now or once the content
+      // includes it, replacing the current selection; the writer of
+      // `selected_object_id`. Nil deselects.
       selectIdentifier(identifier) {
         let controller = this.arrayController;
         return controller ? controller.selectedObjectId = identifier : this.selectionState = {
@@ -1928,6 +1997,8 @@
           id: identifier
         };
       }
+      // Selects the objects at `indexes` in the arranged content, replacing
+      // the current selection. An index outside the content is ignored.
       selectIndexes(indexes) {
         let arranged = this.arrangedObjects();
         let objects = Runtime.cast([], "T::Array[T.untyped]");
@@ -1938,21 +2009,29 @@
         });
         return this.selectedObjects = objects;
       }
+      // Selects `object` alone, replacing the current selection. Nil deselects.
       selectObject(object) {
         return this.selectedObjects = object == null ? [] : [object];
       }
+      // Empties the selection.
       deselectAll() {
         return this.selectedObjects = [];
       }
+      // Selects the first arranged object when nothing is selected and there
+      // is one.
       selectFirstIfNothingSelected() {
         if (Runtime.isTruthy(Runtime.isEmpty(this.selectedObjects) && !Runtime.isEmpty(this.arrangedObjects()))) {
           return this.selectIndexes([0]);
         }
       }
+      // Returns the arranged object at `index`, or nil when `index` is outside
+      // the arranged content.
       objectAt(index) {
         let objects = this.arrangedObjects();
         return Runtime.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
       }
+      // Returns `object`'s `id` as a string, or nil when `object` is nil, has
+      // no `id`, or its id is nil.
       identifierFor(object) {
         if (!Runtime.isTruthy(object)) return null;
         if (!Runtime.isTruthy(Runtime.respondsTo(object, "id"))) return null;
@@ -1960,6 +2039,8 @@
         if (value == null) return null;
         return Runtime.send(value, "to_s");
       }
+      // Returns the arranged object whose id is `identifier`, or nil when none
+      // has it or `identifier` is nil or empty.
       objectWithId(identifier) {
         if (identifier == null || Runtime.isEmpty(identifier)) return null;
         return this.arrangedObjects().find((object) => this.identifierFor(object) === identifier);
@@ -1967,10 +2048,11 @@
       currentSelection() {
         return this.selectedObjects;
       }
+      // :nodoc:
       currentIndexes() {
         return this.selectedIndexes;
       }
-      // Compatibility for subclasses that previously reconciled after arranging.
+      // :nodoc:
       reconcileSelection() {
         return this.selectedObjects;
       }
@@ -2048,7 +2130,10 @@
     }
   };
   var Swill__View = class _Swill__View extends Swill__Responder {
-    // Wraps +element+, marking it managed.
+    // :section: Wrapping an Element
+    // A view, its element, and the controller rooted there.
+    // Creates the view for `element`, marking the element managed. An element
+    // holds at most one view; `View.of` finds it.
     constructor(element) {
       super();
       this._element = element;
@@ -2061,8 +2146,8 @@
     get element() {
       return this._element;
     }
-    // The controller rooted here, or nil when this view is not a controller
-    // root. Use #owner to find the controller a view belongs to.
+    // Returns the controller rooted at this view, or nil when the view is not
+    // a controller root. `owner` finds the controller a view belongs to.
     controllerValue() {
       return this._controller;
     }
@@ -2070,23 +2155,28 @@
       this._controller = controller;
       return this._controller;
     }
-    // The view that adopted this one, or nil.
+    // :section: Forming the View Tree
+    // Adoption links views into the tree that ownership is read from.
+    // The view that adopted this one, or nil for a view outside the tree.
     get superview() {
       return this._superview;
     }
-    // Adopted child views in adoption order.
+    // The views this one adopted, in adoption order; an empty array when there
+    // are none.
     get subviews() {
       return this._subviews;
     }
-    // The nearest controller through the sparse tree: this view's own
-    // controller when it is a controller root, else the superview's owner.
+    // Returns the controller this view belongs to: the controller rooted here,
+    // or else the superview's owner. Returns nil for a view outside any
+    // controller's region.
     owner() {
       let own = this._controller;
       if (own) return own;
       return Runtime.nilable(this._superview?.owner());
     }
-    // Takes +child+ into this view, releasing it from any previous superview.
-    // Structural only: it does not awaken or lay anything out.
+    // Adopts `child` as a subview, releasing it from any previous superview,
+    // and returns it. Adoption changes the view tree only; it does not move
+    // or awaken elements.
     adoptSubview(child) {
       let previous = child.superview;
       if (previous) previous.releaseSubview(child);
@@ -2094,24 +2184,21 @@
       Runtime.append(this._subviews, child);
       return child;
     }
-    // Drops +child+ from this view.
+    // Releases `child` from this view's subviews, leaving it with no
+    // superview. Does nothing when `child` is not a subview.
     releaseSubview(child) {
       this._subviews = this._subviews.filter((candidate) => candidate !== child);
       return child.assignSuperview(null);
     }
-    // Drops this view from its superview, if it has one.
+    // Releases this view from its superview, if it has one.
     removeFromSuperview() {
       let superview = this._superview;
       if (superview) return superview.releaseSubview(this);
     }
-    // Tree-internal; adopt_subview and release_subview keep both sides consistent.
+    // Set by adopt_subview and release_subview, which keep both sides consistent.
     assignSuperview(superview) {
       this._superview = superview;
       return this._superview;
-    }
-    // The controller rooted here, else the superview.
-    nextResponder() {
-      return this._controller || this._superview;
     }
     static of(element) {
       return element.__swill_view__;
@@ -2120,33 +2207,34 @@
       let view = _Swill__View.of(element);
       return view ? view.controllerValue() : null;
     }
-    // Whether the element carries +name+.
+    // Returns whether this view's element carries the attribute `name`.
     hasAttribute(name) {
       return this._element.hasAttribute(name);
     }
-    // Whether +element+ lies within this view's element.
+    // Returns whether `element` lies within this view's element.
     contains(element) {
       return this._element.contains(element);
     }
-    // A fresh element from an inert template's content, or nil when the
-    // template has none.
+    // Returns a copy of the first element in `template`'s content, or nil
+    // when the template is empty. The copy is not yet in the document.
     cloneTemplate(template) {
       let node = template.content.firstElementChild;
       return node ? node.cloneNode(true) : null;
     }
-    // Appends +element+ to this view's element.
+    // Appends `element` as the last child of this view's element.
     append(element) {
       return this._element.appendChild(element);
     }
-    // Inserts +element+ after +anchor+.
+    // Inserts `element` immediately after `anchor`.
     insertAfter(anchor, element) {
       return anchor.after(element);
     }
-    // Removes +element+ from the document.
+    // Removes `element` from the document.
     remove(element) {
       return element.remove();
     }
-    // The direct child of this view's element that contains element, or nil.
+    // Returns the direct child of this view's element that contains
+    // `element`, or nil when `element` is not within this view.
     childContaining(element) {
       let node = element;
       while (node && node.parentElement !== this._element) {
@@ -2155,32 +2243,31 @@
       ;
       return node;
     }
-    // A state class on a child element.
+    // Adds the class `name` to `element` when `on` is true, and removes it
+    // otherwise.
     mark(element, name, on) {
       return element.classList.toggle(name, on);
     }
-    // The selected state, as a class and for assistive technology.
+    // Marks `element` selected or not, as the `selected` class and the
+    // `aria-selected` attribute.
     markSelected(element, on) {
       this.mark(element, "selected", on);
       return element.setAttribute("aria-selected", on ? "true" : "false");
     }
-    // Scrolls the nearest ancestor just far enough to bring +element+ into view.
+    // Scrolls the nearest scrolling ancestor just far enough to bring
+    // `element` into view.
     reveal(element) {
       return element.scrollIntoView({ block: "nearest" });
     }
-    // Keyboard focus needs a tab stop.
-    ensureFocusable() {
-      if (!this._element.hasAttribute("tabindex")) {
-        return this._element.setAttribute("tabindex", "0");
-      }
-    }
-    // Drop the browser's text selection, as before a shift-click sweep.
+    // Clears the browser's text selection, as before a shift-click extends
+    // a list selection.
     clearTextSelection() {
       let selection = this._element.ownerDocument.getSelection();
       if (selection) return selection.removeAllRanges();
     }
-    // An event listener on this view's element; the returned callable
-    // removes it.
+    // Adds an event listener for `type` on this view's element and returns
+    // a callable that removes it. A controller retains the callable so the
+    // listener is removed when it unloads.
     listen(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
@@ -2198,31 +2285,47 @@
       this._element.addEventListener(type, handler, capture);
       return () => this._element.removeEventListener(type, handler, capture);
     }
-    // ---- focus ----
-    // The selector deciding what counts as focusable. Override to widen it.
+    // :section: Focusing
+    // What is focusable within this view, and the view as a responder.
+    // Returns the selector that decides what counts as focusable within this
+    // view. The default is `"input, select, textarea, button, [tabindex]"`.
+    // Override it to widen or narrow the set.
     focusableSelector() {
       return "input, select, textarea, button, [tabindex]";
     }
-    // This element when it is focusable, else its first focusable descendant.
+    // Gives this view's element a tab stop, `tabindex="0"`, unless it already
+    // has one, so keyboard focus can reach it.
+    ensureFocusable() {
+      if (!this._element.hasAttribute("tabindex")) {
+        return this._element.setAttribute("tabindex", "0");
+      }
+    }
+    // Returns this view's element when it matches `focusable_selector`, else
+    // its first descendant that does, or nil when nothing within it is
+    // focusable.
     firstFocusableElement() {
       return this._element.matches(this.focusableSelector()) ? this._element : this._element.querySelector(this.focusableSelector());
     }
-    // Focuses the first focusable element, if there is one.
+    // Focuses `first_focusable_element` without scrolling, if there is one.
     focusElement() {
       let target = this.firstFocusableElement();
       if (target) return target.focus({ preventScroll: true });
     }
-    // Blurs the first focusable element, if there is one.
+    // Blurs `first_focusable_element`, if there is one.
     blurElement() {
       let target = this.firstFocusableElement();
       if (target) return target.blur();
     }
-    // A view wraps a focusable element, so it accepts by default; becoming
-    // first responder focuses it.
+    // Returns the controller rooted at this view, or else its superview. The
+    // chain leaves the view tree at the first controller it meets.
+    nextResponder() {
+      return this._controller || this._superview;
+    }
+    // Returns true: a view always accepts first responder.
     acceptsFirstResponder() {
       return true;
     }
-    // Focuses the element.
+    // Focuses `first_focusable_element` and returns true.
     becomeFirstResponder() {
       this.focusElement();
       return true;
@@ -2247,21 +2350,35 @@
     }
   };
   var Swill__Controller = class extends Swill__Responder {
-    // An outlet is a property connected, at awakening, to the element in this
-    // controller's owned region that carries a matching outlet attribute.
-    // Unconnected until then, so its reader is nilable. Declared here rather
-    // than on Swill::Object because only a controller owns a region.
-    // restorable :query, key: :q — a bindable path whose value the
-    // application keeps in the URL fragment. The leaf type is derived when the
-    // class is compiled; the runtime checks the path at installation.
-    // The object a parent binding assigns through bind="path" on this
-    // controller root. Editors resolve their own bindings under it.
-    // Property under which bind paths in this region resolve; nil binds
-    // against the controller itself. A leading @ in markup always ignores it.
+    // :section: Declaring Outlets and Restorable Paths
+    // Class-level declarations beyond `property`.
+    // Declares an outlet: a property connected, as the region awakens, to the
+    // element in this controller's region carrying a matching `outlet`
+    // attribute. The property holds nil until then, and raises at awakening
+    // when no element matches unless `optional:` is true.
+    // Declares a bindable `path` whose value the application keeps in the URL
+    // fragment under `key`, which defaults to the path itself. The value's
+    // type is derived when the class is compiled; the path is checked when the
+    // runtime installs the class. `controller_did_restore` reports whether a
+    // value was applied.
+    // :section: Presenting an Object
+    // The object this controller's region binds to.
+    // The object this controller presents. A parent controller assigns it
+    // through `bind="path"` on this controller's root element; nil until then.
+    // Bindings within the region resolve under `binding_root`, which by
+    // default is the controller itself.
+    // Returns the property under which `bind` paths in this region resolve,
+    // or nil to resolve them against the controller itself. A path beginning
+    // with `@` in markup ignores the root. The default is nil; override it to
+    // bind a region to the represented object directly.
     bindingRoot() {
       return null;
     }
-    // Adopts +element+ as this controller's root view. Answers self.
+    // :section: Locating the Region
+    // This controller's view, and the controllers around it.
+    // Adopts `element` as this controller's root view, creating a `View` for
+    // it when it has none, and returns the controller. The awakener calls
+    // this for an element carrying `controller`.
     attach(element) {
       this._view = Swill__View.of(element) || new Swill__View(element);
       this._view.controller = this;
@@ -2271,52 +2388,67 @@
     get view() {
       return this._view;
     }
-    // Ownership is derived from the sparse view tree and never stored twice.
+    // Returns the controller that owns the containing region, or nil for a
+    // root controller.
     parent() {
       return Runtime.nilable(this._view.superview?.owner());
     }
-    // Direct child controllers in tree order.
+    // Returns the controllers rooted directly within this region, in document
+    // order; an empty array when there are none.
     childControllers() {
       let found = Runtime.cast([], "T::Array[Controller]");
       this.collectChildControllers(this._view, found);
       return found;
     }
-    // The one application running on this page.
+    // Returns the application running on this page.
     application() {
       return Swill__Application.shared();
     }
-    // A nested controller answers to its parent; a root controller answers to
-    // the application, which is the top of the responder chain.
+    // :section: Responding
+    // This controller's place in the responder chain.
+    // Returns the parent controller, or the application for a root
+    // controller. The application ends the chain.
     nextResponder() {
       return this.parent() || this.application();
     }
-    // Observe a notification for as long as this controller is loaded.
+    // Observes the notification named `name` until this controller unloads.
+    // `callback` receives each `Notification` posted under that name.
     observeNotification(name, callback) {
       return this.retain(Swill__NotificationCenter.default().addObserver(
         name,
         callback
       ));
     }
-    // True when the region holds something focusable.
+    // Returns whether the region contains a focusable element, as `View`
+    // decides it. A controller with nothing to focus refuses first responder.
     acceptsFirstResponder() {
       return this._view.firstFocusableElement() != null;
     }
-    // Focuses the first focusable element in the region.
+    // Focuses the first focusable element in the region and returns true.
+    // Returns false, focusing nothing, when the current first responder
+    // refuses to resign.
     becomeFirstResponder() {
       if (!super.becomeFirstResponder()) return false;
       this._view.focusElement();
       return true;
     }
-    // Blurs the focused element. Answers false to refuse the change.
+    // Blurs the region's focused element and returns true. Override to return
+    // false, which refuses the change and keeps this controller first
+    // responder.
     resignFirstResponder(next_responder) {
       if (!super.resignFirstResponder(next_responder)) return false;
       this._view.blurElement();
       return true;
     }
-    // Releases this controller's bindings, everything it retained, and its own
-    // observation state, then its descendants, exactly once. The element keeps
-    // its View, so the region can be awakened again later. Calling it twice is
-    // harmless.
+    // :section: Loading and Unloading
+    // The hooks that run as a region awakens and goes away, in the order they
+    // run. Each hook's default implementation does nothing.
+    // Releases everything this controller holds, then unloads its child
+    // controllers. Bindings, retained observations, and the controller's own
+    // observers are released; the region's views are dropped from the view
+    // tree, though each element keeps its `View`, so the region can awaken
+    // again. `view_will_disappear` runs first and `view_did_disappear` last.
+    // A second call does nothing.
     unload() {
       if (this._view.controllerValue() !== this) return;
       this.viewWillDisappear();
@@ -2329,45 +2461,50 @@
       this._view.controller = null;
       return this.viewDidDisappear();
     }
-    // Coercion hook for JSON outlets: turn parsed data into value objects
-    // before the outlet is assigned. nil means the script was empty.
+    // Returns the value to assign to the JSON outlet `name` from its parsed
+    // `value`; nil when the script element was empty. The default
+    // implementation returns `value` unchanged. Override it to turn parsed
+    // data into models before the outlet is assigned.
     decodeOutletData(name, value) {
       return value;
     }
-    // Outlets are connected, and no binding has fired yet: state set here is
-    // what bindings push first.
+    // Invoked after the region's outlets are connected and before any binding
+    // is established. State set here is what bindings push first.
     viewDidLoad() {
       return null;
     }
-    // Bindings have pushed their initial values, actions are live, and child
-    // controllers are wired.
+    // Invoked after every binding in the region has pushed its initial value,
+    // every `data-action` has its handler installed, and every child
+    // controller has awakened.
     awakeFromDOM() {
       return null;
     }
-    // Runs on a window controller after fragment values were applied to its
-    // restorable paths and before controller_did_load. restored is true
-    // when at least one value was applied.
+    // Invoked on a window's controller after values from the URL fragment
+    // were applied to its restorable paths, and before `controller_did_load`.
+    // `restored` is true when at least one value was applied.
     controllerDidRestore(restored) {
       return null;
     }
-    // The whole region, including any restored values, is in place. Runs once
-    // per controller instance.
+    // Invoked once per controller instance, after the whole region, including
+    // any restored values, is in place.
     controllerDidLoad() {
       return null;
     }
-    // The region is about to appear. Runs each time it is awakened.
+    // Invoked before the region appears, each time it awakens.
     viewWillAppear() {
       return null;
     }
-    // The region has appeared.
+    // Invoked after the region has appeared.
     viewDidAppear() {
       return null;
     }
-    // The region is about to go away, before anything it owns is released.
+    // Invoked as `unload` begins, before anything the controller holds is
+    // released.
     viewWillDisappear() {
       return null;
     }
-    // The region is gone and everything it owned has been released.
+    // Invoked as `unload` ends, after everything the controller held has been
+    // released.
     viewDidDisappear() {
       return null;
     }
@@ -3076,7 +3213,7 @@
     // ---- windows ----
     // Replace a named container's content with a window template or captured
     // pre-rendered content, awaken it, record the content in the URL fragment
-    // as a history entry, restore the new controller's state, and hand the
+    // as a history entry, restore the new controller's state, and offer the
     // first responder to it. Returns that controller.
     // history is :push for navigation, :replace to rewrite the entry, or :none
     // when the fragment itself asked for the content (Back/Forward).
@@ -3993,6 +4130,18 @@
             "arity": 1,
             "js": "isCollection"
           },
+          "show_first": {
+            "arity": 1,
+            "js": "showFirst"
+          },
+          "replace_object": {
+            "arity": 2,
+            "js": "replaceObject"
+          },
+          "compare_sort_values": {
+            "arity": 2,
+            "js": "compareSortValues"
+          },
           "sort": {
             "arity": 2
           },
@@ -4007,18 +4156,6 @@
           "change_sort_direction": {
             "arity": 1,
             "js": "changeSortDirection"
-          },
-          "show_first": {
-            "arity": 1,
-            "js": "showFirst"
-          },
-          "replace_object": {
-            "arity": 2,
-            "js": "replaceObject"
-          },
-          "compare_sort_values": {
-            "arity": 2,
-            "js": "compareSortValues"
           },
           "arranged_selection": {
             "arity": 0,
@@ -4341,20 +4478,58 @@
               return {};
             }
           },
-          "selection_state": {
-            js: "selectionState",
-            type: "T::Hash[String, T.untyped]",
-            attribute: false,
-            defaultValue() {
-              return {};
-            }
-          },
           "arranged_content": {
             js: "arrangedContent",
             type: "T::Array[T.untyped]",
             attribute: false,
             compute: function compute_arrangedContent() {
               return this.arrangeContent();
+            }
+          },
+          "sort_key": {
+            js: "sortKey",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "changeSortKey",
+            compute: function compute_sortKey() {
+              let controller = this.arrayController;
+              return controller ? controller.sortKey : Runtime.cast(
+                Runtime.logicalOr(this.arrangementOptions.key, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "sort_direction": {
+            js: "sortDirection",
+            type: "String",
+            attribute: false,
+            writer: "changeSortDirection",
+            compute: function compute_sortDirection() {
+              let controller = this.arrayController;
+              return controller ? controller.sortDirection : Runtime.cast(
+                Runtime.logicalOr(
+                  this.arrangementOptions.direction,
+                  () => "ascending"
+                ),
+                "String"
+              );
+            }
+          },
+          "sort_states": {
+            js: "sortStates",
+            type: "T::Hash[String, String]",
+            attribute: false,
+            compute: function compute_sortStates() {
+              let key = this.sortKey;
+              return key != null ? { [key]: this.sortDirection } : {};
+            }
+          },
+          "selection_state": {
+            js: "selectionState",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
             }
           },
           "selected_objects": {
@@ -4398,44 +4573,6 @@
                 if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
-            }
-          },
-          "sort_key": {
-            js: "sortKey",
-            type: "T.nilable(String)",
-            attribute: false,
-            writer: "changeSortKey",
-            compute: function compute_sortKey() {
-              let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime.cast(
-                Runtime.logicalOr(this.arrangementOptions.key, () => null),
-                "T.nilable(String)"
-              );
-            }
-          },
-          "sort_direction": {
-            js: "sortDirection",
-            type: "String",
-            attribute: false,
-            writer: "changeSortDirection",
-            compute: function compute_sortDirection() {
-              let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime.cast(
-                Runtime.logicalOr(
-                  this.arrangementOptions.direction,
-                  () => "ascending"
-                ),
-                "String"
-              );
-            }
-          },
-          "sort_states": {
-            js: "sortStates",
-            type: "T::Hash[String, String]",
-            attribute: false,
-            compute: function compute_sortStates() {
-              let key = this.sortKey;
-              return key != null ? { [key]: this.sortDirection } : {};
             }
           }
         },
@@ -4535,10 +4672,6 @@
             "arity": 1,
             "js": "assignSuperview"
           },
-          "next_responder": {
-            "arity": 0,
-            "js": "nextResponder"
-          },
           "has_attribute?": {
             "arity": 1,
             "js": "hasAttribute"
@@ -4575,10 +4708,6 @@
           "reveal": {
             "arity": 1
           },
-          "ensure_focusable": {
-            "arity": 0,
-            "js": "ensureFocusable"
-          },
           "clear_text_selection": {
             "arity": 0,
             "js": "clearTextSelection"
@@ -4592,6 +4721,10 @@
             "arity": 0,
             "js": "focusableSelector"
           },
+          "ensure_focusable": {
+            "arity": 0,
+            "js": "ensureFocusable"
+          },
           "first_focusable_element": {
             "arity": 0,
             "js": "firstFocusableElement"
@@ -4603,6 +4736,10 @@
           "blur_element": {
             "arity": 0,
             "js": "blurElement"
+          },
+          "next_responder": {
+            "arity": 0,
+            "js": "nextResponder"
           },
           "accepts_first_responder?": {
             "arity": 0,
@@ -5069,20 +5206,58 @@
               return {};
             }
           },
-          "selection_state": {
-            js: "selectionState",
-            type: "T::Hash[String, T.untyped]",
-            attribute: false,
-            defaultValue() {
-              return {};
-            }
-          },
           "arranged_content": {
             js: "arrangedContent",
             type: "T::Array[T.untyped]",
             attribute: false,
             compute: function compute_arrangedContent2() {
               return this.arrangeContent();
+            }
+          },
+          "sort_key": {
+            js: "sortKey",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "changeSortKey",
+            compute: function compute_sortKey2() {
+              let controller = this.arrayController;
+              return controller ? controller.sortKey : Runtime.cast(
+                Runtime.logicalOr(this.arrangementOptions.key, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "sort_direction": {
+            js: "sortDirection",
+            type: "String",
+            attribute: false,
+            writer: "changeSortDirection",
+            compute: function compute_sortDirection2() {
+              let controller = this.arrayController;
+              return controller ? controller.sortDirection : Runtime.cast(
+                Runtime.logicalOr(
+                  this.arrangementOptions.direction,
+                  () => "ascending"
+                ),
+                "String"
+              );
+            }
+          },
+          "sort_states": {
+            js: "sortStates",
+            type: "T::Hash[String, String]",
+            attribute: false,
+            compute: function compute_sortStates2() {
+              let key = this.sortKey;
+              return key != null ? { [key]: this.sortDirection } : {};
+            }
+          },
+          "selection_state": {
+            js: "selectionState",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
             }
           },
           "selected_objects": {
@@ -5126,44 +5301,6 @@
                 if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
-            }
-          },
-          "sort_key": {
-            js: "sortKey",
-            type: "T.nilable(String)",
-            attribute: false,
-            writer: "changeSortKey",
-            compute: function compute_sortKey2() {
-              let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime.cast(
-                Runtime.logicalOr(this.arrangementOptions.key, () => null),
-                "T.nilable(String)"
-              );
-            }
-          },
-          "sort_direction": {
-            js: "sortDirection",
-            type: "String",
-            attribute: false,
-            writer: "changeSortDirection",
-            compute: function compute_sortDirection2() {
-              let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime.cast(
-                Runtime.logicalOr(
-                  this.arrangementOptions.direction,
-                  () => "ascending"
-                ),
-                "String"
-              );
-            }
-          },
-          "sort_states": {
-            js: "sortStates",
-            type: "T::Hash[String, String]",
-            attribute: false,
-            compute: function compute_sortStates2() {
-              let key = this.sortKey;
-              return key != null ? { [key]: this.sortDirection } : {};
             }
           },
           "represented_object": {

@@ -2,31 +2,29 @@
 # frozen_string_literal: true
 
 module Swill
-  # Cocoa-style object bindings: bind(:name, to: object, key_path: "a.b")
-  # keeps the property the binding names equal to the key path on the observed
-  # object. This is the same binding markup establishes, asked for in Ruby
-  # rather than read from an attribute, so the same options apply and the same
-  # machinery runs.
+  # `ObjectBindings` adds bindings established from Ruby to the objects that
+  # include it: `bind` keeps one of the object's properties equal to a key
+  # path on an observed object. It is the same binding markup establishes
+  # with `bind="path"`, with the same options and the same behavior, so an
+  # object can bind to itself or to any observed object without markup.
   #
-  # One binding per name; rebinding disposes the previous one first.
+  # A controller binds its own property to a path under one of its
+  # properties, supplying an empty array while the path has no value:
   #
-  # null_placeholder: is Cocoa's NSNullPlaceholderBindingOption — what the
-  # property receives when the path has no value, so a path that runs through a
-  # nilable object can feed a property that is not one:
+  #     bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
+  #          null_placeholder: [])
   #
-  #   bind(:menu_recipes, to: self, key_path: "selected_menu.recipes",
-  #        null_placeholder: [])
-  #
-  # transform: names a registered ValueTransformer, as transform= does in
-  # markup.
+  # Each name holds one binding, and a controller releases them all when it
+  # unloads. See [Bindings](rdoc-ref:doc/bindings.md).
   module ObjectBindings
     extend T::Sig
 
-    # Keeps the property named by **binding** equal to **key_path** on **to**,
-    # writing **null_placeholder** whenever the path has no value. Replaces any
-    # existing binding of that name.
-    #
-    # Returns self.
+    # Establishes a binding that keeps the property `binding` equal to
+    # `key_path` on `to`, and returns the object. The property receives
+    # `null_placeholder` whenever the path has no value; the default is nil.
+    # `transform` names a registered `ValueTransformer`, as `transform` does in
+    # markup, and raises when no transformer has that name. A binding already
+    # established under this name is released first.
     sig do
       params(
         binding: Symbol,
@@ -49,9 +47,8 @@ module Swill
       self
     end
 
-    # Releases the binding named **binding,** if any.
-    #
-    # Returns self.
+    # Releases the binding named `binding`, if there is one, and returns the
+    # object.
     sig { params(binding: Symbol).returns(T.untyped) }
     def unbind(binding)
       dispose = object_bindings[binding]
@@ -61,7 +58,8 @@ module Swill
       self
     end
 
-    # Releases every binding, as a controller does when it unloads.
+    # Releases every binding on the object and returns it. A controller
+    # calls this as it unloads.
     sig { returns(T.untyped) }
     def unbind_all
       object_bindings.each { |_binding, dispose| dispose.() }
@@ -69,7 +67,7 @@ module Swill
       self
     end
 
-    # Keyed by binding name: binding a name replaces whatever was bound there.
+    # The release callable of each binding, by name.
     sig { returns(T::Hash[Symbol, T.untyped]) }
     def object_bindings # :nodoc:
       @object_bindings = {} unless @object_bindings

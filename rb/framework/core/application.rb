@@ -125,7 +125,7 @@ module Swill
 
     # Replace a named container's content with a window template or captured
     # pre-rendered content, awaken it, record the content in the URL fragment
-    # as a history entry, restore the new controller's state, and hand the
+    # as a history entry, restore the new controller's state, and offer the
     # first responder to it. Returns that controller.
     # history is :push for navigation, :replace to rewrite the entry, or :none
     # when the fragment itself asked for the content (Back/Forward).
