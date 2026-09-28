@@ -154,14 +154,14 @@ module Swill
 
     sig { params(copy: T.untyped, original: T.untyped, index: Integer).void }
     def commit_edit(copy, original, index)
-      if original.is_a?(Model::DistantObject)
+      if original.is_a?(Distant::Object)
         commit_distant_edit(copy, original, index)
         return
       end
       finish_edit(index, apply_edit(copy, original, index))
     end
 
-    sig { params(copy: T.untyped, original: Model::DistantObject, _index: Integer).void }
+    sig { params(copy: T.untyped, original: Distant::Object, _index: Integer).void }
     async def commit_distant_edit(copy, original, _index)
       generation = @edit_generation
       begin

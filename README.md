@@ -96,11 +96,13 @@ Writing an application:
 | [Markup](doc/markup.md) | Every attribute Swill reads, each linking to the guide for its mechanism |
 | [Declarations](doc/declarations.md) | The `property`, `attribute`, `outlet` and `restorable` keywords, the framework macros, and the property protocol |
 | [Bindings](doc/bindings.md) | Key paths, binding roots, writing back, value transformers, observers, and computed properties |
+| [Swell](doc/swell.md) | Chained DOM edits, attribute and property values, descendant lookup, and event listeners |
+| [Controls](doc/controls.md) | Buttons, text fields, selects, segmented choices, value bindings, keyboard behavior, and control templates |
 | [Lifecycle](doc/lifecycle.md) | Activation order, restoration from the URL fragment, unloading, and ownership |
 | [Responders](doc/responders.md) | The responder chain, actions, key events, first responder, and focus |
 | [Collections](doc/collections.md) | Lists and tables: row templates, sorting, filtering, editing in place, `ArrayController`, and shared selection |
-| [Models & Data](doc/models.md) | Client models: `Base`, `Editable`, `Resource` and `DistantObject`; identity, partial fields, collection state, and drafts |
-| [Server data](doc/server_data.md) | Declaring the client surface, queries, resolvers, commands, effects, types and authorization, and the MessagePack WebSocket endpoint |
+| [Models & Data](doc/models.md) | Client models: `Base`, `Editable`, `Resource` and `Distant::Object`; identity, partial fields, collection state, and drafts |
+| [Server Data](doc/server_data.md) | Distant Objects: distant interfaces, remote methods, effects, types and authorization, generation, and the MessagePack WebSocket connection |
 | [A bound data form](doc/data_form.md) | A complete plain-Sequel model, endpoint, Ruby form, and project build |
 
 Boundaries and tooling:
@@ -124,7 +126,7 @@ The implementation covers:
 - class settings and inheritable registries;
 - an open declaration vocabulary: the compiler loads the Ruby, so a macro is
   an ordinary class method marked `macro`, and `attribute`, `outlet`,
-  `restorable`, resource relationships, and distant-object declarations are
+  `restorable`, resource associations, and distant-object declarations are
   written in it rather than in the compiler.
   A plugin's own macro needs no compiler change;
 - mutation hooks, observation, value bindings, actions, drafts, and disposal;

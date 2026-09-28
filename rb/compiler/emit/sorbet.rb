@@ -11,7 +11,8 @@ module Swill
           knowledge.local.each do |entry|
             mixin = entry["kind"] == "mixin"
             properties = mixin ? entry["included_properties"] : entry["properties"]
-            unless mixin && properties.empty?
+            hidden = entry["methods"].select { |method| method["visibility"] }
+            unless mixin && properties.empty? && hidden.empty?
               declaration = "#{mixin ? 'module' : 'class'} #{entry['name']}"
               if !mixin && entry["parent"]
                 declaration << " < #{knowledge.resolve(entry['parent'], entry['scope'])}"
@@ -28,13 +29,22 @@ module Swill
                 end
               end
               # A macro's forwarded methods are real, typed members.
-              entry["methods"].select { |method| method["to"] }.each do |method|
-                parameters = method["parameters"].map { |name, type| "#{name}: #{type}" }.join(", ")
-                signature = parameters.empty? ? "" : "params(#{parameters})."
-                arguments = method["parameters"].keys.join(", ")
-                lines << "  sig { #{signature}returns(#{method['returns']}) }"
-                definition = arguments.empty? ? method["name"] : "#{method['name']}(#{arguments})"
-                lines << "  def #{definition}; end"
+              entry["methods"].select { |method| method["to"] && !method["visibility"] }.each do |method|
+                lines.concat(forward_rbi(method))
+              end
+              # Methods the body made private or protected are declared
+              # again under that visibility, so Sorbet checks their callers.
+              %w[protected private].each do |visibility|
+                members = hidden.select { |method| method["visibility"] == visibility }
+                next if members.empty?
+                lines << "  #{visibility}"
+                members.each do |method|
+                  if method["to"]
+                    lines.concat(forward_rbi(method))
+                  else
+                    lines << "  def #{method['name']}#{formals_rbi(method['formals'])}; end"
+                  end
+                end
               end
               lines << "end"
             end
@@ -54,6 +64,33 @@ module Swill
             end
           end
           lines.join("\n") + "\n"
+        end
+
+        def forward_rbi(method)
+          parameters = method["parameters"].map { |name, type| "#{name}: #{type}" }.join(", ")
+          signature = parameters.empty? ? "" : "params(#{parameters})."
+          arguments = method["parameters"].keys.join(", ")
+          definition = arguments.empty? ? method["name"] : "#{method['name']}(#{arguments})"
+          ["  sig { #{signature}returns(#{method['returns']}) }", "  def #{definition}; end"]
+        end
+
+        # A method's parameter list as an untyped RBI declaration, matching
+        # the definition's arity so Sorbet does not report a redefinition.
+        def formals_rbi(formals)
+          return "" if formals.nil? || formals.empty?
+          list = formals.map do |formal|
+            name = formal["name"]
+            case formal["kind"]
+            when "req" then name
+            when "opt" then "#{name} = T.unsafe(nil)"
+            when "rest" then "*#{name}"
+            when "keyreq" then "#{name}:"
+            when "key" then "#{name}: T.unsafe(nil)"
+            when "keyrest" then "**#{name}"
+            when "block" then "&#{name}"
+            end
+          end
+          "(#{list.join(', ')})"
         end
 
         # Sorbet can bind DSL blocks to the instance, but a single property macro

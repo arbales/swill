@@ -10,7 +10,7 @@ is an implemented guarantee. Current usage is documented in
 
 ## Current checkpoint
 
-The first data slice and the relationship/collection-controller milestone are
+The first data slice and the association/collection-controller milestone are
 implemented and committed. The immediate focus is validating and refining
 that behavior in real applications.
 
@@ -19,9 +19,9 @@ that behavior in real applications.
 | Schema and tooling | Explicit client schemas, Sorbet-compatible types, deterministic generation/checking, generated Ruby and RBI files |
 | Remote operations | Dataset queries, class resolvers, instance/class commands, typed value results, explicit `await` |
 | Object lifecycle | Canonical partial objects, batched hydration, generic persistence, detached drafts, deletion tombstones |
-| Relationships | Sequel association names, reflected cardinality, stable read-only relationship collections, loading/error/freshness state |
-| Mutation effects | Explicit refreshes and relationship invalidations for related objects; generation ordering and demand-driven refresh |
-| Presentation | Ruby `CollectionArrangement`, optional `ArrayController`, ordinary List binding, lazy relationship `_controller` accessors |
+| Associations | Sequel association names, reflected cardinality, stable read-only association collections, loading/error/freshness state |
+| Mutation effects | Explicit refreshes and association invalidations for related objects; generation ordering and demand-driven refresh |
+| Presentation | Ruby `CollectionArrangement`, optional `ArrayController`, ordinary List binding, lazy association `_controller` accessors |
 | Transport | MessagePack over WebSockets, schema handshake, actor-scope reset; current protocol version **2** |
 
 The generated-client fixture exercises the real Falcon WebSocket boundary.
@@ -35,7 +35,7 @@ fix. Those checks do not replace the remaining interaction review below.
 ### 1. Review and refine the implemented data layer
 
 - Review the [before/after examples](doc/collection_controller_examples.md):
-  direct table binding, a shared relationship controller, independent views,
+  direct table binding, a shared association controller, independent views,
   and a view controller including the arrangement module.
 - Finish live Movies checks for sorting/filtering, selection, keyboard focus,
   inline editing, and creating a movie at the top of the visible list.
@@ -60,7 +60,7 @@ interaction review.
 
 ### 2. Define query-result freshness and explicit refresh
 
-This is the next design/implementation milestone. Relationship invalidation
+This is the next design/implementation milestone. Association invalidation
 already names a particular owner and association. An arbitrary query has
 arguments, filtering, ordering, limits, and privacy scope; a patch to one of its
 objects does not establish its current membership or order.
@@ -100,7 +100,7 @@ Acceptance scenarios:
 - Edit a movie so it enters/leaves a query or changes its server sort position;
   refresh reconciles membership/order while retaining canonical identities.
 - Display overlapping mailing lists, change a shared member or move membership,
-  and refresh affected views without speculative inverse relationship edits.
+  and refresh affected views without speculative inverse association edits.
 - Fail and retry a refresh, delete a selected record, refresh during editing,
   and reconnect after an out-of-band change. Each has explicit UI/data behavior.
 
@@ -112,7 +112,7 @@ machinery or extra presentation-controller requirements.
 
 ### Schema, types, and generation
 
-Server models opt into `client_model`; primary keys are implicit and writable
+Server models opt in with a `DistantInterface` module; primary keys are implicit and writable
 fields are an explicit subset. Real Sorbet or the `swill/server` signature
 facade supplies types. Use familiar types such as `T.nilable(Integer)` and
 `T::Boolean`; operations without return signatures must declare `returns:`.
@@ -149,7 +149,7 @@ synchronous. Omitted arguments stay omitted so server-side defaults run there.
 
 `preload:` projects return values; instance-command `changes:` refreshes named
 receiver fields. Class commands have no receiver and reject `changes:`.
-`Swill::Data::Value` carries structured operation results without attaching
+`Swill::Distant::Value` carries structured operation results without attaching
 invocation-specific metadata to canonical models.
 
 Commands are transactional by default, including result validation and
@@ -169,7 +169,7 @@ privacy-denied nils remain indistinguishable from legitimate nils; there is no
 separate client authorization flag. Authentication changes establish a new
 connection/context, and changed actor scope resets cached client data.
 
-### Canonical objects, relationships, and effects
+### Canonical objects, associations, and effects
 
 The client store keys identity by model class and normalized ID. Patches merge
 only included members; omitted fields retain their previous availability and
@@ -184,22 +184,22 @@ Generated associations use `many_to_one`, `one_to_one`, `one_to_many`,
 from Sequel reflection. Join configuration, foreign keys, and scopes stay on
 the server. Unsupported association kinds fail generation clearly.
 
-To-many associations expose stable `RelationshipCollection` instances with
+To-many associations expose stable `AssociationCollection` instances with
 read-only membership and loading, loaded, error, and stale state. Query results
-use `Collection`; they do not yet carry a generic refresh contract. Relationship
+use `Collection`; they do not yet carry a generic refresh contract. Association
 setters and backing-array edits cannot masquerade as persisted mutations.
-Named server operations perform relationship changes.
+Named server operations perform association changes.
 
 Inside an invocation, record explicit authoritative effects:
 
 ```ruby
-Swill::Data.context.refresh(member, :name)
-Swill::Data.context.refresh(list, :members)
-Swill::Data.context.invalidate(previous_list, :members)
+Swill::Distant.context.refresh(member, :name)
+Swill::Distant.context.refresh(list, :members)
+Swill::Distant.context.invalidate(previous_list, :members)
 ```
 
 Refresh projects fresh privacy-scoped values; invalidation retains cached
-membership while marking it stale. Observed relationships refresh through
+membership while marking it stale. Observed associations refresh through
 batched demand; otherwise they refresh on access. Older hydration cannot clear
 a newer invalidation. Effects can name related objects, including old and new
 owners, and follow the operation's transaction rules. They reach the calling
@@ -209,7 +209,7 @@ client; they are not cross-client subscriptions or automatic mutation capture.
 
 | Component | Responsibility |
 | --- | --- |
-| Relationship collection / query result | Returned membership and server order; relationship loading/freshness state |
+| Association collection / query result | Returned membership and server order; association loading/freshness state |
 | `CollectionArrangement` / `ArrayController` | Local filtering/sorting, cached arrangement, identity-based selection |
 | List and its view | Row rendering/lifecycle, focus, keyboard/mouse input, scrolling, header actions |
 
@@ -222,7 +222,7 @@ observed property reads track relevant dependencies. Preserve existing `sort`,
 Ordinary List `bind` accepts either content or an ArrayController. Exactly one
 owner handles arrangement/selection; focus remains in the responder system.
 `list.members_controller` lazily caches a shared controller per owner and
-relationship without fetching just to construct it. Independent views can use
+association without fetching just to construct it. Independent views can use
 direct collection binding or independent controllers over the same objects.
 
 Sorting preserves object selection. Filtering removes hidden objects from the
@@ -246,12 +246,37 @@ hydration demand, and stale-response coordination. JavaScript owns the browser
 WebSocket, codec, request correlation, and connection notifications.
 
 JSON:API and plain JSON remain supported through `Swill::Model::Resource`,
-including their existing `has_one`/`has_many`, codecs, datasets, relationship
-URLs, and persistence APIs. Distant models use `Swill::Model::DistantObject`.
+including their existing `has_one`/`has_many`, codecs, datasets, association
+URLs, and persistence APIs. Distant models use `Swill::Distant::Object`.
 The strategies share observation/editing foundations, but keep stores, loading,
 and transport paths separate. New data investment follows the distant path.
 
 ## Validation and deferred work
+
+### JavaScript-side visibility
+
+The compiler records `private` and `protected` from a class body and Ruby
+enforces them on the MRI host, but the emitted JavaScript methods are
+ordinary: `Runtime.send`, `respondsTo`, `forward` and actions can reach a
+private method in the browser. Loop back: either emit `#name` private
+methods where nothing dynamic reaches them, or have the runtime's dispatch
+refuse a private name.
+
+### Converging the two model frameworks
+
+`Resource` and Distant Objects share `Base` and `Editable` and nothing above
+them. Two convergences are open:
+
+- **Loading state.** Both frameworks now declare `<name>_loaded`,
+  `<name>_loading` and `<name>_error` properties per field or association;
+  distant associations add `<name>_stale`. Left: `Resource` has no
+  `_stale`, and the declaring macros are separate. One declaration on
+  `Editable` would let a view bind to either kind of model the same way.
+- **Identity.** `Resource` pools instances through `Identity`/`Store`;
+  `Swill::Distant::Client` holds canonical distant objects. One pool
+  protocol on `Editable`, with the transport supplying the fetch, would
+  remove the second implementation.
+
 
 For each milestone, run checks appropriate to changed behavior: deterministic
 schema generation, compiler and Sorbet checks, MRI/runtime parity, generated

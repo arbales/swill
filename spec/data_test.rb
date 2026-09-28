@@ -13,7 +13,12 @@ end
 
 module DataFixture
   class PlainRecord < Sequel::Model(DB[:plain_records])
-    client_model fields: [:name], writable: [:name]
+    module DistantInterface
+      extend Swill::Distant::Interface
+
+      fields :name
+      writable :name
+    end
   end
 end
 
@@ -29,25 +34,28 @@ class DataTest < Minitest::Test
         primary_key :id
         String :name
       end
-      Swill::Data.install(Sequel::Model)
 
       class FacadeRecord < Sequel::Model(DB[:facade_records])
         extend T::Sig
-        client_model fields: {name: T.nilable(String)}
 
         sig { params(name: String).returns(T.nilable(FacadeRecord)) }
         def self.named(name)
           first(name: name)
         end
-        command :named, on: :class
+
+        module DistantInterface
+          extend Swill::Distant::Interface
+          fields name: T.nilable(String)
+          command :named, on: :class
+        end
       end
 
-      data_schema = Swill::Data::Schema.new([FacadeRecord])
+      data_schema = Swill::Distant::Schema.new([FacadeRecord])
       schema = data_schema.models.fetch("FacadeRecord")
-      dispatcher = Swill::Data::Dispatcher.new(
+      dispatcher = Swill::Distant::Dispatcher.new(
         schema: data_schema, viewer_context: nil, actor: nil, scope_token: "plain"
       )
-      dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => data_schema.hash)
+      dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => data_schema.hash)
       reply = dispatcher.call(
         "type" => "COMMAND", "request_id" => 1, "generation" => 1,
         "model" => "FacadeRecord", "name" => "named", "arguments" => ["missing"], "keywords" => {}
@@ -56,7 +64,7 @@ class DataTest < Minitest::Test
         sorbet: $LOADED_FEATURES.any? { |path| path.include?("sorbet-runtime") },
         privacy: $LOADED_FEATURES.any? { |path| path.include?("sequel-privacy") },
         field: schema.dig("fields", "name", "type", "kind"),
-        result: schema.dig("operations", "named", "returns", "kind"),
+        result: schema.dig("remote_methods", "named", "returns", "kind"),
         reply: reply["type"],
         boolean: T::Boolean.name,
         array: T::Array[String].kind,
@@ -75,17 +83,17 @@ class DataTest < Minitest::Test
   end
 
   def setup
-    @schema = Swill::Data::Schema.new([
+    @schema = Swill::Distant::Schema.new([
                                         DataFixture::Comment, DataFixture::Post, DataFixture::User
                                       ])
     omniscient = Sequel::Privacy::ViewerContext.omniscient(:data_test_actor)
     actor = DataFixture::User.for_vc(omniscient).with_pk(1)
     vc = Sequel::Privacy::ViewerContext.for_actor(actor)
     actor.reset_viewer_context(vc, :authenticated_connection)
-    @dispatcher = Swill::Data::Dispatcher.new(
+    @dispatcher = Swill::Distant::Dispatcher.new(
       schema: @schema, viewer_context: vc, actor: actor, scope_token: "actor-1"
     )
-    @dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => @schema.hash)
+    @dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => @schema.hash)
   end
 
   def test_clients_without_invalidation_support_fail_the_handshake
@@ -95,29 +103,29 @@ class DataTest < Minitest::Test
 
   def test_protocol_round_trips_references_and_temporal_values
     value = {
-      "reference" => Swill::Data::Protocol::Reference.new("DataFixture::Post", "1"),
+      "reference" => Swill::Distant::Protocol::Reference.new("DataFixture::Post", "1"),
       "nil" => nil,
       "time" => Time.utc(2026, 1, 2, 3, 4, 5),
       "date" => Date.new(2026, 1, 2)
     }
-    assert_equal value, Swill::Data::Protocol.unpack(Swill::Data::Protocol.pack(value))
+    assert_equal value, Swill::Distant::Protocol.unpack(Swill::Distant::Protocol.pack(value))
   end
 
   def test_swill_and_sorbet_signatures_normalize_to_protocol_types
-    operations = @schema.models
-    assert_equal "optional", operations.dig("DataFixture::User", "operations", "current_user", "returns", "kind")
-    assert_equal "String", operations.dig("DataFixture::User", "operations", "first_by_email",
-                                           "parameters", 0, "type", "name")
-    assert_equal "Boolean", operations.dig("DataFixture::Post", "operations", "publish!", "returns", "name")
-    lookup = operations.dig("DataFixture::User", "operations", "lookup", "parameters")
+    models = @schema.models
+    assert_equal "optional", models.dig("DataFixture::User", "remote_methods", "current_user", "returns", "kind")
+    assert_equal "String", models.dig("DataFixture::User", "remote_methods", "first_by_email",
+                                       "parameters", 0, "type", "name")
+    assert_equal "Boolean", models.dig("DataFixture::Post", "remote_methods", "publish!", "returns", "name")
+    lookup = models.dig("DataFixture::User", "remote_methods", "lookup", "parameters")
     lookup_types = lookup.map do |parameter|
       type = parameter.fetch("type")
       type["name"] || type.fetch("kind")
     end
     assert_equal %w[String Boolean Integer dynamic], lookup_types
-    assert_equal Swill::Data::Types.dump(T.nilable(DataFixture::User)),
-                 Swill::Data::Types.dump(Swill::Data::Types.parse("T.nilable(DataFixture::User)"))
-    nested = Swill::Data::Types.parse("T.any(T.nilable(String), T::Array[Integer])")
+    assert_equal Swill::Distant::Types.dump(T.nilable(DataFixture::User)),
+                 Swill::Distant::Types.dump(Swill::Distant::Types.parse("T.nilable(DataFixture::User)"))
+    nested = Swill::Distant::Types.parse("T.any(T.nilable(String), T::Array[Integer])")
     assert_equal %w[optional array], nested.members.map(&:kind)
   end
 
@@ -141,7 +149,7 @@ class DataTest < Minitest::Test
     )
     assert_equal "RETURN", created["type"]
     reference = created.fetch("value")
-    assert_instance_of Swill::Data::Protocol::Reference, reference
+    assert_instance_of Swill::Distant::Protocol::Reference, reference
     id = reference.id
     assert_equal "Draft", DataFixture::DB[:comments].where(id: id).get(:body)
 
@@ -171,11 +179,11 @@ class DataTest < Minitest::Test
   end
 
   def test_create_supports_a_plain_sequel_model
-    schema = Swill::Data::Schema.new([DataFixture::PlainRecord])
-    dispatcher = Swill::Data::Dispatcher.new(
+    schema = Swill::Distant::Schema.new([DataFixture::PlainRecord])
+    dispatcher = Swill::Distant::Dispatcher.new(
       schema: schema, viewer_context: nil, actor: nil, scope_token: "plain"
     )
-    dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => schema.hash)
+    dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => schema.hash)
 
     created = dispatcher.call(
       "type" => "CREATE", "request_id" => 27, "generation" => 27,
@@ -226,7 +234,7 @@ class DataTest < Minitest::Test
                                 "model" => "DataFixture::Post", "name" => "search",
                                 "arguments" => ["Objects"], "keywords" => {})
     assert_equal "RESULT", response["type"]
-    assert_equal [Swill::Data::Protocol::Reference.new("DataFixture::Post", "1")], response["value"]
+    assert_equal [Swill::Distant::Protocol::Reference.new("DataFixture::Post", "1")], response["value"]
     post = response["patches"].find { |patch| patch["model"] == "DataFixture::Post" }
     author = response["patches"].find { |patch| patch["model"] == "DataFixture::User" }
     assert_nil post.dig("fields", "excerpt"), "an included nil remains present"
@@ -240,7 +248,7 @@ class DataTest < Minitest::Test
                                 "arguments" => ["ada@example.test"],
                                 "keywords" => { "exact" => true, "limit" => 1, "unused" => "ok" })
     assert_equal "RETURN", response["type"]
-    assert_equal Swill::Data::Protocol::Reference.new("DataFixture::User", "1"), response["value"]
+    assert_equal Swill::Distant::Protocol::Reference.new("DataFixture::User", "1"), response["value"]
 
     missing = @dispatcher.call("type" => "RESOLVE", "request_id" => 11, "generation" => 11,
                                "model" => "DataFixture::User", "name" => "lookup",
@@ -254,14 +262,14 @@ class DataTest < Minitest::Test
     assert_nil response.fetch("patches").first.fetch("fields").fetch("avatar")
   end
 
-  def test_relationship_hydration_encodes_references
+  def test_association_hydration_encodes_references
     response = @dispatcher.call("type" => "GET", "request_id" => 12, "generation" => 12,
                                 "demands" => [{ "model" => "DataFixture::Post", "id" => "1",
                                                 "fields" => ["comments"] }])
     post = response.fetch("patches").find { |patch| patch["model"] == "DataFixture::Post" }
     comments = post.dig("fields", "comments")
-    assert_equal [Swill::Data::Protocol::Reference.new("DataFixture::Comment", "1")], comments
-    assert Swill::Data::Protocol.pack(response), "the response is MessagePack encodable"
+    assert_equal [Swill::Distant::Protocol::Reference.new("DataFixture::Comment", "1")], comments
+    assert Swill::Distant::Protocol.pack(response), "the response is MessagePack encodable"
   end
 
   def test_command_applies_declared_changes_after_success
@@ -274,7 +282,7 @@ class DataTest < Minitest::Test
   end
 
   def test_class_command_returns_a_typed_value_without_an_id
-    operation = @schema.models.dig("DataFixture::Post", "operations", "lookup_title")
+    operation = @schema.models.dig("DataFixture::Post", "remote_methods", "lookup_title")
     assert_equal "class", operation.fetch("target")
     assert_equal false, operation.fetch("transaction")
     assert_equal "value", operation.dig("returns", "kind")
@@ -285,7 +293,7 @@ class DataTest < Minitest::Test
     assert_equal "RETURN", response["type"]
     assert_equal "DataFixture::PostLookup", response.dig("value", "$value", 0)
     assert_equal "found", response.dig("value", "$value", 1, "status").to_s
-    assert_instance_of Swill::Data::Protocol::Reference, response.dig("value", "$value", 1, "post")
+    assert_instance_of Swill::Distant::Protocol::Reference, response.dig("value", "$value", 1, "post")
     assert_equal "Distributed Objects", response.fetch("patches").first.dig("fields", "title")
   end
 
@@ -302,12 +310,12 @@ class DataTest < Minitest::Test
     assert_equal [{"model" => "DataFixture::User", "id" => "1", "generation" => 70,
                    "fields" => ["posts"]}], response["invalidations"]
     user = response["patches"].find { |patch| patch["model"] == "DataFixture::User" && patch["id"] == "2" && patch["fields"].key?("posts") }
-    assert_equal [Swill::Data::Protocol::Reference.new("DataFixture::Post", "1")], user.dig("fields", "posts")
+    assert_equal [Swill::Distant::Protocol::Reference.new("DataFixture::Post", "1")], user.dig("fields", "posts")
     assert_equal [], user.dig("fields", "published_posts"), "scoped membership is queried, not inferred"
     assert_nil user.dig("fields", "avatar"), "refresh respects denied-read nils"
     post = response["patches"].find { |patch| patch.dig("fields", "author_id") }
     assert_equal 2, post.dig("fields", "author_id")
-    assert_equal Swill::Data::Protocol::Reference.new("DataFixture::User", "2"), post.dig("fields", "author")
+    assert_equal Swill::Distant::Protocol::Reference.new("DataFixture::User", "2"), post.dig("fields", "author")
   ensure
     DataFixture::DB[:posts].where(id: 1).update(author_id: 1)
   end
@@ -351,7 +359,7 @@ class DataTest < Minitest::Test
                                 "model" => "DataFixture::Post", "id" => "1", "name" => "publish_author!",
                                 "arguments" => [], "keywords" => {})
     assert_equal "RETURN", response["type"], response.inspect
-    assert_equal Swill::Data::Protocol::Reference.new("DataFixture::User", "1"), response["value"]
+    assert_equal Swill::Distant::Protocol::Reference.new("DataFixture::User", "1"), response["value"]
     author = response.fetch("patches").find { |patch| patch["model"] == "DataFixture::User" }
     post = response.fetch("patches").find { |patch| patch["model"] == "DataFixture::Post" }
     assert_equal({"name" => "Ada"}, author.fetch("fields"))
@@ -359,11 +367,11 @@ class DataTest < Minitest::Test
   end
 
   def test_projection_validation_uses_the_return_type
-    declaration = DataFixture::Post.swill_data_operations.fetch("publish_author!")
+    declaration = DataFixture::Post::DistantInterface.remote_methods.fetch("publish_author!")
     original = declaration.fetch("projection")
     declaration["projection"] = [:title]
     error = assert_raises(ArgumentError) do
-      Swill::Data::Schema.new([DataFixture::Comment, DataFixture::Post, DataFixture::User])
+      Swill::Distant::Schema.new([DataFixture::Comment, DataFixture::Post, DataFixture::User])
     end
     assert_includes error.message, "DataFixture::User.title"
   ensure
@@ -371,9 +379,49 @@ class DataTest < Minitest::Test
   end
 
   def test_class_commands_reject_receiver_changes
-    klass = Class.new.extend(Swill::Data::Declarations)
-    error = assert_raises(ArgumentError) { klass.command(:publish, on: :class, changes: [:title]) }
+    interface = Module.new.extend(Swill::Distant::Interface)
+    error = assert_raises(ArgumentError) { interface.command(:publish, on: :class, changes: [:title]) }
     assert_includes error.message, "class commands have no receiver"
+  end
+
+  def test_interface_fields_mix_reflected_and_typed_names_and_reject_duplicates
+    interface = Module.new.extend(Swill::Distant::Interface)
+    interface.fields :title, body: T.nilable(String)
+    interface.fields :excerpt
+    interface.associations :author
+    interface.writable :title
+    declaration = interface.declaration
+    assert_equal %w[title body excerpt], declaration.fetch("fields")
+    assert_equal %w[body], declaration.fetch("field_types").keys
+    assert_equal "optional", declaration.dig("field_types", "body").kind
+    assert_equal %w[author], declaration.fetch("associations")
+    assert_equal %w[title], declaration.fetch("writable")
+    error = assert_raises(ArgumentError) { interface.fields :title }
+    assert_includes error.message, "duplicate field title"
+    assert_raises(ArgumentError) { interface.associations :author }
+    assert_raises(ArgumentError) { interface.writable :title }
+    assert_raises(ArgumentError) { interface.command(:publish!); interface.command(:publish!) }
+  end
+
+  def test_schema_accepts_models_or_their_interfaces_and_requires_an_interface
+    from_model = Swill::Distant::Schema.new([DataFixture::PlainRecord])
+    from_interface = Swill::Distant::Schema.new([DataFixture::PlainRecord::DistantInterface])
+    assert_equal from_model.hash, from_interface.hash
+    assert_same DataFixture::PlainRecord, from_interface.model_class("DataFixture::PlainRecord")
+    assert_same DataFixture::PlainRecord, DataFixture::PlainRecord::DistantInterface.model
+    bare = Class.new(Sequel::Model(DataFixture::DB[:plain_records]))
+    error = assert_raises(ArgumentError) { Swill::Distant::Schema.new([bare]) }
+    assert_includes error.message, "no distant interface"
+    assert_nil Swill::Distant::Interface.of(bare)
+  end
+
+  # The fixture declares Post's interface in a file loaded after the model,
+  # so discovery finds interfaces added by reopening the class.
+  def test_discovery_finds_each_model_with_an_interface
+    discovered = Swill::Distant::Schema.discover
+    assert_equal %w[DataFixture::Comment DataFixture::PlainRecord DataFixture::Post DataFixture::User],
+                 discovered.models.keys
+    assert_equal @schema.models.fetch("DataFixture::Post"), discovered.models.fetch("DataFixture::Post")
   end
 
   def test_non_nilable_fields_stay_non_nilable
@@ -403,8 +451,8 @@ class DataTest < Minitest::Test
   end
 
   def test_handshake_and_schema_reject_untrusted_names
-    bad = Swill::Data::Dispatcher.new(schema: @schema, viewer_context: nil, actor: nil, scope_token: "x")
-    mismatch = bad.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => "wrong")
+    bad = Swill::Distant::Dispatcher.new(schema: @schema, viewer_context: nil, actor: nil, scope_token: "x")
+    mismatch = bad.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => "wrong")
     assert_equal "schema_mismatch", mismatch.dig("error", "code")
 
     unknown = @dispatcher.call("type" => "GET", "request_id" => 4, "generation" => 7,
@@ -422,7 +470,7 @@ class DataTest < Minitest::Test
     assert_equal "type_mismatch", invalid.dig("error", "code")
   end
 
-  def test_relationship_schema_preserves_association_type_and_reflected_cardinality
+  def test_association_schema_preserves_association_type_and_reflected_cardinality
     reflection_class = Struct.new(:type, :associated_class, :plural) do
       def returns_array?
         plural
@@ -432,36 +480,36 @@ class DataTest < Minitest::Test
       [type, reflection_class.new(type, DataFixture::User, %i[one_to_many many_to_many].include?(type))]
     end
     model = Struct.new(:association_reflections, :name).new(reflections, "Example")
-    declaration = {"relationships" => reflections.keys.map(&:to_s)}
-    relationships = @schema.send(:relationships, model, declaration)
+    declaration = {"associations" => reflections.keys.map(&:to_s)}
+    associations = @schema.send(:associations, model, declaration)
     reflections.each do |type, reflection|
-      assert_equal type.to_s, relationships[type.to_s]["association"]
-      assert_equal(reflection.returns_array? ? "many" : "one", relationships[type.to_s]["kind"])
+      assert_equal type.to_s, associations[type.to_s]["association"]
+      assert_equal(reflection.returns_array? ? "many" : "one", associations[type.to_s]["kind"])
     end
     # Cardinality comes from the reflection, independently of its type name.
     reflections[:one_to_many].plural = false
-    assert_equal "one", @schema.send(:relationships, model, declaration)["one_to_many"]["kind"]
+    assert_equal "one", @schema.send(:associations, model, declaration)["one_to_many"]["kind"]
     reflections[:one_to_many].type = :unsupported_plugin_type
-    assert_raises(ArgumentError) { @schema.send(:relationships, model, declaration) }
+    assert_raises(ArgumentError) { @schema.send(:associations, model, declaration) }
   end
 
   def test_generation_is_deterministic_and_check_detects_drift
     Dir.mktmpdir do |root|
-      generator = Swill::Data::Generator.new(File.expand_path("fixtures/data/server.rb", __dir__), root: root)
+      generator = Swill::Distant::Generator.new(File.expand_path("fixtures/data/server.rb", __dir__), root: root)
       generator.instance_variable_set(:@schema, @schema)
       paths = generator.generate
       assert generator.check
       assert(paths.any? { |path| path.end_with?("schema.json") })
-      proxy = paths.find { |path| path.end_with?("data_fixture/post.rb") }
+      proxy = paths.find { |path| path.end_with?("generated/data_fixture/post.rb") }
       proxy_source = File.read(proxy)
-      assert_includes proxy_source, "class Post < Swill::Model::DistantObject"
+      assert_includes proxy_source, "class Post < Swill::Distant::Object"
       assert_includes proxy_source, 'model_name "DataFixture::Post"'
       assert_includes proxy_source, "attribute :title"
       assert_includes proxy_source, 'many_to_one :author, class: "DataFixture::User"'
       refute_includes proxy_source, "remote_"
       rbi = paths.find { |path| path.end_with?("data_fixture/post.rbi") }
       assert_includes File.read(rbi), "T.nilable(DataFixture::User)"
-      assert_includes File.read(rbi), "Swill::Model::RelationshipCollection[DataFixture::Comment]"
+      assert_includes File.read(rbi), "Swill::Model::AssociationCollection[DataFixture::Comment]"
       refute_includes File.read(rbi), "def author="
       assert_includes proxy_source,
                       "async def self.search(text, published = Swill::Runtime.omitted_argument)"
@@ -472,10 +520,17 @@ class DataTest < Minitest::Test
       assert_includes File.read(value_proxy), "property :status"
       schema_source = paths.find { |path| path.end_with?("generated/schema.rb") }
       assert_includes File.read(schema_source), "module DataSchema"
-      user_proxy = paths.find { |path| path.end_with?("data_fixture/user.rb") }
+      user_proxy = paths.find { |path| path.end_with?("generated/data_fixture/user.rb") }
       assert_includes File.read(user_proxy), "async def self.lookup(*emails, exact:, limit: Swill::Runtime.omitted_argument, **options)"
       generated_rbis = paths.select { |path| path.end_with?(".rbi") }.map { |path| File.read(path) }
       refute generated_rbis.any? { |source| source.include?("T.unsafe") }
+      extension = paths.find { |path| path.end_with?("client/models/data_fixture/post.rb") }
+      assert_includes File.read(extension), "module DataFixture\n  # Client behavior for DataFixture::Post"
+      assert_includes File.read(extension), "  class Post\n  end\n"
+      refute(paths.any? { |path| path.end_with?("client/models/data_fixture/post_lookup.rb") }, "values get no extension")
+      File.write(extension, "edited")
+      generator.generate
+      assert_equal "edited", File.read(extension), "an existing extension is never overwritten"
       File.write(proxy, "stale")
       assert_raises(ArgumentError) { generator.check }
     end
@@ -486,7 +541,8 @@ class DataTest < Minitest::Test
     klass = Class.new(Sequel::Model(DataFixture::DB[:blocked_operations]))
     DataFixture.const_set(:BlockedOperation, klass)
     klass.extend(T::Sig)
-    klass.client_model fields: []
+    interface = Module.new.extend(Swill::Distant::Interface)
+    klass.const_set(:DistantInterface, interface)
     klass.singleton_class.class_eval do
       define_method(:stream) { |_value = nil, &_block| nil }
     end
@@ -494,12 +550,15 @@ class DataTest < Minitest::Test
     klass.singleton_class.class_eval do
       define_method(:stream) { |value = nil, &block| block&.call(value) }
     end
-    klass.resolver :stream
+    interface.resolver :stream
 
-    error = assert_raises(ArgumentError) { Swill::Data::Schema.new([klass]) }
+    error = assert_raises(ArgumentError) { Swill::Distant::Schema.new([klass]) }
     assert_includes error.message, "DataFixture::BlockedOperation.stream"
     assert_includes error.message, "block"
   ensure
+    # The class outlives its constant, so its interface goes too or discovery
+    # would still find it.
+    klass&.send(:remove_const, :DistantInterface) if klass&.const_defined?(:DistantInterface, false)
     DataFixture.send(:remove_const, :BlockedOperation) if DataFixture.const_defined?(:BlockedOperation, false)
     DataFixture::DB.drop_table?(:blocked_operations)
   end

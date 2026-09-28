@@ -14,12 +14,12 @@
   var Swill__NumberTransformer = framework.Swill__NumberTransformer;
   var Swill__BooleanTransformer = framework.Swill__BooleanTransformer;
   var Swill__BindingDestination = framework.Swill__BindingDestination;
-  var Swill__TextBindingDestination = framework.Swill__TextBindingDestination;
-  var Swill__FieldBindingDestination = framework.Swill__FieldBindingDestination;
-  var Swill__SelectBindingDestination = framework.Swill__SelectBindingDestination;
-  var Swill__CheckboxBindingDestination = framework.Swill__CheckboxBindingDestination;
-  var Swill__ElementPropertyBindingDestination = framework.Swill__ElementPropertyBindingDestination;
-  var Swill__ObjectPropertyBindingDestination = framework.Swill__ObjectPropertyBindingDestination;
+  var Swill__BindingDestination__Text = framework.Swill__BindingDestination__Text;
+  var Swill__BindingDestination__Field = framework.Swill__BindingDestination__Field;
+  var Swill__BindingDestination__Select = framework.Swill__BindingDestination__Select;
+  var Swill__BindingDestination__Checkbox = framework.Swill__BindingDestination__Checkbox;
+  var Swill__BindingDestination__ElementProperty = framework.Swill__BindingDestination__ElementProperty;
+  var Swill__BindingDestination__ObjectProperty = framework.Swill__BindingDestination__ObjectProperty;
   var Swill__Binding = framework.Swill__Binding;
   var Swill__ObjectBindings = framework.Swill__ObjectBindings;
   var Swill__CollectionArrangement = framework.Swill__CollectionArrangement;
@@ -56,24 +56,24 @@
   var Swill__Model__Drafts = framework.Swill__Model__Drafts;
   var Swill__Model__Base = framework.Swill__Model__Base;
   var Swill__Model__Editable = framework.Swill__Model__Editable;
-  var Swill__Model__Relationships = framework.Swill__Model__Relationships;
-  var Swill__Model__Relationships_ClassMethods = framework.Swill__Model__Relationships_ClassMethods;
+  var Swill__Model__Associations = framework.Swill__Model__Associations;
+  var Swill__Model__Associations_ClassMethods = framework.Swill__Model__Associations_ClassMethods;
   var Swill__Model__Store = framework.Swill__Model__Store;
   var Swill__Model__Identity = framework.Swill__Model__Identity;
   var Swill__Model__Identity_ClassMethods = framework.Swill__Model__Identity_ClassMethods;
   var Swill__Model__Collection = framework.Swill__Model__Collection;
-  var Swill__Model__RelationshipCollection = framework.Swill__Model__RelationshipCollection;
+  var Swill__Model__AssociationCollection = framework.Swill__Model__AssociationCollection;
   var Swill__Model__ResultSet = framework.Swill__Model__ResultSet;
-  var Swill__Model__DistantClient = framework.Swill__Model__DistantClient;
-  var Swill__Model__DistantData = framework.Swill__Model__DistantData;
-  var Swill__Model__DistantData_ClassMethods = framework.Swill__Model__DistantData_ClassMethods;
-  var Swill__Model__DistantObject = framework.Swill__Model__DistantObject;
-  var Swill__Model__Relationship = framework.Swill__Model__Relationship;
+  var Swill__Model__Association = framework.Swill__Model__Association;
   var Swill__Model__Codec = framework.Swill__Model__Codec;
   var Swill__Model__PlainJSON = framework.Swill__Model__PlainJSON;
   var Swill__Model__JSONAPI = framework.Swill__Model__JSONAPI;
   var Swill__Model__Dataset = framework.Swill__Model__Dataset;
   var Swill__Model__Resource = framework.Swill__Model__Resource;
+  var Swill__Distant__Fields = framework.Swill__Distant__Fields;
+  var Swill__Distant__Fields_ClassMethods = framework.Swill__Distant__Fields_ClassMethods;
+  var Swill__Distant__Object = framework.Swill__Distant__Object;
+  var Swill__Distant__Client = framework.Swill__Distant__Client;
 
   // build/application.classes.mjs
   function NormalizeName(Superclass) {
@@ -128,10 +128,10 @@
   };
   var Demo__Book = class extends Swill__Model__Resource {
     async loadAuthor() {
-      return await this.loadRelationship("author");
+      return await this.loadAssociation("author");
     }
     async reloadAuthor() {
-      return await this.reloadRelationship("author");
+      return await this.reloadAssociation("author");
     }
   };
   var Demo__Author = class extends Swill__Model__Resource {
@@ -139,10 +139,10 @@
       return Runtime.isEmpty(Runtime.strip(this.name)) ? "name must not be blank" : null;
     }
     async loadBooks() {
-      return await this.loadRelationship("books");
+      return await this.loadAssociation("books");
     }
     async reloadBooks() {
-      return await this.reloadRelationship("books");
+      return await this.reloadAssociation("books");
     }
   };
   var Demo__Note = class extends Swill__Model__Resource {
@@ -717,7 +717,7 @@
           }
         },
         registries: {
-          modelRelationships: { "author": { "name": "author", "key": "author", "kind": "one", "type": "Demo::Author", "url": null } },
+          modelAssociations: { "author": { "name": "author", "key": "author", "kind": "one", "type": "Demo::Author", "url": null } },
           modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "title": { "name": "title", "key": "title", "type": "String", "default": "" } }
         },
         settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "resource_type", js: "resourceType", value: "books" }],
@@ -785,7 +785,7 @@
           }
         },
         registries: {
-          modelRelationships: { "books": { "name": "books", "key": "books", "kind": "many", "type": "Demo::Book", "url": "/api/authors/:id/books" } },
+          modelAssociations: { "books": { "name": "books", "key": "books", "kind": "many", "type": "Demo::Book", "url": "/api/authors/:id/books" } },
           modelAttributes: { "id": { "name": "id", "key": "id", "type": "T.nilable(String)", "default": null }, "name": { "name": "name", "key": "name", "type": "String", "default": "" }, "born": { "name": "born", "key": "born", "type": "T.nilable(Integer)", "default": null } }
         },
         settings: [{ name: "endpoint", js: "endpoint", value: "/api/authors" }, { name: "resource_type", js: "resourceType", value: "authors" }],

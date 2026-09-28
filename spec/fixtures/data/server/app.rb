@@ -4,11 +4,11 @@ require "roda"
 require_relative "../server"
 
 module DataFixture
-  SCHEMA = Swill::Data::Schema.discover
+  SCHEMA = Swill::Distant::Schema.discover
 
   class App < Roda
     ROOT = File.expand_path("../../../..", __dir__)
-    DATA_ENDPOINT = Swill::Data::WebSocket.new(
+    DATA_ENDPOINT = Swill::Distant::Connection.new(
       schema: SCHEMA,
       authenticate: ->(_env) do
         omniscient = Sequel::Privacy::ViewerContext.omniscient(:fixture_authentication)

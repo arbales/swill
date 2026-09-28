@@ -185,10 +185,11 @@ class Swill::Object
     params(name: T.any(Symbol, String), type: T.untyped, default: T.untyped,
            key: T.nilable(T.any(Symbol, String)), attribute: T::Boolean, outlet: T::Boolean,
            optional: T::Boolean, will_access: T::Boolean, writer: T.nilable(Symbol),
+           reads: T.nilable(T.any(Symbol, String)),
            block: T.nilable(T.proc.bind(T.untyped).returns(T.untyped))).void
   end
   def self.property(name, type:, default: nil, key: nil, attribute: false, outlet: false,
-                    optional: false, will_access: false, writer: nil, &block); end
+                    optional: false, will_access: false, writer: nil, reads: nil, &block); end
 
   # A bindable path the application keeps in the URL fragment. Controller's
   # restorable macro is the spelling.
@@ -212,12 +213,12 @@ class Swill::Object
   def self.await(value); end
 end
 
-module Swill::Model::Relationships
+module Swill::Model::Associations
   extend T::Helpers
   mixes_in_class_methods(ClassMethods)
 end
 
-module Swill::Model::Relationships::ClassMethods
+module Swill::Model::Associations::ClassMethods
   extend T::Sig
   extend T::Helpers
   extend T::Generic
@@ -252,17 +253,17 @@ module Swill::Model::Drafts
   def collect_attributes; end
 end
 
-module Swill::Model::DistantData
+module Swill::Distant::Fields
   extend T::Helpers
   mixes_in_class_methods(ClassMethods)
-  requires_ancestor { Swill::Model::DistantObject }
+  requires_ancestor { Swill::Distant::Object }
 end
 
-module Swill::Model::DistantData::ClassMethods
+module Swill::Distant::Fields::ClassMethods
   extend T::Helpers
   extend T::Generic
-  has_attached_class!(:out) { {upper: Swill::Model::DistantObject} }
-  requires_ancestor { T.class_of(Swill::Model::DistantObject) }
+  has_attached_class!(:out) { {upper: Swill::Distant::Object} }
+  requires_ancestor { T.class_of(Swill::Distant::Object) }
 end
 
 # Object bindings are an object's own; raising reaches Kernel through it.

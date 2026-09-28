@@ -88,19 +88,19 @@ module Swill
       known = @shared
       return known if known
       @shared = T.let({
-        "text" => TextBindingDestination.new,
-        "field" => FieldBindingDestination.new,
-        "select" => SelectBindingDestination.new,
-        "checkbox" => CheckboxBindingDestination.new,
-        "property" => ElementPropertyBindingDestination.new,
-        "object" => ObjectPropertyBindingDestination.new
+        "text" => BindingDestination::Text.new,
+        "field" => BindingDestination::Field.new,
+        "select" => BindingDestination::Select.new,
+        "checkbox" => BindingDestination::Checkbox.new,
+        "property" => BindingDestination::ElementProperty.new,
+        "object" => BindingDestination::ObjectProperty.new
       }, T.nilable(T::Hash[String, BindingDestination]))
       T.must(@shared)
     end
   end
 
   # An element that shows the value as its text.
-  class TextBindingDestination < BindingDestination
+  class BindingDestination::Text < BindingDestination
     extend T::Sig
 
     sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
@@ -116,7 +116,7 @@ module Swill
 
   # A form control, which carries the value in its `value` and reports edits as
   # they are typed.
-  class FieldBindingDestination < BindingDestination
+  class BindingDestination::Field < BindingDestination
     extend T::Sig
 
     sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
@@ -154,7 +154,7 @@ module Swill
   end
 
   # A select commits on choice rather than on keystroke.
-  class SelectBindingDestination < FieldBindingDestination
+  class BindingDestination::Select < BindingDestination::Field
     extend T::Sig
 
     sig { override.returns(String) }
@@ -165,7 +165,7 @@ module Swill
 
   # A checkbox is the truth of the value rather than a rendering of it, so a
   # transformer has nothing to do here and nil must stay nil: "" is true.
-  class CheckboxBindingDestination < FieldBindingDestination
+  class BindingDestination::Checkbox < BindingDestination::Field
     extend T::Sig
 
     sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
@@ -197,7 +197,7 @@ module Swill
   # A named DOM property or attribute, written one way. This is where the
   # document's own rules live: what a boolean property makes of a value, and
   # which absences remove an attribute rather than writing it empty.
-  class ElementPropertyBindingDestination < BindingDestination
+  class BindingDestination::ElementProperty < BindingDestination
     extend T::Sig
 
     sig { override.params(receiver: Element, binding: T.nilable(String), value: T.untyped).void }
@@ -247,7 +247,7 @@ module Swill
   #
   # The property is reached by name rather than by calling it, because the name
   # is only known at wiring time.
-  class ObjectPropertyBindingDestination < BindingDestination
+  class BindingDestination::ObjectProperty < BindingDestination
     extend T::Sig
 
     sig { override.params(receiver: Swill::Object, binding: T.nilable(String), value: T.untyped).void }

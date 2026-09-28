@@ -161,7 +161,7 @@ export function include(klass, mixins, incoming = new Map()) {
  * its parent's, so that adding to it leaves the parent's unchanged.
  *
  * @param {Function} klass
- * @param {string} name The registry, such as `relationships`.
+ * @param {string} name The registry, such as `associations`.
  * @param {"hash" | "array"} [initial] The empty value when nothing is
  *   inherited.
  * @returns {object | Array} The class's registry, which may be changed.
@@ -334,11 +334,11 @@ export function installClass(klass, name, properties, methods, registries = {}, 
           ? computedValue(this, descriptor)
           : storedValue(this, descriptor);
       },
-      ...(descriptor.computed && !descriptor.writer ? {} : {
-        set(value) {
-          writeProperty(this, descriptor, value);
-        }
-      })
+      // A computed property without a writer has a setter all the same, so
+      // an assignment raises `Read-only property` rather than TypeError.
+      set(value) {
+        writeProperty(this, descriptor, value);
+      }
     });
   }
 

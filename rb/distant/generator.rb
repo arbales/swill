@@ -3,8 +3,9 @@
 require "fileutils"
 
 module Swill
-  module Data
-    # Writes the reviewable client schema, proxy Ruby, and RBI from one schema.
+  module Distant
+    # Writes the reviewable client schema, proxy Ruby, and RBI from one
+    # schema, and once per model an extension file the application owns.
     class Generator
       attr_reader :entry, :root
 
@@ -21,6 +22,7 @@ module Swill
         @schema = Schema.discover
       end
 
+      # Extensions are written only when absent: the application edits them.
       def generate
         outputs = rendered_outputs
         (artifact_paths - outputs.keys).each { |path| FileUtils.rm_f(path) }
@@ -28,9 +30,16 @@ module Swill
           FileUtils.mkdir_p(File.dirname(path))
           File.write(path, source)
         end
-        outputs.keys
+        extensions = extension_outputs.reject { |path, _| File.file?(path) }
+        extensions.each do |path, source|
+          FileUtils.mkdir_p(File.dirname(path))
+          File.write(path, source)
+        end
+        outputs.keys + extension_outputs.keys
       end
 
+      # Only the generated roots are checked; extensions belong to the
+      # application once written.
       def check
         outputs = rendered_outputs
         extra = artifact_paths - outputs.keys
@@ -45,6 +54,8 @@ module Swill
 
       private
 
+      # Every file under the two generated roots. Obsolete-file deletion is
+      # restricted to these roots, so extensions are never removed.
       def artifact_paths
         roots = [
           File.join(root, "client", "models", "generated"),
@@ -73,6 +84,27 @@ module Swill
         outputs
       end
 
+      # One extension per model, beside the generated directory. Values get
+      # none: they are plain, complete objects.
+      def extension_outputs
+        schema.models.each_value.to_h do |model|
+          basename = underscore(model.fetch("name"))
+          [File.join(root, "client", "models", "#{basename}.rb"), render_extension(model.fetch("name"))]
+        end
+      end
+
+      def render_extension(name)
+        parts = name.split("::")
+        namespace = parts[0...-1]
+        lines = namespace.each_with_index.map { |part, index| "#{'  ' * index}module #{part}" }
+        depth = namespace.length
+        lines << "#{'  ' * depth}# Client behavior for #{name}, beside its generated proxy."
+        lines << "#{'  ' * depth}class #{parts.last}"
+        lines << "#{'  ' * depth}end"
+        namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }
+        (["# typed: true", "# frozen_string_literal: true", ""] + lines).join("\n") + "\n"
+      end
+
       def proxy_source(model)
         body = ["model_name #{model['name'].to_json}"]
         model.fetch("fields").each_value do |field|
@@ -80,11 +112,11 @@ module Swill
 
           body << "attribute :#{field['name']}, type: #{ruby_type(field['type'])}"
         end
-        model.fetch("relationships").each_value do |relationship|
-          macro = relationship.fetch("association")
-          body << "#{macro} :#{relationship['name']}, class: #{relationship['model'].to_json}"
+        model.fetch("associations").each_value do |association|
+          macro = association.fetch("association")
+          body << "#{macro} :#{association['name']}, class: #{association['model'].to_json}"
         end
-        model.fetch("operations").each_value do |operation|
+        model.fetch("remote_methods").each_value do |operation|
           body << ""
           body.concat(proxy_operation(operation))
         end
@@ -113,7 +145,7 @@ module Swill
         [
           "sig { #{sig_params}returns(#{ruby_type(operation['returns'])}) }",
           "async def #{prefix}#{operation['name']}(#{declaration})",
-          "  await Swill::Model::DistantClient.default.#{client_method}(#{target}, #{operation['name'].to_json}, [#{args}], {#{keywords}}, #{operation.dig('returns', 'kind').to_json})",
+          "  await Swill::Distant::Client.default.#{client_method}(#{target}, #{operation['name'].to_json}, [#{args}], {#{keywords}}, #{operation.dig('returns', 'kind').to_json})",
           "end"
         ]
       end
@@ -125,20 +157,22 @@ module Swill
 
           type = ruby_type(field["type"])
           body.push("sig { returns(#{type}) }", "def #{field['name']}; end")
+          body.concat(field_state_rbi(field["name"], false))
         end
-        model.fetch("relationships").each_value do |relationship|
-          target = relationship.fetch("model")
-          type = if relationship["kind"] == "many"
-                   "Swill::Model::RelationshipCollection[#{target}]"
+        model.fetch("associations").each_value do |association|
+          target = association.fetch("model")
+          type = if association["kind"] == "many"
+                   "Swill::Model::AssociationCollection[#{target}]"
                  else
                    "T.nilable(#{target})"
                  end
-          body.push("sig { returns(#{type}) }", "def #{relationship['name']}; end")
-          if relationship["kind"] == "many"
-            body.push("sig { returns(Swill::ArrayController) }", "def #{relationship['name']}_controller; end")
+          body.push("sig { returns(#{type}) }", "def #{association['name']}; end")
+          body.concat(field_state_rbi(association["name"], true))
+          if association["kind"] == "many"
+            body.push("sig { returns(Swill::ArrayController) }", "def #{association['name']}_controller; end")
           end
         end
-        model.fetch("operations").each_value do |operation|
+        model.fetch("remote_methods").each_value do |operation|
           parameters = operation["parameters"].map { |item| "#{item['name']}: #{ruby_type(item['type'])}" }.join(", ")
           sig_params = parameters.empty? ? "" : "params(#{parameters})."
           instance_command = operation["kind"] == "command" && operation.fetch("target", "instance") == "instance"
@@ -150,6 +184,17 @@ module Swill
           )
         end
         ["# typed: true", "", render_class(model["name"], body), ""].join("\n")
+      end
+
+      # The readers of a field's state properties, as Distant::Object's
+      # attribute and association macros declare them: loaded, loading and
+      # error for every field, and stale for an association.
+      def field_state_rbi(name, association)
+        lines = ["sig { returns(T::Boolean) }", "def #{name}_loaded; end"]
+        lines.push("sig { returns(T::Boolean) }", "def #{name}_stale; end") if association
+        lines.push("sig { returns(T::Boolean) }", "def #{name}_loading; end")
+        lines.push("sig { returns(T.nilable(String)) }", "def #{name}_error; end")
+        lines
       end
 
       def schema_source
@@ -198,7 +243,7 @@ module Swill
         namespace = parts[0...-1]
         lines = namespace.each_with_index.map { |part, index| "#{'  ' * index}module #{part}" }
         depth = namespace.length
-        lines << "#{'  ' * depth}class #{parts.last} < Swill::Model::DistantObject"
+        lines << "#{'  ' * depth}class #{parts.last} < Swill::Distant::Object"
         lines.concat(body.map { |line| line.empty? ? "" : "#{'  ' * (depth + 1)}#{line}" })
         lines << "#{'  ' * depth}end"
         namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }

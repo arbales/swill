@@ -1,126 +1,175 @@
-# Server data
+# Server Data
 
-The data layer exposes a declared client model surface, lifecycle persistence,
-named Sequel queries, contextual resolvers, and instance or class commands over
-binary MessagePack WebSockets. `DATA_DESIGN.md` describes the model and
-`DATA_PLAN.md` records the implemented decisions.
+Swill supports working with model objects across the network, bridging your
+server-side objects to your browser client without individual endpoints,
+serializers or other ceremony.
 
-## Declaring the Client Surface
+This guide describes how a model exposes itself to clients, client code
+generation, the wire format, and how client and server connect.
 
-Install declarations on the application's Sequel base in the server entry,
-load authoritative models and their exported operations, then generate the
-checked-in client schema, Ruby models, and RBIs:
+The client side of the same objects — `Swill::Distant::Object`, partial
+fields and collections — is in the [Models guide](models.md#distant-objects).
+
+## Distant Objects
+
+An application that keeps its records on a server needs to read them, change
+them, run behavior that only the server can perform, and keep what the browser
+holds consistent with what the server did. Distant Objects provides this
+through a few parts with distinct responsibilities:
+
+- A **server model** is an ordinary `Sequel::Model`. It communicates with your
+  database and is responsible for persistence, associations, validations and
+  hooks. An existing data model needs no change to adopt Distant Objects.
+- A model's **distant interface** declares what it provides to clients:
+  `fields`, `associations` and `writable` expose the corresponding portions
+  of the server model, and `query`, `resolver` and `command` export methods.
+- The **schema** is generated from the server models and their distant
+  interfaces. It holds the types, the associations and the signature of
+  every exported method, carries the protocol version, and is hashed; client
+  and server each hold the hash.
+- A **generated client model** is a Ruby class with a property per field, an
+  association per association, and an `async` method per remote method, with
+  type information for Sorbet and the compiler.
+- An **extension** is also generated for each client model: a file that
+  reopens the generated class, where you add client-side behavior. The
+  compiler merges the generated and authored parts into a single JavaScript
+  class.
+- A **connection** is a Rack application that accepts a binary MessagePack
+  WebSocket connection, authenticates it, and runs the messages it receives.
+  Where the application uses `Sequel::Privacy` or another authorization
+  layer, the connection also carries a viewer context into every remote
+  method.
+- A server method runs in a **context** holding the actor and viewer context,
+  and methods for noting an operation's side effects — refreshing objects and
+  invalidating associations the client will need to reload.
+
+A connection opens with a handshake: the browser sends the protocol version
+and its schema hash, and the server answers with its own or refuses with
+`schema_mismatch`. From then on the browser sends remote methods, writes and
+field demands, and the server answers each with the objects it touched.
+
+The running example is a `Post` with an author and comments.
+
+## Creating a Distant Interface
+
+The server entry loads the models, then their distant interfaces:
 
 ```ruby
 # server.rb
 require "sequel"
 require "swill/server"
 
-Swill::Data.install(Sequel::Model)
 require_relative "server/models/post"
-require_relative "server/operations/post"
+require_relative "server/interfaces/post"
 ```
 
 ```ruby
-# server/operations/post.rb
+# server/interfaces/post.rb
 class Post
-  client_model fields: %i[title body published published_at], relationships: %i[author comments],
-               writable: %i[title body]
-  query :search, returns: Swill::Data::ResultSet[Post], preload: [:title]
-  command :publish!, returns: T::Boolean, changes: %i[published published_at]
+  module DistantInterface
+    extend Swill::Distant::Interface
+
+    fields :title, :body, :published, :published_at
+    associations :author, :comments
+    writable :title, :body
+
+    query :search, returns: Swill::Distant::ResultSet[Post], preload: [:title]
+    command :publish!, returns: T::Boolean, changes: %i[published published_at]
+  end
 end
 ```
 
-Only models declaring `client_model` enter schema discovery and the protocol.
-The primary key is included automatically. `fields` and `relationships` are
-closed allowlists: they define what may appear in generated code or hydration.
-`writable` must be a scalar, non-primary-key subset of `fields`; it is the
-subset accepted by `save` and `apply_draft`. A database column omitted from
-the declaration remains usable by server code and policies while staying
-absent from the schema, generated code, hydration requests, and client writes,
-even when a viewer's privacy policy would permit reading it.
+A model with a `DistantInterface` module is in the schema; a model without
+one is invisible to the browser, even when another model's association
+points at it, and the schema rejects such an association. Models are
+required before their interfaces.
 
-The server entrypoint uses Sorbet's type spelling without requiring an
-application to load Sorbet. When `sorbet-runtime` was required first, Swill
-uses its `T`; otherwise it supplies the protocol subset: `T::Sig`,
-`T.nilable`, `T::Boolean`, `T::Array`, `T.any`, and `T.untyped`.
+- `fields` are the columns the browser may read. A field's type is
+  reflected from its column; `fields :title, body: T.nilable(String)` states
+  a type instead. The primary key is included without being named, and a
+  model must have exactly one.
+- `associations` are the associations the browser may follow: `many_to_one`,
+  `one_to_one`, `one_to_many`, `many_to_many` and `one_through_one`, each
+  pointing at a model with an interface. A to-many association also gives the
+  client a `<name>_controller`, so no field or remote method may have that
+  name.
+- `writable` are the fields `save` and `apply_draft` may send: a subset of
+  `fields`, scalar, and not the primary key. Every field needs a reader on
+  the model and every writable field a writer; the schema raises otherwise.
 
-Applications using sequel-privacy add `gem "sequel-privacy", ">= 0.7.2"` to
-their Gemfile and require it before `swill/server`. It is an optional
-integration, not a Swill gem dependency. Plain Sequel applications do not load
-privacy code; dispatch uses privacy-aware datasets and cache scopes only when
-sequel-privacy is present.
+Each of the three may be called more than once; naming a field twice raises.
 
-## Generating
+A column left out of the interface is still available to server code and
+policies. It is absent from the schema, the generated class, field demands
+and writes, whatever a privacy policy would allow.
 
-```sh
-bundle exec swill data generate server.rb
-bundle exec swill data check server.rb
+## Remote Methods
+
+A remote method exports a method the model already has. There are three
+kinds:
+
+| Declaration | Receiver on the server | Call in the browser | Transaction |
+| --- | --- | --- | --- |
+| `query :search` | The model's dataset — the privacy-scoped dataset when sequel-privacy is loaded | `await Post.search(...)` | The application's |
+| `resolver :current_user` | The model class | `await User.current_user` | The application's |
+| `command :publish!` | The saved instance | `await post.publish!` | Opened by Swill |
+| `command :import, on: :class` | The model class | `await Post.import(...)` | Opened by Swill |
+
+A query is a read, usually a dataset method; its dataset result is loaded as
+an array. A resolver answers contextual state that is not a dataset
+operation. A command performs a mutation. `transaction: false` leaves a
+command to manage its own transaction, for a command that must keep an
+external request outside the database transaction. A remote method exports a
+trusted application method; it does not sandbox the method's implementation.
+
+Generated methods keep the method's parameters: required and optional
+positional, positional rest, required and optional keywords, and keyword
+rest. Defaults are evaluated on the server, and an explicit `nil` is
+distinct from an omitted argument. A block parameter is rejected at schema
+generation, because a callable cannot cross the connection. The compiler's
+own parameter support is described in [keywords, rest arguments, and
+blocks](compiler.md#keywords-rest-arguments-and-blocks). A model argument is
+sent as a reference and resolved on the server under the viewer context.
+
+Every remote method is asynchronous in the browser: `await Post.search(...)`,
+`await post.publish!`. Reading a local field or association is synchronous.
+
+### Results and Projections
+
+A remote method's return value is checked against `returns:` and encoded: a
+model becomes a reference to a patch carrying its projected fields, a
+dataset or array becomes an array of them, a `Swill::Distant::Value` carries
+its fields, and anything else is sent as it is.
+
+`preload:` projects fields onto the returned value; `changes:` refreshes
+fields on an instance command's receiver. They are independent:
+
+```ruby
+command :publish_and_return_author, returns: User,
+        changes: [:published], preload: [:name]
 ```
 
-The generation root is the current directory, or `--root DIR`. A complete
-application can keep the boundary visible with this layout:
+This returns the canonical `User` with its name, and refreshes `published`
+on the post that received the command. A class command has no receiver and
+rejects `changes:`. A command that returns its receiver may use both; the
+patches merge into the same object.
 
-| Path | Loaded by | Purpose |
-| --- | --- | --- |
-| `server.rb` and `server/models/` | Server and generator | Database models, policies, query implementations, and commands |
-| `server/operations/` | Server and generator | The explicitly exported query, resolver, command, and projection declarations |
-| `client/models/generated/` | Client compiler | Generated proxy fields and async operation methods |
-| `client/models/` | Client compiler | Handwritten browser-only model behavior |
-| `sorbet/rbi/shims/generated/` | Sorbet only | Generated type declarations; never executable input |
+For a `Swill::Distant::Value`, an array projection applies to every model
+inside the value, and a hash projects each value field on its own:
 
-The server derives its schema from the loaded server models. It does not load
-the generated client Ruby or RBI files. The client entry loads generated
-models first and handwritten client files second. The compiler merges those
-local class reopenings in source order and emits one JavaScript class; a
-handwritten method definition replaces a generated definition with the same
-name. `client/models/generated/schema.rb` supplies the Ruby `DataSchema::HASH`
-constant for the client handshake; `schema.json` is the inspectable schema.
-The repository fixture follows this layout under `spec/fixtures/data` so its
-artifacts do not leak into the repository-level `client/` or `sorbet/` trees.
+```ruby
+command :lookup, on: :class, returns: PostLookup,
+        preload: {post: [:title, {author: [:name]}]}
+```
 
-For a coordinated build and watch loop, use the
-[project workflow](getting_started.md#project-workflow). Generation requires
-the server entry as ordinary Ruby: it may need database access when Sequel
-reflects column types and associations. Explicit field types do not prevent
-Sequel itself from connecting while defining a model. A dedicated schema
-loader can use `Sequel.mock`, explicit types, and `def_column_accessor`, but
-must reproduce the same declarations as the running server. Swill does not
-start the application or supply a universal schema-only environment switch.
-
-## Persistence
-
-Create and update use Sequel persistence under the connection's viewer
-context. Sequel validation and hooks run normally. When sequel-privacy is
-loaded, its `:create`, `:edit`, protected-field, and `:delete` policies also
-apply. Named commands are the interface for domain mutations and relationship
-changes.
-
-## Operations and Projections
-
-| Declaration | Server receiver | Client call | Transaction |
-| --- | --- | --- | --- |
-| `query :search` | Privacy-aware dataset when privacy is installed; otherwise the model dataset | `await Post.search(...)` | Application-owned |
-| `resolver :current_user` | Model class | `await User.current_user` | Application-owned |
-| `command :publish!` | Persisted model instance | `await post.publish!` | Swill wraps by default |
-| `command :import, on: :class` | Model class | `await Post.import(...)` | Swill wraps by default |
-
-`transaction: false` gives a command ownership of its transaction boundaries,
-for example to keep an external HTTP request outside the database transaction.
-These declarations export trusted application methods; they do not sandbox
-query or resolver implementations.
-
-Generated methods preserve required and optional positional
-parameters, positional rest, required and optional keywords, and keyword rest.
-Defaults run only on the server, and an explicit `nil` is distinct from an
-omitted argument. Schema generation rejects block parameters because
-executable callbacks do not cross the data connection. The compiler's own
-parameter support is described in [keywords, rest arguments, and
-blocks](compiler.md#keywords-rest-arguments-and-blocks).
+Projections are checked against the return type when the schema is
+generated. A command with a transaction validates and encodes its response
+inside it, so a response that fails to encode rolls the command back.
 
 ### Effects on Related Objects
 
-A server method body can name the objects it affects:
+A method that changes records other than its receiver names them, through
+the context:
 
 ```ruby
 command :change_author, returns: T::Boolean
@@ -129,7 +178,7 @@ def change_author(new_author)
   previous_author = author
   update(author_id: new_author.id)
 
-  context = Swill::Data.context
+  context = Swill::Distant.context
   context.refresh(self, :author_id, :author)
   context.invalidate(previous_author, :posts)
   context.invalidate(new_author, :posts)
@@ -137,91 +186,142 @@ def change_author(new_author)
 end
 ```
 
-`context.refresh(record, *fields)` includes authoritative scalar fields or
-complete relationship membership in the response. `context.invalidate(record,
-*relationships)` marks cached relationships stale without sending membership.
-Both require a saved model and schema-exposed member names. For a small
-relationship, replace the last invalidation with `context.refresh(new_author,
-:posts)` to avoid a subsequent fetch. When one response both refreshes and
-invalidates the same relationship, the refresh wins.
+`context.refresh(record, *fields)` sends the fields' current values, or an
+association's complete membership, with the response. `context.invalidate(
+record, *associations)` marks the browser's cached membership stale without
+sending it; the browser refreshes a stale association it is observing or
+next reads, as [collection state](models.md#collection-state) describes. A
+small association is cheaper to refresh than to invalidate and fetch again.
+Both require a saved model and declared names, and an association both
+refreshed and invalidated in one response is refreshed.
 
-Effects are collected per invocation, including effects declared by
-persistence hooks. They cannot leak between operations sharing a connection or
-between fibers. The dispatcher re-fetches effect targets under the current
-viewer context, avoiding stale association caches and privileged source
-objects. Refresh uses ordinary Sequel relationship access, preserving
-conditions, ordering, limits, and privacy. Effects do not infer inverse
-membership.
+Effects belong to the invocation that declared them, including effects
+declared from persistence hooks; they cannot reach another remote method on
+the same connection or another fiber. Before encoding, the dispatcher fetches
+each affected record again under the viewer context, so a cached association
+or a privileged object cannot become a patch, and reads associations through
+Sequel, keeping their conditions, order, limits and privacy. Effects reach
+the client that sent the remote method; other clients are not notified. A
+change made to the database outside a remote method is not reported.
 
-Validation and serialization run within the command's default transaction. A
-failed command or invalid effect returns no effects, and the default
-transaction rolls back. With `transaction: false`, the application owns
-rollback and may already have committed before effect serialization fails.
-Effects update the calling client, not other connected clients; subscriptions
-are separate work. Database changes made outside Swill operations are not
-captured.
+## Persistence
 
-On the client, an invalidation keeps the collection and its rows and marks
-them stale; see [collection state](models.md#collection-state) for the
-observable state and how a stale relationship refreshes.
+The browser's `save`, `apply_draft` and `delete` on a distant object are
+writes, not remote methods: `CREATE`, `UPDATE` and `DELETE` messages that the
+server applies through Sequel. The attributes of a write are checked against
+`writable` and their declared types, the record is created or found under
+the viewer context, and Sequel's validations and hooks run as they do for
+any save. sequel-privacy's `:create`, `:edit`, protected-field and `:delete`
+policies apply when that gem is loaded. The write runs in a transaction and
+answers with every declared field of the record. A failed validation answers
+`validation_failed` with the model's errors.
 
-Invalidation messages use protocol version 2. Regenerate schema and client
-files and deploy matching server and browser runtimes; an old client fails the
-handshake.
+A change beyond assigning writable fields — a state transition, an
+association change — is a command.
 
-`changes:` refreshes fields on an instance command's receiver. `preload:`
-projects fields on the returned value. They are independent:
+## Types and Authorization
 
-```ruby
-command :publish_and_return_author, returns: User,
-        changes: [:published], preload: [:name]
+Method signatures and explicit field types are written in Sorbet's spelling.
+When the application required `sorbet-runtime` before `swill/server`, they
+are Sorbet's own; otherwise `swill/server` supplies the subset the protocol
+understands — `T::Sig`, `sig`, `T.nilable`, `T::Boolean`, `T::Array`, `T.any`
+and `T.untyped` — and records the same schema. Sorbet is not required on the
+server.
+
+A field's nullability is the application's. A `NOT NULL` column is reflected
+as non-nilable; an explicit `body: T.nilable(String)` overrides the
+reflection. A field the browser has not loaded reads as nil whatever its
+type, and so does a field a privacy policy denies; how the client reads,
+demands and loads a field is described in [identity, partial fields, and
+collections](models.md#identity-partial-fields-and-collections). An
+application whose policies deny fields declares those fields nilable.
+
+sequel-privacy is an optional integration, not a dependency. An application
+using it adds `gem "sequel-privacy", ">= 0.7.2"` to its Gemfile and requires
+it before `swill/server`. When it is loaded, queries and writes go through
+the viewer's privacy-scoped dataset, each remote method runs inside a privacy
+cache scope, and a privacy error answers `unauthorized`. Without it, queries
+use the model's dataset and the viewer context may be nil.
+
+## Generating
+
+```sh
+bundle exec swill data generate server.rb
+bundle exec swill data check server.rb
 ```
 
-This returns a canonical `User` with its name and refreshes `published` on
-the receiving post. Neither projection is applied to the other object.
-Class commands reject `changes:` because they have no instance receiver.
-Returning the receiver itself can use both projections; its patches merge
-into the same canonical object.
+`generate` loads the server entry, reflects the schema, and writes:
 
-For `Swill::Data::Value` returns, an array projection applies to model members
-inside the value; a hash selects value fields individually:
+| Path | Contents | Loaded by |
+| --- | --- | --- |
+| `client/models/generated/schema.json` | The schema, for inspection | Nothing |
+| `client/models/generated/schema.rb` | `DataSchema::HASH`, for the handshake | The client entry |
+| `client/models/generated/<model>.rb` | One class per model and value | The client compiler |
+| `client/models/<model>.rb` | The extension: written once, when absent | The client compiler |
+| `sorbet/rbi/shims/generated/<model>.rbi` | Their type declarations | Sorbet |
 
-```ruby
-command :lookup, on: :class, returns: PostLookup,
-        preload: {post: [:title, {author: [:name]}]}
-```
+A generated file under `generated/` that no longer corresponds to a
+declaration is deleted; an extension is never checked, overwritten or
+deleted. `check` fails when a generated file is missing, stale or obsolete,
+which is how a build verifies that the checked-in client matches the server.
 
-Projection paths are checked against the return type during schema generation.
-Queries and resolvers also project their return type, which need not be the
-declaring model. Commands with transactions validate and serialize their
-response before the transaction completes; failures roll it back.
+The root for these paths is the current directory, or `--root DIR`. A
+complete application keeps the boundary visible in its layout:
 
-## Types, Loading, and Authorization
+| Path | Loaded by | Purpose |
+| --- | --- | --- |
+| `server.rb` and `server/models/` | Server and generator | Models, policies, query implementations, and commands |
+| `server/interfaces/` | Server and generator | The distant interfaces |
+| `client/models/generated/` | Client compiler | Generated classes |
+| `client/models/` | Client compiler | Extensions |
+| `sorbet/rbi/shims/generated/` | Sorbet | Generated type declarations |
 
-Field nullability belongs to the application. A non-null database column is
-inferred as non-nilable; explicit types such as `title: String` or
-`title: T.nilable(String)` control the exported declaration. Swill does not
-make every field nilable because a privacy integration is available.
+The server never loads the client directories, and the browser never loads
+the server's. The client entry loads the generated classes and then the
+extensions; the compiler merges the two bodies into one JavaScript class, a
+method in the extension replacing a generated one of the same name.
 
-Sequel::Privacy can return nil for a denied field read. Applications using
-that behavior should choose declarations and UI handling appropriate to it.
-An application without that behavior can keep non-nilable fields. Unknown
-fields may still read as nil before hydration: availability is distinct from
-the declared type of a loaded value, and a denied read is nil as well. How the
-client reads, hydrates and explicitly loads a field is described in
-[identity, partial fields, and
-collections](models.md#identity-partial-fields-and-collections).
-
-Generated operations are asynchronous; callers write `await Post.search(...)`
-and `await post.publish!`. Local fields and relationships are synchronous.
+Generation runs the server entry as ordinary Ruby, so it may need the
+database: Sequel reflects column types and associations from the connection
+when a model is defined, whether or not the interface states explicit types.
+An application that generates without a database supplies a schema loader —
+`Sequel.mock`, explicit types, `def_column_accessor` — that makes the same
+declarations as the running server. Swill does not start the application and
+defines no schema-only mode. The [project
+workflow](getting_started.md#project-workflow) runs generation before each
+build.
 
 ## Connecting
 
-Add `async-websocket` and a compatible Rack server such as Falcon to the
-application's Gemfile. Mount `Swill::Data::WebSocket` in a Rack application
-and provide one authenticated viewer context, actor, and opaque scope token
-per connection. The browser configures the endpoint before its first
-operation:
+The connection needs `async-websocket` and a Rack server that supports it,
+such as Falcon. `Swill::Distant::Connection` is mounted in the Rack
+application with the schema and an authenticator:
+
+```ruby
+# config.ru — server.rb loads declarations, not listeners.
+require_relative "server"
+
+map "/data" do
+  run Swill::Distant::Connection.new(
+    schema: Swill::Distant::Schema.discover,
+    authenticate: ->(env) { MyApp.authenticate_data_connection(env) }
+  )
+end
+```
+
+`Schema.discover` collects the models that have a distant interface;
+`Schema.new([Post, User])` names them instead. The authenticator runs once
+per connection and returns `{viewer_context:, actor:, scope_token:}`: the
+viewer context every remote method on the connection runs under (nil for
+plain Sequel), the actor, and an opaque token that identifies the
+authenticated scope. A new actor or scope is a new token. A request that is
+not a WebSocket upgrade is answered `426`.
+
+Start the Rack server with `bundle exec falcon serve`; the
+[project workflow](getting_started.md#project-workflow) does not manage it.
+
+The browser configures its connection before its first remote method, with
+the hash the generator wrote:
 
 ```ruby
 require_relative "models/generated/schema"
@@ -230,35 +330,31 @@ module MyApp
   class Application < Swill::Application
     def initialize
       super
-      Swill::Model::DistantClient.configure(url: "/data", schema_hash: MyApp::DataSchema::HASH)
+      Swill::Distant::Client.configure(url: "/data", schema_hash: MyApp::DataSchema::HASH)
     end
   end
 end
 ```
 
-`DataSchema` lives under the common namespace of exported models, or at the
-top level when there is none. Configuration is application-wide. Plain
-JavaScript can use `Swill.Runtime.configureData(url, schemaHash)`.
+`DataSchema` lives under the namespace the models share, or at the top level
+when they share none. The configuration is application-wide. Plain
+JavaScript calls `Swill.Runtime.configureData(url, schemaHash)`.
 
-The endpoint can be mounted with Rack's `map`:
+### Errors
 
-```ruby
-# config.ru — server.rb loads declarations, not listeners.
-require_relative "server"
+A message that fails answers an `ERROR` with a code and a message:
 
-map "/data" do
-  run Swill::Data::WebSocket.new(
-    schema: Swill::Data::Schema.discover,
-    authenticate: ->(env) { MyApp.authenticate_data_connection(env) }
-  )
-end
-```
+| Code | Cause |
+| --- | --- |
+| `handshake_required` | A message before the handshake |
+| `schema_mismatch` | The browser's protocol version or schema hash differs from the server's; the connection closes. Regenerate and deploy matching client and server |
+| `unknown_model`, `unknown_operation`, `unknown_field` | A name the schema does not declare |
+| `wrong_operation_kind` | A query called as a command, or the reverse |
+| `invalid_attributes` | A write naming a field that is not writable, with the fields in `details` |
+| `validation_failed` | Sequel validation, with the model's errors in `details` |
+| `unauthorized` | A privacy policy denied the remote method or write |
+| `operation_failed` | Any other exception in the method |
 
-The application's authentication method returns
-`{viewer_context:, actor:, scope_token:}`. Plain Sequel may use a nil viewer
-context; the scope token identifies the authenticated data scope. Change it
-when the actor or scope changes. Start the Rack server with
-`bundle exec falcon serve`; the
-[project workflow](getting_started.md#project-workflow) does not manage it.
+The protocol version is 2.
 
 See [a bound data form](data_form.md) for the complete model-to-form path.

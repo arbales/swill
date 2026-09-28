@@ -37,7 +37,11 @@ module Swill
           # resolve in Ruby's source scope, not against implementation-local names.
           # Declarations have already been collected. Keep the original source and
           # locations so Pragma sees comments, including those on the final line.
+          # Visibility is Ruby's: a bare `private` is dropped and `private def`
+          # is the definition inside it, so every method is emitted as an
+          # ordinary JavaScript method.
           body = @knowledge.statements(node.children.last).flat_map do |statement|
+            statement = Knowledge.unwrap_visibility(statement)
             attribute_accessors(statement) || (class_body_statement?(statement) ? [statement] : [])
           end.map { |statement| process(statement) }
           body.reject! { |statement| statement.type == :begin && statement.children.empty? }

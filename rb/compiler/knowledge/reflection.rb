@@ -105,7 +105,12 @@ module Swill
           end
           entry["writer"] = Knowledge.member(descriptor["writer"]) if descriptor["writer"]
           entry["will_access"] = true if descriptor["will_access"]
-          if descriptor["computed"]
+          if descriptor["reads"]
+            # A computed property over another property: its expression is
+            # that property's reader, so the compiler lowers it and Sorbet
+            # checks the two declared types agree.
+            entry["expression"] = descriptor["reads"]
+          elsif descriptor["computed"]
             entry["expression"] = blocks.fetch(descriptor["block"])
           else
             entry["default"] = descriptor["default"]

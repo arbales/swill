@@ -10,14 +10,14 @@ Use four model locations with distinct responsibilities:
 
 ```text
 server/models/post.rb
-server/operations/post.rb
+server/interfaces/post.rb
 client/models/generated/post.rb
 client/models/post.rb
 ```
 
 `server/models/post.rb` is the authoritative server model. It remains a normal `Sequel::Model` and contains persistence, associations, validations, dataset methods, command implementations, and `sequel-privacy` rules.
 
-`server/operations/post.rb` reopens the server model and declares the remote
+`server/interfaces/post.rb` reopens the server model and declares the remote
 Swill surface. It is schema input and is never compiled into the browser.
 
 ```ruby
@@ -39,7 +39,7 @@ class Post
 end
 ```
 
-The server loads `server/models/` and `server/operations/`; it never loads
+The server loads `server/models/` and `server/interfaces/`; it never loads
 either client directory. The client compiler loads
 `client/models/generated/` and then `client/models/`. Generated RBI files are
 loaded only by Sorbet. The generated client class contains the methods that
@@ -241,7 +241,7 @@ Post[123].equal?(Post[123])
 
 All incoming results hydrate these canonical instances rather than creating response-specific copies.
 
-Relationships are references:
+Associations are references:
 
 ```text
 Post:123.author → User:42
@@ -293,13 +293,18 @@ Partials should merge into existing objects.
 
 ## 8. Keep the client schema, privacy, and projections separate
 
-Declare the fields and relationships that belong to the client protocol on
+Declare the fields and associations that belong to the client protocol on
 each server model. Server columns are private by default:
 
 ```ruby
-client_model fields: [:title, :body],
-             relationships: [:author, :comments],
-             writable: [:title, :body]
+class Post
+  module DistantInterface
+    extend Swill::Distant::Interface
+    fields :title, :body
+    associations :author, :comments
+    writable :title, :body
+  end
+end
 ```
 
 The declaration controls protocol exposure and write capability. It does not
@@ -395,7 +400,7 @@ Undefined
 
 Do not overuse extensions.
 
-## 11. Make missing fields and relationships demand-driven
+## 11. Make missing fields and associations demand-driven
 
 Model access should operate synchronously against the local object graph, but accessing missing data may automatically schedule background hydration.
 
@@ -405,14 +410,14 @@ For example:
 post.comments
 ```
 
-should return a stable collection object immediately, even if the relationship has not been loaded yet.
+should return a stable collection object immediately, even if the association has not been loaded yet.
 
 ```ruby
 comments = post.comments
 comments.loaded? # => false
 ```
 
-Accessing or binding to that relationship can schedule:
+Accessing or binding to that association can schedule:
 
 ```text
 GET Post:123.comments
@@ -457,10 +462,10 @@ When `name` arrives, Swill updates the existing `User[42]` object and emits KVO 
 Swill should distinguish:
 
 ```text
-relationship identity unknown
-relationship identity known, target partial
-relationship collection unknown
-relationship collection known, members partial
+association identity unknown
+association identity known, target partial
+association collection unknown
+association collection known, members partial
 ```
 
 For example:
@@ -485,7 +490,7 @@ post.author.name
 
 should result in one batched fetch for the missing author names rather than twenty individual network requests.
 
-Likewise, accessing several unloaded relationships should allow Swill to batch those relationship loads.
+Likewise, accessing several unloaded associations should allow Swill to batch those association loads.
 
 This establishes an important rule:
 
@@ -547,7 +552,7 @@ Comment:991.body = "..."
 Post:123.comment_count = 17
 ```
 
-The client Store applies those changes to canonical objects and emits KVO notifications for changed fields and relationships.
+The client Store applies those changes to canonical objects and emits KVO notifications for changed fields and associations.
 
 This provides a foundation for optimistic updates later without requiring them in v1.
 
@@ -633,7 +638,7 @@ typed parameters
 typed returns
 canonical refs
 partial objects
-lazy relationship hydration
+lazy association hydration
 lazy field hydration
 batched background GETs
 KVO notifications
@@ -674,7 +679,7 @@ sequel-privacy controls returned rows and fields
 
 query results and related objects may be partial
 
-missing bound fields and relationships schedule background hydration
+missing bound fields and associations schedule background hydration
 
 background requests are coalesced and batched
 
@@ -696,7 +701,7 @@ canonical identity
     +
 partial fields
     +
-lazy relationships
+lazy associations
     +
 KVO observation
     +

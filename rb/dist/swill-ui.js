@@ -719,10 +719,10 @@
           if (descriptor.willAccess) this.propertyWillAccess(descriptor.name);
           return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
         },
-        ...descriptor.computed && !descriptor.writer ? {} : {
-          set(value) {
-            writeProperty(this, descriptor, value);
-          }
+        // A computed property without a writer has a setter all the same, so
+        // an assignment raises `Read-only property` rather than TypeError.
+        set(value) {
+          writeProperty(this, descriptor, value);
         }
       });
     }
@@ -1215,8 +1215,13 @@
     Swill__Awakening: () => Swill__Awakening,
     Swill__Binding: () => Swill__Binding,
     Swill__BindingDestination: () => Swill__BindingDestination,
+    Swill__BindingDestination__Checkbox: () => Swill__BindingDestination__Checkbox,
+    Swill__BindingDestination__ElementProperty: () => Swill__BindingDestination__ElementProperty,
+    Swill__BindingDestination__Field: () => Swill__BindingDestination__Field,
+    Swill__BindingDestination__ObjectProperty: () => Swill__BindingDestination__ObjectProperty,
+    Swill__BindingDestination__Select: () => Swill__BindingDestination__Select,
+    Swill__BindingDestination__Text: () => Swill__BindingDestination__Text,
     Swill__BooleanTransformer: () => Swill__BooleanTransformer,
-    Swill__CheckboxBindingDestination: () => Swill__CheckboxBindingDestination,
     Swill__CollectionArrangement: () => Swill__CollectionArrangement,
     Swill__Connections__Actions: () => Swill__Connections__Actions,
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
@@ -1225,23 +1230,18 @@
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__DOM: () => Swill__DOM,
-    Swill__ElementPropertyBindingDestination: () => Swill__ElementPropertyBindingDestination,
-    Swill__FieldBindingDestination: () => Swill__FieldBindingDestination,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Notification: () => Swill__Notification,
     Swill__NotificationCenter: () => Swill__NotificationCenter,
     Swill__NumberTransformer: () => Swill__NumberTransformer,
     Swill__Object: () => Swill__Object,
     Swill__ObjectBindings: () => Swill__ObjectBindings,
-    Swill__ObjectPropertyBindingDestination: () => Swill__ObjectPropertyBindingDestination,
     Swill__Observable: () => Swill__Observable,
     Swill__OutletOwner: () => Swill__OutletOwner,
     Swill__OutletOwner_ClassMethods: () => Swill__OutletOwner_ClassMethods,
     Swill__Responder: () => Swill__Responder,
-    Swill__SelectBindingDestination: () => Swill__SelectBindingDestination,
     Swill__Swell: () => Swill__Swell,
     Swill__Templates: () => Swill__Templates,
-    Swill__TextBindingDestination: () => Swill__TextBindingDestination,
     Swill__URLFragment: () => Swill__URLFragment,
     Swill__ValueTransformer: () => Swill__ValueTransformer,
     Swill__View: () => Swill__View,
@@ -1366,21 +1366,30 @@
       if (block) block(dom);
       return dom;
     }
+    // Creates a wrapper for `element`, preserving its existing view and owner.
     constructor(element) {
       super();
       this._element = element;
     }
+    // The element this wrapper reads and changes.
     get element() {
       return this._element;
     }
+    // :section: Managing Classes
+    // Reading and changing the element's CSS classes.
+    // Adds the class `name` and returns the wrapper. See `#remove_class`.
     addClass(name) {
       this._element.classList.add(name);
       return this;
     }
+    // Removes the class `name` and returns the wrapper. See `#add_class`.
     removeClass(name) {
       this._element.classList.remove(name);
       return this;
     }
+    // Adds the class `name` when `on` is true, removes it when false, and
+    // returns the wrapper. When `on` is omitted or nil, reverses the class's
+    // presence. See `#has_class?`.
     toggleClassWithOn(name, on) {
       if (on == null) {
         this._element.classList.toggle(name);
@@ -1390,10 +1399,16 @@
       ;
       return this;
     }
+    // Returns whether the element has the class `name`. See `#toggle_class`.
     hasClass(name) {
       return this._element.classList.contains(name);
     }
-    // HTML booleans are presence/absence; nil also removes the attribute.
+    // :section: Managing Attributes
+    // Reading and changing HTML, ARIA, and data attributes.
+    // Sets the attribute `name` from `value` and returns the wrapper.
+    // A nil or false value removes the attribute; true sets an empty string.
+    // Other values are converted to strings. See `#attribute`, `#aria`, and
+    // `#data` for reading attributes and writing prefixed values.
     attr(name, value) {
       if (value == null || value === false) {
         this._element.removeAttribute(name);
@@ -1406,81 +1421,132 @@
       ;
       return this;
     }
+    // Returns the attribute `name` as a string, or nil when absent.
+    // See `#attr` and `#has_attribute?`.
     attribute(name) {
       return this._element.getAttribute(name);
     }
+    // Returns whether the element has the attribute `name`, including an
+    // attribute whose value is an empty string. See `#attribute`.
     hasAttribute(name) {
       return this._element.hasAttribute(name);
     }
+    // Removes the attribute `name` and returns the wrapper.
+    // See `#attr` and `#has_attribute?`.
     removeAttr(name) {
       this._element.removeAttribute(name);
       return this;
     }
-    // ARIA and data values are strings: false means "false", not absence.
+    // Sets `aria-name` to the string form of `value` and returns the wrapper.
+    // A nil value removes the attribute; false is written as "false".
+    // Supply the suffix, such as "expanded", as `name`. See `#aria_value`.
     aria(name, value) {
       return this.attr(
         `aria-${name}`,
         value == null ? null : Runtime.send(value, "to_s")
       );
     }
+    // Sets `data-name` to the string form of `value` and returns the wrapper.
+    // A nil value removes the attribute; false is written as "false".
+    // Supply the suffix, such as "value", as `name`. See `#data_value`.
     data(name, value) {
       return this.attr(
         `data-${name}`,
         value == null ? null : Runtime.send(value, "to_s")
       );
     }
+    // Returns the value of `aria-name`, or nil when absent. `name` is the
+    // suffix without "aria-". See `#aria`.
     ariaValue(name) {
       return this.attribute(`aria-${name}`);
     }
+    // Returns the value of `data-name`, or nil when absent. `name` is the
+    // suffix without "data-". See `#data`.
     dataValue(name) {
       return this.attribute(`data-${name}`);
     }
-    // Properties retain their values and types, unlike serialized attributes.
+    // :section: Managing Properties
+    // Reading and assigning the element's DOM properties.
+    // Assigns `value` to the DOM property `name` and returns the wrapper.
+    // Uses the property's JavaScript name, such as "readOnly". The DOM
+    // property's setter determines how the value is stored.
+    // See `#property_value`.
     prop(name, value) {
       this._element[name] = value;
       return this;
     }
+    // Returns the DOM property `name` using its JavaScript spelling.
+    // An absent property returns JavaScript's undefined value. See `#prop`.
     propertyValue(name) {
       return this._element[name];
     }
-    // Text is always literal. Markup belongs in templates.
+    // :section: Managing Content and Visibility
+    // Updating text, child nodes, and the element's hidden state.
+    // Replaces the element's contents with the string form of `value` and
+    // returns the wrapper. Text is displayed literally; nil clears the
+    // contents. See `#text_content` and `#empty`.
     text(value) {
       this._element.textContent = Runtime.send(value, "to_s");
       return this;
     }
+    // Returns the element's text content, or an empty string when it has
+    // none. See `#text`.
     textContent() {
       return this._element.textContent;
     }
+    // Sets the element's hidden property to true and returns the wrapper.
+    // See `#show`.
     hide() {
       this._element.hidden = true;
       return this;
     }
+    // Sets the element's hidden property to false and returns the wrapper.
+    // See `#hide`.
     show() {
       this._element.hidden = false;
       return this;
     }
+    // Removes all child nodes and returns the wrapper. See `#append`.
     empty() {
       this._element.replaceChildren();
       return this;
     }
+    // Appends `node` as the last child and returns the wrapper. An existing
+    // node moves from its current parent. See `#empty`.
     append(node) {
       this._element.appendChild(node);
       return this;
     }
+    // Removes the element from its parent and returns the wrapper.
+    // An element with no parent remains unchanged.
     remove() {
       this._element.remove();
       return this;
     }
+    // :section: Finding Elements
+    // Looking up descendants by CSS selector.
+    // Returns a new wrapper for the first descendant matching `selector`,
+    // or nil when none matches. See `#find!`.
     find(selector) {
       let found = this._element.querySelector(selector);
       return found ? _Swill__Swell.$index(found) : null;
     }
+    // Returns a new wrapper for the first descendant matching `selector`.
+    // Raises "No element matching ..." when none matches; use `#find` when
+    // the descendant may be absent.
     findBang(selector) {
       let found = this.find(selector);
       if (!found) throw new Error(`No element matching ${selector}`);
       return found;
     }
-    // Retain the returned disposer on the object that owns the listener.
+    // :section: Listening for Events
+    // Registering event handlers and releasing them with their owner.
+    // Registers `handler` for events of `type` and returns a callable that
+    // removes the listener. The handler receives the DOM event. `capture`
+    // selects the capture phase; the default is false.
+    //
+    // Retain the returned callable on the controller or view that owns the
+    // listener so it is removed when that owner unloads.
     listen(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
@@ -1663,19 +1729,19 @@
       if (known) return known;
       this._shared = Runtime.cast(
         {
-          text: new Swill__TextBindingDestination(),
-          field: new Swill__FieldBindingDestination(),
-          select: new Swill__SelectBindingDestination(),
-          checkbox: new Swill__CheckboxBindingDestination(),
-          property: new Swill__ElementPropertyBindingDestination(),
-          object: new Swill__ObjectPropertyBindingDestination()
+          text: new Swill__BindingDestination__Text(),
+          field: new Swill__BindingDestination__Field(),
+          select: new Swill__BindingDestination__Select(),
+          checkbox: new Swill__BindingDestination__Checkbox(),
+          property: new Swill__BindingDestination__ElementProperty(),
+          object: new Swill__BindingDestination__ObjectProperty()
         },
         "T.nilable(T::Hash[String, BindingDestination])"
       );
       return Runtime.must(this._shared);
     }
   };
-  var Swill__TextBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__Text = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return receiver.textContent = value;
     }
@@ -1683,7 +1749,7 @@
       return receiver.textContent;
     }
   };
-  var Swill__FieldBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__Field = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return receiver.value = value;
     }
@@ -1705,12 +1771,12 @@
       return "input";
     }
   };
-  var Swill__SelectBindingDestination = class extends Swill__FieldBindingDestination {
+  var Swill__BindingDestination__Select = class extends Swill__BindingDestination__Field {
     eventName() {
       return "change";
     }
   };
-  var Swill__CheckboxBindingDestination = class extends Swill__FieldBindingDestination {
+  var Swill__BindingDestination__Checkbox = class extends Swill__BindingDestination__Field {
     write(receiver, binding, value) {
       return receiver.checked = Runtime.isTruthy(value);
     }
@@ -1727,7 +1793,7 @@
       return "change";
     }
   };
-  var Swill__ElementPropertyBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__ElementProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       let property = Runtime.must(binding);
       if (property.startsWith("data-") || property.startsWith("aria-")) {
@@ -1769,7 +1835,7 @@
       return false;
     }
   };
-  var Swill__ObjectPropertyBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__ObjectProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return Runtime.write(receiver, Runtime.must(binding), value);
     }
@@ -2491,7 +2557,7 @@
     // a list selection.
     clearTextSelection() {
       let selection = this._element.ownerDocument.getSelection();
-      return selection?.removeAllRanges;
+      return selection?.removeAllRanges();
     }
     // Adds an event listener for `type` on this view's element and returns
     // a callable that removes it. A controller retains the callable so the
@@ -2542,7 +2608,7 @@
     // Blurs `first_focusable_element`, if there is one.
     blurElement() {
       let target = this.firstFocusableElement();
-      return target?.blur;
+      return target?.blur();
     }
     // Returns the controller rooted at this view, or else its superview. The
     // chain leaves the view tree at the first controller it meets.
@@ -2560,7 +2626,15 @@
     }
   };
   var Swill__Control = class extends Swill__View {
-    // Copy the shared prototype, then connect its children to this control.
+    // The object consulted before the control resigns first responder. It may
+    // implement `control_should_resign_first_responder(control, next_responder)`
+    // and return false to refuse the change. The default is nil.
+    // See `#resign_first_responder`.
+    // Replaces the element's contents with a copy of the named control template
+    // and connects its outlets, bindings, and actions to this control.
+    // Raises "Control template already loaded" if a template has been loaded,
+    // or "Unknown control template: ..." if the name is absent from the catalog.
+    // Connections are released when the control unloads.
     loadTemplate(name) {
       if (this._owns_content) throw new Error("Control template already loaded");
       let template = Swill__Templates.named(
@@ -2571,6 +2645,10 @@
       this._element.replaceChildren(template.content.cloneNode(true));
       return Swill__Awakening.awakenOwned(this._element, this);
     }
+    // Invoked before first responder moves to `next_responder`. Returns false
+    // if the delegate refuses; otherwise returns the superclass result.
+    // An override should call `super` to preserve the delegate's decision.
+    // See `#delegate`.
     resignFirstResponder(next_responder) {
       let current = this.delegate;
       if (Runtime.isTruthy(Runtime.logicalAnd(
@@ -4731,8 +4809,8 @@
           }
         }
       },
-      "Swill::TextBindingDestination": {
-        constructor: Swill__TextBindingDestination,
+      "Swill::BindingDestination::Text": {
+        constructor: Swill__BindingDestination__Text,
         properties: {},
         methods: {
           "write": {
@@ -4743,8 +4821,8 @@
           }
         }
       },
-      "Swill::FieldBindingDestination": {
-        constructor: Swill__FieldBindingDestination,
+      "Swill::BindingDestination::Field": {
+        constructor: Swill__BindingDestination__Field,
         properties: {},
         methods: {
           "write": {
@@ -4766,8 +4844,8 @@
           }
         }
       },
-      "Swill::SelectBindingDestination": {
-        constructor: Swill__SelectBindingDestination,
+      "Swill::BindingDestination::Select": {
+        constructor: Swill__BindingDestination__Select,
         properties: {},
         methods: {
           "event_name": {
@@ -4776,8 +4854,8 @@
           }
         }
       },
-      "Swill::CheckboxBindingDestination": {
-        constructor: Swill__CheckboxBindingDestination,
+      "Swill::BindingDestination::Checkbox": {
+        constructor: Swill__BindingDestination__Checkbox,
         properties: {},
         methods: {
           "write": {
@@ -4800,8 +4878,8 @@
           }
         }
       },
-      "Swill::ElementPropertyBindingDestination": {
-        constructor: Swill__ElementPropertyBindingDestination,
+      "Swill::BindingDestination::ElementProperty": {
+        constructor: Swill__BindingDestination__ElementProperty,
         properties: {},
         methods: {
           "write": {
@@ -4821,8 +4899,8 @@
           }
         }
       },
-      "Swill::ObjectPropertyBindingDestination": {
-        constructor: Swill__ObjectPropertyBindingDestination,
+      "Swill::BindingDestination::ObjectProperty": {
+        constructor: Swill__BindingDestination__ObjectProperty,
         properties: {},
         methods: {
           "write": {
@@ -6023,7 +6101,7 @@
 
   // build/ui/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.DistantObject": "Swill__Model__DistantObject", "Model.DistantClient": "Swill__Model__DistantClient", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Model.DistantObject"]);
+  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
   Swill__Templates.install('<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" role="listbox" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" role="option" tabindex="-1">\n      <span class="custom-select-icon" aria-hidden="true"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>\n  </template>\n</template>\n');
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();

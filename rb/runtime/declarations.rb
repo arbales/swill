@@ -83,7 +83,7 @@ module Swill
 
     # A real, typed method that hands its arguments to another: what gives a
     # macro a callable member. `load_ingredients` is nothing but
-    # `load_relationship("ingredients")`, so the macro declares it rather than
+    # `load_association("ingredients")`, so the macro declares it rather than
     # every application writing the wrapper and casting the untyped result.
     def forward(name, to:, with: [], parameters: {}, returns: nil, async: false)
       swill_forwards << {
@@ -121,9 +121,18 @@ module Swill
     # will_access: flags the read path: the getter notifies the object before
     # it resolves, so a value can load itself. attribute:, key:, outlet: and
     # optional: are the marks the macros built on property set.
+    #
+    # reads: declares a computed property whose value is the property it
+    # names, for a macro that cannot write a block: the block's source is
+    # compiled as written, so a name interpolated into it would not compile.
     def self.property(name, type:, default: UNSET, key: nil, attribute: false,
-                      outlet: false, optional: false, will_access: false, writer: nil, &computed)
+                      outlet: false, optional: false, will_access: false, writer: nil, reads: nil, &computed)
       name = name.to_s
+      if reads
+        raise ArgumentError, "reads: and a block are exclusive" if computed
+        source = reads.to_s
+        computed = -> { Swill::Runtime.read(self, source) }
+      end
       unless name.match?(/\A[a-z_]\w*\??\z/) && (computed || !name.end_with?("?"))
         raise ArgumentError, "unsupported property name #{name}"
       end
@@ -146,7 +155,10 @@ module Swill
         descriptor["outlet"] = true
         descriptor["optional"] = optional
       end
-      if computed
+      if reads
+        descriptor["reads"] = reads.to_s
+        descriptor["compute"] = computed
+      elsif computed
         descriptor["block"] = computed.source_location
         descriptor["compute"] = computed
       else
@@ -169,6 +181,12 @@ module Swill
       if !computed || writer
         define_method("#{name}=") do |value|
           Swill::Runtime.write_property(self, descriptor, value)
+        end
+      else
+        # The browser's setter for a computed property raises the same way,
+        # so an assignment fails alike on both hosts.
+        define_method("#{name}=") do |_value|
+          raise "Read-only property: #{name}"
         end
       end
       name.to_sym

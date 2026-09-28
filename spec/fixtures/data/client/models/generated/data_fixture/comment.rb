@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 module DataFixture
-  class Comment < Swill::Model::DistantObject
+  class Comment < Swill::Distant::Object
     model_name "DataFixture::Comment"
     attribute :author_id, type: Integer
     attribute :body, type: String

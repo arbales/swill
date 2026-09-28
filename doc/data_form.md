@@ -39,13 +39,17 @@ end
 # server.rb — generation loads this too, so do not start a server here.
 require "sequel"
 require "swill/server"
-Swill::Data.install(Sequel::Model)
 
 module Notes
   DB = Sequel.sqlite(File.join(__dir__, "notes.sqlite3"))
 
   class Note < Sequel::Model(DB[:notes])
-    client_model fields: {title: String}, writable: [:title]
+    module DistantInterface
+      extend Swill::Distant::Interface
+
+      fields title: String
+      writable :title
+    end
 
     def validate
       super
@@ -63,8 +67,8 @@ require "rack/static"
 use Rack::Static, urls: ["/assets"], root: "public"
 
 map "/data" do
-  run Swill::Data::WebSocket.new(
-    schema: Swill::Data::Schema.new([Notes::Note]),
+  run Swill::Distant::Connection.new(
+    schema: Swill::Distant::Schema.new([Notes::Note]),
     authenticate: ->(_env) { {viewer_context: nil, actor: nil, scope_token: "local-demo"} }
   )
 end
@@ -85,7 +89,7 @@ module Notes
   class Application < Swill::Application
     def initialize
       super
-      Swill::Model::DistantClient.configure(url: "/data", schema_hash: Notes::DataSchema::HASH)
+      Swill::Distant::Client.configure(url: "/data", schema_hash: Notes::DataSchema::HASH)
     end
   end
 

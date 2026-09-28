@@ -5,9 +5,6 @@ module DataFixture
     plugin :privacy
     extend T::Sig
 
-    client_model fields: %i[author_id title excerpt body published published_at],
-                 relationships: %i[author comments], writable: %i[author_id title excerpt body]
-
     many_to_one :author, class: "DataFixture::User", key: :author_id
     one_to_many :comments, class: "DataFixture::Comment", key: :post_id
 
@@ -36,6 +33,42 @@ module DataFixture
     def invalid_publish!
       update(published: true)
       "not a boolean"
+    end
+
+    def self.lookup_title(title)
+      post = for_vc(Swill::Distant.context.viewer_context).first(title: title)
+      PostLookup.new(post: post, status: post ? :found : :missing)
+    end
+
+    def move_to_author!(author_id, replace: false, fail: false, hidden: false)
+      context = Swill::Distant.context
+      old_author = author
+      new_author = User.for_vc(context.viewer_context).with_pk!(author_id)
+      update(author_id: new_author.id)
+      context.refresh(self, :author_id, :author)
+      context.invalidate(old_author, :posts)
+      if replace
+        context.refresh(new_author, :posts, :published_posts, :avatar)
+      else
+        context.invalidate(new_author, :posts)
+      end
+      context.refresh(new_author, :surprise) if hidden
+      raise "move rejected" if fail
+
+      true
+    end
+
+    def publish_author!
+      update(published: true)
+      author
+    end
+
+    def self.wrapped_transaction?
+      DB.in_transaction?
+    end
+
+    def self.unwrapped_transaction?
+      DB.in_transaction?
     end
   end
 end

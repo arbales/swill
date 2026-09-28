@@ -105,7 +105,7 @@ module Swill
         unless %w[generate check].include?(action) && entry
           raise OptionParser::ParseError, "data expects generate or check and a SERVER_ENTRY"
         end
-        generator = Swill::Data::Generator.new(entry, root: options[:root] || Dir.pwd)
+        generator = Swill::Distant::Generator.new(entry, root: options[:root] || Dir.pwd)
         if action == "generate"
           written = generator.generate
           puts "swill: wrote #{written.length} data files"

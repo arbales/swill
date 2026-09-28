@@ -7,16 +7,15 @@ require_relative "../rb/framework/model/dirty_tracking"
 require_relative "../rb/framework/model/drafts"
 require_relative "../rb/framework/model/base"
 require_relative "../rb/framework/model/editable"
-require_relative "../rb/framework/model/relationships"
+require_relative "../rb/framework/model/associations"
 require_relative "../rb/framework/model/store"
 require_relative "../rb/framework/model/identity"
 require_relative "../rb/framework/core/object_bindings"
 require_relative "../rb/framework/core/collection_arrangement"
 require_relative "../rb/framework/model/collection"
-require_relative "../rb/framework/model/distant_client"
-require_relative "../rb/framework/model/distant_data"
-require_relative "../rb/framework/model/distant_object"
-require_relative "../rb/framework/model/relationship"
+require_relative "../rb/framework/distant/object"
+require_relative "../rb/framework/distant/client"
+require_relative "../rb/framework/model/association"
 require_relative "../rb/framework/model/codec"
 require_relative "../rb/framework/model/dataset"
 require_relative "../rb/framework/model/resource"
@@ -36,16 +35,18 @@ class DisconnectDependent < Swill::Object
 end
 
 class SharedTest < Minitest::Test
-  class RelatedRecord < Swill::Model::DistantObject
+  class RelatedRecord < Swill::Distant::Object
+    attribute :body, type: T.nilable(String)
     many_to_one :parent, class: "SharedTest::RelatedRecord"
     one_to_many :children, class: "SharedTest::RelatedRecord"
   end
 
-  def test_distant_relationships_are_read_only_and_observable_on_mri
+  def test_distant_associations_are_read_only_and_observable_on_mri
     record = RelatedRecord.new
     children = record.children
     assert children.records.frozen?
-    assert_raises(RuntimeError) { record.parent = record }
+    error = assert_raises(RuntimeError) { record.parent = record }
+    assert_equal "Read-only property: parent", error.message
     assert_raises(RuntimeError) { record.children = [] }
     assert_raises(RuntimeError) { children.records = [] }
     assert_raises(RuntimeError) { children.replace([]) }
@@ -77,7 +78,7 @@ class SharedTest < Minitest::Test
     refute Swill::Runtime.observed(source, "count")
   end
 
-  def test_invalidated_relationships_keep_loaded_contents_on_mri
+  def test_invalidated_associations_keep_loaded_contents_on_mri
     record = RelatedRecord.new
     record.apply_data_field("children", [record], 1, false)
     children = record.children
@@ -125,7 +126,7 @@ class SharedTest < Minitest::Test
     controller.dealloc
   end
 
-  def test_relationship_controller_is_lazy_shared_and_released_on_mri
+  def test_association_controller_is_lazy_shared_and_released_on_mri
     record = RelatedRecord.new
     controller = record.children_controller
     assert_same controller, record.children_controller
@@ -133,15 +134,72 @@ class SharedTest < Minitest::Test
     record.apply_data_field("children", [record], 1, false)
     assert_equal [record], controller.arranged_objects
     record.reset_data_fields
-    assert_nil controller.content
+    refute record.field_loaded?(:children)
+    assert_same controller, record.children_controller, "a reset keeps the controller"
+    record.dealloc
+    assert_nil controller.content, "dealloc releases the controller"
     refute_same controller, record.children_controller
+  end
+
+  def test_field_state_is_observable_on_mri
+    record = RelatedRecord.new
+    states = []
+    record.observe("body_loading", ->(value) { states << ["loading", value] })
+    record.observe("body_error", ->(value) { states << ["error", value] })
+    record.observe("body_loaded", ->(value) { states << ["loaded", value] })
+    assert record.begin_data_field_load("body", false)
+    refute record.begin_data_field_load("body", false), "a loading field is not requested again"
+    record.data_request_started("body", 1)
+    record.fail_data_field("body", "offline", 1)
+    assert_equal "offline", record.field_error(:body)
+    refute record.field_loading?(:body)
+    record.apply_data_field("body", "Text", 2, false)
+    assert record.field_loaded?(:body)
+    assert_equal "Text", record.body
+    assert_equal [["loading", true], ["loading", false], ["error", "offline"], ["loaded", true], ["error", nil]], states
+    refute record.field_stale?(:body), "a scalar field is never stale"
+    children = record.children
+    record.apply_data_field("children", [], 1, false)
+    record.invalidate_data_field("children", 2)
+    assert children.stale?
+    assert record.children_stale
+    record.dealloc
+  end
+
+  def test_a_draft_remembers_its_original_on_mri
+    person = Demo::Person.new
+    person.name = "Ada"
+    other = Demo::Person.new
+    copy = person.draft
+    assert copy.draft?
+    refute person.draft?
+    assert copy.draft_of?(person)
+    refute copy.draft_of?(other)
+    error = assert_raises(RuntimeError) { other.apply_draft(copy) }
+    assert_includes error.message, "draft made from this object"
+    copy.name = "Grace"
+    person.apply_draft(copy)
+    assert_equal "Grace", person.name
+
+    record = RelatedRecord.new
+    record.apply_data_field("id", "1", 1, true)
+    record.apply_data_field("body", "Text", 1, true)
+    draft = record.draft
+    assert draft.draft?
+    assert draft.draft_of?(record)
+    assert draft.field_loaded?(:body)
+    assert_equal "Text", draft.body
+    refute draft.dirty?
+    stranger = RelatedRecord.new
+    stranger.apply_data_field("id", "2", 1, true)
+    assert_raises(RuntimeError) { stranger.apply_draft(draft) }
   end
 
   def test_model_strategies_share_only_the_explicit_base_layers
     base = Swill::Model::Base.new
     editable = Swill::Model::Editable.new
     resource = Swill::Model::Resource.new
-    distant = Swill::Model::DistantObject.new
+    distant = Swill::Distant::Object.new
 
     refute_respond_to base, :dirty?
     assert_respond_to editable, :dirty?
@@ -342,7 +400,7 @@ class SharedModelTest < Minitest::Test
     result["authors"] = authors.map { |author| [author.id, author.name, author.born] }
     result["books"] = ada.books.map(&:title)
     result["linked"] = ada.books.first.author.equal?(ada)
-    result["loaded"] = [ada.relationship_loaded?("books"), ada.books.first.relationship_loaded?("author")]
+    result["loaded"] = [ada.association_loaded?("books"), ada.books.first.association_loaded?("author")]
     result["pooled"] = Demo::Author.get("1").equal?(ada) && Demo::Book.get("10").equal?(ada.books.first)
     result["clean"] = ada.dirty?
     ada.name = "Ada Lovelace"

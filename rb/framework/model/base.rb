@@ -4,7 +4,7 @@
 module Swill
   module Model
     # Common model state: observable, validated attributes and a stable id.
-    # Persistence strategies live in Resource and DistantObject.
+    # Persistence strategies live in Resource and Distant::Object.
     class Base < Swill::Object
       extend T::Sig
       include Attributes

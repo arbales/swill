@@ -87,7 +87,10 @@ class CLITest < Minitest::Test
       server = File.join(ROOT, "spec/fixtures/data/server.rb")
       stdout, stderr, status = swill("data", "generate", server, "--root", dir)
       assert status.success?, stderr
-      assert_includes stdout, "wrote 10 data files"
+      assert_includes stdout, "wrote 13 data files"
+      extension = File.join(dir, "client/models/data_fixture/post.rb")
+      assert_includes File.read(extension), "class Post\n"
+      refute_includes File.read(extension), "Distant::Object", "the extension reopens the generated class"
 
       stdout, stderr, status = swill("data", "check", server, "--root", dir)
       assert status.success?, stderr
@@ -106,12 +109,14 @@ class CLITest < Minitest::Test
       server = <<~RUBY
         require "sequel"
         require #{File.join(ROOT, "rb/swill/server").inspect}
-        Swill::Data.install(Sequel::Model)
         module ProjectFixture
           DB = Sequel.mock
           class Note < Sequel::Model(DB[:notes])
             def_column_accessor :id, :title, :body
-            client_model fields: {id: String, title: String}
+            module DistantInterface
+              extend Swill::Distant::Interface
+              fields id: String, title: String
+            end
           end
         end
       RUBY
@@ -135,7 +140,7 @@ class CLITest < Minitest::Test
       generated = File.join(dir, "client/models/generated/project_fixture/note.rb")
       File.write(generated, "stale")
       assert_equal stamps, project.snapshot, "generated files must not trigger a rebuild loop"
-      File.write(File.join(dir, "server.rb"), server.sub("title: String}", "title: String, body: String}"))
+      File.write(File.join(dir, "server.rb"), server.sub("title: String", "title: String, body: String"))
       refute_equal stamps, project.snapshot
       _stdout, stderr, status = swill("build", "--project", config)
       assert status.success?, stderr
@@ -180,9 +185,9 @@ class CLITest < Minitest::Test
       assert File.file?(File.join(dir, "public/assets/swill.js"))
       script = <<~RUBY
         require #{File.join(dir, "server.rb").inspect}
-        schema = Swill::Data::Schema.new([Notes::Note])
-        dispatcher = Swill::Data::Dispatcher.new(schema: schema, viewer_context: nil, actor: nil, scope_token: "test")
-        dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Data::PROTOCOL_VERSION, "schema_hash" => schema.hash)
+        schema = Swill::Distant::Schema.new([Notes::Note])
+        dispatcher = Swill::Distant::Dispatcher.new(schema: schema, viewer_context: nil, actor: nil, scope_token: "test")
+        dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => schema.hash)
         create = {"type" => "CREATE", "model" => "Notes::Note", "request_id" => 1, "generation" => 1}
         invalid = dispatcher.call(create.merge("attributes" => {"title" => ""}))
         abort invalid.inspect unless invalid.dig("error", "code") == "validation_failed"

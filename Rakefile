@@ -164,8 +164,9 @@ RDOC_OPTS = [
 # Undocumented public API under rb/framework/. A ratchet, not a gate: it
 # fails when the number grows, and the baseline comes down as the framework
 # gets documented. Internals drop out of the count as they are marked :nodoc:.
-# Declared properties and outlets count as they do on the class page.
-DOC_COVERAGE_BASELINE = 247
+# Declared properties and outlets count as they do on the class page, and
+# protected methods count with public ones; private methods do not appear.
+DOC_COVERAGE_BASELINE = 173
 
 desc "Report undocumented public framework API (fails if it grew)"
 task :doc_coverage do
@@ -177,11 +178,11 @@ task :doc_coverage do
     gaps = []
     Dir.mktmpdir do |tmp|
       rdoc = RDoc::RDoc.new
-      rdoc.document(RDOC_OPTS + ["-q", "-o", File.join(tmp, "out")] + Dir["rb/framework/**/*.rb"])
+      rdoc.document(RDOC_OPTS + ["-q", "-o", File.join(tmp, "out")] + Dir["rb/framework/**/*.rb"] + Dir["rb/distant/**/*.rb"])
       rdoc.store.all_classes_and_modules.sort_by(&:full_name).each do |mod|
         gaps << mod.full_name unless mod.documented?
         mod.method_list.each do |method|
-          next unless method.visibility == :public
+          next unless %i[public protected].include?(method.visibility)
           gaps << "#{mod.full_name}##{method.name}" unless method.documented?
         end
         mod.attributes.each do |attribute|

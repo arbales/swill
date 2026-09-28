@@ -43,15 +43,15 @@ module Swill
       "Model.Base" => "Swill::Model::Base",
       "Model.Editable" => "Swill::Model::Editable",
       "Model.Resource" => "Swill::Model::Resource",
-      "Model.DistantObject" => "Swill::Model::DistantObject",
-      "Model.DistantClient" => "Swill::Model::DistantClient",
       "Model.Store" => "Swill::Model::Store",
       "Model.Codec" => "Swill::Model::Codec",
       "Model.PlainJSON" => "Swill::Model::PlainJSON",
       "Model.JSONAPI" => "Swill::Model::JSONAPI",
       "Model.Dataset" => "Swill::Model::Dataset",
       "Model.Collection" => "Swill::Model::Collection",
-      "Model.ResultSet" => "Swill::Model::ResultSet"
+      "Model.ResultSet" => "Swill::Model::ResultSet",
+      "Distant.Object" => "Swill::Distant::Object",
+      "Distant.Client" => "Swill::Distant::Client"
     }.freeze
 
     # The public classes a plain JavaScript class may extend directly. The
@@ -59,7 +59,7 @@ module Swill
     JAVASCRIPT_ROOTS = %w[
       Object ArrayController Controller Application View List SortableList Editor InlineEditor EditableList
       Control TextField Button Select CustomSelect ValueTransformer
-      Model.Base Model.Resource Model.DistantObject
+      Model.Base Model.Resource Distant.Object
     ].freeze
 
     # Encoded names shared by the compiler, its metadata, and generated code.

@@ -230,7 +230,13 @@ module SwillDoc
     end
 
     def public_methods(klass, singleton)
-      klass.method_list.select { |method| method.visibility == :public && method.singleton == singleton }
+      methods_of(klass, singleton, :public)
+    end
+
+    # A class's methods of one visibility. Private methods are not shown;
+    # protected ones are, since a subclass calls them.
+    def methods_of(klass, singleton, visibility)
+      klass.method_list.select { |method| method.visibility == visibility && method.singleton == singleton }
                        .sort_by(&:name)
     end
 
@@ -252,7 +258,8 @@ module SwillDoc
         ["Outlets", :declaration, declarations(klass, true)],
         ["Attributes", :attribute, plain_attributes(klass)],
         ["Public class methods", "class-method", public_methods(klass, true)],
-        ["Public instance methods", "instance-method", public_methods(klass, false)]
+        ["Public instance methods", "instance-method", public_methods(klass, false)],
+        ["Protected instance methods", "instance-method protected-method", methods_of(klass, false, :protected)]
       ]
       sections = klass.sort_sections.filter_map do |section|
         groups = kinds.map do |title, kind, list|
@@ -310,7 +317,8 @@ module SwillDoc
     # to its entry on the module's page.
     def included_members(mod)
       [["Properties", declarations(mod, false)], ["Outlets", declarations(mod, true)],
-       ["Methods", public_methods(mod, false)]].reject { |_, list| list.empty? }
+       ["Methods", public_methods(mod, false)],
+       ["Protected methods", methods_of(mod, false, :protected)]].reject { |_, list| list.empty? }
     end
 
     def member_link(mod, member)

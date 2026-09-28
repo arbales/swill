@@ -1,8 +1,8 @@
 # Declarations
 
 A declaration is a class-body statement that describes a value the class
-provides: `property`, `attribute`, `outlet`, `restorable`, and the relationship
-macros of `Swill::Model::Resource` and `Swill::Model::DistantObject`. This
+provides: `property`, `attribute`, `outlet`, `restorable`, and the association
+macros of `Swill::Model::Resource` and `Swill::Distant::Object`. This
 guide covers the keywords each accepts and the property protocol: the access
 and notification rules every declared property follows on MRI and in the
 browser. How the compiler collects a declaration and emits it is described in
@@ -36,6 +36,7 @@ outlet :extra, type: T.untyped, optional: true
 | `attribute:`, `key:` | Marks the property as local model data with an external key, used by validation, dirty tracking, and attribute collection |
 | `outlet:`, `optional:` | Marks the property an outlet, connected at [awakening](awakening.md); the [`outlet`](markup.md#outlet) attribute names it in markup |
 | `will_access:` | The getter calls `property_will_access(name)` before it resolves |
+| `reads:` | The name of another property; declares a computed, read-only property whose value is that property's. A macro uses it where a block cannot name the property it builds |
 
 A `name=` method cannot replace the accessor of a declared property, and a
 `restorable` path must start at a declared property with a fragment key unique
@@ -51,15 +52,15 @@ The framework provides these declaration macros:
 | `attribute :name, type:, default:, key:` | A property marked as an attribute, and the same declaration as data in `model_attributes` |
 | `outlet :field, type:, optional:` | A stored, nilable, observable property with `outlet` and `optional` metadata. Declared on `Swill::Controller`, so only a controller can call it. The type names the connected value: a framework class for a view or child controller, `T::Hash[...]` or `T::Array[...]` for decoded JSON, `T.untyped` for anything. Awakening checks a typed outlet's value against the type shallowly, as `T.cast` does, so a JSON script that decodes to the wrong shape fails by outlet name |
 | `restorable :path, key: :k` | A dotted property path the application keeps in the URL fragment; see [restoration](lifecycle.md#restoration). Declared on `Swill::Controller` |
-| `Resource.has_many :name, type:, key:, url:, will_access:` | An endpoint-backed array relationship, its loading properties, descriptor, and typed load/reload methods |
+| `Resource.has_many :name, type:, key:, url:, will_access:` | An endpoint-backed array association, its loading properties, descriptor, and typed load/reload methods |
 | `Resource.has_one :name, ...` | The endpoint-backed nilable form of the same declaration |
-| `DistantObject.model_name "Name"` | The server model name as a class setting |
-| `DistantObject.attribute :name, type:` | A partial scalar whose reads participate in data demand collection |
-| `DistantObject.many_to_one`, `one_to_one`, `one_through_one` with `class:` | A read-only partial nilable model reference |
-| `DistantObject.one_to_many`, `many_to_many` with `class:` | A read-only partial stable `RelationshipCollection` of model references |
+| `Distant::Object.model_name "Name"` | The server model name as a class setting |
+| `Distant::Object.attribute :name, type:` | A partial scalar whose reads participate in data demand collection |
+| `Distant::Object.many_to_one`, `one_to_one`, `one_through_one` with `class:` | A read-only partial nilable model reference |
+| `Distant::Object.one_to_many`, `many_to_many` with `class:` | A read-only partial stable `AssociationCollection` of model references |
 
-An outlet or resource relationship may name a class defined later by writing
-its name as a string. Generated distant relationship declarations use server
+An outlet or resource association may name a class defined later by writing
+its name as a string. Generated distant association declarations use server
 model names as strings so cyclic model graphs do not depend on client class load
 order.
 
@@ -91,9 +92,9 @@ A read records the property as a dependency of any computed property being
 evaluated. For a property declared with `will_access:`, it also invokes
 `property_will_access(name)` before returning the value.
 
-`Swill::Model::Resource` uses this hook to load endpoint relationships on
-access. `Swill::Model::DistantObject` uses it to request fields and
-relationships absent from a partial object. Reads and explicit loads share
+`Swill::Model::Resource` uses this hook to load endpoint associations on
+access. `Swill::Distant::Object` uses it to request fields and
+associations absent from a partial object. Reads and explicit loads share
 in-flight requests. See [Models](models.md) for loading behavior and error
 handling.
 

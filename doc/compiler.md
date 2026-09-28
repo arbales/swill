@@ -103,6 +103,7 @@ The compiler accepts the following statements in class and mixin bodies:
 | `property :name, ...`, or any declaration macro | Evaluated in the class body; the compiler collects the resulting declarations (see [Declaration macros](#declaration-macros)) |
 | `def self.name(...)` | Classes only: a static method under the same name rules. Inside it `self` is the class and a bare `new` constructs it; `self.new` is rejected as a name |
 | `async def name(...)`, `async def self.name(...)` | The same, marked asynchronous: it compiles to an `async` method and its body may `await` |
+| `private`, `protected`, `private def name(...)`, `private :name` | Visibility is recorded per method and enforced by Ruby: the generated RBI declares the method under a `private` or `protected` section, so `srb tc` checks its callers. JavaScript methods stay ordinary; the browser does not enforce visibility |
 | `def self.included(base)` | Mixins only; see [Included hooks](#included-hooks) |
 | `module ClassMethods` | Mixins only; see [Class methods](#class-methods) |
 | nested `class` / `module` | Mixins only; collected as namespaced entries |
@@ -149,8 +150,8 @@ class configuration, and method definitions. Plugin macros use the primitives
 in this table to declare those members.
 
 The `forward` declaration generates a method that delegates a call. For example,
-`forward :load_ingredients, to: :load_relationship, with: ["ingredients"]`
-declares `load_ingredients` as a call to `load_relationship("ingredients")`.
+`forward :load_ingredients, to: :load_association, with: ["ingredients"]`
+declares `load_ingredients` as a call to `load_association("ingredients")`.
 Methods created with a `define_method` block in a macro are unsupported by the
 compiler.
 
