@@ -122,7 +122,7 @@ class MembersTable < Swill::Controller::SortableList
 end
 ```
 
-The table binds directly to a relationship:
+The table binds directly to an association:
 
 ```html
 <table controller="MembersTable" bind="mailing_list.members">
@@ -187,11 +187,11 @@ binds to `members.selected_object`. Those bindings do not depend on finding a
 table outlet. This costs one owned object and an explicit connection, and is
 worth it only when that separation is useful.
 
-## Relationship Convenience and Independent Views
+## Association Convenience and Independent Views
 
-A distant object's to-many relationship supplies a shared `ArrayController`
-through its `<name>_controller` accessor; see [relationship
-controllers](models.md#relationship-controllers) for what that controller
+A distant object's to-many association supplies a shared `ArrayController`
+through its `<name>_controller` accessor; see [association
+controllers](models.md#association-controllers) for what that controller
 caches and how long it lives.
 
 ```ruby
@@ -241,7 +241,7 @@ before its record arrives. Keyboard focus, scrolling, and row activation
 remain in `List`.
 
 `show_first(movie)` places the movie first and selects it without changing
-query or relationship membership. New content or explicit sorting clears that
+query or association membership. New content or explicit sorting clears that
 placement. Refreshing the same collection retains it; an application that
 needs to remove the temporary row can clear it with an explicit sort or
 replace the content. Local filters still apply to temporarily included rows.

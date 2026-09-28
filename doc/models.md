@@ -4,10 +4,10 @@ Swill makes it easy for you (or maybe just me!) to work with data from your
 web services.
 
 `Swill::Model` has two concrete subclasses, chosen by how the application
-reaches its data. `Swill::Model::Resource` fetches models and relationships
+reaches its data. `Swill::Model::Resource` fetches models and associations
 over JSON:API (or plain JSON). It keeps one instance per id, so a record
 fetched twice is the same object; saves, deletes and reloads a record against
-its endpoint; and loads `has_many` and `has_one` relationships from their own
+its endpoint; and loads `has_many` and `has_one` associations from their own
 URLs the first time they are read.
 
 `Swill::Model::DistantObject` is a sort of homeage to Distributed Objects in
@@ -47,16 +47,16 @@ end
 
 JSON:API is the default codec; `codec Swill::Model::PlainJSON` selects plain
 JSON. `find`, `fetch`, `find_all`, `where`, `fetch_all`, `save`, `delete`,
-`reload`, the dataset, the identity pool, and relationship loading are
-available on every `Resource`. An endpoint relationship has observable loading
+`reload`, the dataset, the identity pool, and association loading are
+available on every `Resource`. An endpoint association has observable loading
 and error properties and generated `load_<name>` and `reload_<name>` methods.
 
 ## Distant Objects
 
-The server declares which fields and relationships of a `Sequel::Model` belong
-in the client protocol with `client_model`; see [declaring the client
-surface](server_data.md#declaring-the-client-surface) for the declaration and
-its rules. `swill data generate` emits a client class like:
+A server model's distant interface declares which of its fields and
+associations the client sees; see [creating a distant
+interface](server_data.md#creating-a-distant-interface) for the declaration
+and its rules. `swill data generate` emits a client class like:
 
 ```ruby
 class Contact < Swill::Model::DistantObject
@@ -72,27 +72,27 @@ instance methods by default; `on: :class` generates a class method.
 Applications add browser-only behavior by reopening the generated class in a
 later handwritten source file.
 
-### Relationship Controllers
+### Association Controllers
 
-A to-many relationship generates a `<name>_controller` accessor, so
+A to-many association generates a `<name>_controller` accessor, so
 `mailing_list.members_controller` returns an `ArrayController` whose content
 is the `members` collection. The accessor lazily caches one default
-`ArrayController` per owner and relationship. Repeated access shares sort and
+`ArrayController` per owner and association. Repeated access shares sort and
 selection state, not only the data. Constructing it creates no DOM objects and
 fetches nothing.
 
 A view-owned controller should be retained by its owner and released with it.
-A model-cached relationship controller lives until the model disconnects or
+A model-cached association controller lives until the model disconnects or
 resets; it can outlive individual views. Reading `members_controller` does not
 fetch membership. Reading or observing its arrangement accesses the
-relationship and participates in normal loading. Invalidation releases
+association and participates in normal loading. Invalidation releases
 obsolete computation dependencies, and release ends the remaining
 observations. See [collections](collections.md) for sharing that controller
 between a table and other views.
 
 ### Collection State
 
-Invalidation from the server keeps a relationship collection and its rows:
+Invalidation from the server keeps an association collection and its rows:
 
 ```ruby
 posts = author.posts
@@ -100,24 +100,24 @@ posts.loaded?   # Has authoritative membership ever been received?
 posts.stale?    # Does that membership need refreshing?
 posts.loading?  # Is a load queued or in flight?
 posts.error     # Last load error, if any
-author.field_stale?(:posts) # Also available for to-one relationships
+author.field_stale?(:posts) # Also available for to-one associations
 ```
 
-A relationship observed directly or through an actively observed computed
+An association observed directly or through an actively observed computed
 property refreshes through the normal batched demand path. An unobserved
-relationship waits until it is accessed; reading a retained collection's
+association waits until it is accessed; reading a retained collection's
 records also counts as access. Releasing the observers ends that automatic
 demand. Loading and freshness are separate from availability: a refresh or a
 failure keeps `loaded?` true and keeps the previous contents. `load_field`
 refreshes stale fields; `reload_field` forces a refresh. An older response or
 load failure cannot clear a newer invalidation or replace newer state. See
 [effects on related objects](server_data.md#effects-on-related-objects) for
-how a server operation marks a relationship stale.
+how a remote method marks an association stale.
 
 ## Identity, Partial Fields, and Collections
 
 The compiled Ruby `DistantClient` keeps one canonical distant object for each
-`(model, id)`. Queries, relationships, resolvers, commands, hydration, and
+`(model, id)`. Queries, associations, resolvers, commands, hydration, and
 persistence patches all update that object. Per-field generations prevent
 older responses from replacing newer values, and a background patch leaves a
 locally dirty field alone.
@@ -131,14 +131,14 @@ fails, where a read of the field would remain nil.
 This loading behavior does not force all declared types to be nilable; see
 [types, loading, and authorization](server_data.md#types-and-authorization).
 
-A to-many relationship is a stable, read-only `RelationshipCollection`;
+A to-many association is a stable, read-only `AssociationCollection`;
 hydration replaces its records without replacing the collection. Many-valued
 queries return a loaded `ResultSet`. Both expose observable collection state
 and array-like reads.
 
-Generated relationship declarations preserve Sequel's association names and
-use `class:` for the destination. Relationships cannot be assigned or edited
-locally: use an exposed server operation to change them. Their `records` arrays
+Generated association declarations preserve Sequel's association names and
+use `class:` for the destination. Associations cannot be assigned or edited
+locally: a command changes them. Their `records` arrays
 are frozen snapshots of membership, not frozen model objects. Query result
 collections are editable. Collection loading and error state follow the
 owner's field state, including failures, retries, and resets.
@@ -146,7 +146,7 @@ owner's field state, including failures, retries, and resets.
 ## Distant Editing and Lifecycle
 
 Distant objects support authoritative create, update, and delete. `save` sends
-only dirty fields declared writable by `client_model`. An id-less object is
+only dirty fields the distant interface declares writable. An id-less object is
 created and becomes the canonical instance when the server assigns its ID.
 An existing object is updated. The server validates the message and runs
 Sequel setters, validation, and hooks; when sequel-privacy is loaded, its
@@ -174,6 +174,6 @@ canonical store, cached values remain readable by existing bindings, and
 future persistence or hydration is rejected. Older in-flight responses cannot
 resurrect it.
 
-Named commands are the interface for domain mutations and relationships.
+Named commands are the interface for domain mutations and associations.
 Generic lifecycle persistence is limited to the declared writable scalar
 fields.

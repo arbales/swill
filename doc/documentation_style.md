@@ -21,6 +21,15 @@ attribute, each linking to the guide for its mechanism.
 Each guide has a row in the README's index, titled by its own heading, with a
 description of what it covers.
 
+### Opening a Guide
+
+The first paragraph says what the system does for the application, in one
+sentence, and may name what it removes the need for: "bridging your
+server-side objects to your browser client without individual endpoints,
+serializers or other ceremony." The second paragraph says what the guide
+covers. The third says where the rest of the subject lives. An opening may
+address the reader as *you*; the body returns to the third person.
+
 ## Voice
 
 Descriptions are declarative, in the third person and the present tense, for a
@@ -93,6 +102,11 @@ are deliberate and stay as written. They may be rewrapped; their words may not.
 - One paragraph, one thing, in the order a reader meets them: what the thing
   is, how it is declared, what happens to it at launch, what the API does
   with it later.
+- A subsystem with several parts gets a proper name — Distant Objects — used
+  as its H2 and in the vocabulary table. Its parts are introduced in one
+  list, each a bold noun with an article: "A **server model** is…", then what
+  it is, what it does for the application, and, where true, what the
+  application need not do to adopt it.
 - A rule with several cases is a table, as in [Markup](markup.md#bind-).
 - Prose is wrapped at 80 columns, with no trailing whitespace. Code blocks and
   tables are exempt.
@@ -273,8 +287,13 @@ set, insert, remove, invoke, select, discard. Name the connection: outlets are
 connected, bindings are established, action handlers are installed.
 
 A word in the "Not" column that is another layer's own term keeps that
-meaning there: the data layer *hydrates* a partial field, and its guides say
+meaning there: Distant Objects *hydrates* a partial field, and its guides say
 so; turning markup into objects is *awaken*.
+
+Where the host library or the design's ancestry has a word, it is the word:
+Sequel's *association*, and Distributed Objects' *connection* and *distant*.
+"The loaded models" are the loaded models; "every loaded model with…" says
+nothing more.
 
 | Use | For | Not |
 | --- | --- | --- |
@@ -291,3 +310,10 @@ so; turning markup into objects is *awaken*.
 | arranged content | the content after sorting and filtering, in display order | sorted items, rows |
 | selection | the objects chosen within the arranged content | current item |
 | represented object | the object a controller presents | model, record |
+| Distant Objects | the system that presents server models in the browser | the data layer |
+| distant interface | the module declaring what a model provides to clients | bridge, client model, declaration |
+| association | a model's link to other models, as Sequel names it | relationship |
+| remote method | a query, resolver or command a distant interface exports | operation |
+| connection | the Rack application a browser's WebSocket reaches | endpoint |
+| extension | the generated file where an application extends a client model | stub |
+| viewer context | what an operation runs under, as sequel-privacy names it | user, scope |

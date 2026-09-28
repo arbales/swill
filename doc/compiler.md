@@ -149,8 +149,8 @@ class configuration, and method definitions. Plugin macros use the primitives
 in this table to declare those members.
 
 The `forward` declaration generates a method that delegates a call. For example,
-`forward :load_ingredients, to: :load_relationship, with: ["ingredients"]`
-declares `load_ingredients` as a call to `load_relationship("ingredients")`.
+`forward :load_ingredients, to: :load_association, with: ["ingredients"]`
+declares `load_ingredients` as a call to `load_association("ingredients")`.
 Methods created with a `define_method` block in a macro are unsupported by the
 compiler.
 
