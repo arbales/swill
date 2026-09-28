@@ -83,6 +83,7 @@ try {
   ({sessionId} = await call("Target.attachToTarget", {targetId, flatten: true}));
   await call("Runtime.enable");
   await call("Page.enable");
+  await call("Emulation.setDeviceMetricsOverride", {width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false});
   await call("Page.navigate", {url: page});
   await loaded();
 
@@ -203,12 +204,61 @@ try {
   assert.ok(Math.abs(widened - (width + 120)) <= 4, `the pane widened from ${width} to ${widened}`);
   assert.ok(Math.abs(taller - (height + 60)) <= 4, `the file index grew from ${height} to ${taller}`);
 
+  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "true", "resizing does not collapse the section");
+
+  for (const name of ["file-index", "method-index"]) {
+    const headerTop = await evaluate(`document.querySelector('[data-section="${name}"]').getBoundingClientRect().top`);
+    await drag(`[data-section="${name}"]`, 0, 0);
+    assert.equal(await evaluate(`document.querySelector(".${name}").getBoundingClientRect().height`), 0);
+    if (name === "file-index") {
+      assert.equal(await evaluate(`document.querySelector('[data-section="file-index"]').getBoundingClientRect().top`), headerTop, "the top section collapses upward into its heading");
+    } else {
+      assert.equal(await evaluate(`(() => {
+        const header = document.querySelector('[data-section="method-index"]').closest("header");
+        return header.getBoundingClientRect().bottom === document.querySelector(".navigator").getBoundingClientRect().bottom;
+      })()`), true, "the bottom section collapses downward to the foot of the sidebar");
+    }
+    await evaluate(`document.querySelector('[data-section="${name}"]').focus()`);
+    await press(" ", "Space", 32, " ");
+    assert.equal(await evaluate(`document.querySelector('[data-section="${name}"]').getAttribute("aria-expanded")`), "true", "Space reopens a focused section");
+  }
+  assert.equal(await evaluate(`[...document.querySelectorAll(".navigator .pane-header:not(.search)")].every(header => getComputedStyle(header).borderTopWidth === "1px")`), true);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector(".search")).borderTopWidth`), "0px");
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector(".search-field")).padding`), "6px");
+
+  // Each index keeps its scroll position, including a section closed during navigation.
+  const scrollPositions = () => evaluate(`[...document.querySelectorAll(".navigator .index")].map(list => list.scrollTop)`);
+  await evaluate(`[...document.querySelectorAll(".navigator .index")].forEach((list, i) => list.scrollTop = 80 + i * 100)`);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const scrolled = await scrollPositions();
+  assert.ok(scrolled.every(position => position > 0), "all three indexes scroll");
+  await drag('[data-section="class-index"]', 0, 0);
+  assert.equal(await evaluate(`document.querySelector(".class-index").getBoundingClientRect().height`), 0);
+  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "false");
+
   // The sizes carry to the next page.
   await call("Page.navigate", {url: pathToFileURL(resolve(root, "rdoc/Swill/View.html")).href});
   await new Promise(resolve => setTimeout(resolve, 300));
   await loaded();
   const [kept, keptHeight] = await sizes();
   assert.ok(Math.abs(kept - widened) <= 1 && Math.abs(keptHeight - taller) <= 1, "the layout is remembered");
+  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "false", "collapsed sections stay closed across pages");
+  await evaluate(`document.querySelector('[data-section="class-index"]').focus()`);
+  await press("Enter", "Enter", 13, "\r");
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "true", "Enter opens a focused section");
+  assert.deepEqual(await scrollPositions(), scrolled, "each index restores its scroll position");
+
+  await press("~", "Backquote", 192, "~");
+  await evaluate(`(() => {
+    const input = document.querySelector(".search input");
+    input.value = "binding_root";
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+  })()`);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  await press("Escape", "Escape", 27);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(await scrollPositions(), scrolled, "clearing search restores the index positions");
   await evaluate(`localStorage.removeItem("swill-doc-layout")`);
 
   // The language switch re-spells the page and the indexes, and the choice

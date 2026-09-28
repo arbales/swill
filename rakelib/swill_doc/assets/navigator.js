@@ -15,7 +15,8 @@
 // the query and leaves the search.
 //
 // The pane's width and the first two indexes' heights can be dragged, and are
-// remembered from page to page, as is whether the implementation is open.
+// remembered from page to page, along with each index’s scroll position and
+// whether its section is open. Click a section heading to open or close it.
 //
 // The language switch chooses whether pages read as Ruby or as JavaScript; the
 // choice is remembered, and the indexes follow it.
@@ -48,17 +49,32 @@
   const draggable = (handle, begin, resize, done) => {
     const down = event => {
       if (event.button !== 0) return;
-      event.preventDefault();
-      handle.setPointerCapture(event.pointerId);
-      begin();
-      const move = moved => resize(moved.clientX - event.clientX, moved.clientY - event.clientY);
-      const up = () => {
-        handle.removeEventListener("pointermove", move);
-        handle.removeEventListener("pointerup", up);
-        done();
+      let dragging = false;
+      const move = moved => {
+        const dx = moved.clientX - event.clientX;
+        const dy = moved.clientY - event.clientY;
+        if (!dragging) {
+          if (Math.hypot(dx, dy) < 4 || begin() === false) return;
+          dragging = true;
+          handle.setPointerCapture(event.pointerId);
+        }
+        moved.preventDefault();
+        resize(dx, dy);
       };
-      handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", up);
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        if (dragging) {
+          const suppress = click => { click.preventDefault(); click.stopPropagation(); };
+          handle.addEventListener("click", suppress, {capture: true, once: true});
+          setTimeout(() => handle.removeEventListener("click", suppress, true), 0);
+          done();
+        }
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
     };
     handle.addEventListener("pointerdown", down);
     return () => handle.removeEventListener("pointerdown", down);
@@ -99,7 +115,10 @@
       this.cursor = -1;
       try { this.internalOpen = localStorage.getItem(internalKey) === "open"; } catch { /* private browsing */ }
       this.language = currentLanguage();
-      this.observe("query", () => this.select(-1));
+      this.observe("query", () => {
+        this.select(-1);
+        requestAnimationFrame(() => this.restoreScroll?.());
+      });
       this.observeNotification("language_did_change", notification => {
         this.language = notification.userInfo;
       });
@@ -121,6 +140,43 @@
         }
       };
       apply();
+      layout.scroll ??= {};
+      layout.collapsed ??= {};
+      const sections = [...pane.querySelectorAll("[data-section]")].map(button => ({
+        button, name: button.dataset.section, list: pane.querySelector(`#${button.dataset.section}`)
+      }));
+      const listen = (element, type, callback) => {
+        element.addEventListener(type, callback);
+        this.retain(() => element.removeEventListener(type, callback));
+      };
+      this.restoreScroll = () => {
+        if (this.query.trim()) return;
+        for (const {name, list} of sections) {
+          if (!list.hasAttribute("data-collapsed")) list.scrollTop = layout.scroll[name] ?? 0;
+        }
+      };
+      for (const {button, name, list} of sections) {
+        const collapse = () => {
+          const closed = !!layout.collapsed[name];
+          list.toggleAttribute("data-collapsed", closed);
+          button.setAttribute("aria-expanded", String(!closed));
+        };
+        collapse();
+        listen(list, "scroll", () => {
+          if (this.query.trim() || list.hidden || list.hasAttribute("data-collapsed")) return;
+          layout.scroll[name] = list.scrollTop;
+          storeLayout(layout);
+        });
+        listen(button, "click", () => {
+          layout.collapsed[name] = !layout.collapsed[name];
+          collapse();
+          this.select(-1);
+          this.restoreScroll();
+          storeLayout(layout);
+        });
+      }
+      this.restoreScroll();
+      document.fonts.ready.then(() => this.restoreScroll());
       let start = 0;
       this.retain(draggable(pane.querySelector(".width-handle"),
         () => { start = pane.getBoundingClientRect().width; },
@@ -133,7 +189,10 @@
         const name = header.dataset.resizes;
         const list = pane.querySelector(`.${name}`);
         this.retain(draggable(header,
-          () => { start = list.getBoundingClientRect().height; },
+          () => {
+            if (list.hidden || list.hasAttribute("data-collapsed")) return false;
+            start = list.getBoundingClientRect().height;
+          },
           (_dx, dy) => {
             layout[name] = Math.round(Math.max(40, start + dy));
             apply();
@@ -149,7 +208,9 @@
 
     // Every result, in the order the lists show them.
     results() {
-      return [this.fileList, this.classList, this.methodList].flatMap(list =>
+      return [this.fileList, this.classList, this.methodList]
+        .filter(list => !list.view.element.hasAttribute("data-collapsed"))
+        .flatMap(list =>
         list.arrangedObjects().map((entry, index) => ({list, index, entry})));
     }
 
@@ -166,6 +227,7 @@
     }
 
     keyDown(event) {
+      if (event.target?.closest?.(".section-toggle")) return;
       const step = {ArrowDown: 1, ArrowUp: -1}[event.key];
       if (!step) return super.keyDown(event);
       event.preventDefault();
@@ -176,7 +238,10 @@
     // Enter opens the selected result, or the first, preferring a class to a
     // method to a file.
     insertNewline(event) {
-      const chosen = this.results()[this.cursor]?.entry ?? this.classes[0] ?? this.methods[0] ?? this.files[0];
+      if (event.target?.closest?.(".section-toggle")) return;
+      const results = this.results();
+      const chosen = (results[this.cursor] ?? results.find(result => result.list === this.classList) ??
+        results.find(result => result.list === this.methodList) ?? results[0])?.entry;
       if (!chosen) return;
       event.preventDefault();
       if (chosen.group) this.toggleInternal();
@@ -217,7 +282,7 @@
   // ~ anywhere outside a field moves to the search.
   class DocApplication extends Swill.Application {
     keyDown(event) {
-      if (event.key === "~" && !typing(event.target)) {
+      if ((event.key === "`" || event.key === "~") && !typing(event.target)) {
         const navigator = this.controllers.find(controller => controller instanceof DocNavigator);
         if (navigator) {
           event.preventDefault();

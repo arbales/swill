@@ -29,6 +29,28 @@ function launched(body) {
 const Bindings = swill.Swill__Connections__Bindings;
 const Actions = swill.Swill__Connections__Actions;
 
+test("binding destination factories return shared instances of the namespaced classes", () => {
+  const Destination = Runtime.resolve("Swill::BindingDestination");
+  const cases = [
+    ["Text", () => Destination.forElement({tagName: "SPAN"})],
+    ["Field", () => Destination.forElement({tagName: "INPUT", type: "text"})],
+    ["Field", () => Destination.forElement({tagName: "TEXTAREA"})],
+    ["Select", () => Destination.forElement({tagName: "SELECT"})],
+    ["Checkbox", () => Destination.forElement({tagName: "INPUT", type: "checkbox"})],
+    ["ElementProperty", () => Destination.elementProperty()],
+    ["ObjectProperty", () => Destination.objectProperty()]
+  ];
+  for (const [name, create] of cases) {
+    const destination = create();
+    assert.ok(destination instanceof Runtime.resolve(`Swill::BindingDestination::${name}`), name);
+    assert.ok(destination instanceof Destination);
+    assert.equal(create(), destination, `${name} is shared`);
+  }
+  const Field = Runtime.resolve("Swill::BindingDestination::Field");
+  assert.ok(Destination.forElement({tagName: "SELECT"}) instanceof Field);
+  assert.ok(Destination.forElement({tagName: "INPUT", type: "checkbox"}) instanceof Field);
+});
+
 test("real Attributes concern builds isolated inherited registries", () => {
   const Base = Runtime.resolve("Swill::Model::Base");
   const result = {

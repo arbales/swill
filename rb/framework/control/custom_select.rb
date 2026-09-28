@@ -2,25 +2,50 @@
 # frozen_string_literal: true
 
 module Swill
-  # A stylable select: a button showing the chosen option and a listbox of
-  # the rest, built inside the element it is given. Options are hashes with
-  # "value" and "label", and optionally "description" and "icon". value
-  # follows the choice; a user's choice also dispatches input and change on
-  # the element, as a native select would. Enter and Space toggle the
-  # listbox, arrows move within it, Escape closes it, and so does focus or a
-  # pointer leaving the control.
+  # `Control::CustomSelect` presents a choice with a button and a popup list
+  # of options. An option has a value and label, and can include a description
+  # and icon. The control builds its contents from the custom select template.
+  #
+  #     <div klass="Swill::Control::CustomSelect" bind="selected_person"
+  #          aria-label="Person"></div>
+  #
+  # See [Controls](rdoc-ref:doc/controls.md) for options, value bindings, and
+  # keyboard behavior.
   class Control::CustomSelect < Control
     extend T::Sig
 
+    # :section: Configuring the Choice
+    # Options, selection, and the elements supplied by the template.
+
+    # The option hashes, with "value" and "label" entries and optional
+    # "description" and "icon" entries. Values are compared as strings.
+    # Assigning the array rebuilds the list and preserves `value`.
+    # The default is [].
     property :options, type: T::Array[T::Hash[String, T.untyped]], default: []
+    # The chosen option's value as a string. Assignment updates the label,
+    # icon, and selected state without dispatching input or change events.
+    # An unmatched value leaves the button label empty. The default is "".
+    # See `#selected_option` and `#choose`.
     property :value, type: String, default: ""
 
+    # The view wrapping the button that opens and closes the popup.
+    # Connected during template loading; nil before it is connected.
     outlet :button, type: View
+    # The view displaying the selected option's icon in the button.
+    # Connected during template loading; nil before it is connected.
     outlet :icon, type: View
+    # The view displaying the selected option's label in the button.
+    # Connected during template loading; nil before it is connected.
     outlet :label, type: View
+    # The view containing the option list. Connected during template loading;
+    # nil before it is connected. See `#open` and `#close`.
     outlet :popup, type: View
+    # The template cloned for each option. Connected during template loading;
+    # nil before it is connected.
     outlet :option_template, type: HTMLTemplateElement
 
+    # Creates the control, loads its template, and installs its event handlers.
+    # The popup is initially closed.
     sig { params(element: Element).void }
     def initialize(element)
       super
@@ -34,21 +59,26 @@ module Swill
       apply_open(false)
     end
 
-    # Called by KVO when the options have changed, rerenders the options.
+    # :section: Handling Changes and Events
+    # Responding to property changes, keys, and pointer events.
+
+    # Invoked after `options` changes to rebuild the popup and update the
+    # button. An override should call `super` to preserve rendering.
     sig { params(_previous: T.untyped, _options: T.untyped).void }
     def options_did_change(_previous, _options)
       render_options
     end
 
-    # Called when the value of the control changes,
-    # updating the button and selection state of the control.
+    # Invoked after `value` changes to update the button and selected option.
+    # An override should call `super` to preserve these updates.
     sig { params(_previous: T.untyped, _value: String).void }
     def value_did_change(_previous, _value)
       sync_button
       sync_selected_option
     end
 
-    # Called when a user presses Escape, closing the control.
+    # Invoked for Escape. Closes an open popup and prevents the default event
+    # behavior. With the popup closed, passes the event to `super`.
     sig { override.params(event: KeyboardEvent).void }
     def cancel_operation(event)
       return super unless @open
@@ -56,7 +86,10 @@ module Swill
       close
     end
 
-    # Called when the user types, handling arrow keys and Enter.
+    # Invoked for a key event. Enter and Space toggle the popup. Up and Down
+    # choose the adjacent option while the popup is open; choosing closes it.
+    # Other keys pass to `super`. An override should pass unhandled keys to
+    # `super`.
     sig { override.params(event: KeyboardEvent).void }
     def key_down(event)
       case event.key
@@ -74,6 +107,9 @@ module Swill
       end
     end
 
+    # Loads the custom select template and configures the root as a focusable
+    # combobox. Installs handlers for closing the popup when focus or a pointer
+    # press moves outside the control. Called during construction.
     sig { void }
     def install_chrome
       root = @element
@@ -87,23 +123,32 @@ module Swill
       retain(-> { root.ownerDocument.removeEventListener("pointerdown", @document_pointer_down) })
     end
 
-    # Called when a user clicks on the button to open or close the control.
+    # Toggles the popup for a pointer click. Ignores clicks with event detail
+    # zero; keyboard activation is handled by `#key_down`.
     sig { params(_sender: T.untyped, event: MouseEvent).void }
     def button_clicked(_sender, event)
       toggle unless event.detail == 0
     end
 
+    # Closes the popup when focus leaves the control or has no next element.
     sig { params(event: Event).void }
     def focus_out(event)
       next_element = event.relatedTarget
       close if next_element == nil || !@element.contains(next_element)
     end
 
+    # Closes the popup when the pointer press occurs outside the control.
     sig { params(event: Event).void }
     def document_pointer_down(event)
       close unless @element.contains(event.target)
     end
 
+    # :section: Presenting Options
+    # Displaying labels, icons, descriptions, and selected state.
+
+    # Rebuilds the option rows and updates the button and selected state.
+    # An icon name adds the class "icon-name". A nil description or icon hides
+    # its corresponding element.
     sig { void }
     def render_options
       container = T.must(popup).element
@@ -124,18 +169,23 @@ module Swill
       sync_selected_option
     end
 
+    # Chooses the value of the clicked option within the popup.
+    # Clicks outside an option leave the value unchanged. See `#choose`.
     sig { params(event: Event).void }
     def option_clicked(event)
       row = event.target.closest("[role='option']")
       choose(T.must(Swell[row].data_value("value"))) if row && T.must(popup).element.contains(row)
     end
 
-    # Returns the currently selected option or nil if nothing is selected.
+    # Returns the first option whose string value equals `value`, or nil
+    # when none matches.
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
     def selected_option
       options.find { |option| option_value(option) == value }
     end
 
+    # Updates the button label and icon from `#selected_option`. With no
+    # matching option, clears the label and hides the icon.
     sig { void }
     def sync_button
       option = selected_option
@@ -146,6 +196,7 @@ module Swill
       T.must(label).element.textContent = option ? option["label"].to_s : ""
     end
 
+    # Updates aria-selected on each option row according to `value`.
     sig { void }
     def sync_selected_option
       T.must(popup).element.querySelectorAll("[role='option']").forEach(->(row) do
@@ -154,23 +205,31 @@ module Swill
       end)
     end
 
-    # ---- open and closed ----
+    # :section: Opening and Choosing
+    # Controlling popup visibility and choosing a value.
 
+    # Opens a closed popup or closes an open popup. See `#open` and `#close`.
     sig { void }
     def toggle
       @open ? close : open
     end
 
+    # Opens the popup and begins listening for pointer presses outside the
+    # control. Does nothing when already open. See `#close`.
     sig { void }
     def open
       apply_open(true) unless @open
     end
 
+    # Closes the popup and stops listening for outside pointer presses.
+    # Does nothing when already closed. See `#open`.
     sig { void }
     def close
       apply_open(false) if @open
     end
 
+    # Sets popup visibility, the root's open class, and expanded attributes
+    # from `open`. Updates the document listener for outside pointer presses.
     sig { params(open: T::Boolean).void }
     def apply_open(open)
       @open = open
@@ -185,6 +244,9 @@ module Swill
       end
     end
 
+    # Chooses the option `delta` positions from the current selection,
+    # wrapping at either end. Chooses the first option when no value matches,
+    # and does nothing when there are no options. See `#choose`.
     sig { params(delta: Integer).void }
     def move_selection(delta)
       return if options.empty?
@@ -194,7 +256,10 @@ module Swill
       choose(option_value(T.must(options[index])))
     end
 
-    # A user's choice: the value, then the events a native select sends.
+    # Closes the popup and assigns `next_value`. If the value changes,
+    # dispatches bubbling input and change events. Accepts a string even when
+    # no option matches; assign `value` directly to update selection without
+    # dispatching DOM events.
     sig { params(next_value: String).void }
     def choose(next_value)
       close
@@ -204,6 +269,8 @@ module Swill
       @element.dispatchEvent(Event.new("change", {bubbles: true}))
     end
 
+    # Returns the string form of the option's "value" entry, or an empty
+    # string when it is nil.
     sig { params(option: T::Hash[String, T.untyped]).returns(String) }
     def option_value(option)
       option["value"].to_s
