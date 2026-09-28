@@ -129,7 +129,7 @@ hydration request. `await post.load_field(:body)` rejects when the load
 fails, where a read of the field would remain nil.
 
 This loading behavior does not force all declared types to be nilable; see
-[types, loading, and authorization](server_data.md#types-loading-and-authorization).
+[types, loading, and authorization](server_data.md#types-and-authorization).
 
 A to-many relationship is a stable, read-only `RelationshipCollection`;
 hydration replaces its records without replacing the collection. Many-valued
