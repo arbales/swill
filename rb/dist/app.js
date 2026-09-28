@@ -1190,20 +1190,58 @@
               return {};
             }
           },
-          "selection_state": {
-            js: "selectionState",
-            type: "T::Hash[String, T.untyped]",
-            attribute: false,
-            defaultValue() {
-              return {};
-            }
-          },
           "arranged_content": {
             js: "arrangedContent",
             type: "T::Array[T.untyped]",
             attribute: false,
             compute: function compute_arrangedContent() {
               return this.arrangeContent();
+            }
+          },
+          "sort_key": {
+            js: "sortKey",
+            type: "T.nilable(String)",
+            attribute: false,
+            writer: "changeSortKey",
+            compute: function compute_sortKey() {
+              let controller = this.arrayController;
+              return controller ? controller.sortKey : Runtime.cast(
+                Runtime.logicalOr(this.arrangementOptions.key, () => null),
+                "T.nilable(String)"
+              );
+            }
+          },
+          "sort_direction": {
+            js: "sortDirection",
+            type: "String",
+            attribute: false,
+            writer: "changeSortDirection",
+            compute: function compute_sortDirection() {
+              let controller = this.arrayController;
+              return controller ? controller.sortDirection : Runtime.cast(
+                Runtime.logicalOr(
+                  this.arrangementOptions.direction,
+                  () => "ascending"
+                ),
+                "String"
+              );
+            }
+          },
+          "sort_states": {
+            js: "sortStates",
+            type: "T::Hash[String, String]",
+            attribute: false,
+            compute: function compute_sortStates() {
+              let key = this.sortKey;
+              return key != null ? { [key]: this.sortDirection } : {};
+            }
+          },
+          "selection_state": {
+            js: "selectionState",
+            type: "T::Hash[String, T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return {};
             }
           },
           "selected_objects": {
@@ -1247,44 +1285,6 @@
                 if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
-            }
-          },
-          "sort_key": {
-            js: "sortKey",
-            type: "T.nilable(String)",
-            attribute: false,
-            writer: "changeSortKey",
-            compute: function compute_sortKey() {
-              let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime.cast(
-                Runtime.logicalOr(this.arrangementOptions.key, () => null),
-                "T.nilable(String)"
-              );
-            }
-          },
-          "sort_direction": {
-            js: "sortDirection",
-            type: "String",
-            attribute: false,
-            writer: "changeSortDirection",
-            compute: function compute_sortDirection() {
-              let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime.cast(
-                Runtime.logicalOr(
-                  this.arrangementOptions.direction,
-                  () => "ascending"
-                ),
-                "String"
-              );
-            }
-          },
-          "sort_states": {
-            js: "sortStates",
-            type: "T::Hash[String, String]",
-            attribute: false,
-            compute: function compute_sortStates() {
-              let key = this.sortKey;
-              return key != null ? { [key]: this.sortDirection } : {};
             }
           },
           "filter_text": {

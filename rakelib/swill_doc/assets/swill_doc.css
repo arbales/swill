@@ -382,6 +382,36 @@ html[data-language="javascript"] .class-index li[data-internal] { padding-left: 
 .property-description { font-weight: 400; }
 .property-description p { margin: 0; }
 
+/* Topic: a :section: of the class, with its own title and description. */
+.topic { display: flex; flex-direction: column; gap: 12px; }
+.topic-title {
+  margin: 24px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--black);
+  font: 500 22px/normal var(--serif);
+}
+.topic-description p { margin: 0; }
+/* The topic's rule already divides; the kind labels within it need none. */
+.topic .section-title { padding-top: 0; border-top: 0; }
+.topic-title + .section-title,
+.topic-description + .section-title { margin-top: 0; }
+
+/* `.` or `#` before a member's name, as the method index spells it. */
+/* Screened back from the name's own color: black, white, or link blue. */
+.member-prefix { color: inherit; opacity: 0.5; font-weight: 400; }
+.page-index .pane-header a { color: inherit; }
+
+/* Included from: a module's members, by name. */
+.included-members {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.included-members dt { color: var(--half-grey); }
+.included-members dd { margin: 0; font: 400 15px/normal var(--mono); }
+.included-members a { text-decoration: underline dotted; text-underline-position: from-font; }
+
 /* Method cards. */
 .method {
   width: 100%;

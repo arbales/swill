@@ -91,7 +91,7 @@ module SwillDoc
           h(method.params || "()")
         end
       returns = signature ? type_html(signature.returns, method.parent) : h("unknown")
-      %(<span class="signature-name">#{h method.name}</span>) +
+      %(#{member_prefix(method)}<span class="signature-name">#{h method.name}</span>) +
         %(<span class="signature-params">#{params}</span>) +
         %( <span class="signature-returns">→ #{returns}</span>)
     end
@@ -216,6 +216,12 @@ module SwillDoc
       @store.all_classes.select { |candidate| superclass_of(candidate) == klass }.sort_by(&:full_name)
     end
 
+    # The classes and modules that include a module directly.
+    def includers(mod)
+      @store.all_classes_and_modules.select { |candidate| candidate.includes.any? { |included| included.module == mod } }
+            .sort_by(&:full_name)
+    end
+
     def constant_value(constant)
       lines = constant.value.to_s.lines
       shown = lines.first(CONSTANT_LINES).join.chomp
@@ -234,6 +240,85 @@ module SwillDoc
 
     def plain_attributes(klass)
       klass.attributes.reject { |attribute| attribute.is_a?(SwillRDoc::Declaration) }
+    end
+
+    # A class's members by `:section:`, in source order: the untitled section
+    # first, then each titled one where its first member appears. Within a
+    # section, members are grouped by kind; a section with no public members
+    # is left out.
+    def member_sections(klass)
+      kinds = [
+        ["Properties", :declaration, declarations(klass, false)],
+        ["Outlets", :declaration, declarations(klass, true)],
+        ["Attributes", :attribute, plain_attributes(klass)],
+        ["Public class methods", "class-method", public_methods(klass, true)],
+        ["Public instance methods", "instance-method", public_methods(klass, false)]
+      ]
+      sections = klass.sort_sections.filter_map do |section|
+        groups = kinds.map do |title, kind, list|
+          members = list.select { |member| member.section == section }
+          # A titled section keeps its source order, which is the order the
+          # comment was written to read in; the untitled one is alphabetical.
+          members = members.sort_by { |member| member.line || 0 } if section.title
+          [title, kind, members]
+        end.reject { |_, _, list| list.empty? }
+        [section, groups] unless groups.empty?
+      end
+      sections.sort_by do |section, groups|
+        [section.title ? 1 : 0, groups.flat_map { |_, _, list| list.map { |member| member.line || 0 } }.min]
+      end
+    end
+
+    # The page's index: the untitled section by kind, then one entry list per
+    # titled section, each linking to its heading.
+    def page_index(sections)
+      sections.flat_map do |section, groups|
+        next groups.map { |title, _, list| [title, nil, list] } unless section.title
+        [[section.title, section.aref, groups.flat_map { |_, _, list| list }]]
+      end
+    end
+
+    # Ruby's spelling of a member's kind: `.` for a class method, `#` for an
+    # instance method, property or attribute.
+    def member_prefix(member)
+      singleton = member.is_a?(RDoc::AnyMethod) && member.singleton
+      %(<span class="member-prefix">#{singleton ? '.' : '#'}</span>)
+    end
+
+    # An index entry: prefix and name, in both spellings.
+    def index_entry_html(klass, entry)
+      javascript = if !compiled?(klass) then nil
+                   elsif entry.is_a?(RDoc::AnyMethod) then javascript_member(entry.name)
+                   else javascript_property(klass, entry.name)
+                   end
+      member_prefix(entry) + spelled(h(entry.name), javascript && h(javascript))
+    end
+
+    # The documented modules a class includes, and those they include in turn,
+    # nearest first. A module not in the store, such as T::Sig, is left out.
+    def included_modules(klass, seen = [])
+      klass.includes.each do |included|
+        mod = included.module
+        next unless mod.is_a?(RDoc::ClassModule) && !seen.include?(mod)
+        seen << mod
+        included_modules(mod, seen)
+      end
+      seen
+    end
+
+    # What an included module adds, as YARD lists it: names only, each linked
+    # to its entry on the module's page.
+    def included_members(mod)
+      [["Properties", declarations(mod, false)], ["Outlets", declarations(mod, true)],
+       ["Methods", public_methods(mod, false)]].reject { |_, list| list.empty? }
+    end
+
+    def member_link(mod, member)
+      javascript = if !compiled?(mod) then nil
+                   elsif member.is_a?(RDoc::AnyMethod) then javascript_member(member.name)
+                   else javascript_property(mod, member.name)
+                   end
+      %(<a href="#{h href_to(mod)}##{h member.aref}">#{spelled(h(member.name), javascript && h(javascript))}</a>)
     end
   end
 end

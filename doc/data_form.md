@@ -5,9 +5,11 @@ It uses plain Sequel, explicit non-nilable fields, and an anonymous local data
 scope. An authenticated application supplies its own authentication callback
 as described in [server data](server_data.md#connecting).
 
-## Dependencies and database
+## Dependencies and Database
 
-Use Ruby 3.2+ and `esbuild` on PATH. Add these gems and run `bundle install`:
+Use Ruby 3.2+ and `esbuild` on PATH. The Gemfile adds the data server's gems
+to the two lines required to [install Swill as a
+gem](getting_started.md#installing-as-a-gem); run `bundle install`:
 
 ```ruby
 source "https://rubygems.org"
@@ -31,7 +33,7 @@ DB.create_table?(:notes) do
 end
 ```
 
-## Server declaration and endpoint
+## Server Declaration and Endpoint
 
 ```ruby
 # server.rb — generation loads this too, so do not start a server here.
@@ -72,7 +74,7 @@ map "/" do
 end
 ```
 
-## Client and bindings
+## Client and Bindings
 
 ```ruby
 # client/app.rb
@@ -135,14 +137,15 @@ end
 </html>
 ```
 
-`Editor` makes the represented object the default binding root. The title
-input edits that object directly; `@message` and `@saving` bind to the
-controller. Saving sends writable dirty fields and runs Sequel validation.
-A failed save leaves the input intact and displays the error. This example
-shows a summary; automatic per-field validation presentation is not yet part
-of the form API.
+`Editor` makes the represented object the [binding
+root](bindings.md#binding-roots), so the title input edits that object
+directly while `@message` and `@saving` bind to the controller; a table of
+notes would use a list from [collections](collections.md). Saving sends the
+writable dirty fields and runs Sequel validation. A failed save leaves the
+input intact and displays the error. This example shows a summary; the form
+API has no automatic per-field validation presentation.
 
-## Build and run
+## Build and Run
 
 ```yaml
 # swill.yml
@@ -151,14 +154,15 @@ client: client/app.rb
 out: public/assets/app.js
 ```
 
-Run `bundle exec swill build`, then start `bundle exec falcon serve` manually
-and open the address it reports. In another terminal, `bundle exec swill watch`
-rebuilds after edits. Reload the page after a build, and restart the server
-after server declaration changes. Blank titles demonstrate server validation;
-nonblank titles create records.
+Run `bundle exec swill build`, then `bundle exec falcon serve` and open the
+address it reports; the [project workflow](getting_started.md#project-workflow)
+describes the build and does not manage the server. In another terminal,
+`bundle exec swill watch` rebuilds after edits. Reload the page after a build,
+and restart the server after server declaration changes. A blank title fails
+server validation; a nonblank title creates a record.
 
-The project workflow generates proxies before compiling and copies the
-framework alongside the app. `bundle exec swill data check server.rb` verifies
-generated data artifacts in CI. To typecheck, install Sorbet, then run
-`bundle exec srb tc` from `client/` after building. Keep this generated client
-typecheck separate from any server Sorbet configuration.
+`bundle exec swill data check server.rb` verifies generated data artifacts in
+CI. To typecheck, install Sorbet, then run `bundle exec srb tc` from `client/`
+after building, keeping this generated client typecheck separate from any
+server Sorbet configuration; see [typing an
+application](sorbet.md#typing-an-application).

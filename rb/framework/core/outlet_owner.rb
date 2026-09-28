@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 module Swill
-  # Named connections owned by an application or controller.
+  # Named connections owned by an application, controller, or control.
   module OutletOwner
     extend T::Sig
 
@@ -14,15 +14,18 @@ module Swill
     module ClassMethods
       extend Swill::Declarations
 
-      # Connected at launch/awakening; nil until then, even when required.
+      # Declares a property connected at launch/awakening to the element in
+      # the owner's region with a matching `outlet` attribute. It holds nil
+      # until then; a missing element raises unless `optional:` is true.
       macro def outlet(name, type:, optional: false, &computed)
         property name, type: Swill::Runtime.optional_type(type), default: nil,
                        outlet: true, optional: optional, &computed
       end
     end
 
-    # Coercion hook for JSON outlets: turn parsed data into value objects
-    # before the outlet is assigned. nil means the script was empty.
+    # Returns the value to assign to JSON outlet `name` from its parsed
+    # `value`; nil when the script element was empty. Override to turn parsed
+    # data into models before assignment. The default returns it unchanged.
     sig { params(name: String, value: T.untyped).returns(T.untyped) }
     def decode_outlet_data(name, value)
       value

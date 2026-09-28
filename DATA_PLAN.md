@@ -6,7 +6,7 @@ This file tracks implementation status and the next work in order.
 optimizations. Neither an exploratory API spelling nor an older design example
 is an implemented guarantee. Current usage is documented in
 [server data](doc/server_data.md) and the
-[collection-controller examples](doc/collection_controller_examples.md).
+[collections guide](doc/collections.md).
 
 ## Current checkpoint
 

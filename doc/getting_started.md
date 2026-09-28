@@ -1,6 +1,9 @@
-# Getting started
+# Getting Started
 
-## Building an application
+This guide covers building an application with the `swill` command, the
+`swill.yml` project workflow, and installing Swill as a gem.
+
+## Building an Application
 
 The `swill` command compiles an application against the framework and
 bundles it into one script that reads the framework from the page:
@@ -15,13 +18,17 @@ The entry file's `require_relative` lines name the sources in order, as they
 would on MRI; the compiler treats those lines as inert. The page loads
 `swill.js` (from a CDN, or the copy `--with-framework` places beside the
 output) before `app.js`, and names its application with
-`<body application="...">`. `esbuild` must be on the path; a source map is
-written beside the output.
+`<body application="...">`. The framework launches the named application on
+`DOMContentLoaded` and terminates it on a `pagehide` whose `persisted` flag is
+false; a persisted `pagehide` means the page may return from the back-forward
+cache. `Swill::Application#browser` is the window, for `prompt` and `print`.
+`esbuild` must be on the path. A source map is written beside the output.
 
-## Project workflow
+## Project Workflow
 
 For applications with a server data schema, put `swill.yml` at the project
-root. All paths are relative to that file, even when invoked from elsewhere:
+root. All paths are relative to that file, even when the command is invoked
+from another directory:
 
 ```yaml
 server: server.rb
@@ -41,18 +48,19 @@ bundle exec swill build --project /path/to/app/swill.yml
 
 Each build generates the data proxies and schema, compiles the application,
 copies the installed gem's framework bundle and source map, and generates
-client Sorbet artifacts. Steps run in fresh Ruby processes so server model
-edits are reflected on every rebuild. A failing step stops the build and names
-the stage; watch mode reports the failure and retries after the next edit.
-It does not start or restart your Rack server or reload the browser.
+client Sorbet artifacts. Each step runs in a fresh Ruby process, so edits to
+server models are reflected on every rebuild. A failing step stops the build
+and names the stage; watch mode reports the failure and retries after the next
+edit. The build does not start or restart the application's Rack server, and
+does not reload the browser.
 
 `server` is optional for applications without distant data. `root` defaults
 to the configuration directory and controls data generation. `out` defaults
 to `dist/app.js` beside the client entry. `framework` defaults to true;
 `minify` defaults to false. `types` defaults to the client entry directory;
-use `false` to skip type generation. Generation does not run `srb tc`.
-An existing `sorbet/config` remains application-owned: update its source list
-when adding client files, or remove it to regenerate the default.
+`false` skips type generation. Generation does not run `srb tc`. An existing
+`sorbet/config` belongs to the application: update its source list when adding
+client files, or remove it to regenerate the default.
 
 Keep the client Sorbet root separate from server Sorbet configuration. Data
 generation also emits shims under `<root>/sorbet/rbi/shims/generated`; those
@@ -61,9 +69,9 @@ both representations of the same class into the client typecheck.
 
 By default the watcher tracks Ruby files, `Gemfile`, `Gemfile.lock`, and the
 project configuration. It detects added and removed files and excludes
-generated data/type outputs, `build`, `vendor`, and `node_modules`. Supply
-`watch` patterns for additional sources such as stylesheets. Add asset steps
-as argument arrays; these execute directly, without shell interpolation:
+generated data and type outputs, `build`, `vendor`, and `node_modules`.
+Supply `watch` patterns for additional sources such as stylesheets. Add asset
+steps as argument arrays; these execute directly, without shell interpolation:
 
 ```yaml
 before_build:
@@ -78,21 +86,19 @@ watch:
 
 The optional `env` mapping supplies string environment variables to build
 steps. For example, `env: { SWILL_SCHEMA_ONLY: "1" }` can select an
-application's own schema-only loader. Swill does not interpret that variable.
+application's own schema-only loader; Swill does not interpret that variable.
 Prefer a dedicated server entry that loads model declarations without
-starting listeners, workers, or making external service calls.
+starting listeners or workers, or making external service calls.
 
-Explicit entry commands retain their existing behavior and bypass project
-discovery. With `--project`, put build options in the file rather than mixing
-them with command-line build flags. `--interval` controls watch polling.
+An explicit entry on the command line bypasses project discovery. With
+`--project`, put build options in the file rather than mixing them with
+command-line build flags. `--interval` controls watch polling.
 
-## Installing as a gem
+## Installing as a Gem
 
 For a complete server-backed example, follow [a bound data form](data_form.md).
-The compiler installs `sorbet-runtime`; server-only code need not load it.
-To use real Sorbet on the server, require it before `swill/server`. Otherwise
-the server entrypoint supplies the documented type subset. Add
-`sequel-privacy` explicitly only for applications using that integration.
+The server side's requirements — `sorbet-runtime`, `swill/server`, and
+`sequel-privacy` — are stated in [server data](server_data.md).
 
 The gem carries the compiler, the framework's Ruby, the JavaScript runtime,
 a prebuilt `swill.js`, and the `swill` command, so an application needs no
@@ -120,35 +126,10 @@ gem build swill.gemspec
 gem install ./swill-0.0.1.gem
 ```
 
-The framework's interface is compiled from its sources on demand rather than
-shipped prebuilt: it costs about 0.16s per process, against a whole
-application build of roughly 0.25s, so precomputing it would buy nothing and
-could go stale.
+The framework's interface is compiled from its sources on demand; it costs
+about 0.16s per process.
 
+## Application Ports
 
-## Application ports
-
-The "bar" application (`~/Workspace/bar`, a Roda API with a TypeScript
-Swill frontend) has a second frontend in Ruby under `frontend-ruby/`,
-compiled by `bin/drinks frontend:build --ruby` through the `swill` command
-and checked in headless Chrome against a fake JSON:API server
-(`deno run -A frontend-ruby/spec/browser_check.mjs`). Its `PORT.md` lists every
-markup change against the TypeScript markup and whether it is a naming
-difference, a framework difference, or a choice of the port. Two framework
-rules came out of it: a `false` value removes a `data-*` attribute (ARIA
-attributes keep `"false"`), and a first responder that new window content
-chooses while loading (a field focused in `controller_did_load`) stands.
-`Swill::Application#browser` is the window, for `prompt` and `print`.
-
-## The static example
-
-`examples/rb/static/index.html` with `examples/rb/static.rb` is the full proof of
-the UI surface, ported from the retired Opal port's static example
-(`examples/opal/static/app.rb`): a toolbar that switches
-the main window between a bindings pane (key-path bindings, computed model
-predicates, a draft editor, a nested card with a binding root, a nested
-counter posting notifications, and a first-responder readout), a controls
-pane (text field, select, custom select), and a data pane (an editable,
-sortable list of plain observable objects); a palette dialog; and a
-workspace window whose panes keep their fields in the URL fragment. The
-brewery search from the original waits for the backend model slice.
+The maintainer's notes on the bar application's Ruby frontend and on the
+static example are in [development](development.md#application-ports).
