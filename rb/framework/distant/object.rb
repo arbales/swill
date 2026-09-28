@@ -2,11 +2,108 @@
 # frozen_string_literal: true
 
 module Swill
-  module Model
-    # A generated client representative of an authoritative server record.
-    class DistantObject < Editable
+  module Distant
+    # The declarations a generated distant object makes and the state of the
+    # fields they declare. `Object` includes it; the class-level macros below
+    # are what the generator writes into each model.
+    module Fields
       extend T::Sig
-      include DistantData
+
+      sig { params(base: T.class_of(Swill::Object)).void }
+      def self.included(base) # :nodoc:
+        base.extend(ClassMethods)
+      end
+
+      module ClassMethods # :nodoc:
+        extend Swill::Declarations
+
+        class_setting :data_model_name
+        inheritable_registry :data_fields
+
+        # Declares the authoritative server model name used on the wire.
+        macro def model_name(name)
+          data_model_name(name)
+        end
+
+        # Declares a partially loadable scalar field.
+        macro def attribute(name, type:, default: nil, key: name)
+          model_attributes[name.to_s] = {
+            "name" => name.to_s, "key" => key.to_s,
+            "type" => Swill::Runtime.type_name(type), "default" => default
+          }
+          data_fields[name.to_s] = { "kind" => "field", "type" => Swill::Runtime.type_name(type) }
+          property name, type: type, default: default, attribute: true, key: key, will_access: true
+        end
+
+        # Names mirror Sequel; persistence options stay on the server.
+        macro def many_to_one(name, **options)
+          declare_data_association(name, association_class(options), "one", "many_to_one")
+        end
+
+        macro def one_to_one(name, **options)
+          declare_data_association(name, association_class(options), "one", "one_to_one")
+        end
+
+        macro def one_to_many(name, **options)
+          declare_data_association(name, association_class(options), "many", "one_to_many")
+        end
+
+        macro def many_to_many(name, **options)
+          declare_data_association(name, association_class(options), "many", "many_to_many")
+        end
+
+        macro def one_through_one(name, **options)
+          declare_data_association(name, association_class(options), "one", "one_through_one")
+        end
+
+        macro def association_class(options)
+          unknown = options.keys - [:class]
+          raise ArgumentError, "unknown association options: #{unknown.join(', ')}" unless unknown.empty?
+
+          options.fetch(:class)
+        end
+
+        macro def declare_data_association(name, model, kind, type)
+          target = Swill::Runtime.class_name(model, self)
+          data_fields[name.to_s] = { "kind" => kind, "model" => target, "association" => type }
+          type = kind == "many" ? "Swill::Model::AssociationCollection[#{target}]" : "T.nilable(#{target})"
+          property name, type: type, default: nil, will_access: true
+          if kind == "many"
+            forward :"#{name}_controller", to: :association_controller, with: [name.to_s],
+                    returns: "Swill::ArrayController"
+          end
+        end
+      end
+
+      # Whether +name+ has an authoritative value, including nil.
+      sig { params(name: Symbol).returns(T::Boolean) }
+      def field_loaded?(name)
+        data_field_loaded(name.to_s)
+      end
+
+      # Cached data remains readable while an invalidated association refreshes.
+      sig { params(name: Symbol).returns(T::Boolean) }
+      def field_stale?(name)
+        data_field_stale(name.to_s)
+      end
+
+      # Whether +name+ currently has a request in flight.
+      sig { params(name: Symbol).returns(T::Boolean) }
+      def field_loading?(name)
+        data_field_loading(name.to_s)
+      end
+
+      # The last loading error for +name+, if any.
+      sig { params(name: Symbol).returns(T.nilable(String)) }
+      def field_error(name)
+        data_field_error(name.to_s)
+      end
+    end
+
+    # A generated client representative of an authoritative server record.
+    class Object < Model::Editable
+      extend T::Sig
+      include Fields
 
       property :deleted, type: T::Boolean, default: false
       property :deleted?, type: T::Boolean do
@@ -18,13 +115,13 @@ module Swill
       def initialize
         super
         @data_field_states = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
-        @data_draft_source = T.let(nil, T.nilable(DistantObject))
+        @data_draft_source = T.let(nil, T.nilable(Object))
         @applying_association = T.let(false, T::Boolean)
         @data_controllers = T.let({}, T::Hash[String, ArrayController])
-        @data_collections = T.let({}, T::Hash[String, AssociationCollection[T.untyped]])
+        @data_collections = T.let({}, T::Hash[String, Model::AssociationCollection[T.untyped]])
         self.class.data_fields.each do |name, descriptor|
           next unless descriptor["kind"] == "many"
-          collection = Swill::Model::AssociationCollection.new
+          collection = Model::AssociationCollection.new
           collection.attach_association(self, name)
           @data_collections[name] = collection
           write_data_association(name, collection)
@@ -85,7 +182,7 @@ module Swill
       def property_will_access(name)
         super
         return if @syncing_data_collection || draft? || deleted?
-        DistantClient.default.demand(self, name) if self.class.data_fields.key?(name)
+        Client.default.demand(self, name) if self.class.data_fields.key?(name)
       end
 
       # Loads a field explicitly, surfacing any transport error.
@@ -94,7 +191,7 @@ module Swill
         raise "A distant draft cannot hydrate fields" if draft?
         raise "A deleted distant object cannot hydrate fields" if deleted?
         raise "An unsaved distant object cannot hydrate fields" unless id
-        await DistantClient.default.load_field(self, name.to_s, false)
+        await Client.default.load_field(self, name.to_s, false)
       end
 
       # Loads a field again even when it already has a value.
@@ -103,7 +200,7 @@ module Swill
         raise "A distant draft cannot hydrate fields" if draft?
         raise "A deleted distant object cannot hydrate fields" if deleted?
         raise "An unsaved distant object cannot hydrate fields" unless id
-        await DistantClient.default.load_field(self, name.to_s, true)
+        await Client.default.load_field(self, name.to_s, true)
       end
 
       # Creates or updates this record and applies the authoritative response.
@@ -116,16 +213,16 @@ module Swill
         return self if id && attributes.empty?
 
         if id
-          await DistantClient.default.update(self, attributes)
+          await Client.default.update(self, attributes)
         else
-          await DistantClient.default.create(self, attributes)
+          await Client.default.create(self, attributes)
         end
         mark_clean!
         self
       end
 
       # Persists changes from a draft made by this object.
-      sig { params(copy: DistantObject).returns(T.self_type) }
+      sig { params(copy: Object).returns(T.self_type) }
       async def apply_draft(copy)
         raise "Cannot persist a deleted distant object" if deleted?
         unless copy.draft_from?(self)
@@ -135,7 +232,7 @@ module Swill
         attributes = copy.collect_dirty_attributes
         return self if attributes.empty?
 
-        await DistantClient.default.update(self, attributes)
+        await Client.default.update(self, attributes)
         copy.mark_clean!
         self
       end
@@ -147,7 +244,7 @@ module Swill
         raise "Save a distant draft with original.apply_draft(draft)" if draft?
         raise "Cannot delete an unsaved distant object" unless id
 
-        await DistantClient.default.delete(self)
+        await Client.default.delete(self)
         self
       end
 
@@ -179,12 +276,12 @@ module Swill
 
       # Internal distant-data state. It is ordinary Ruby state so the model's
       # behavior is the same on MRI and in compiled applications.
-      sig { params(original: DistantObject).void }
+      sig { params(original: Object).void }
       def attach_data_draft(original)
         @data_draft_source = original
       end
 
-      sig { params(original: DistantObject).returns(T::Boolean) }
+      sig { params(original: Object).returns(T::Boolean) }
       def draft_from?(original)
         @data_draft_source == original
       end

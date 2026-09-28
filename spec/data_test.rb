@@ -502,7 +502,7 @@ class DataTest < Minitest::Test
       assert(paths.any? { |path| path.end_with?("schema.json") })
       proxy = paths.find { |path| path.end_with?("generated/data_fixture/post.rb") }
       proxy_source = File.read(proxy)
-      assert_includes proxy_source, "class Post < Swill::Model::DistantObject"
+      assert_includes proxy_source, "class Post < Swill::Distant::Object"
       assert_includes proxy_source, 'model_name "DataFixture::Post"'
       assert_includes proxy_source, "attribute :title"
       assert_includes proxy_source, 'many_to_one :author, class: "DataFixture::User"'

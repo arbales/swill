@@ -269,7 +269,7 @@ test("plain JavaScript extends the object, transformer, and model roots", () => 
   const Swill = environment.load("swill");
   const {Runtime} = Swill;
   for (const name of ["Object", "Button", "ValueTransformer"]) assert.equal(typeof Swill[name], "function", name);
-  assert.equal(typeof Swill.Model.DistantClient.configure, "function");
+  assert.equal(typeof Swill.Distant.Client.configure, "function");
 
   class Contact extends Swill.Object {
     static properties = {first: {default: "Ada"}, last: {default: "Lovelace"}};

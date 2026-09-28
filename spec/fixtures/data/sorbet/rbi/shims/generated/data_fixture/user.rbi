@@ -1,7 +1,7 @@
 # typed: true
 
 module DataFixture
-  class User < Swill::Model::DistantObject
+  class User < Swill::Distant::Object
     sig { returns(T.nilable(String)) }
     def avatar; end
     sig { returns(String) }

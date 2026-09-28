@@ -2,11 +2,11 @@
 # frozen_string_literal: true
 
 module Swill
-  module Model
+  module Distant
     # Client-side protocol semantics for generated distant models. The browser
     # runtime supplies a transport; this object owns identity and materializes
     # its responses as Ruby objects.
-    class DistantClient < Swill::Object
+    class Client < Swill::Object
       extend T::Sig
 
       sig { returns(T.attached_class) }
@@ -51,7 +51,7 @@ module Swill
       end
 
       sig do
-        params(object: DistantObject, name: String, positional: T::Array[T.untyped],
+        params(object: Object, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
       end
       async def command(object, name, positional, keywords, result_kind)
@@ -70,7 +70,7 @@ module Swill
         wrap_result(value, result_kind)
       end
 
-      sig { params(object: DistantObject, attributes: T::Hash[T.untyped, T.untyped]).returns(DistantObject) }
+      sig { params(object: Object, attributes: T::Hash[T.untyped, T.untyped]).returns(Object) }
       async def create(object, attributes)
         await request("CREATE", {
           "model" => object.class.data_model_name,
@@ -79,7 +79,7 @@ module Swill
         object
       end
 
-      sig { params(object: DistantObject, attributes: T::Hash[T.untyped, T.untyped]).returns(DistantObject) }
+      sig { params(object: Object, attributes: T::Hash[T.untyped, T.untyped]).returns(Object) }
       async def update(object, attributes)
         await request("UPDATE", {
           "model" => object.class.data_model_name,
@@ -89,7 +89,7 @@ module Swill
         object
       end
 
-      sig { params(object: DistantObject).returns(DistantObject) }
+      sig { params(object: Object).returns(Object) }
       async def delete(object)
         model = object.class.data_model_name
         id = object.id.to_s
@@ -106,7 +106,7 @@ module Swill
       end
 
       # Queue all members read in this JavaScript turn into one GET.
-      sig { params(object: DistantObject, name: String).void }
+      sig { params(object: Object, name: String).void }
       def demand(object, name)
         return unless object.id
         return unless object.begin_data_field_load(name, false)
@@ -122,7 +122,7 @@ module Swill
         schedule_demands
       end
 
-      sig { params(object: DistantObject, name: String, reload: T::Boolean).returns(T.untyped) }
+      sig { params(object: Object, name: String, reload: T::Boolean).returns(T.untyped) }
       async def load_field(object, name, reload)
         return Runtime.read(object, name) if !reload && object.data_field_loaded(name) && !object.data_field_stale(name)
         object.begin_data_field_load(name, true)
@@ -136,7 +136,7 @@ module Swill
         @stores.each do |_model, store|
           typed_store = T.cast(store, T::Hash[String, T.untyped])
           typed_store.each do |_id, object|
-            distant = T.cast(object, DistantObject)
+            distant = T.cast(object, Object)
             distant.reset_data_fields
             distant.disconnect
           end
@@ -168,7 +168,7 @@ module Swill
       sig { params(value: T.untyped, result_kind: String).returns(T.untyped) }
       def wrap_result(value, result_kind)
         return value unless result_kind == "result_set"
-        ResultSet.new.replace(T.cast(value, T::Array[T.untyped]))
+        Model::ResultSet.new.replace(T.cast(value, T::Array[T.untyped]))
       end
 
       sig { params(values: T::Array[T.untyped]).returns(T::Array[T.untyped]) }
@@ -187,8 +187,8 @@ module Swill
 
       sig { params(value: T.untyped).returns(T.untyped) }
       def encode_value(value)
-        if value.is_a?(DistantObject) && value.id
-          distant = T.cast(value, DistantObject)
+        if value.is_a?(Object) && value.id
+          distant = T.cast(value, Object)
           return {"$ref" => [distant.class.data_model_name, distant.id.to_s]}
         end
         return {"$time" => Runtime.data_time_iso(value)} if Runtime.data_time(value)
@@ -205,7 +205,7 @@ module Swill
         value
       end
 
-      sig { params(value: T.untyped, response_generation: Integer, preferred: T.nilable(DistantObject)).returns(T.untyped) }
+      sig { params(value: T.untyped, response_generation: Integer, preferred: T.nilable(Object)).returns(T.untyped) }
       def decode_value(value, response_generation, preferred = nil)
         if value.is_a?(Array)
           return T.cast(value, T::Array[T.untyped]).map do |item|
@@ -239,16 +239,16 @@ module Swill
 
       sig do
         params(model: String, id: String, response_generation: Integer,
-               preferred: T.nilable(DistantObject)).returns(DistantObject)
+               preferred: T.nilable(Object)).returns(Object)
       end
       def canonical(model, id, response_generation, preferred = nil)
         store = model_store(model)
         existing = store[id]
-        return T.cast(existing, DistantObject) if existing
+        return T.cast(existing, Object) if existing
 
         removed = model_tombstones(model)[id]
         if removed && response_generation <= removed["generation"]
-          return T.cast(removed["object"], DistantObject)
+          return T.cast(removed["object"], Object)
         end
         model_tombstones(model).delete(id) if removed
 
@@ -258,7 +258,7 @@ module Swill
         object
       end
 
-      sig { params(patch: T::Hash[String, T.untyped], preferred: T.nilable(DistantObject), overwrite_dirty: T::Boolean).returns(DistantObject) }
+      sig { params(patch: T::Hash[String, T.untyped], preferred: T.nilable(Object), overwrite_dirty: T::Boolean).returns(Object) }
       def apply_patch(patch, preferred, overwrite_dirty)
         model = patch["model"].to_s
         id = patch["id"].to_s
@@ -281,7 +281,7 @@ module Swill
       def apply_invalidation(effect)
         object = model_store(effect["model"].to_s)[effect["id"].to_s]
         return unless object
-        distant = T.cast(object, DistantObject)
+        distant = T.cast(object, Object)
         return if distant.deleted?
         T.cast(effect["fields"], T::Array[String]).each do |name|
           distant.invalidate_data_field(name, T.cast(effect["generation"], Integer))
@@ -292,7 +292,7 @@ module Swill
       def refresh_observed(effect)
         object = model_store(effect["model"].to_s)[effect["id"].to_s]
         return unless object
-        distant = T.cast(object, DistantObject)
+        distant = T.cast(object, Object)
         return if distant.deleted?
         T.cast(effect["fields"], T::Array[String]).each do |name|
           demand(distant, name) if distant.data_field_stale(name) && distant.data_field_observed(name)
@@ -301,7 +301,7 @@ module Swill
 
       sig do
         params(message: T::Hash[String, T.untyped], response_generation: Integer,
-               preferred: T.nilable(DistantObject), overwrite_dirty: T::Boolean).returns(T.untyped)
+               preferred: T.nilable(Object), overwrite_dirty: T::Boolean).returns(T.untyped)
       end
       def apply_envelope(message, response_generation, preferred, overwrite_dirty)
         invalidations = T.cast(message["invalidations"] || [], T::Array[T::Hash[String, T.untyped]])
@@ -313,7 +313,7 @@ module Swill
       end
 
       sig do
-        params(type: String, contents: T::Hash[String, T.untyped], preferred: T.nilable(DistantObject),
+        params(type: String, contents: T::Hash[String, T.untyped], preferred: T.nilable(Object),
                overwrite_dirty: T::Boolean).returns(T.untyped)
       end
       async def request(type, contents, preferred, overwrite_dirty)
@@ -322,7 +322,7 @@ module Swill
       end
 
       sig do
-        params(type: String, contents: T::Hash[String, T.untyped], preferred: T.nilable(DistantObject),
+        params(type: String, contents: T::Hash[String, T.untyped], preferred: T.nilable(Object),
                overwrite_dirty: T::Boolean).returns(T::Array[T.untyped])
       end
       async def request_with_generation(type, contents, preferred, overwrite_dirty)
@@ -353,7 +353,7 @@ module Swill
         T.cast(contents["demands"], T::Array[T::Hash[String, T.untyped]]).each do |item|
           object = model_store(item["model"].to_s)[item["id"].to_s]
           next unless object
-          distant = T.cast(object, DistantObject)
+          distant = T.cast(object, Object)
           T.cast(item["fields"], T::Array[String]).each do |name|
             if error
               distant.fail_data_field(name, error, generation)
@@ -389,7 +389,7 @@ module Swill
         end
       end
 
-      sig { params(object: DistantObject, fields: T::Array[String]).returns(T::Hash[String, T.untyped]) }
+      sig { params(object: Object, fields: T::Array[String]).returns(T::Hash[String, T.untyped]) }
       def demand_hash(object, fields)
         {"model" => object.class.data_model_name, "id" => object.id, "fields" => fields}
       end
@@ -408,14 +408,14 @@ module Swill
         @queued_demands = {}
         return if batch.empty?
         demands = batch.map do |item|
-          demand_hash(T.cast(item["object"], DistantObject), T.cast(item["fields"], T::Array[String]))
+          demand_hash(T.cast(item["object"], Object), T.cast(item["fields"], T::Array[String]))
         end
         begin
           await request("GET", {"demands" => demands}, nil, false)
         rescue => error
           unless Runtime.data_connected
             batch.each do |item|
-              object = T.cast(item["object"], DistantObject)
+              object = T.cast(item["object"], Object)
               fields = T.cast(item["fields"], T::Array[String])
               key = "#{object.class.data_model_name}:#{object.id}"
               queued = @queued_demands[key] ||= {"object" => object, "fields" => []}

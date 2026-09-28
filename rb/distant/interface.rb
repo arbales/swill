@@ -77,7 +77,7 @@ module Swill
 
       # The model this interface describes, found by the module's name.
       def model
-        Object.const_get(name.delete_suffix("::DistantInterface"))
+        ::Object.const_get(name.delete_suffix("::DistantInterface"))
       end
 
       private

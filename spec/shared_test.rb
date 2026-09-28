@@ -13,9 +13,8 @@ require_relative "../rb/framework/model/identity"
 require_relative "../rb/framework/core/object_bindings"
 require_relative "../rb/framework/core/collection_arrangement"
 require_relative "../rb/framework/model/collection"
-require_relative "../rb/framework/model/distant_client"
-require_relative "../rb/framework/model/distant_data"
-require_relative "../rb/framework/model/distant_object"
+require_relative "../rb/framework/distant/object"
+require_relative "../rb/framework/distant/client"
 require_relative "../rb/framework/model/association"
 require_relative "../rb/framework/model/codec"
 require_relative "../rb/framework/model/dataset"
@@ -36,7 +35,7 @@ class DisconnectDependent < Swill::Object
 end
 
 class SharedTest < Minitest::Test
-  class RelatedRecord < Swill::Model::DistantObject
+  class RelatedRecord < Swill::Distant::Object
     many_to_one :parent, class: "SharedTest::RelatedRecord"
     one_to_many :children, class: "SharedTest::RelatedRecord"
   end
@@ -141,7 +140,7 @@ class SharedTest < Minitest::Test
     base = Swill::Model::Base.new
     editable = Swill::Model::Editable.new
     resource = Swill::Model::Resource.new
-    distant = Swill::Model::DistantObject.new
+    distant = Swill::Distant::Object.new
 
     refute_respond_to base, :dirty?
     assert_respond_to editable, :dirty?

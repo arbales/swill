@@ -75,20 +75,19 @@ module Swill
       rb/framework/model/store.rb
       rb/framework/model/identity.rb
       rb/framework/model/collection.rb
-      rb/framework/model/distant_client.rb
-      rb/framework/model/distant_data.rb
-      rb/framework/model/distant_object.rb
       rb/framework/model/association.rb
       rb/framework/model/codec.rb
       rb/framework/model/dataset.rb
       rb/framework/model/resource.rb
+      rb/framework/distant/object.rb
+      rb/framework/distant/client.rb
     ].freeze
 
     # The UI framework alone, in the same order: views, controllers, bindings,
     # the responder chain, and List, without models, remote data, the concrete
     # controls, or the list controllers built on List.
     UI_FRAMEWORK_SOURCES = FRAMEWORK_SOURCES.reject do |path|
-      path.start_with?("rb/framework/model/") ||
+      path.start_with?("rb/framework/model/", "rb/framework/distant/") ||
         (path.start_with?("rb/framework/control/") && !path.end_with?("/base.rb")) ||
         %w[core/wire.rb controller/sortable_list.rb controller/editor.rb
            controller/inline_editor.rb controller/editable_list.rb].any? { |name| path.end_with?(name) }
@@ -133,7 +132,7 @@ module Swill
           return error unless match
 
           destination = %w[has_many has_one].include?(match[1]) ?
-            "Swill::Model::Resource for endpoint associations or Swill::Model::DistantObject for generated associations" :
+            "Swill::Model::Resource for endpoint associations or Swill::Distant::Object for generated associations" :
             "Swill::Model::Resource"
           CompileError.new("#{error.message}; models using #{match[1]} must inherit #{destination}")
         end

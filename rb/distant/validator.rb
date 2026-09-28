@@ -104,7 +104,7 @@ module Swill
         when "Float" then value.is_a?(Numeric)
         when "Time" then value.is_a?(Time) || value.is_a?(DateTime)
         when "Date" then value.is_a?(Date)
-        else value.is_a?(Object.const_get(name))
+        else value.is_a?(::Object.const_get(name))
         end
       rescue NameError
         false

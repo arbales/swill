@@ -252,17 +252,17 @@ module Swill::Model::Drafts
   def collect_attributes; end
 end
 
-module Swill::Model::DistantData
+module Swill::Distant::Fields
   extend T::Helpers
   mixes_in_class_methods(ClassMethods)
-  requires_ancestor { Swill::Model::DistantObject }
+  requires_ancestor { Swill::Distant::Object }
 end
 
-module Swill::Model::DistantData::ClassMethods
+module Swill::Distant::Fields::ClassMethods
   extend T::Helpers
   extend T::Generic
-  has_attached_class!(:out) { {upper: Swill::Model::DistantObject} }
-  requires_ancestor { T.class_of(Swill::Model::DistantObject) }
+  has_attached_class!(:out) { {upper: Swill::Distant::Object} }
+  requires_ancestor { T.class_of(Swill::Distant::Object) }
 end
 
 # Object bindings are an object's own; raising reaches Kernel through it.

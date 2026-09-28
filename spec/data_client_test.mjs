@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import {Runtime} from "../rb/runtime/runtime.mjs";
 import {pack, unpack} from "../rb/runtime/message_pack.mjs";
 import {
-  Swill__Model__DistantObject as DistantObject,
-  Swill__Model__DistantClient as DistantClient,
+  Swill__Distant__Object as DistantBase,
+  Swill__Distant__Client as Client,
   Swill__Model__Collection as Collection,
   Swill__Model__ResultSet as ResultSet
 } from "../build/framework.mjs";
@@ -18,7 +18,7 @@ test("MessagePack preserves safe 64-bit integers and inert map keys", () => {
   assert.equal(Object.hasOwn(decoded, "__proto__"), true);
 });
 
-class Post extends DistantObject {}
+class Post extends DistantBase {}
 
 Runtime.install({classes: {Post: {
   constructor: Post,
@@ -148,14 +148,14 @@ test("queries return canonical ResultSets and unknown fields hydrate", async () 
   Runtime.configureData("ws://fixture", "schema", () => (transport = new FakeWebSocket()));
   assert.ok(new Post().comments instanceof Collection);
 
-  const results = await DistantClient.default().query("Post", "search", ["Hello"], {}, "result_set");
+  const results = await Client.default().query("Post", "search", ["Hello"], {}, "result_set");
   assert.ok(results instanceof ResultSet);
   assert.equal(results.isLoaded(), true);
   const post = results.first();
   assert.equal(post.title, "Hello");
   assert.equal(post.isDirty, false, "server identity does not become a local edit");
 
-  await DistantClient.default().query("Post", "search",
+  await Client.default().query("Post", "search",
     [Runtime.omittedArgument(), null],
     {limit: Runtime.omittedArgument(), explicit: null}, "result_set");
   const encoded = transport.requests.filter(request => request.type === "QUERY").at(-1);
@@ -170,8 +170,8 @@ test("queries return canonical ResultSets and unknown fields hydrate", async () 
   assert.equal(post.body, null, "known nil reads exactly like unknown nil");
   assert.equal(transport.requests.filter(request => request.type === "GET").length, 1);
 
-  const older = DistantClient.default().resolve("Post", "find", ["1"], {}, "model");
-  const newer = DistantClient.default().resolve("Post", "find", ["1"], {}, "model");
+  const older = Client.default().resolve("Post", "find", ["1"], {}, "model");
+  const newer = Client.default().resolve("Post", "find", ["1"], {}, "model");
   const [sameFromOlder, sameFromNewer] = await Promise.all([older, newer]);
   assert.equal(sameFromOlder, post);
   assert.equal(sameFromNewer, post);
@@ -202,7 +202,7 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   await assert.rejects(draft.save(), /original\.apply_draft/);
 
   transport.holdNextQuery = true;
-  const stale = DistantClient.default().query("Post", "search", ["stale"], {}, "result_set");
+  const stale = Client.default().query("Post", "search", ["stale"], {}, "result_set");
   await new Promise(resolve => setTimeout(resolve, 0));
   await post.delete();
   assert.equal(post.isDeleted, true);
@@ -222,23 +222,23 @@ test("dirty fields survive background patches and actor changes replace identity
   let transport;
   Runtime.configureData("ws://fixture-scope", "schema", () => (transport = new FakeWebSocket()));
 
-  const first = (await DistantClient.default().query(
+  const first = (await Client.default().query(
     "Post", "search", [], {}, "result_set"
   )).first();
   first.title = "Local edit";
-  const same = (await DistantClient.default().query(
+  const same = (await Client.default().query(
     "Post", "search", [], {}, "result_set"
   )).first();
   assert.equal(same, first);
   assert.equal(first.title, "Local edit", "a background patch does not replace a dirty field");
 
-  const plain = await DistantClient.default().query("Post", "search", [], {}, "array");
+  const plain = await Client.default().query("Post", "search", [], {}, "array");
   assert.equal(Array.isArray(plain), true, "schema cardinality controls result wrapping");
   assert.equal(plain instanceof ResultSet, false);
 
   transport.close();
   FakeWebSocket.actorScope = "actor-2";
-  const replacement = (await DistantClient.default().query(
+  const replacement = (await Client.default().query(
     "Post", "search", [], {}, "result_set"
   )).first();
   assert.notEqual(replacement, first);
@@ -332,7 +332,7 @@ async function effectsFixture() {
   Runtime.closeData();
   let transport;
   Runtime.configureData("ws://effects", "schema", () => (transport = new EffectsWebSocket()));
-  const client = DistantClient.default();
+  const client = Client.default();
   const post = (await client.query("Post", "search", [], {}, "result_set")).first();
   post.applyDataField("comments", [post], 1, false);
   return {client, post, comments: post.comments, transport};

@@ -237,7 +237,7 @@ module Swill
           type = pending.pop
           pending.concat(type.fetch("members", []))
           next unless type["kind"] == "value"
-          klass = Object.const_get(type.fetch("name"))
+          klass = ::Object.const_get(type.fetch("name"))
           next if found.key?(klass.name)
           fields = klass.fields.to_h do |name, field_type|
             dumped = Types.dump(field_type)

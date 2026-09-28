@@ -89,7 +89,7 @@ module Notes
   class Application < Swill::Application
     def initialize
       super
-      Swill::Model::DistantClient.configure(url: "/data", schema_hash: Notes::DataSchema::HASH)
+      Swill::Distant::Client.configure(url: "/data", schema_hash: Notes::DataSchema::HASH)
     end
   end
 

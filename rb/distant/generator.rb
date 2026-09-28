@@ -145,7 +145,7 @@ module Swill
         [
           "sig { #{sig_params}returns(#{ruby_type(operation['returns'])}) }",
           "async def #{prefix}#{operation['name']}(#{declaration})",
-          "  await Swill::Model::DistantClient.default.#{client_method}(#{target}, #{operation['name'].to_json}, [#{args}], {#{keywords}}, #{operation.dig('returns', 'kind').to_json})",
+          "  await Swill::Distant::Client.default.#{client_method}(#{target}, #{operation['name'].to_json}, [#{args}], {#{keywords}}, #{operation.dig('returns', 'kind').to_json})",
           "end"
         ]
       end
@@ -230,7 +230,7 @@ module Swill
         namespace = parts[0...-1]
         lines = namespace.each_with_index.map { |part, index| "#{'  ' * index}module #{part}" }
         depth = namespace.length
-        lines << "#{'  ' * depth}class #{parts.last} < Swill::Model::DistantObject"
+        lines << "#{'  ' * depth}class #{parts.last} < Swill::Distant::Object"
         lines.concat(body.map { |line| line.empty? ? "" : "#{'  ' * (depth + 1)}#{line}" })
         lines << "#{'  ' * depth}end"
         namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }

@@ -1607,6 +1607,10 @@
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__Controller__SortableList: () => Swill__Controller__SortableList,
     Swill__DOM: () => Swill__DOM,
+    Swill__Distant__Client: () => Swill__Distant__Client,
+    Swill__Distant__Fields: () => Swill__Distant__Fields,
+    Swill__Distant__Fields_ClassMethods: () => Swill__Distant__Fields_ClassMethods,
+    Swill__Distant__Object: () => Swill__Distant__Object,
     Swill__ElementPropertyBindingDestination: () => Swill__ElementPropertyBindingDestination,
     Swill__FieldBindingDestination: () => Swill__FieldBindingDestination,
     Swill__Launcher: () => Swill__Launcher,
@@ -1621,10 +1625,6 @@
     Swill__Model__Collection: () => Swill__Model__Collection,
     Swill__Model__Dataset: () => Swill__Model__Dataset,
     Swill__Model__DirtyTracking: () => Swill__Model__DirtyTracking,
-    Swill__Model__DistantClient: () => Swill__Model__DistantClient,
-    Swill__Model__DistantData: () => Swill__Model__DistantData,
-    Swill__Model__DistantData_ClassMethods: () => Swill__Model__DistantData_ClassMethods,
-    Swill__Model__DistantObject: () => Swill__Model__DistantObject,
     Swill__Model__Drafts: () => Swill__Model__Drafts,
     Swill__Model__Editable: () => Swill__Model__Editable,
     Swill__Model__Identity: () => Swill__Model__Identity,
@@ -3169,7 +3169,15 @@
     }
   };
   var Swill__Control = class extends Swill__View {
-    // Copy the shared prototype, then connect its children to this control.
+    // The object consulted before the control resigns first responder. It may
+    // implement `control_should_resign_first_responder(control, next_responder)`
+    // and return false to refuse the change. The default is nil.
+    // See `#resign_first_responder`.
+    // Replaces the element's contents with a copy of the named control template
+    // and connects its outlets, bindings, and actions to this control.
+    // Raises "Control template already loaded" if a template has been loaded,
+    // or "Unknown control template: ..." if the name is absent from the catalog.
+    // Connections are released when the control unloads.
     loadTemplate(name) {
       if (this._owns_content) throw new Error("Control template already loaded");
       let template = Swill__Templates.named(
@@ -3180,6 +3188,10 @@
       this._element.replaceChildren(template.content.cloneNode(true));
       return Swill__Awakening.awakenOwned(this._element, this);
     }
+    // Invoked before first responder moves to `next_responder`. Returns false
+    // if the delegate refuses; otherwise returns the superclass result.
+    // An override should call `super` to preserve the delegate's decision.
+    // See `#delegate`.
     resignFirstResponder(next_responder) {
       let current = this.delegate;
       if (Runtime2.isTruthy(Runtime2.logicalAnd(
@@ -3198,17 +3210,28 @@
     }
   };
   var Swill__Control__Button = class extends Swill__Control {
+    // Creates a control for `element` and adds `tabindex="0"` when no tabindex
+    // is present. An existing tabindex is preserved.
     constructor(element) {
       super(element);
       this.ensureFocusable();
     }
-    // Native buttons activate themselves; Enter must not commit an ancestor editor.
+    // Invoked for a key event. Leaves Enter and Space to the native button
+    // and passes other keys to the superclass. An override should call `super`
+    // for keys it does not handle.
     keyDown(event) {
       if (event.key === "Enter" || event.key === " ") return;
       return super.keyDown(event);
     }
   };
   var Swill__Control__TextField = class extends Swill__Control {
+    // The text displayed by the input. Typing updates this property; assigning
+    // it updates the input. The declaration default is ""; construction reads
+    // the input's initial value.
+    // Creates a control for `element`, reads its input's value, and listens for
+    // input events. If the value is empty and a value attribute exists, uses
+    // that attribute. With no input, leaves `value` at its default and registers
+    // no listener. See `#input_element`.
     constructor(element) {
       super(element);
       let input = this.inputElement();
@@ -3223,23 +3246,39 @@
       input.addEventListener("input", handler);
       this.retain(() => input.removeEventListener("input", handler));
     }
+    // Invoked after `value` changes to update the input when one is present.
+    // An override should call `super` to preserve the display update.
     valueDidChange(_previous, value) {
       let input = this.inputElement();
       if (Runtime2.isTruthy(input && input.value !== value)) {
         return input.value = value;
       }
     }
+    // Copies the input's value to `value` when `event` originated at that input.
+    // Events from other elements leave the value unchanged.
     inputDidChange(event) {
       let input = this.inputElement();
       if (Runtime2.isTruthy(input && event.target === input)) {
         return this.value = input.value;
       }
     }
+    // Returns the wrapped element when it is an input, otherwise its first
+    // input descendant. Returns nil when neither is present.
     inputElement() {
       return this._element.tagName === "INPUT" ? this._element : this._element.querySelector("input");
     }
   };
   var Swill__Control__Select = class extends Swill__Control {
+    // The strings used to create options after those present at construction.
+    // Each string supplies an option's label and value. Assigning a new array
+    // replaces the generated options and reapplies `value`. The default is [].
+    // The selected value. User changes update it; assignment writes the
+    // select's value. Replacing `options` preserves this property even when
+    // no option matches. The declaration default is ""; construction reads
+    // the element's initial value.
+    // Creates a control for the select `element`, preserves its initial child
+    // options, and reads its value. If the value is empty and a value attribute
+    // exists, uses that attribute. Listens for selection changes until unload.
     constructor(element) {
       super(element);
       this._template_option_count = element.children.length;
@@ -3253,7 +3292,9 @@
       element.addEventListener("change", handler);
       this.retain(() => element.removeEventListener("change", handler));
     }
-    // Reawakening must see only the original option prefix.
+    // Removes generated options and releases the control's connections.
+    // Options present at construction remain for a subsequent awakening.
+    // An override should call `super` to preserve cleanup.
     unload() {
       let children = this._element.children;
       while (children.length > this._template_option_count) {
@@ -3262,6 +3303,8 @@
       ;
       return super.unload();
     }
+    // Invoked after `options` changes to replace generated options and reapply
+    // `value`. An override should call `super` to preserve rendering.
     optionsDidChange(_previous, values) {
       let children = this._element.children;
       while (children.length > this._template_option_count) {
@@ -3276,9 +3319,13 @@
       });
       return this.syncValue();
     }
+    // Invoked after `value` changes to update the select element.
+    // An override should call `super` to preserve the display update.
     valueDidChange(_previous, _value) {
       return this.syncValue();
     }
+    // Assigns `value` to the select element when it differs from the displayed
+    // value. The browser determines the selection when no option matches.
     syncValue() {
       if (this._element.value !== this.value) {
         return this._element.value = this.value;
@@ -3286,6 +3333,28 @@
     }
   };
   var Swill__Control__CustomSelect = class extends Swill__Control {
+    // :section: Configuring the Choice
+    // Options, selection, and the elements supplied by the template.
+    // The option hashes, with "value" and "label" entries and optional
+    // "description" and "icon" entries. Values are compared as strings.
+    // Assigning the array rebuilds the list and preserves `value`.
+    // The default is [].
+    // The chosen option's value as a string. Assignment updates the label,
+    // icon, and selected state without dispatching input or change events.
+    // An unmatched value leaves the button label empty. The default is "".
+    // See `#selected_option` and `#choose`.
+    // The view wrapping the button that opens and closes the popup.
+    // Connected during template loading; nil before it is connected.
+    // The view displaying the selected option's icon in the button.
+    // Connected during template loading; nil before it is connected.
+    // The view displaying the selected option's label in the button.
+    // Connected during template loading; nil before it is connected.
+    // The view containing the option list. Connected during template loading;
+    // nil before it is connected. See `#open` and `#close`.
+    // The template cloned for each option. Connected during template loading;
+    // nil before it is connected.
+    // Creates the control, loads its template, and installs its event handlers.
+    // The popup is initially closed.
     constructor(element) {
       super(element);
       this._open = Runtime2.cast(false, "T::Boolean");
@@ -3297,23 +3366,30 @@
       this.renderOptions();
       this.applyOpen(false);
     }
-    // Called by KVO when the options have changed, rerenders the options.
+    // :section: Handling Changes and Events
+    // Responding to property changes, keys, and pointer events.
+    // Invoked after `options` changes to rebuild the popup and update the
+    // button. An override should call `super` to preserve rendering.
     optionsDidChange(_previous, _options) {
       return this.renderOptions();
     }
-    // Called when the value of the control changes,
-    // updating the button and selection state of the control.
+    // Invoked after `value` changes to update the button and selected option.
+    // An override should call `super` to preserve these updates.
     valueDidChange(_previous, _value) {
       this.syncButton();
       return this.syncSelectedOption();
     }
-    // Called when a user presses Escape, closing the control.
+    // Invoked for Escape. Closes an open popup and prevents the default event
+    // behavior. With the popup closed, passes the event to `super`.
     cancelOperation(event) {
       if (!this._open) return super.cancelOperation(event);
       event.preventDefault();
       return this.close();
     }
-    // Called when the user types, handling arrow keys and Enter.
+    // Invoked for a key event. Enter and Space toggle the popup. Up and Down
+    // choose the adjacent option while the popup is open; choosing closes it.
+    // Other keys pass to `super`. An override should pass unhandled keys to
+    // `super`.
     keyDown(event) {
       switch (event.key) {
         case "ArrowDown":
@@ -3333,6 +3409,9 @@
           return super.keyDown(event);
       }
     }
+    // Loads the custom select template and configures the root as a focusable
+    // combobox. Installs handlers for closing the popup when focus or a pointer
+    // press moves outside the control. Called during construction.
     installChrome() {
       let root = this._element;
       Swill__Swell.$index(this._element).addClass("custom-select").attr(
@@ -3350,19 +3429,27 @@
         this._document_pointer_down
       ));
     }
-    // Called when a user clicks on the button to open or close the control.
+    // Toggles the popup for a pointer click. Ignores clicks with event detail
+    // zero; keyboard activation is handled by `#key_down`.
     buttonClicked(_sender, event) {
       if (event.detail !== 0) return this.toggle();
     }
+    // Closes the popup when focus leaves the control or has no next element.
     focusOut(event) {
       let next_element = event.relatedTarget;
       if (next_element == null || !this._element.contains(next_element)) {
         return this.close();
       }
     }
+    // Closes the popup when the pointer press occurs outside the control.
     documentPointerDown(event) {
       if (!this._element.contains(event.target)) return this.close();
     }
+    // :section: Presenting Options
+    // Displaying labels, icons, descriptions, and selected state.
+    // Rebuilds the option rows and updates the button and selected state.
+    // An icon name adds the class "icon-name". A nil description or icon hides
+    // its corresponding element.
     renderOptions() {
       let container = Runtime2.must(this.popup).element;
       container.replaceChildren();
@@ -3389,16 +3476,21 @@
       this.syncButton();
       return this.syncSelectedOption();
     }
+    // Chooses the value of the clicked option within the popup.
+    // Clicks outside an option leave the value unchanged. See `#choose`.
     optionClicked(event) {
       let row = event.target.closest("[role='option']");
       if (Runtime2.isTruthy(row && Runtime2.must(this.popup).element.contains(row))) {
         return this.choose(Runtime2.must(Swill__Swell.$index(row).dataValue("value")));
       }
     }
-    // Returns the currently selected option or nil if nothing is selected.
+    // Returns the first option whose string value equals `value`, or nil
+    // when none matches.
     selectedOption() {
       return this.options.find((option) => this.optionValue(option) === this.value);
     }
+    // Updates the button label and icon from `#selected_option`. With no
+    // matching option, clears the label and hides the icon.
     syncButton() {
       let option = this.selectedOption();
       let icon_name = option ? option.icon : null;
@@ -3416,22 +3508,31 @@
         "to_s"
       ) : "";
     }
+    // Updates aria-selected on each option row according to `value`.
     syncSelectedOption() {
       return Runtime2.must(this.popup).element.querySelectorAll("[role='option']").forEach((row) => {
         let dom = Swill__Swell.$index(row);
         return dom.aria("selected", dom.dataValue("value") === this.value);
       });
     }
-    // ---- open and closed ----
+    // :section: Opening and Choosing
+    // Controlling popup visibility and choosing a value.
+    // Opens a closed popup or closes an open popup. See `#open` and `#close`.
     toggle() {
       return this._open ? this.close() : this.open();
     }
+    // Opens the popup and begins listening for pointer presses outside the
+    // control. Does nothing when already open. See `#close`.
     open() {
       if (!this._open) return this.applyOpen(true);
     }
+    // Closes the popup and stops listening for outside pointer presses.
+    // Does nothing when already closed. See `#open`.
     close() {
       if (this._open) return this.applyOpen(false);
     }
+    // Sets popup visibility, the root's open class, and expanded attributes
+    // from `open`. Updates the document listener for outside pointer presses.
     applyOpen(open) {
       this._open = open;
       Swill__Swell.$index(this._element).toggleClassWithOn("open", open).aria(
@@ -3455,6 +3556,9 @@
         this._document_pointer_down
       );
     }
+    // Chooses the option `delta` positions from the current selection,
+    // wrapping at either end. Chooses the first option when no value matches,
+    // and does nothing when there are no options. See `#choose`.
     moveSelection(delta) {
       if (Runtime2.isEmpty(this.options)) return;
       let current = -1;
@@ -3464,7 +3568,10 @@
       let index = current < 0 ? 0 : (current + delta) % this.options.length;
       return this.choose(this.optionValue(Runtime2.must(this.options[index])));
     }
-    // A user's choice: the value, then the events a native select sends.
+    // Closes the popup and assigns `next_value`. If the value changes,
+    // dispatches bubbling input and change events. Accepts a string even when
+    // no option matches; assign `value` directly to update selection without
+    // dispatching DOM events.
     choose(next_value) {
       this.close();
       if (this.value === next_value) return;
@@ -3472,11 +3579,29 @@
       this._element.dispatchEvent(new Event("input", { bubbles: true }));
       return this._element.dispatchEvent(new Event("change", { bubbles: true }));
     }
+    // Returns the string form of the option's "value" entry, or an empty
+    // string when it is nil.
     optionValue(option) {
       return Runtime2.send(option.value, "to_s");
     }
   };
   var Swill__Control__Segmented = class extends Swill__Control {
+    // :section: Configuring the Choice
+    // Options, selection, and availability.
+    // The option hashes, with "value" and "label" entries. Values are compared
+    // as strings. Assigning the array rebuilds the buttons and preserves
+    // `value`. The default is [].
+    // The chosen option's value as a string. Assignment updates selection and
+    // focusability without dispatching input or change events. An unmatched
+    // value leaves all buttons unchecked. The default is "". See `#choose`.
+    // Whether the control rejects choices and keyboard input. When true, its
+    // buttons are disabled and removed from the tab order. The default is false.
+    // The view containing the option buttons, connected by the segmented
+    // template during construction. It is nil until the template is loaded.
+    // The template cloned for each option button, connected during
+    // construction. It is nil until the segmented template is loaded.
+    // Creates the control, loads the segmented template, and listens for clicks.
+    // Sets the root's class to include "segmented" and its role to "radiogroup".
     constructor(element) {
       super(element);
       Swill__Swell.$index(element).addClass("segmented").attr(
@@ -3488,15 +3613,26 @@
       this.retain(Swill__Swell.$index(element).listen("click", handler));
       this.renderOptions();
     }
+    // :section: Updating the Presentation
+    // Rebuilding buttons and reflecting changes in control state.
+    // Invoked after `options` changes to rebuild the buttons. An override
+    // should call `super` to preserve rendering.
     optionsDidChange(_previous, _options) {
       return this.renderOptions();
     }
+    // Invoked after `value` changes to update checked state and the tab order.
+    // An override should call `super` to preserve these updates.
     valueDidChange(_previous, _value) {
       return this.syncSelection();
     }
+    // Invoked after `disabled` changes to update button availability and the
+    // tab order. An override should call `super` to preserve these updates.
     disabledDidChange(_previous, _disabled) {
       return this.syncSelection();
     }
+    // Replaces the buttons with one per option and updates their selection
+    // state. If focus was inside the buttons, moves it to the selected button
+    // or the first button when no option matches.
     renderOptions() {
       let container = Runtime2.must(this.segments).element;
       let focused = container.contains(this._element.ownerDocument.activeElement);
@@ -3512,6 +3648,9 @@
       this.syncSelection();
       if (focused) return this.focusSelection();
     }
+    // Updates each button's checked state, disabled state, and tabindex.
+    // The selected button, or the first when no option matches, gets tabindex
+    // zero when enabled. Updates aria-disabled on the root.
     syncSelection() {
       let buttons = Runtime2.must(this.segments).element.children;
       let selected = this.options.find((option) => Runtime2.send(option.value, "to_s") === this.value);
@@ -3534,12 +3673,21 @@
         this.disabled
       );
     }
+    // :section: Choosing and Focusing
+    // Selecting an option from a click, a key event, or an explicit call.
+    // Chooses the value of the clicked radio button within this control.
+    // Clicks outside a radio button leave the value unchanged. See `#choose`.
     segmentClicked(event) {
       let button = event.target.closest("[role='radio']");
       if (Runtime2.isTruthy(button && this._element.contains(button))) {
         return this.choose(Runtime2.must(Swill__Swell.$index(button).dataValue("value")));
       }
     }
+    // Invoked for a key event. Arrow keys choose the previous or next option,
+    // wrapping at either end; Home and End choose the first or last option.
+    // Moves focus to the chosen button. Disabled controls ignore key events.
+    // Enter and Space retain native button activation; other keys pass to
+    // `super`. An override should pass unhandled keys to `super`.
     keyDown(event) {
       if (this.disabled) return;
       let index;
@@ -3584,16 +3732,25 @@
           return super.keyDown(event);
       }
     }
+    // Returns the button with tabindex zero, or nil when no button has a tab
+    // stop. See `#focus_selection`.
     firstFocusableElement() {
       return Runtime2.must(this.segments).element.querySelector('[tabindex="0"]');
     }
+    // Returns whether the control is enabled and has at least one option.
     acceptsFirstResponder() {
       return !this.disabled && !Runtime2.isEmpty(this.options);
     }
+    // Focuses the button returned by `#first_focusable_element` without
+    // scrolling. Does nothing when there is no such button.
     focusSelection() {
       let button = this.firstFocusableElement();
       if (button) return button.focus({ preventScroll: true });
     }
+    // Assigns `next_value` and dispatches bubbling input and change events.
+    // Does nothing when disabled or when the value is unchanged. Accepts a
+    // string even when no option matches; assign `value` directly to update
+    // selection without dispatching DOM events.
     choose(next_value) {
       if (this.disabled || this.value === next_value) return;
       this.value = next_value;
@@ -5538,7 +5695,7 @@
     }
     // ---- policy hooks ----
     commitEdit(copy, original, index) {
-      if (original instanceof Swill__Model__DistantObject) {
+      if (original instanceof Swill__Distant__Object) {
         this.commitDistantEdit(copy, original, index);
         return;
       }
@@ -5989,7 +6146,7 @@
       this._applying_membership = Runtime2.cast(false, "T::Boolean");
       this._association_owner = Runtime2.cast(
         null,
-        "T.nilable(Swill::Model::DistantObject)"
+        "T.nilable(Swill::Distant::Object)"
       );
       this._association_name = Runtime2.cast("", "String");
       Object.freeze(this.records);
@@ -6017,950 +6174,6 @@
     }
   };
   var Swill__Model__ResultSet = class extends Swill__Model__Collection {
-  };
-  var Swill__Model__DistantClient = class _Swill__Model__DistantClient extends Swill__Object {
-    static default() {
-      return this._default ||= new this();
-    }
-    static configure(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
-        positional: [],
-        keywords: [
-          { name: "url", kind: "keyreq" },
-          { name: "schema_hash", kind: "keyreq" }
-        ],
-        keywordRest: null,
-        block: "__swill_block"
-      });
-      let url = Runtime2.argument(__swill_bound, "url");
-      let schema_hash = Runtime2.argument(__swill_bound, "schema_hash");
-      return Runtime2.configureData(url, schema_hash);
-    }
-    constructor() {
-      super();
-      this._stores = Runtime2.cast(
-        {},
-        "T::Hash[String, T::Hash[String, T.untyped]]"
-      );
-      this._tombstones = Runtime2.cast(
-        {},
-        "T::Hash[String, T::Hash[String, T.untyped]]"
-      );
-      this._queued_demands = Runtime2.cast({}, "T::Hash[String, T.untyped]");
-      this._demand_scheduled = Runtime2.cast(false, "T::Boolean");
-      this._actor_scope = Runtime2.cast(null, "T.nilable(String)");
-      this._generation = Runtime2.cast(0, "Integer");
-      this._active_generations = Runtime2.cast([], "T::Array[Integer]");
-      Runtime2.registerDataLifecycle(
-        () => this.reset(),
-        () => this.connectionOpened()
-      );
-    }
-    async query(model, name, positional, keywords, result_kind) {
-      let value = await this.request(
-        "QUERY",
-        this.operation(model, name, positional, keywords),
-        null,
-        false
-      );
-      return this.wrapResult(value, result_kind);
-    }
-    async resolve(model, name, positional, keywords, result_kind) {
-      let value = await this.request(
-        "RESOLVE",
-        this.operation(model, name, positional, keywords),
-        null,
-        false
-      );
-      return this.wrapResult(value, result_kind);
-    }
-    async command(object, name, positional, keywords, result_kind) {
-      let contents = this.operation(
-        object.constructor.dataModelName(),
-        name,
-        positional,
-        keywords
-      );
-      contents.id = object.id;
-      let value = await this.request("COMMAND", contents, null, true);
-      return this.wrapResult(value, result_kind);
-    }
-    async classCommand(model, name, positional, keywords, result_kind) {
-      let value = await this.request(
-        "COMMAND",
-        this.operation(model, name, positional, keywords),
-        null,
-        true
-      );
-      return this.wrapResult(value, result_kind);
-    }
-    async create(object, attributes) {
-      await this.request(
-        "CREATE",
-        {
-          model: object.constructor.dataModelName(),
-          attributes: this.encodeValue(attributes)
-        },
-        object,
-        true
-      );
-      return object;
-    }
-    async update(object, attributes) {
-      await this.request(
-        "UPDATE",
-        {
-          model: object.constructor.dataModelName(),
-          id: object.id,
-          attributes: this.encodeValue(attributes)
-        },
-        null,
-        true
-      );
-      return object;
-    }
-    async delete(object) {
-      let model = object.constructor.dataModelName();
-      let id = Runtime2.stringify(object.id);
-      let [_value, removed_generation] = await this.requestWithGeneration(
-        "DELETE",
-        { model, id },
-        null,
-        true
-      );
-      Runtime2.deleteKey(this.modelStore(model), id);
-      this.modelTombstones(model)[id] = {
-        object,
-        generation: removed_generation
-      };
-      object.deleted = true;
-      Runtime2.deleteKey(this._queued_demands, `${model}:${id}`);
-      object.disconnect();
-      this.pruneTombstones();
-      return object;
-    }
-    // Queue all members read in this JavaScript turn into one GET.
-    demand(object, name) {
-      if (object.id == null) return;
-      if (!object.beginDataFieldLoad(name, false)) return;
-      let model = object.constructor.dataModelName();
-      let key = `${model}:${object.id}`;
-      let item = this._queued_demands[key];
-      if (!Runtime2.isTruthy(item)) {
-        item = { object, fields: [] };
-        this._queued_demands[key] = item;
-      }
-      ;
-      let fields = Runtime2.cast(item.fields, "T::Array[String]");
-      if (!fields.includes(name)) Runtime2.append(fields, name);
-      return this.scheduleDemands();
-    }
-    async loadField(object, name, reload) {
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        !reload && object.dataFieldLoaded(name),
-        () => !object.dataFieldStale(name)
-      ))) return Runtime2.read(object, name);
-      object.beginDataFieldLoad(name, true);
-      await this.request(
-        "GET",
-        { demands: [this.demandHash(object, [name])] },
-        null,
-        false
-      );
-      return Runtime2.read(object, name);
-    }
-    // A changed actor or an explicit close invalidates every identity.
-    reset() {
-      Object.entries(this._stores).forEach(([_model, store]) => {
-        let typed_store = Runtime2.cast(store, "T::Hash[String, T.untyped]");
-        return Object.entries(typed_store).forEach(([_id, object]) => {
-          let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
-          distant.resetDataFields();
-          return distant.disconnect();
-        });
-      });
-      this._stores = {};
-      this._tombstones = {};
-      this._queued_demands = {};
-      this._actor_scope = null;
-      return this._actor_scope;
-    }
-    connectionOpened() {
-      if (!Runtime2.isEmpty(this._queued_demands)) return this.scheduleDemands();
-    }
-    operation(model, name, positional, keywords) {
-      return {
-        model,
-        name,
-        arguments: this.encodeArguments(positional),
-        keywords: this.encodeKeywords(keywords)
-      };
-    }
-    wrapResult(value, result_kind) {
-      if (result_kind !== "result_set") return value;
-      return new Swill__Model__ResultSet().replace(Runtime2.cast(
-        value,
-        "T::Array[T.untyped]"
-      ));
-    }
-    encodeArguments(values) {
-      return values.filter((value) => !Runtime2.isTruthy(Runtime2.isOmittedArgument(value))).map((value) => this.encodeValue(value));
-    }
-    encodeKeywords(values) {
-      let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
-      Object.entries(values).forEach(([name, value]) => {
-        if (!Runtime2.isTruthy(Runtime2.isOmittedArgument(value))) {
-          result[name] = this.encodeValue(value);
-        }
-      });
-      return result;
-    }
-    encodeValue(value) {
-      if (Runtime2.isTruthy(value instanceof Swill__Model__DistantObject && Runtime2.send(
-        value,
-        "id"
-      ))) {
-        let distant = Runtime2.cast(value, "Swill::Model::DistantObject");
-        return { $ref: [
-          distant.constructor.dataModelName(),
-          Runtime2.stringify(distant.id)
-        ] };
-      }
-      ;
-      if (Runtime2.isTruthy(Runtime2.dataTime(value))) {
-        return { $time: Runtime2.dataTimeIso(value) };
-      }
-      ;
-      if (Array.isArray(value)) {
-        return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.encodeValue(item));
-      }
-      ;
-      if (Runtime2.isTruthy(Runtime2.dataRecord(value))) {
-        let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
-        Object.entries(Runtime2.cast(value, "T::Hash[T.untyped, T.untyped]")).forEach(([name, item]) => result[name] = this.encodeValue(item));
-        return result;
-      }
-      ;
-      return value;
-    }
-    decodeValueWithPreferred(value, response_generation, preferred) {
-      if (Array.isArray(value)) {
-        return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.decodeValueWithPreferred(item, response_generation, preferred));
-      }
-      ;
-      if (!Runtime2.isTruthy(Runtime2.dataRecord(value))) return value;
-      let record2 = Runtime2.cast(value, "T::Hash[String, T.untyped]");
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
-        record2,
-        "$ref"
-      ))) {
-        let reference = Runtime2.cast(record2["$ref"], "T::Array[T.untyped]");
-        let use_preferred = Runtime2.logicalAnd(
-          preferred && Runtime2.isEqual(
-            preferred.constructor.dataModelName(),
-            reference[0]
-          ),
-          () => preferred.id == null
-        );
-        return this.canonicalWithPreferred(
-          Runtime2.send(reference[0], "to_s"),
-          Runtime2.send(reference[1], "to_s"),
-          response_generation,
-          Runtime2.isTruthy(use_preferred) ? preferred : null
-        );
-      }
-      ;
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
-        record2,
-        "$time"
-      ))) return Runtime2.dataTimeFromIso(Runtime2.send(record2["$time"], "to_s"));
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
-        record2,
-        "$date"
-      ))) return record2["$date"];
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
-        record2,
-        "$value"
-      ))) {
-        let tagged = Runtime2.cast(record2["$value"], "T::Array[T.untyped]");
-        let klass = Runtime2.resolve(Runtime2.send(tagged[0], "to_s"));
-        let attributes = Runtime2.cast(
-          this.decodeValue(tagged[1], response_generation),
-          "T::Hash[String, T.untyped]"
-        );
-        let object = new klass();
-        Object.entries(attributes).forEach(([name, item]) => Runtime2.write(object, name, item));
-        return object;
-      }
-      ;
-      let result = Runtime2.cast({}, "T::Hash[String, T.untyped]");
-      Object.entries(record2).forEach(([name, item]) => result[name] = this.decodeValueWithPreferred(
-        item,
-        response_generation,
-        preferred
-      ));
-      return result;
-    }
-    canonicalWithPreferred(model, id, response_generation, preferred) {
-      let store = this.modelStore(model);
-      let existing = store[id];
-      if (Runtime2.isTruthy(existing)) {
-        return Runtime2.cast(existing, "Swill::Model::DistantObject");
-      }
-      ;
-      let removed = this.modelTombstones(model)[id];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        removed,
-        () => response_generation <= removed.generation
-      ))) return Runtime2.cast(removed.object, "Swill::Model::DistantObject");
-      if (Runtime2.isTruthy(removed)) {
-        Runtime2.deleteKey(this.modelTombstones(model), id);
-      }
-      ;
-      let object = preferred || new (Runtime2.resolve(model))();
-      Runtime2.invoke(
-        object,
-        "apply_data_field",
-        "id",
-        id,
-        response_generation,
-        true
-      );
-      store[id] = object;
-      return object;
-    }
-    applyPatch(patch, preferred, overwrite_dirty) {
-      let model = Runtime2.send(patch.model, "to_s");
-      let id = Runtime2.send(patch.id, "to_s");
-      let patch_generation = Runtime2.cast(patch.generation, "Integer");
-      let use_preferred = Runtime2.logicalAnd(
-        preferred && Runtime2.isEqual(
-          preferred.constructor.dataModelName(),
-          model
-        ),
-        () => preferred.id == null
-      );
-      let object = this.canonicalWithPreferred(
-        model,
-        id,
-        patch_generation,
-        Runtime2.isTruthy(use_preferred) ? preferred : null
-      );
-      let removed = this.modelTombstones(model)[id];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        removed,
-        () => patch_generation <= removed.generation
-      ))) return object;
-      let fields = Runtime2.cast(
-        Runtime2.logicalOr(patch.fields, () => ({})),
-        "T::Hash[String, T.untyped]"
-      );
-      Object.entries(fields).forEach(([name, encoded]) => {
-        let value = this.decodeValue(encoded, patch_generation);
-        return object.applyDataField(
-          name,
-          value,
-          patch_generation,
-          overwrite_dirty
-        );
-      });
-      return object;
-    }
-    // Invalidations affect cached objects only; they never instantiate a graph.
-    applyInvalidation(effect) {
-      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
-        effect.id,
-        "to_s"
-      )];
-      if (!Runtime2.isTruthy(object)) return;
-      let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
-      if (distant.isDeleted) return;
-      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => distant.invalidateDataField(
-        name,
-        Runtime2.cast(effect.generation, "Integer")
-      ));
-    }
-    refreshObserved(effect) {
-      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
-        effect.id,
-        "to_s"
-      )];
-      if (!Runtime2.isTruthy(object)) return;
-      let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
-      if (distant.isDeleted) return;
-      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => {
-        if (Runtime2.isTruthy(distant.dataFieldStale(name) && distant.dataFieldObserved(name))) {
-          this.demand(distant, name);
-        }
-      });
-    }
-    applyEnvelope(message, response_generation, preferred, overwrite_dirty) {
-      let invalidations = Runtime2.cast(
-        Runtime2.logicalOr(message.invalidations, () => []),
-        "T::Array[T::Hash[String, T.untyped]]"
-      );
-      invalidations.forEach((effect) => this.applyInvalidation(effect));
-      let patches = Runtime2.cast(
-        Runtime2.logicalOr(message.patches, () => []),
-        "T::Array[T::Hash[String, T.untyped]]"
-      );
-      patches.forEach((patch) => this.applyPatch(patch, preferred, overwrite_dirty));
-      invalidations.forEach((effect) => this.refreshObserved(effect));
-      return this.decodeValueWithPreferred(
-        message.value,
-        response_generation,
-        preferred
-      );
-    }
-    async request(type, contents, preferred, overwrite_dirty) {
-      let [value, _operation_generation] = await this.requestWithGeneration(
-        type,
-        contents,
-        preferred,
-        overwrite_dirty
-      );
-      return value;
-    }
-    async requestWithGeneration(type, contents, preferred, overwrite_dirty) {
-      this._generation++;
-      let operation_generation = this._generation;
-      Runtime2.append(this._active_generations, operation_generation);
-      let payload = Object.assign(
-        {},
-        contents,
-        { generation: operation_generation }
-      );
-      if (type === "GET") {
-        this.updateDemandState(contents, operation_generation, null);
-      }
-      ;
-      try {
-        let raw = await Runtime2.dataRequest(type, payload);
-        let received = Runtime2.cast(raw, "T::Hash[String, T.untyped]");
-        let scope = Runtime2.send(received.actor_scope, "to_s");
-        if (Runtime2.isTruthy(Runtime2.logicalAnd(
-          this._actor_scope,
-          () => this._actor_scope !== scope
-        ))) this.reset();
-        this._actor_scope = scope;
-        let message = Runtime2.cast(
-          received.message,
-          "T::Hash[String, T.untyped]"
-        );
-        return [
-          this.applyEnvelope(
-            message,
-            operation_generation,
-            preferred,
-            overwrite_dirty
-          ),
-          operation_generation
-        ];
-      } catch (error) {
-        if (type === "GET") {
-          this.updateDemandState(contents, operation_generation, error.message);
-        }
-        ;
-        return (() => {
-          throw error;
-        })();
-      } finally {
-        this._active_generations = this._active_generations.filter((item) => !(item === operation_generation));
-        this.pruneTombstones();
-      }
-    }
-    updateDemandState(contents, generation, error) {
-      return Runtime2.cast(
-        contents.demands,
-        "T::Array[T::Hash[String, T.untyped]]"
-      ).forEach((item) => {
-        let object = this.modelStore(Runtime2.send(item.model, "to_s"))[Runtime2.send(
-          item.id,
-          "to_s"
-        )];
-        if (!Runtime2.isTruthy(object)) return;
-        let distant = Runtime2.cast(object, "Swill::Model::DistantObject");
-        return Runtime2.cast(item.fields, "T::Array[String]").forEach((name) => error != null ? distant.failDataFieldWithGeneration(
-          name,
-          error,
-          generation
-        ) : distant.dataRequestStarted(name, generation));
-      });
-    }
-    modelStore(model) {
-      return this._stores[model] ||= {};
-    }
-    modelTombstones(model) {
-      return this._tombstones[model] ||= {};
-    }
-    pruneTombstones() {
-      let oldest = Runtime2.logicalOr(
-        Runtime2.min(this._active_generations),
-        () => this._generation + 1
-      );
-      Object.entries(this._tombstones).forEach(([_model, removed_objects]) => {
-        let typed_removed = Runtime2.cast(
-          removed_objects,
-          "T::Hash[String, T.untyped]"
-        );
-        return Object.keys(typed_removed).forEach((id) => {
-          let removed = typed_removed[id];
-          if (removed.generation < oldest) return Runtime2.deleteKey(typed_removed, id);
-        });
-      });
-      return Object.keys(this._tombstones).forEach((model) => {
-        if (Runtime2.isEmpty(Runtime2.must(this._tombstones[model]))) {
-          Runtime2.deleteKey(this._tombstones, model);
-        }
-      });
-    }
-    demandHash(object, fields) {
-      return {
-        model: object.constructor.dataModelName(),
-        id: object.id,
-        fields
-      };
-    }
-    scheduleDemands() {
-      if (this._demand_scheduled) return;
-      this._demand_scheduled = true;
-      return queueMicrotask(() => this.flushDemands());
-    }
-    async flushDemands() {
-      this._demand_scheduled = false;
-      let batch = Object.values(this._queued_demands);
-      this._queued_demands = {};
-      if (Runtime2.isEmpty(batch)) return;
-      let demands = batch.map((item) => this.demandHash(
-        Runtime2.cast(item.object, "Swill::Model::DistantObject"),
-        Runtime2.cast(item.fields, "T::Array[String]")
-      ));
-      try {
-        return await this.request("GET", { demands }, null, false);
-      } catch (error) {
-        if (!Runtime2.isTruthy(Runtime2.dataConnected())) {
-          batch.forEach((item) => {
-            let object = Runtime2.cast(item.object, "Swill::Model::DistantObject");
-            let fields = Runtime2.cast(item.fields, "T::Array[String]");
-            let key = `${object.constructor.dataModelName()}:${object.id}`;
-            let queued = this._queued_demands[key] ||= {
-              object,
-              fields: []
-            };
-            let target = Runtime2.cast(queued.fields, "T::Array[String]");
-            return fields.forEach((name) => {
-              if (!target.includes(name)) Runtime2.append(target, name);
-            });
-          });
-        }
-        ;
-        return Runtime2.warn(`data did not load: ${error.message}`);
-      }
-    }
-    decodeValue(value, response_generation) {
-      return _Swill__Model__DistantClient.prototype.decodeValueWithPreferred.call(
-        this,
-        value,
-        response_generation,
-        null
-      );
-    }
-    canonical(model, id, response_generation) {
-      return _Swill__Model__DistantClient.prototype.canonicalWithPreferred.call(
-        this,
-        model,
-        id,
-        response_generation,
-        null
-      );
-    }
-  };
-  function Swill__Model__DistantData(Superclass) {
-    class Swill__Model__DistantData_Layer extends Superclass {
-      // :nodoc:
-      // :nodoc:
-      // Declares the authoritative server model name used on the wire.
-      // Declares a partially loadable scalar field.
-      // Names mirror Sequel; persistence options stay on the server.
-      // Whether +name+ has an authoritative value, including nil.
-      isFieldLoaded(name) {
-        return this.dataFieldLoaded(name);
-      }
-      // Cached data remains readable while an invalidated association refreshes.
-      isFieldStale(name) {
-        return this.dataFieldStale(name);
-      }
-      // Whether +name+ currently has a request in flight.
-      isFieldLoading(name) {
-        return this.dataFieldLoading(name);
-      }
-      // The last loading error for +name+, if any.
-      fieldError(name) {
-        return this.dataFieldError(name);
-      }
-    }
-    return Swill__Model__DistantData_Layer;
-  }
-  function Swill__Model__DistantData_ClassMethods(Superclass) {
-    class Swill__Model__DistantData_ClassMethods_Layer extends Object {
-      dataFields() {
-        return Runtime2.inheritableRegistry(this, "dataFields", "hash");
-      }
-      dataModelName(...values) {
-        return Runtime2.classSetting(this, "data_model_name", values);
-      }
-    }
-    Object.setPrototypeOf(Swill__Model__DistantData_ClassMethods_Layer.prototype, Superclass);
-    return Swill__Model__DistantData_ClassMethods_Layer.prototype;
-  }
-  var Swill__Model__DistantObject = class _Swill__Model__DistantObject extends Swill__Model__Editable {
-    // Gives each to-many association its stable collection.
-    constructor() {
-      super();
-      this._data_field_states = Runtime2.cast(
-        {},
-        "T::Hash[String, T::Hash[String, T.untyped]]"
-      );
-      this._data_draft_source = Runtime2.cast(
-        null,
-        "T.nilable(Swill::Model::DistantObject)"
-      );
-      this._applying_association = Runtime2.cast(false, "T::Boolean");
-      this._data_controllers = Runtime2.cast(
-        {},
-        "T::Hash[String, ArrayController]"
-      );
-      this._data_collections = Runtime2.cast(
-        {},
-        "T::Hash[String, AssociationCollection[T.untyped]]"
-      );
-      Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (descriptor.kind !== "many") return;
-        let collection = new Swill__Model__AssociationCollection();
-        collection.attachAssociation(this, name);
-        this._data_collections[name] = collection;
-        return this.writeDataAssociation(name, collection);
-      });
-    }
-    // Shared presentation is opt-in; constructing the controller does not load.
-    associationController(name) {
-      let existing = this._data_controllers[name];
-      if (existing) return existing;
-      let collection = this._data_collections[name];
-      if (!collection) throw new Error(`Unknown to-many association ${name}`);
-      let controller = new Swill__ArrayController();
-      controller.content = collection;
-      this._data_controllers[name] = controller;
-      return controller;
-    }
-    releaseAssociationControllers() {
-      Object.entries(this._data_controllers).forEach(([_name, controller]) => {
-        Runtime2.write(controller, "content", null);
-        return Runtime2.send(controller, "dealloc");
-      });
-      this._data_controllers = {};
-      return this._data_controllers;
-    }
-    disconnect() {
-      this.releaseAssociationControllers();
-      return super.disconnect();
-    }
-    coercePropertyValue(name, value, previous) {
-      let descriptor = this.constructor.dataFields()[name];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        Runtime2.logicalAnd(descriptor, () => descriptor.kind !== "field"),
-        () => !this._applying_association
-      ))) {
-        throw new Error(`Association ${name} is read-only; use a server operation`);
-      }
-      ;
-      return super.coercePropertyValue(name, value, previous);
-    }
-    // Internal writes still use the ordinary observation machinery.
-    writeDataAssociation(name, value) {
-      this._applying_association = true;
-      try {
-        return Runtime2.write(this, name, value);
-      } finally {
-        this._applying_association = false;
-      }
-    }
-    // Schedules hydration when a declared member is unknown.
-    propertyWillAccess(name) {
-      super.propertyWillAccess(name);
-      if (this._syncing_data_collection || this.isDraft() || this.isDeleted) return;
-      if (Object.hasOwn(this.constructor.dataFields(), name)) {
-        return Swill__Model__DistantClient.default().demand(this, name);
-      }
-    }
-    async loadField(name) {
-      if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
-      if (this.isDeleted) {
-        throw new Error("A deleted distant object cannot hydrate fields");
-      }
-      ;
-      if (this.id == null) {
-        throw new Error("An unsaved distant object cannot hydrate fields");
-      }
-      ;
-      return await Swill__Model__DistantClient.default().loadField(
-        this,
-        name,
-        false
-      );
-    }
-    async reloadField(name) {
-      if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
-      if (this.isDeleted) {
-        throw new Error("A deleted distant object cannot hydrate fields");
-      }
-      ;
-      if (this.id == null) {
-        throw new Error("An unsaved distant object cannot hydrate fields");
-      }
-      ;
-      return await Swill__Model__DistantClient.default().loadField(
-        this,
-        name,
-        true
-      );
-    }
-    async save() {
-      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (this.isDraft()) {
-        throw new Error("Save a distant draft with original.apply_draft(draft)");
-      }
-      ;
-      let attributes = this.collectDirtyAttributes();
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        this.id,
-        () => Runtime2.isEmpty(attributes)
-      ))) return this;
-      if (this.id != null) {
-        await Swill__Model__DistantClient.default().update(this, attributes);
-      } else {
-        await Swill__Model__DistantClient.default().create(this, attributes);
-      }
-      ;
-      this.markCleanBang();
-      return this;
-    }
-    async applyDraft(copy) {
-      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (!copy.isDraftFrom(this)) {
-        throw new Error("apply_draft requires a draft created from this distant object");
-      }
-      ;
-      let attributes = copy.collectDirtyAttributes();
-      if (Runtime2.isEmpty(attributes)) return this;
-      await Swill__Model__DistantClient.default().update(this, attributes);
-      copy.markCleanBang();
-      return this;
-    }
-    async delete() {
-      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (this.isDraft()) {
-        throw new Error("Save a distant draft with original.apply_draft(draft)");
-      }
-      ;
-      if (this.id == null) {
-        throw new Error("Cannot delete an unsaved distant object");
-      }
-      ;
-      await Swill__Model__DistantClient.default().delete(this);
-      return this;
-    }
-    // Returns a detached editable copy that never hydrates independently.
-    draft() {
-      if (this.isDeleted) throw new Error("Cannot draft a deleted distant object");
-      if (this.id == null) {
-        throw new Error("Save a distant object before drafting it");
-      }
-      ;
-      let copy = new this.constructor();
-      copy.attachDataDraft(this);
-      let attributes = Runtime2.cast(
-        { id: this.id },
-        "T::Hash[T.untyped, T.untyped]"
-      );
-      Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (!Runtime2.isTruthy(descriptor.kind === "field" && this.dataFieldLoaded(name))) {
-          return;
-        }
-        ;
-        return attributes[name] = Runtime2.read(this, name);
-      });
-      copy.applyAttributes(attributes);
-      copy.presentDataField("id");
-      Object.entries(attributes).forEach(([name, _value]) => copy.presentDataField(Runtime2.send(name, "to_s")));
-      copy.markCleanBang();
-      return copy;
-    }
-    // Whether this object is a detached editing copy.
-    isDraft() {
-      return this._data_draft_source != null;
-    }
-    // Internal distant-data state. It is ordinary Ruby state so the model's
-    // behavior is the same on MRI and in compiled applications.
-    attachDataDraft(original) {
-      this._data_draft_source = original;
-      return this._data_draft_source;
-    }
-    isDraftFrom(original) {
-      return this._data_draft_source === original;
-    }
-    dataFieldLoaded(name) {
-      return this.dataFieldState(name).loaded === true;
-    }
-    dataFieldStale(name) {
-      return this.dataFieldState(name).stale === true;
-    }
-    // A generation watermark prevents older hydration from clearing staleness.
-    invalidateDataField(name, generation) {
-      let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
-        descriptor,
-        () => descriptor.kind !== "field"
-      ))) return;
-      let state2 = this.dataFieldState(name);
-      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
-      state2.generation = generation;
-      state2.stale = true;
-      state2.status = "stale";
-      state2.error = null;
-      return this.syncDataCollection(name);
-    }
-    dataFieldObserved(name) {
-      if (Runtime2.isTruthy(Runtime2.observed(this, name))) return true;
-      let collection = this._data_collections[name];
-      return collection != null && Runtime2.observed(collection, "records");
-    }
-    dataRequestStarted(name, generation) {
-      return this.dataFieldState(name).request_generation = generation;
-    }
-    dataFieldLoading(name) {
-      return this.dataFieldState(name).status === "loading";
-    }
-    dataFieldError(name) {
-      return Runtime2.cast(
-        this.dataFieldState(name).error,
-        "T.nilable(String)"
-      );
-    }
-    // Returns whether a request should be made.
-    beginDataFieldLoad(name, reload) {
-      let state2 = this.dataFieldState(name);
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        !reload && state2.loaded,
-        () => !Runtime2.isTruthy(state2.stale)
-      ))) return false;
-      if (Runtime2.isTruthy(!reload && state2.status === "loading")) return false;
-      state2.status = "loading";
-      state2.error = null;
-      this.syncDataCollection(name);
-      return true;
-    }
-    failDataFieldWithGeneration(name, message, generation) {
-      let state2 = this.dataFieldState(name);
-      if (Runtime2.isTruthy(generation != null ? (() => {
-        return generation < Runtime2.cast(state2.generation, "Integer") || generation < Runtime2.cast(
-          state2.request_generation,
-          "Integer"
-        );
-      })() : generation)) return;
-      state2.status = "failed";
-      state2.error = message;
-      return this.syncDataCollection(name);
-    }
-    presentDataField(name) {
-      let state2 = this.dataFieldState(name);
-      state2.status = "present";
-      state2.loaded = true;
-      state2.stale = false;
-      state2.error = null;
-      return this.syncDataCollection(name);
-    }
-    // Apply one authoritative member unless a newer response already won.
-    applyDataField(name, value, generation, overwrite_dirty) {
-      let state2 = this.dataFieldState(name);
-      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
-      state2.generation = generation;
-      state2.status = "present";
-      state2.loaded = true;
-      state2.stale = false;
-      state2.error = null;
-      if (Runtime2.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
-        return;
-      }
-      ;
-      let descriptor = this.constructor.dataFields()[name];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        descriptor,
-        () => descriptor.kind === "many"
-      ))) {
-        let collection = Runtime2.must(this._data_collections[name]);
-        collection.applyMembership(Runtime2.cast(
-          Runtime2.logicalOr(value, () => []),
-          "T::Array[T.untyped]"
-        ));
-      } else if (Runtime2.isTruthy(Runtime2.logicalOr(
-        Runtime2.logicalAnd(descriptor, () => descriptor.kind === "field"),
-        () => name === "id"
-      ))) {
-        this.applyAttributes({ [name]: value });
-      } else {
-        this.writeDataAssociation(name, value);
-      }
-      ;
-      return this.syncDataCollection(name);
-    }
-    resetDataFields() {
-      this.releaseAssociationControllers();
-      this._data_field_states = {};
-      return Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (descriptor.kind === "many") this.syncDataCollection(name);
-      });
-    }
-    // Mirror the owner's authoritative state without demanding another load.
-    syncDataCollection(name) {
-      let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
-        descriptor,
-        () => descriptor.kind === "many"
-      ))) return;
-      this._syncing_data_collection = true;
-      try {
-        let collection = Runtime2.must(this._data_collections[name]);
-        let state2 = this.dataFieldState(name);
-        collection.loaded = state2.loaded === true;
-        collection.stale = state2.stale === true;
-        collection.loading = state2.status === "loading";
-        return collection.error = Runtime2.cast(
-          state2.error,
-          "T.nilable(String)"
-        );
-      } finally {
-        this._syncing_data_collection = false;
-      }
-    }
-    dataFieldState(name) {
-      return this._data_field_states[name] ||= {
-        status: "unknown",
-        loaded: false,
-        stale: false,
-        error: null,
-        generation: -1,
-        request_generation: -1
-      };
-    }
-    failDataField(name, message) {
-      return _Swill__Model__DistantObject.prototype.failDataFieldWithGeneration.call(
-        this,
-        name,
-        message,
-        null
-      );
-    }
   };
   var Swill__Model__Association = class extends Swill__Object {
     constructor(descriptor) {
@@ -7382,6 +6595,950 @@
       return Runtime2.read(this, name);
     }
   };
+  function Swill__Distant__Fields(Superclass) {
+    class Swill__Distant__Fields_Layer extends Superclass {
+      // :nodoc:
+      // :nodoc:
+      // Declares the authoritative server model name used on the wire.
+      // Declares a partially loadable scalar field.
+      // Names mirror Sequel; persistence options stay on the server.
+      // Whether +name+ has an authoritative value, including nil.
+      isFieldLoaded(name) {
+        return this.dataFieldLoaded(name);
+      }
+      // Cached data remains readable while an invalidated association refreshes.
+      isFieldStale(name) {
+        return this.dataFieldStale(name);
+      }
+      // Whether +name+ currently has a request in flight.
+      isFieldLoading(name) {
+        return this.dataFieldLoading(name);
+      }
+      // The last loading error for +name+, if any.
+      fieldError(name) {
+        return this.dataFieldError(name);
+      }
+    }
+    return Swill__Distant__Fields_Layer;
+  }
+  function Swill__Distant__Fields_ClassMethods(Superclass) {
+    class Swill__Distant__Fields_ClassMethods_Layer extends Object {
+      dataFields() {
+        return Runtime2.inheritableRegistry(this, "dataFields", "hash");
+      }
+      dataModelName(...values) {
+        return Runtime2.classSetting(this, "data_model_name", values);
+      }
+    }
+    Object.setPrototypeOf(Swill__Distant__Fields_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Distant__Fields_ClassMethods_Layer.prototype;
+  }
+  var Swill__Distant__Object = class _Swill__Distant__Object extends Swill__Model__Editable {
+    // Gives each to-many association its stable collection.
+    constructor() {
+      super();
+      this._data_field_states = Runtime2.cast(
+        {},
+        "T::Hash[String, T::Hash[String, T.untyped]]"
+      );
+      this._data_draft_source = Runtime2.cast(
+        null,
+        "T.nilable(Swill::Distant::Object)"
+      );
+      this._applying_association = Runtime2.cast(false, "T::Boolean");
+      this._data_controllers = Runtime2.cast(
+        {},
+        "T::Hash[String, ArrayController]"
+      );
+      this._data_collections = Runtime2.cast(
+        {},
+        "T::Hash[String, Model::AssociationCollection[T.untyped]]"
+      );
+      Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
+        if (descriptor.kind !== "many") return;
+        let collection = new Swill__Model__AssociationCollection();
+        collection.attachAssociation(this, name);
+        this._data_collections[name] = collection;
+        return this.writeDataAssociation(name, collection);
+      });
+    }
+    // Shared presentation is opt-in; constructing the controller does not load.
+    associationController(name) {
+      let existing = this._data_controllers[name];
+      if (existing) return existing;
+      let collection = this._data_collections[name];
+      if (!collection) throw new Error(`Unknown to-many association ${name}`);
+      let controller = new Swill__ArrayController();
+      controller.content = collection;
+      this._data_controllers[name] = controller;
+      return controller;
+    }
+    releaseAssociationControllers() {
+      Object.entries(this._data_controllers).forEach(([_name, controller]) => {
+        Runtime2.write(controller, "content", null);
+        return Runtime2.send(controller, "dealloc");
+      });
+      this._data_controllers = {};
+      return this._data_controllers;
+    }
+    disconnect() {
+      this.releaseAssociationControllers();
+      return super.disconnect();
+    }
+    coercePropertyValue(name, value, previous) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        Runtime2.logicalAnd(descriptor, () => descriptor.kind !== "field"),
+        () => !this._applying_association
+      ))) {
+        throw new Error(`Association ${name} is read-only; use a server operation`);
+      }
+      ;
+      return super.coercePropertyValue(name, value, previous);
+    }
+    // Internal writes still use the ordinary observation machinery.
+    writeDataAssociation(name, value) {
+      this._applying_association = true;
+      try {
+        return Runtime2.write(this, name, value);
+      } finally {
+        this._applying_association = false;
+      }
+    }
+    // Schedules hydration when a declared member is unknown.
+    propertyWillAccess(name) {
+      super.propertyWillAccess(name);
+      if (this._syncing_data_collection || this.isDraft() || this.isDeleted) return;
+      if (Object.hasOwn(this.constructor.dataFields(), name)) {
+        return Swill__Distant__Client.default().demand(this, name);
+      }
+    }
+    async loadField(name) {
+      if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
+      if (this.isDeleted) {
+        throw new Error("A deleted distant object cannot hydrate fields");
+      }
+      ;
+      if (this.id == null) {
+        throw new Error("An unsaved distant object cannot hydrate fields");
+      }
+      ;
+      return await Swill__Distant__Client.default().loadField(
+        this,
+        name,
+        false
+      );
+    }
+    async reloadField(name) {
+      if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
+      if (this.isDeleted) {
+        throw new Error("A deleted distant object cannot hydrate fields");
+      }
+      ;
+      if (this.id == null) {
+        throw new Error("An unsaved distant object cannot hydrate fields");
+      }
+      ;
+      return await Swill__Distant__Client.default().loadField(
+        this,
+        name,
+        true
+      );
+    }
+    async save() {
+      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
+      if (this.isDraft()) {
+        throw new Error("Save a distant draft with original.apply_draft(draft)");
+      }
+      ;
+      let attributes = this.collectDirtyAttributes();
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        this.id,
+        () => Runtime2.isEmpty(attributes)
+      ))) return this;
+      if (this.id != null) {
+        await Swill__Distant__Client.default().update(this, attributes);
+      } else {
+        await Swill__Distant__Client.default().create(this, attributes);
+      }
+      ;
+      this.markCleanBang();
+      return this;
+    }
+    async applyDraft(copy) {
+      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
+      if (!copy.isDraftFrom(this)) {
+        throw new Error("apply_draft requires a draft created from this distant object");
+      }
+      ;
+      let attributes = copy.collectDirtyAttributes();
+      if (Runtime2.isEmpty(attributes)) return this;
+      await Swill__Distant__Client.default().update(this, attributes);
+      copy.markCleanBang();
+      return this;
+    }
+    async delete() {
+      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
+      if (this.isDraft()) {
+        throw new Error("Save a distant draft with original.apply_draft(draft)");
+      }
+      ;
+      if (this.id == null) {
+        throw new Error("Cannot delete an unsaved distant object");
+      }
+      ;
+      await Swill__Distant__Client.default().delete(this);
+      return this;
+    }
+    // Returns a detached editable copy that never hydrates independently.
+    draft() {
+      if (this.isDeleted) throw new Error("Cannot draft a deleted distant object");
+      if (this.id == null) {
+        throw new Error("Save a distant object before drafting it");
+      }
+      ;
+      let copy = new this.constructor();
+      copy.attachDataDraft(this);
+      let attributes = Runtime2.cast(
+        { id: this.id },
+        "T::Hash[T.untyped, T.untyped]"
+      );
+      Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
+        if (!Runtime2.isTruthy(descriptor.kind === "field" && this.dataFieldLoaded(name))) {
+          return;
+        }
+        ;
+        return attributes[name] = Runtime2.read(this, name);
+      });
+      copy.applyAttributes(attributes);
+      copy.presentDataField("id");
+      Object.entries(attributes).forEach(([name, _value]) => copy.presentDataField(Runtime2.send(name, "to_s")));
+      copy.markCleanBang();
+      return copy;
+    }
+    // Whether this object is a detached editing copy.
+    isDraft() {
+      return this._data_draft_source != null;
+    }
+    // Internal distant-data state. It is ordinary Ruby state so the model's
+    // behavior is the same on MRI and in compiled applications.
+    attachDataDraft(original) {
+      this._data_draft_source = original;
+      return this._data_draft_source;
+    }
+    isDraftFrom(original) {
+      return this._data_draft_source === original;
+    }
+    dataFieldLoaded(name) {
+      return this.dataFieldState(name).loaded === true;
+    }
+    dataFieldStale(name) {
+      return this.dataFieldState(name).stale === true;
+    }
+    // A generation watermark prevents older hydration from clearing staleness.
+    invalidateDataField(name, generation) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+        descriptor,
+        () => descriptor.kind !== "field"
+      ))) return;
+      let state2 = this.dataFieldState(name);
+      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
+      state2.generation = generation;
+      state2.stale = true;
+      state2.status = "stale";
+      state2.error = null;
+      return this.syncDataCollection(name);
+    }
+    dataFieldObserved(name) {
+      if (Runtime2.isTruthy(Runtime2.observed(this, name))) return true;
+      let collection = this._data_collections[name];
+      return collection != null && Runtime2.observed(collection, "records");
+    }
+    dataRequestStarted(name, generation) {
+      return this.dataFieldState(name).request_generation = generation;
+    }
+    dataFieldLoading(name) {
+      return this.dataFieldState(name).status === "loading";
+    }
+    dataFieldError(name) {
+      return Runtime2.cast(
+        this.dataFieldState(name).error,
+        "T.nilable(String)"
+      );
+    }
+    // Returns whether a request should be made.
+    beginDataFieldLoad(name, reload) {
+      let state2 = this.dataFieldState(name);
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        !reload && state2.loaded,
+        () => !Runtime2.isTruthy(state2.stale)
+      ))) return false;
+      if (Runtime2.isTruthy(!reload && state2.status === "loading")) return false;
+      state2.status = "loading";
+      state2.error = null;
+      this.syncDataCollection(name);
+      return true;
+    }
+    failDataFieldWithGeneration(name, message, generation) {
+      let state2 = this.dataFieldState(name);
+      if (Runtime2.isTruthy(generation != null ? (() => {
+        return generation < Runtime2.cast(state2.generation, "Integer") || generation < Runtime2.cast(
+          state2.request_generation,
+          "Integer"
+        );
+      })() : generation)) return;
+      state2.status = "failed";
+      state2.error = message;
+      return this.syncDataCollection(name);
+    }
+    presentDataField(name) {
+      let state2 = this.dataFieldState(name);
+      state2.status = "present";
+      state2.loaded = true;
+      state2.stale = false;
+      state2.error = null;
+      return this.syncDataCollection(name);
+    }
+    // Apply one authoritative member unless a newer response already won.
+    applyDataField(name, value, generation, overwrite_dirty) {
+      let state2 = this.dataFieldState(name);
+      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
+      state2.generation = generation;
+      state2.status = "present";
+      state2.loaded = true;
+      state2.stale = false;
+      state2.error = null;
+      if (Runtime2.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
+        return;
+      }
+      ;
+      let descriptor = this.constructor.dataFields()[name];
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        descriptor,
+        () => descriptor.kind === "many"
+      ))) {
+        let collection = Runtime2.must(this._data_collections[name]);
+        collection.applyMembership(Runtime2.cast(
+          Runtime2.logicalOr(value, () => []),
+          "T::Array[T.untyped]"
+        ));
+      } else if (Runtime2.isTruthy(Runtime2.logicalOr(
+        Runtime2.logicalAnd(descriptor, () => descriptor.kind === "field"),
+        () => name === "id"
+      ))) {
+        this.applyAttributes({ [name]: value });
+      } else {
+        this.writeDataAssociation(name, value);
+      }
+      ;
+      return this.syncDataCollection(name);
+    }
+    resetDataFields() {
+      this.releaseAssociationControllers();
+      this._data_field_states = {};
+      return Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
+        if (descriptor.kind === "many") this.syncDataCollection(name);
+      });
+    }
+    // Mirror the owner's authoritative state without demanding another load.
+    syncDataCollection(name) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+        descriptor,
+        () => descriptor.kind === "many"
+      ))) return;
+      this._syncing_data_collection = true;
+      try {
+        let collection = Runtime2.must(this._data_collections[name]);
+        let state2 = this.dataFieldState(name);
+        collection.loaded = state2.loaded === true;
+        collection.stale = state2.stale === true;
+        collection.loading = state2.status === "loading";
+        return collection.error = Runtime2.cast(
+          state2.error,
+          "T.nilable(String)"
+        );
+      } finally {
+        this._syncing_data_collection = false;
+      }
+    }
+    dataFieldState(name) {
+      return this._data_field_states[name] ||= {
+        status: "unknown",
+        loaded: false,
+        stale: false,
+        error: null,
+        generation: -1,
+        request_generation: -1
+      };
+    }
+    failDataField(name, message) {
+      return _Swill__Distant__Object.prototype.failDataFieldWithGeneration.call(
+        this,
+        name,
+        message,
+        null
+      );
+    }
+  };
+  var Swill__Distant__Client = class _Swill__Distant__Client extends Swill__Object {
+    static default() {
+      return this._default ||= new this();
+    }
+    static configure(...__swill_arguments) {
+      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+        positional: [],
+        keywords: [
+          { name: "url", kind: "keyreq" },
+          { name: "schema_hash", kind: "keyreq" }
+        ],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let url = Runtime2.argument(__swill_bound, "url");
+      let schema_hash = Runtime2.argument(__swill_bound, "schema_hash");
+      return Runtime2.configureData(url, schema_hash);
+    }
+    constructor() {
+      super();
+      this._stores = Runtime2.cast(
+        {},
+        "T::Hash[String, T::Hash[String, T.untyped]]"
+      );
+      this._tombstones = Runtime2.cast(
+        {},
+        "T::Hash[String, T::Hash[String, T.untyped]]"
+      );
+      this._queued_demands = Runtime2.cast({}, "T::Hash[String, T.untyped]");
+      this._demand_scheduled = Runtime2.cast(false, "T::Boolean");
+      this._actor_scope = Runtime2.cast(null, "T.nilable(String)");
+      this._generation = Runtime2.cast(0, "Integer");
+      this._active_generations = Runtime2.cast([], "T::Array[Integer]");
+      Runtime2.registerDataLifecycle(
+        () => this.reset(),
+        () => this.connectionOpened()
+      );
+    }
+    async query(model, name, positional, keywords, result_kind) {
+      let value = await this.request(
+        "QUERY",
+        this.operation(model, name, positional, keywords),
+        null,
+        false
+      );
+      return this.wrapResult(value, result_kind);
+    }
+    async resolve(model, name, positional, keywords, result_kind) {
+      let value = await this.request(
+        "RESOLVE",
+        this.operation(model, name, positional, keywords),
+        null,
+        false
+      );
+      return this.wrapResult(value, result_kind);
+    }
+    async command(object, name, positional, keywords, result_kind) {
+      let contents = this.operation(
+        object.constructor.dataModelName(),
+        name,
+        positional,
+        keywords
+      );
+      contents.id = object.id;
+      let value = await this.request("COMMAND", contents, null, true);
+      return this.wrapResult(value, result_kind);
+    }
+    async classCommand(model, name, positional, keywords, result_kind) {
+      let value = await this.request(
+        "COMMAND",
+        this.operation(model, name, positional, keywords),
+        null,
+        true
+      );
+      return this.wrapResult(value, result_kind);
+    }
+    async create(object, attributes) {
+      await this.request(
+        "CREATE",
+        {
+          model: object.constructor.dataModelName(),
+          attributes: this.encodeValue(attributes)
+        },
+        object,
+        true
+      );
+      return object;
+    }
+    async update(object, attributes) {
+      await this.request(
+        "UPDATE",
+        {
+          model: object.constructor.dataModelName(),
+          id: object.id,
+          attributes: this.encodeValue(attributes)
+        },
+        null,
+        true
+      );
+      return object;
+    }
+    async delete(object) {
+      let model = object.constructor.dataModelName();
+      let id = Runtime2.stringify(object.id);
+      let [_value, removed_generation] = await this.requestWithGeneration(
+        "DELETE",
+        { model, id },
+        null,
+        true
+      );
+      Runtime2.deleteKey(this.modelStore(model), id);
+      this.modelTombstones(model)[id] = {
+        object,
+        generation: removed_generation
+      };
+      object.deleted = true;
+      Runtime2.deleteKey(this._queued_demands, `${model}:${id}`);
+      object.disconnect();
+      this.pruneTombstones();
+      return object;
+    }
+    // Queue all members read in this JavaScript turn into one GET.
+    demand(object, name) {
+      if (object.id == null) return;
+      if (!object.beginDataFieldLoad(name, false)) return;
+      let model = object.constructor.dataModelName();
+      let key = `${model}:${object.id}`;
+      let item = this._queued_demands[key];
+      if (!Runtime2.isTruthy(item)) {
+        item = { object, fields: [] };
+        this._queued_demands[key] = item;
+      }
+      ;
+      let fields = Runtime2.cast(item.fields, "T::Array[String]");
+      if (!fields.includes(name)) Runtime2.append(fields, name);
+      return this.scheduleDemands();
+    }
+    async loadField(object, name, reload) {
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        !reload && object.dataFieldLoaded(name),
+        () => !object.dataFieldStale(name)
+      ))) return Runtime2.read(object, name);
+      object.beginDataFieldLoad(name, true);
+      await this.request(
+        "GET",
+        { demands: [this.demandHash(object, [name])] },
+        null,
+        false
+      );
+      return Runtime2.read(object, name);
+    }
+    // A changed actor or an explicit close invalidates every identity.
+    reset() {
+      Object.entries(this._stores).forEach(([_model, store]) => {
+        let typed_store = Runtime2.cast(store, "T::Hash[String, T.untyped]");
+        return Object.entries(typed_store).forEach(([_id, object]) => {
+          let distant = Runtime2.cast(object, "Swill::Distant::Object");
+          distant.resetDataFields();
+          return distant.disconnect();
+        });
+      });
+      this._stores = {};
+      this._tombstones = {};
+      this._queued_demands = {};
+      this._actor_scope = null;
+      return this._actor_scope;
+    }
+    connectionOpened() {
+      if (!Runtime2.isEmpty(this._queued_demands)) return this.scheduleDemands();
+    }
+    operation(model, name, positional, keywords) {
+      return {
+        model,
+        name,
+        arguments: this.encodeArguments(positional),
+        keywords: this.encodeKeywords(keywords)
+      };
+    }
+    wrapResult(value, result_kind) {
+      if (result_kind !== "result_set") return value;
+      return new Swill__Model__ResultSet().replace(Runtime2.cast(
+        value,
+        "T::Array[T.untyped]"
+      ));
+    }
+    encodeArguments(values) {
+      return values.filter((value) => !Runtime2.isTruthy(Runtime2.isOmittedArgument(value))).map((value) => this.encodeValue(value));
+    }
+    encodeKeywords(values) {
+      let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
+      Object.entries(values).forEach(([name, value]) => {
+        if (!Runtime2.isTruthy(Runtime2.isOmittedArgument(value))) {
+          result[name] = this.encodeValue(value);
+        }
+      });
+      return result;
+    }
+    encodeValue(value) {
+      if (Runtime2.isTruthy(value instanceof Swill__Distant__Object && Runtime2.send(
+        value,
+        "id"
+      ))) {
+        let distant = Runtime2.cast(value, "Swill::Distant::Object");
+        return { $ref: [
+          distant.constructor.dataModelName(),
+          Runtime2.stringify(distant.id)
+        ] };
+      }
+      ;
+      if (Runtime2.isTruthy(Runtime2.dataTime(value))) {
+        return { $time: Runtime2.dataTimeIso(value) };
+      }
+      ;
+      if (Array.isArray(value)) {
+        return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.encodeValue(item));
+      }
+      ;
+      if (Runtime2.isTruthy(Runtime2.dataRecord(value))) {
+        let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
+        Object.entries(Runtime2.cast(value, "T::Hash[T.untyped, T.untyped]")).forEach(([name, item]) => result[name] = this.encodeValue(item));
+        return result;
+      }
+      ;
+      return value;
+    }
+    decodeValueWithPreferred(value, response_generation, preferred) {
+      if (Array.isArray(value)) {
+        return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.decodeValueWithPreferred(item, response_generation, preferred));
+      }
+      ;
+      if (!Runtime2.isTruthy(Runtime2.dataRecord(value))) return value;
+      let record2 = Runtime2.cast(value, "T::Hash[String, T.untyped]");
+      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$ref"
+      ))) {
+        let reference = Runtime2.cast(record2["$ref"], "T::Array[T.untyped]");
+        let use_preferred = Runtime2.logicalAnd(
+          preferred && Runtime2.isEqual(
+            preferred.constructor.dataModelName(),
+            reference[0]
+          ),
+          () => preferred.id == null
+        );
+        return this.canonicalWithPreferred(
+          Runtime2.send(reference[0], "to_s"),
+          Runtime2.send(reference[1], "to_s"),
+          response_generation,
+          Runtime2.isTruthy(use_preferred) ? preferred : null
+        );
+      }
+      ;
+      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$time"
+      ))) return Runtime2.dataTimeFromIso(Runtime2.send(record2["$time"], "to_s"));
+      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$date"
+      ))) return record2["$date"];
+      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$value"
+      ))) {
+        let tagged = Runtime2.cast(record2["$value"], "T::Array[T.untyped]");
+        let klass = Runtime2.resolve(Runtime2.send(tagged[0], "to_s"));
+        let attributes = Runtime2.cast(
+          this.decodeValue(tagged[1], response_generation),
+          "T::Hash[String, T.untyped]"
+        );
+        let object = new klass();
+        Object.entries(attributes).forEach(([name, item]) => Runtime2.write(object, name, item));
+        return object;
+      }
+      ;
+      let result = Runtime2.cast({}, "T::Hash[String, T.untyped]");
+      Object.entries(record2).forEach(([name, item]) => result[name] = this.decodeValueWithPreferred(
+        item,
+        response_generation,
+        preferred
+      ));
+      return result;
+    }
+    canonicalWithPreferred(model, id, response_generation, preferred) {
+      let store = this.modelStore(model);
+      let existing = store[id];
+      if (Runtime2.isTruthy(existing)) {
+        return Runtime2.cast(existing, "Swill::Distant::Object");
+      }
+      ;
+      let removed = this.modelTombstones(model)[id];
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        removed,
+        () => response_generation <= removed.generation
+      ))) return Runtime2.cast(removed.object, "Swill::Distant::Object");
+      if (Runtime2.isTruthy(removed)) {
+        Runtime2.deleteKey(this.modelTombstones(model), id);
+      }
+      ;
+      let object = preferred || new (Runtime2.resolve(model))();
+      Runtime2.invoke(
+        object,
+        "apply_data_field",
+        "id",
+        id,
+        response_generation,
+        true
+      );
+      store[id] = object;
+      return object;
+    }
+    applyPatch(patch, preferred, overwrite_dirty) {
+      let model = Runtime2.send(patch.model, "to_s");
+      let id = Runtime2.send(patch.id, "to_s");
+      let patch_generation = Runtime2.cast(patch.generation, "Integer");
+      let use_preferred = Runtime2.logicalAnd(
+        preferred && Runtime2.isEqual(
+          preferred.constructor.dataModelName(),
+          model
+        ),
+        () => preferred.id == null
+      );
+      let object = this.canonicalWithPreferred(
+        model,
+        id,
+        patch_generation,
+        Runtime2.isTruthy(use_preferred) ? preferred : null
+      );
+      let removed = this.modelTombstones(model)[id];
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        removed,
+        () => patch_generation <= removed.generation
+      ))) return object;
+      let fields = Runtime2.cast(
+        Runtime2.logicalOr(patch.fields, () => ({})),
+        "T::Hash[String, T.untyped]"
+      );
+      Object.entries(fields).forEach(([name, encoded]) => {
+        let value = this.decodeValue(encoded, patch_generation);
+        return object.applyDataField(
+          name,
+          value,
+          patch_generation,
+          overwrite_dirty
+        );
+      });
+      return object;
+    }
+    // Invalidations affect cached objects only; they never instantiate a graph.
+    applyInvalidation(effect) {
+      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
+        effect.id,
+        "to_s"
+      )];
+      if (!Runtime2.isTruthy(object)) return;
+      let distant = Runtime2.cast(object, "Swill::Distant::Object");
+      if (distant.isDeleted) return;
+      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => distant.invalidateDataField(
+        name,
+        Runtime2.cast(effect.generation, "Integer")
+      ));
+    }
+    refreshObserved(effect) {
+      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
+        effect.id,
+        "to_s"
+      )];
+      if (!Runtime2.isTruthy(object)) return;
+      let distant = Runtime2.cast(object, "Swill::Distant::Object");
+      if (distant.isDeleted) return;
+      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => {
+        if (Runtime2.isTruthy(distant.dataFieldStale(name) && distant.dataFieldObserved(name))) {
+          this.demand(distant, name);
+        }
+      });
+    }
+    applyEnvelope(message, response_generation, preferred, overwrite_dirty) {
+      let invalidations = Runtime2.cast(
+        Runtime2.logicalOr(message.invalidations, () => []),
+        "T::Array[T::Hash[String, T.untyped]]"
+      );
+      invalidations.forEach((effect) => this.applyInvalidation(effect));
+      let patches = Runtime2.cast(
+        Runtime2.logicalOr(message.patches, () => []),
+        "T::Array[T::Hash[String, T.untyped]]"
+      );
+      patches.forEach((patch) => this.applyPatch(patch, preferred, overwrite_dirty));
+      invalidations.forEach((effect) => this.refreshObserved(effect));
+      return this.decodeValueWithPreferred(
+        message.value,
+        response_generation,
+        preferred
+      );
+    }
+    async request(type, contents, preferred, overwrite_dirty) {
+      let [value, _operation_generation] = await this.requestWithGeneration(
+        type,
+        contents,
+        preferred,
+        overwrite_dirty
+      );
+      return value;
+    }
+    async requestWithGeneration(type, contents, preferred, overwrite_dirty) {
+      this._generation++;
+      let operation_generation = this._generation;
+      Runtime2.append(this._active_generations, operation_generation);
+      let payload = Object.assign(
+        {},
+        contents,
+        { generation: operation_generation }
+      );
+      if (type === "GET") {
+        this.updateDemandState(contents, operation_generation, null);
+      }
+      ;
+      try {
+        let raw = await Runtime2.dataRequest(type, payload);
+        let received = Runtime2.cast(raw, "T::Hash[String, T.untyped]");
+        let scope = Runtime2.send(received.actor_scope, "to_s");
+        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+          this._actor_scope,
+          () => this._actor_scope !== scope
+        ))) this.reset();
+        this._actor_scope = scope;
+        let message = Runtime2.cast(
+          received.message,
+          "T::Hash[String, T.untyped]"
+        );
+        return [
+          this.applyEnvelope(
+            message,
+            operation_generation,
+            preferred,
+            overwrite_dirty
+          ),
+          operation_generation
+        ];
+      } catch (error) {
+        if (type === "GET") {
+          this.updateDemandState(contents, operation_generation, error.message);
+        }
+        ;
+        return (() => {
+          throw error;
+        })();
+      } finally {
+        this._active_generations = this._active_generations.filter((item) => !(item === operation_generation));
+        this.pruneTombstones();
+      }
+    }
+    updateDemandState(contents, generation, error) {
+      return Runtime2.cast(
+        contents.demands,
+        "T::Array[T::Hash[String, T.untyped]]"
+      ).forEach((item) => {
+        let object = this.modelStore(Runtime2.send(item.model, "to_s"))[Runtime2.send(
+          item.id,
+          "to_s"
+        )];
+        if (!Runtime2.isTruthy(object)) return;
+        let distant = Runtime2.cast(object, "Swill::Distant::Object");
+        return Runtime2.cast(item.fields, "T::Array[String]").forEach((name) => error != null ? distant.failDataFieldWithGeneration(
+          name,
+          error,
+          generation
+        ) : distant.dataRequestStarted(name, generation));
+      });
+    }
+    modelStore(model) {
+      return this._stores[model] ||= {};
+    }
+    modelTombstones(model) {
+      return this._tombstones[model] ||= {};
+    }
+    pruneTombstones() {
+      let oldest = Runtime2.logicalOr(
+        Runtime2.min(this._active_generations),
+        () => this._generation + 1
+      );
+      Object.entries(this._tombstones).forEach(([_model, removed_objects]) => {
+        let typed_removed = Runtime2.cast(
+          removed_objects,
+          "T::Hash[String, T.untyped]"
+        );
+        return Object.keys(typed_removed).forEach((id) => {
+          let removed = typed_removed[id];
+          if (removed.generation < oldest) return Runtime2.deleteKey(typed_removed, id);
+        });
+      });
+      return Object.keys(this._tombstones).forEach((model) => {
+        if (Runtime2.isEmpty(Runtime2.must(this._tombstones[model]))) {
+          Runtime2.deleteKey(this._tombstones, model);
+        }
+      });
+    }
+    demandHash(object, fields) {
+      return {
+        model: object.constructor.dataModelName(),
+        id: object.id,
+        fields
+      };
+    }
+    scheduleDemands() {
+      if (this._demand_scheduled) return;
+      this._demand_scheduled = true;
+      return queueMicrotask(() => this.flushDemands());
+    }
+    async flushDemands() {
+      this._demand_scheduled = false;
+      let batch = Object.values(this._queued_demands);
+      this._queued_demands = {};
+      if (Runtime2.isEmpty(batch)) return;
+      let demands = batch.map((item) => this.demandHash(
+        Runtime2.cast(item.object, "Swill::Distant::Object"),
+        Runtime2.cast(item.fields, "T::Array[String]")
+      ));
+      try {
+        return await this.request("GET", { demands }, null, false);
+      } catch (error) {
+        if (!Runtime2.isTruthy(Runtime2.dataConnected())) {
+          batch.forEach((item) => {
+            let object = Runtime2.cast(item.object, "Swill::Distant::Object");
+            let fields = Runtime2.cast(item.fields, "T::Array[String]");
+            let key = `${object.constructor.dataModelName()}:${object.id}`;
+            let queued = this._queued_demands[key] ||= {
+              object,
+              fields: []
+            };
+            let target = Runtime2.cast(queued.fields, "T::Array[String]");
+            return fields.forEach((name) => {
+              if (!target.includes(name)) Runtime2.append(target, name);
+            });
+          });
+        }
+        ;
+        return Runtime2.warn(`data did not load: ${error.message}`);
+      }
+    }
+    decodeValue(value, response_generation) {
+      return _Swill__Distant__Client.prototype.decodeValueWithPreferred.call(
+        this,
+        value,
+        response_generation,
+        null
+      );
+    }
+    canonical(model, id, response_generation) {
+      return _Swill__Distant__Client.prototype.canonicalWithPreferred.call(
+        this,
+        model,
+        id,
+        response_generation,
+        null
+      );
+    }
+  };
 
   // build/framework.meta.mjs
   var meta = {
@@ -7666,9 +7823,9 @@
         classFactory: Swill__Model__Identity_ClassMethods,
         methods: {}
       },
-      "Swill::Model::DistantData": {
-        factory: Swill__Model__DistantData,
-        classFactory: Swill__Model__DistantData_ClassMethods,
+      "Swill::Distant::Fields": {
+        factory: Swill__Distant__Fields,
+        classFactory: Swill__Distant__Fields_ClassMethods,
         methods: {
           "field_loaded?": {
             "arity": 1,
@@ -9799,141 +9956,150 @@
         properties: {},
         methods: {}
       },
-      "Swill::Model::DistantClient": {
-        constructor: Swill__Model__DistantClient,
+      "Swill::Model::Association": {
+        constructor: Swill__Model__Association,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "name": {
+            "arity": 0,
+            "accessor": true
+          },
+          "key": {
+            "arity": 0,
+            "accessor": true
+          },
+          "many?": {
+            "arity": 0,
+            "js": "isMany"
+          },
+          "model_class": {
+            "arity": 0,
+            "js": "modelClass"
+          },
+          "url_for": {
+            "arity": 1,
+            "js": "urlFor"
+          }
+        }
+      },
+      "Swill::Model::Codec": {
+        constructor: Swill__Model__Codec,
+        properties: {},
+        methods: {}
+      },
+      "Swill::Model::PlainJSON": {
+        constructor: Swill__Model__PlainJSON,
+        properties: {},
+        methods: {}
+      },
+      "Swill::Model::JSONAPI": {
+        constructor: Swill__Model__JSONAPI,
+        properties: {},
+        methods: {}
+      },
+      "Swill::Model::Dataset": {
+        constructor: Swill__Model__Dataset,
+        properties: {
+          "records": {
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "loading": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "error": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 3
+          },
+          "url": {
+            "arity": 0,
+            "accessor": true
+          },
+          "params": {
+            "arity": 0,
+            "accessor": true
+          },
+          "reload": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Model::Resource": {
+        constructor: Swill__Model__Resource,
+        mixins: [Swill__Model__Associations, Swill__Model__Identity],
         properties: {},
         methods: {
           "initialize": {
             "arity": 0
           },
-          "query": {
-            "arity": 5
-          },
-          "resolve": {
-            "arity": 5
-          },
-          "command": {
-            "arity": 5
-          },
-          "class_command": {
-            "arity": 5,
-            "js": "classCommand"
-          },
-          "create": {
-            "arity": 2
-          },
-          "update": {
-            "arity": 2
-          },
-          "delete": {
+          "serialize": {
             "arity": 1
           },
-          "demand": {
-            "arity": 2
-          },
-          "load_field": {
-            "arity": 3,
-            "js": "loadField"
-          },
-          "reset": {
+          "validate": {
             "arity": 0
           },
-          "connection_opened": {
-            "arity": 0,
-            "js": "connectionOpened"
+          "save": {
+            "arity": 0
           },
-          "operation": {
-            "arity": 4
+          "delete": {
+            "arity": 0
           },
-          "wrap_result": {
+          "reload": {
+            "arity": 0
+          },
+          "associations": {
+            "arity": 0
+          },
+          "association": {
+            "arity": 1
+          },
+          "association_loaded?": {
+            "arity": 1,
+            "js": "isAssociationLoaded"
+          },
+          "assign_association": {
             "arity": 2,
-            "js": "wrapResult"
+            "js": "assignAssociation"
           },
-          "encode_arguments": {
+          "load_association": {
             "arity": 1,
-            "js": "encodeArguments"
+            "js": "loadAssociation"
           },
-          "encode_keywords": {
+          "property_will_access": {
             "arity": 1,
-            "js": "encodeKeywords"
+            "js": "propertyWillAccess"
           },
-          "encode_value": {
+          "load_association_in_background": {
             "arity": 1,
-            "js": "encodeValue"
+            "js": "loadAssociationInBackground"
           },
-          "decode_value": {
-            "arity": 2,
-            "js": "decodeValue"
-          },
-          "decode_value_with_preferred": {
-            "arity": 3,
-            "js": "decodeValueWithPreferred",
-            "family": "decode_value"
-          },
-          "canonical": {
-            "arity": 3
-          },
-          "canonical_with_preferred": {
-            "arity": 4,
-            "js": "canonicalWithPreferred",
-            "family": "canonical"
-          },
-          "apply_patch": {
-            "arity": 3,
-            "js": "applyPatch"
-          },
-          "apply_invalidation": {
+          "reload_association": {
             "arity": 1,
-            "js": "applyInvalidation"
-          },
-          "refresh_observed": {
-            "arity": 1,
-            "js": "refreshObserved"
-          },
-          "apply_envelope": {
-            "arity": 4,
-            "js": "applyEnvelope"
-          },
-          "request": {
-            "arity": 4
-          },
-          "request_with_generation": {
-            "arity": 4,
-            "js": "requestWithGeneration"
-          },
-          "update_demand_state": {
-            "arity": 3,
-            "js": "updateDemandState"
-          },
-          "model_store": {
-            "arity": 1,
-            "js": "modelStore"
-          },
-          "model_tombstones": {
-            "arity": 1,
-            "js": "modelTombstones"
-          },
-          "prune_tombstones": {
-            "arity": 0,
-            "js": "pruneTombstones"
-          },
-          "demand_hash": {
-            "arity": 2,
-            "js": "demandHash"
-          },
-          "schedule_demands": {
-            "arity": 0,
-            "js": "scheduleDemands"
-          },
-          "flush_demands": {
-            "arity": 0,
-            "js": "flushDemands"
+            "js": "reloadAssociation"
           }
         }
       },
-      "Swill::Model::DistantObject": {
-        constructor: Swill__Model__DistantObject,
-        mixins: [Swill__Model__DistantData],
+      "Swill::Distant::Object": {
+        constructor: Swill__Distant__Object,
+        mixins: [Swill__Distant__Fields],
         properties: {
           "deleted": {
             type: "T::Boolean",
@@ -10074,144 +10240,135 @@
           }
         }
       },
-      "Swill::Model::Association": {
-        constructor: Swill__Model__Association,
-        properties: {},
-        methods: {
-          "initialize": {
-            "arity": 1
-          },
-          "name": {
-            "arity": 0,
-            "accessor": true
-          },
-          "key": {
-            "arity": 0,
-            "accessor": true
-          },
-          "many?": {
-            "arity": 0,
-            "js": "isMany"
-          },
-          "model_class": {
-            "arity": 0,
-            "js": "modelClass"
-          },
-          "url_for": {
-            "arity": 1,
-            "js": "urlFor"
-          }
-        }
-      },
-      "Swill::Model::Codec": {
-        constructor: Swill__Model__Codec,
-        properties: {},
-        methods: {}
-      },
-      "Swill::Model::PlainJSON": {
-        constructor: Swill__Model__PlainJSON,
-        properties: {},
-        methods: {}
-      },
-      "Swill::Model::JSONAPI": {
-        constructor: Swill__Model__JSONAPI,
-        properties: {},
-        methods: {}
-      },
-      "Swill::Model::Dataset": {
-        constructor: Swill__Model__Dataset,
-        properties: {
-          "records": {
-            type: "T::Array[T.untyped]",
-            attribute: false,
-            defaultValue() {
-              return [];
-            }
-          },
-          "loading": {
-            type: "T::Boolean",
-            attribute: false,
-            defaultValue() {
-              return false;
-            }
-          },
-          "error": {
-            type: "T.nilable(String)",
-            attribute: false,
-            defaultValue() {
-              return null;
-            }
-          }
-        },
-        methods: {
-          "initialize": {
-            "arity": 3
-          },
-          "url": {
-            "arity": 0,
-            "accessor": true
-          },
-          "params": {
-            "arity": 0,
-            "accessor": true
-          },
-          "reload": {
-            "arity": 0
-          }
-        }
-      },
-      "Swill::Model::Resource": {
-        constructor: Swill__Model__Resource,
-        mixins: [Swill__Model__Associations, Swill__Model__Identity],
+      "Swill::Distant::Client": {
+        constructor: Swill__Distant__Client,
         properties: {},
         methods: {
           "initialize": {
             "arity": 0
           },
-          "serialize": {
-            "arity": 1
+          "query": {
+            "arity": 5
           },
-          "validate": {
-            "arity": 0
+          "resolve": {
+            "arity": 5
           },
-          "save": {
-            "arity": 0
+          "command": {
+            "arity": 5
+          },
+          "class_command": {
+            "arity": 5,
+            "js": "classCommand"
+          },
+          "create": {
+            "arity": 2
+          },
+          "update": {
+            "arity": 2
           },
           "delete": {
-            "arity": 0
-          },
-          "reload": {
-            "arity": 0
-          },
-          "associations": {
-            "arity": 0
-          },
-          "association": {
             "arity": 1
           },
-          "association_loaded?": {
-            "arity": 1,
-            "js": "isAssociationLoaded"
+          "demand": {
+            "arity": 2
           },
-          "assign_association": {
+          "load_field": {
+            "arity": 3,
+            "js": "loadField"
+          },
+          "reset": {
+            "arity": 0
+          },
+          "connection_opened": {
+            "arity": 0,
+            "js": "connectionOpened"
+          },
+          "operation": {
+            "arity": 4
+          },
+          "wrap_result": {
             "arity": 2,
-            "js": "assignAssociation"
+            "js": "wrapResult"
           },
-          "load_association": {
+          "encode_arguments": {
             "arity": 1,
-            "js": "loadAssociation"
+            "js": "encodeArguments"
           },
-          "property_will_access": {
+          "encode_keywords": {
             "arity": 1,
-            "js": "propertyWillAccess"
+            "js": "encodeKeywords"
           },
-          "load_association_in_background": {
+          "encode_value": {
             "arity": 1,
-            "js": "loadAssociationInBackground"
+            "js": "encodeValue"
           },
-          "reload_association": {
+          "decode_value": {
+            "arity": 2,
+            "js": "decodeValue"
+          },
+          "decode_value_with_preferred": {
+            "arity": 3,
+            "js": "decodeValueWithPreferred",
+            "family": "decode_value"
+          },
+          "canonical": {
+            "arity": 3
+          },
+          "canonical_with_preferred": {
+            "arity": 4,
+            "js": "canonicalWithPreferred",
+            "family": "canonical"
+          },
+          "apply_patch": {
+            "arity": 3,
+            "js": "applyPatch"
+          },
+          "apply_invalidation": {
             "arity": 1,
-            "js": "reloadAssociation"
+            "js": "applyInvalidation"
+          },
+          "refresh_observed": {
+            "arity": 1,
+            "js": "refreshObserved"
+          },
+          "apply_envelope": {
+            "arity": 4,
+            "js": "applyEnvelope"
+          },
+          "request": {
+            "arity": 4
+          },
+          "request_with_generation": {
+            "arity": 4,
+            "js": "requestWithGeneration"
+          },
+          "update_demand_state": {
+            "arity": 3,
+            "js": "updateDemandState"
+          },
+          "model_store": {
+            "arity": 1,
+            "js": "modelStore"
+          },
+          "model_tombstones": {
+            "arity": 1,
+            "js": "modelTombstones"
+          },
+          "prune_tombstones": {
+            "arity": 0,
+            "js": "pruneTombstones"
+          },
+          "demand_hash": {
+            "arity": 2,
+            "js": "demandHash"
+          },
+          "schedule_demands": {
+            "arity": 0,
+            "js": "scheduleDemands"
+          },
+          "flush_demands": {
+            "arity": 0,
+            "js": "flushDemands"
           }
         }
       }
@@ -10369,7 +10526,7 @@
 
   // build/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime2, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.DistantObject": "Swill__Model__DistantObject", "Model.DistantClient": "Swill__Model__DistantClient", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Model.DistantObject"]);
+  globalThis.Swill = browserAPI(framework_exports, Runtime2, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
   Swill__Templates.install('<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" role="listbox" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" role="option" tabindex="-1">\n      <span class="custom-select-icon" aria-hidden="true"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>\n  </template>\n</template>\n');
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();

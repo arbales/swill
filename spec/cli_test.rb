@@ -90,7 +90,7 @@ class CLITest < Minitest::Test
       assert_includes stdout, "wrote 13 data files"
       extension = File.join(dir, "client/models/data_fixture/post.rb")
       assert_includes File.read(extension), "class Post\n"
-      refute_includes File.read(extension), "DistantObject", "the extension reopens the generated class"
+      refute_includes File.read(extension), "Distant::Object", "the extension reopens the generated class"
 
       stdout, stderr, status = swill("data", "check", server, "--root", dir)
       assert status.success?, stderr

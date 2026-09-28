@@ -74,7 +74,7 @@ module Swill
         stale
       end
 
-      sig { params(owner: DistantObject, name: String).void }
+      sig { params(owner: Distant::Object, name: String).void }
       def attach_association(owner, name)
         @association_owner = owner
         @association_name = name
@@ -91,7 +91,7 @@ module Swill
       def initialize
         super
         @applying_membership = T.let(false, T::Boolean)
-        @association_owner = T.let(nil, T.nilable(DistantObject))
+        @association_owner = T.let(nil, T.nilable(Distant::Object))
         @association_name = T.let("", String)
         records.freeze
       end

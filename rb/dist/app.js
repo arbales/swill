@@ -64,16 +64,16 @@
   var Swill__Model__Collection = framework.Swill__Model__Collection;
   var Swill__Model__AssociationCollection = framework.Swill__Model__AssociationCollection;
   var Swill__Model__ResultSet = framework.Swill__Model__ResultSet;
-  var Swill__Model__DistantClient = framework.Swill__Model__DistantClient;
-  var Swill__Model__DistantData = framework.Swill__Model__DistantData;
-  var Swill__Model__DistantData_ClassMethods = framework.Swill__Model__DistantData_ClassMethods;
-  var Swill__Model__DistantObject = framework.Swill__Model__DistantObject;
   var Swill__Model__Association = framework.Swill__Model__Association;
   var Swill__Model__Codec = framework.Swill__Model__Codec;
   var Swill__Model__PlainJSON = framework.Swill__Model__PlainJSON;
   var Swill__Model__JSONAPI = framework.Swill__Model__JSONAPI;
   var Swill__Model__Dataset = framework.Swill__Model__Dataset;
   var Swill__Model__Resource = framework.Swill__Model__Resource;
+  var Swill__Distant__Fields = framework.Swill__Distant__Fields;
+  var Swill__Distant__Fields_ClassMethods = framework.Swill__Distant__Fields_ClassMethods;
+  var Swill__Distant__Object = framework.Swill__Distant__Object;
+  var Swill__Distant__Client = framework.Swill__Distant__Client;
 
   // build/application.classes.mjs
   function NormalizeName(Superclass) {
