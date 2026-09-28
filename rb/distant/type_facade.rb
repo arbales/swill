@@ -1,7 +1,11 @@
 # frozen_string_literal: true
 
-# Server declarations use Sorbet's type vocabulary even when Sorbet is not
-# loaded. Real Sorbet wins when an application requires it first.
+# The type facade: when no `T` is defined — the application did not require
+# `sorbet-runtime` before `swill/server` — this defines the subset of Sorbet's
+# vocabulary the protocol understands (`T::Sig`, `T::Boolean`, `T::Array`,
+# `T.nilable`, `T.any`, `T.untyped`), each producing a `Swill::Distant::Type`
+# directly. Server declarations are then written the same way with or without
+# Sorbet, and Sorbet's own `T` is used whenever it is loaded first.
 unless defined?(T)
   Object.const_set(:T, Module.new)
   T.const_set(:Sig, Swill::Sig)

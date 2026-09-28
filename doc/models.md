@@ -110,6 +110,15 @@ posts.error     # Last load error, if any
 author.field_stale?(:posts) # Also available for to-one associations
 ```
 
+Every field and association declares its state as properties beside it:
+`<name>_loaded`, `<name>_loading` and `<name>_error`, and `<name>_stale` for
+an association. They are observable, so a spinner binds to
+`bind-hidden="@post.body_loading"` and an empty state to `posts_loaded`; the
+`field_loaded?`, `field_stale?`, `field_loading?` and `field_error`
+predicates read them, and a collection's `loaded?`, `stale?`, `loading?` and
+`error` are computed from its owner's. An association is read-only: writing
+`post.author` raises `Read-only property`; a command changes it.
+
 An association observed directly or through an actively observed computed
 property refreshes through the normal batched demand path. An unobserved
 association waits until it is accessed; reading a retained collection's

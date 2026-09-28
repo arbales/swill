@@ -2,10 +2,27 @@
 
 module Swill
   module Distant
-    # Runtime checks at the untrusted protocol boundary.
+    # `Validator` checks what crosses the protocol boundary against the
+    # schema: the arguments a browser sends to a remote method, the
+    # attributes it writes, and the value a remote method returns. The
+    # `Dispatcher` calls it before invoking a method and before encoding its
+    # result, and a failed check is answered as an `ERROR` with the code
+    # `invalid_arguments` (the wrong number of positional arguments, a
+    # missing required keyword, or an unknown keyword) or `type_mismatch` (a
+    # value that does not match its declared `Type`). Types are the schema's
+    # encoded Hashes, as `Type#to_h` produces them. See
+    # [Server Data](rdoc-ref:doc/server_data.md).
     module Validator
       module_function
 
+      # Checks `arguments` and `keywords` against the remote method
+      # `declaration` and returns the positional parameter bound to each
+      # argument, as `positional_parameters!` does. Raises
+      # `Dispatcher::RemoteError` with code `invalid_arguments` when the
+      # positional count is wrong, a required keyword is missing, or a
+      # keyword is not declared and the method has no keyword rest — the
+      # missing and extra names are in `details` — and with code
+      # `type_mismatch` when an argument does not match its parameter's type.
       def arguments!(declaration, arguments, keywords)
         parameters = declaration.fetch("parameters")
         bindings = positional_parameters!(declaration, arguments.length)
@@ -38,6 +55,14 @@ module Swill
         bindings
       end
 
+      # Returns the positional parameter of `declaration` bound to each of
+      # `count` arguments, as an array of parameter Hashes in argument order,
+      # following Ruby's rules: required parameters before the first optional
+      # bind first, required parameters after the optionals bind from the
+      # end, the optionals take what remains in order, and a rest parameter
+      # takes the rest. Raises `Dispatcher::RemoteError` with code
+      # `invalid_arguments` when `count` is below the required number or
+      # above the maximum for a method without a rest parameter.
       def positional_parameters!(declaration, count)
         positional = declaration.fetch("parameters").select { |item| %w[req opt rest].include?(item["kind"]) }
         required = positional.count { |item| item["kind"] == "req" }
@@ -69,16 +94,28 @@ module Swill
         bindings
       end
 
+      # Checks a remote method's return `value` against its declared `type`.
+      # Raises `Dispatcher::RemoteError` with code `type_mismatch` when it
+      # does not match; the message names the return value.
       def result!(value, type)
         value!(value, type, "return value")
       end
 
+      # Checks `value` against `type`. Raises `Dispatcher::RemoteError` with
+      # code `type_mismatch` when it does not match, naming `subject` (such
+      # as "argument title") and the type in the message.
       def value!(value, type, subject)
         return if matches?(value, type)
 
         raise Dispatcher::RemoteError.new("type_mismatch", "#{subject} does not match #{describe(type)}")
       end
 
+      # Returns true when `value` matches the encoded `type`: anything for
+      # `dynamic`; nil or the member for `optional`; any member for `union`;
+      # a literal's name by string form for `enum`; an Array or Sequel
+      # dataset whose items all match the member for `array` and
+      # `result_set`; an instance of the named class for `model`,
+      # `model_ref` and `value`; and `primitive?` for a primitive.
       def matches?(value, type)
         kind = type.fetch("kind")
         members = type.fetch("members", [])
@@ -94,10 +131,16 @@ module Swill
         end
       end
 
+      # Returns true when `value` is an Array or, with Sequel loaded, a
+      # `Sequel::Dataset`.
       def collection?(value)
         value.is_a?(Array) || (defined?(Sequel::Dataset) && value.is_a?(Sequel::Dataset))
       end
 
+      # Returns true when `value` is of the primitive `name`: `Boolean`
+      # accepts true and false, `Float` any Numeric, `Time` a Time or
+      # DateTime, `Date` a Date, and any other name an instance of the class
+      # it names; false when no such class exists.
       def primitive?(value, name)
         case name
         when "Boolean" then [true, false].include?(value)
@@ -110,9 +153,13 @@ module Swill
         false
       end
 
+      # Returns the name of `type` for an error message, or its kind when it
+      # has no name.
       def describe(type)
         type["name"] || type["kind"]
       end
+
+      private_class_method :matches?, :collection?, :primitive?, :describe
     end
   end
 end

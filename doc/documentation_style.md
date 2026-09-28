@@ -51,6 +51,9 @@ this method to filter the content."
 - **Exact about failure.** Say what raises, and when: at declaration, as the
   region awakens, or at the call. Say what is silently ignored, too, and
   connect a failure to its effect on the caller.
+- **A count is not a description.** "One connection per client", "one
+  immutable type" say how many and not what. Say what the thing is, then
+  what it does; the count follows if it matters.
 - **No reassurance.** Leave out "simply", "just", "easy", "magic" and
   "seamless". Adjectives mark real distinctions — selected objects, pending
   edits — not the experience of using the framework.

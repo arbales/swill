@@ -253,16 +253,25 @@ and transport paths separate. New data investment follows the distant path.
 
 ## Validation and deferred work
 
+### JavaScript-side visibility
+
+The compiler records `private` and `protected` from a class body and Ruby
+enforces them on the MRI host, but the emitted JavaScript methods are
+ordinary: `Runtime.send`, `respondsTo`, `forward` and actions can reach a
+private method in the browser. Loop back: either emit `#name` private
+methods where nothing dynamic reaches them, or have the runtime's dispatch
+refuse a private name.
+
 ### Converging the two model frameworks
 
 `Resource` and Distant Objects share `Base` and `Editable` and nothing above
 them. Two convergences are open:
 
-- **Loading state.** `Resource` associations expose `<name>_loading`,
-  `<name>_loaded` and `<name>_error` properties; distant fields and
-  collections expose `loaded?`, `stale?`, `loading?` and `error`. One
-  vocabulary on `Editable`, with `stale?` meaningful for both, would let a
-  view bind to either kind of model the same way.
+- **Loading state.** Both frameworks now declare `<name>_loaded`,
+  `<name>_loading` and `<name>_error` properties per field or association;
+  distant associations add `<name>_stale`. Left: `Resource` has no
+  `_stale`, and the declaring macros are separate. One declaration on
+  `Editable` would let a view bind to either kind of model the same way.
 - **Identity.** `Resource` pools instances through `Identity`/`Store`;
   `Swill::Distant::Client` holds canonical distant objects. One pool
   protocol on `Editable`, with the transport supplying the fetch, would

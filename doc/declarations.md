@@ -36,6 +36,7 @@ outlet :extra, type: T.untyped, optional: true
 | `attribute:`, `key:` | Marks the property as local model data with an external key, used by validation, dirty tracking, and attribute collection |
 | `outlet:`, `optional:` | Marks the property an outlet, connected at [awakening](awakening.md); the [`outlet`](markup.md#outlet) attribute names it in markup |
 | `will_access:` | The getter calls `property_will_access(name)` before it resolves |
+| `reads:` | The name of another property; declares a computed, read-only property whose value is that property's. A macro uses it where a block cannot name the property it builds |
 
 A `name=` method cannot replace the accessor of a declared property, and a
 `restorable` path must start at a declared property with a fragment key unique
