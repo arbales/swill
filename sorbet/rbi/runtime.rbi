@@ -185,10 +185,11 @@ class Swill::Object
     params(name: T.any(Symbol, String), type: T.untyped, default: T.untyped,
            key: T.nilable(T.any(Symbol, String)), attribute: T::Boolean, outlet: T::Boolean,
            optional: T::Boolean, will_access: T::Boolean, writer: T.nilable(Symbol),
+           reads: T.nilable(T.any(Symbol, String)),
            block: T.nilable(T.proc.bind(T.untyped).returns(T.untyped))).void
   end
   def self.property(name, type:, default: nil, key: nil, attribute: false, outlet: false,
-                    optional: false, will_access: false, writer: nil, &block); end
+                    optional: false, will_access: false, writer: nil, reads: nil, &block); end
 
   # A bindable path the application keeps in the URL fragment. Controller's
   # restorable macro is the spelling.

@@ -60,24 +60,66 @@ module Swill
       end
     end
 
-    # Read-only membership; only authoritative hydration replaces its snapshot.
+    # `AssociationCollection` is the value of a to-many association on a
+    # `Distant::Object`: one stable collection per association whose
+    # membership the server replaces and the application reads. Its state —
+    # `loaded`, `stale`, `loading` and `error` — is its owner's state for
+    # the association, read through the owner's `<name>_loaded`,
+    # `<name>_stale`, `<name>_loading` and `<name>_error` properties, so a
+    # binding may follow either.
     class AssociationCollection < Collection
       extend T::Generic
 
       Element = type_member
 
+      # The records the server last sent, frozen. Reading them on a saved
+      # owner requests the association when it is unloaded or stale.
       property :records, type: T::Array[T.untyped], default: [], will_access: true
-      property :stale, type: T::Boolean, default: false
 
+      # Whether the owner holds a membership the server sent, nil included.
+      property :loaded, type: T::Boolean do
+        association_state("loaded") == true
+      end
+
+      # Whether the server has invalidated the membership since it was sent.
+      # A stale collection keeps its records until it refreshes.
+      property :stale, type: T::Boolean do
+        association_state("stale") == true
+      end
+
+      # Whether a request for the membership is in flight.
+      property :loading, type: T::Boolean do
+        association_state("loading") == true
+      end
+
+      # The message of the last failed request for the membership, or nil.
+      property :error, type: T.nilable(String) do
+        T.cast(association_state("error"), T.nilable(String))
+      end
+
+      # `stale`, as a predicate.
       sig { returns(T::Boolean) }
       def stale?
         stale
       end
 
+      # Makes this collection the value of the association `name` on
+      # `owner`. `Distant::Object` calls this as it creates the collection;
+      # from then on the collection's state is read from the owner.
       sig { params(owner: Distant::Object, name: String).void }
       def attach_association(owner, name)
         @association_owner = owner
         @association_name = name
+      end
+
+      # The owner's `<name>_<state>` property, or nil before an owner is
+      # attached. Reading it inside a computed property makes that property
+      # follow the owner's.
+      sig { params(state: String).returns(T.untyped) }
+      def association_state(state)
+        owner = @association_owner
+        return nil unless owner
+        Swill::Runtime.read(owner, "#{@association_name}_#{state}")
       end
 
       sig { params(name: String).void }
@@ -96,6 +138,8 @@ module Swill
         records.freeze
       end
 
+      # Raises: association membership is read-only and changes through a
+      # server operation.
       sig { override.params(_records: T::Array[T.untyped]).returns(T.self_type) }
       def replace(_records)
         raise "Association membership is read-only; use a server operation"
@@ -110,7 +154,8 @@ module Swill
         super
       end
 
-      # Internal hydration entry point. Copy once per patch, never per read.
+      # Replaces the membership with a frozen copy of `records`. The owner
+      # calls this as it applies the server's value for the association.
       sig { params(records: T::Array[T.untyped]).void }
       def apply_membership(records)
         @applying_membership = true

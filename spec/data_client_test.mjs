@@ -20,14 +20,39 @@ test("MessagePack preserves safe 64-bit integers and inert map keys", () => {
 
 class Post extends DistantBase {}
 
+// The state properties a field declares beside its value, as
+// Distant::Fields' macros do: loaded, loading and error, and stale for an
+// association.
+function fieldState(name, association) {
+  const state = {
+    [`${name}_loaded`]: {type: "T::Boolean", defaultValue: () => false},
+    [`${name}_loading`]: {type: "T::Boolean", defaultValue: () => false},
+    [`${name}_error`]: {type: "T.nilable(String)", defaultValue: () => null}
+  };
+  if (association) state[`${name}_stale`] = {type: "T::Boolean", defaultValue: () => false};
+  return state;
+}
+
+// An association is a stored data_<name> the client writes and a computed
+// public property reading it.
+function association(name, type) {
+  return {
+    [`data_${name}`]: {type, defaultValue: () => null},
+    [name]: {type, willAccess: true, compute() { return this[`data_${name}`]; }},
+    ...fieldState(name, true)
+  };
+}
+
 Runtime.install({classes: {Post: {
   constructor: Post,
   properties: {
     title: {type: "T.nilable(String)", attribute: true, key: "title", willAccess: true, defaultValue: () => null},
+    ...fieldState("title", false),
     body: {type: "T.nilable(String)", attribute: true, key: "body", willAccess: true, defaultValue: () => null},
+    ...fieldState("body", false),
     comment_count: {type: "Integer", compute() { return this.comments.size(); }},
-    author: {type: "T.nilable(Post)", willAccess: true, defaultValue: () => null},
-    comments: {type: "Swill::Model::Collection", willAccess: true, defaultValue: () => null}
+    ...association("author", "T.nilable(Post)"),
+    ...association("comments", "Swill::Model::Collection")
   },
   registries: {
     modelAttributes: {
@@ -251,10 +276,15 @@ test("association membership is read-only while query results remain editable", 
   const post = new Post();
   const comments = post.comments;
   const author = new Post();
-  assert.throws(() => { post.author = author; }, /read-only/);
+  assert.throws(() => { post.author = author; }, /Read-only property: author/);
+  assert.throws(() => Runtime.write(post, "author", author), /Read-only property: author/);
+  const authors = [];
+  const stopAuthor = Runtime.observe(post, "author", value => authors.push(value));
   post.applyDataField("author", author, 1, false);
   assert.equal(post.author, author);
-  assert.throws(() => { post.comments = []; }, /read-only/);
+  assert.deepEqual(authors, [author], "the client's write is observable through the public property");
+  stopAuthor();
+  assert.throws(() => { post.comments = []; }, /Read-only property: comments/);
   assert.throws(() => { comments.records = []; }, /read-only/);
   assert.throws(() => comments.replace([]), /read-only/);
   assert.throws(() => comments.records.push(post), TypeError);
@@ -289,6 +319,49 @@ test("association loading, errors, retry, and reset follow owner state", () => {
   assert.equal(comments.isLoaded(), false);
   assert.deepEqual(loading, [true, false, true, false]);
   stop();
+});
+
+test("a field's state is observable as it loads and fails", async () => {
+  const {post, transport} = await effectsFixture();
+  const states = [];
+  const stops = ["body_loading", "body_loaded", "body_error"].map(name =>
+    Runtime.observe(post, name, value => states.push([name, value])));
+  assert.equal(post.body, null, "reading an unloaded field starts its request");
+  assert.equal(post.isFieldLoading("body"), true);
+  await nextTurn();
+  assert.equal(post.isFieldLoaded("body"), true);
+  assert.deepEqual(states, [["body_loading", true], ["body_loaded", true], ["body_loading", false]]);
+
+  states.length = 0;
+  transport.failNextGet = true;
+  await assert.rejects(post.reloadField("body"), /retry later/);
+  assert.deepEqual(states, [["body_loading", true], ["body_loading", false], ["body_error", "retry later"]]);
+  assert.equal(post.fieldError("body"), "retry later");
+  assert.equal(post.isFieldLoaded("body"), true, "a failed reload keeps the loaded value");
+  stops.forEach(stop => stop());
+});
+
+test("a draft is refused by any object but its original", async () => {
+  const {post, client} = await effectsFixture();
+  const draft = post.draft();
+  assert.equal(draft.isDraft(), true);
+  assert.equal(draft.isDraftOf(post), true);
+  const stranger = (await client.query("Post", "search", [], {}, "result_set")).first();
+  assert.equal(stranger, post, "the query answers the canonical object");
+  const other = new Post();
+  other.applyDataField("id", "9", 1, true);
+  assert.equal(draft.isDraftOf(other), false);
+  await assert.rejects(other.applyDraft(draft), /draft created from this distant object/);
+});
+
+test("an association controller is released when its owner deallocs", async () => {
+  const {post, comments} = await effectsFixture();
+  const controller = post.associationController("comments");
+  assert.equal(controller.content, comments);
+  assert.equal(post.associationController("comments"), controller, "one controller per association");
+  post.dealloc();
+  assert.equal(controller.content, null);
+  assert.notEqual(post.associationController("comments"), controller, "a dealloc'd controller is not reused");
 });
 
 

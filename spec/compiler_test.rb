@@ -2709,6 +2709,112 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     File.delete(path) if File.exist?(path)
   end
 
+  def test_a_property_may_read_another_property_by_name
+    # reads: is a computed property a macro can declare without a block, as
+    # the association macros of Distant::Object do; the compiler lowers the
+    # named reader and Sorbet checks the two declared types agree.
+    compiler = compile(<<~RUBY)
+      property :data_owner, type: T.nilable(String), default: nil
+      property :owner, type: T.nilable(String), reads: :data_owner
+      property :owner_label, type: String do
+        current = owner
+        current ? "Owner: \#{current}" : "No owner"
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_match(/computeOwner\(\) \{\s*return this\.dataOwner;/, js, "the named reader is lowered as the computation")
+    refute_includes compiler.rbi, "def owner=(value)", "a property reading another has no writer"
+    assert_includes compiler.type_probes, "def __spike_check_owner
+data_owner
+  end"
+    assert_equal [nil, "No owner", "Ada", "Owner: Ada", "Read-only property: owner", "Read-only property: owner"], execute(js + <<~JS)
+      const example = new Example();
+      const before = [example.owner, example.ownerLabel];
+      example.dataOwner = "Ada";
+      const after = [example.owner, example.ownerLabel];
+      let assigned, written;
+      try { example.owner = "Grace"; } catch (error) { assigned = error.message; }
+      try { Runtime.write(example, "owner", "Grace"); } catch (error) { written = error.message; }
+      console.log(JSON.stringify([...before, ...after, assigned, written]));
+    JS
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      compile("property :owner, type: String, reads: :other do\n1\nend")
+    end
+    assert_includes error.message, "reads: and a block are exclusive"
+  end
+
+  def test_visibility_is_recorded_for_ruby_and_erased_for_javascript
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Helpers
+        def shared; "shared"; end
+        private
+        def helper_secret; "secret"; end
+      end
+      class Example < TestObject
+        include Helpers
+        extend T::Sig
+        def visible; hidden + guarded + tagged(1) + shared + helper_secret; end
+        private def tagged(count, label = "x"); "\#{label}\#{count}"; end
+        def spoken; "spoken"; end
+        private
+        sig { returns(String) }
+        def hidden; "hidden"; end
+        protected
+        def guarded; "guarded"; end
+        public
+        def open; "open"; end
+        private :spoken
+      end
+    RUBY
+    entry = compiler.knowledge.interface.find { |candidate| candidate["name"] == "Example" }
+    visibility = entry["methods"].to_h { |method| [method["name"], method["visibility"]] }
+    assert_equal({"visible" => nil, "tagged" => "private", "spoken" => "private", "hidden" => "private",
+                  "guarded" => "protected", "open" => nil}, visibility)
+    mixin = compiler.knowledge.interface.find { |candidate| candidate["name"] == "Helpers" }
+    assert_equal "private", mixin["methods"].find { |method| method["name"] == "helper_secret" }["visibility"]
+
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    refute_includes js, "#hidden", "JavaScript methods stay ordinary"
+    refute_match(/\bprivate\b|\bprotected\b/, js.gsub(/"(private|protected)"/, ""))
+    assert_match(/"hidden": \{\s*"arity": 0,\s*"visibility": "private"\s*\}/, js, "the meta records visibility")
+    assert_match(/"guarded": \{\s*"arity": 0,\s*"visibility": "protected"\s*\}/, js)
+    assert_equal ["hiddenguardedx1sharedsecret", "spoken", "open"], execute(js + <<~JS)
+      const example = new Example();
+      console.log(JSON.stringify([example.visible(), example.spoken(), example.open()]));
+    JS
+
+    rbi = compiler.rbi
+    assert_includes rbi, "class Example < TestObject\n  extend T::Sig\n  protected\n  def guarded; end\n  private\n" \
+                         "  def tagged(count, label = T.unsafe(nil)); end\n  def spoken; end\n  def hidden; end\nend"
+    assert_includes rbi, "module Helpers\n  extend T::Sig\n  private\n  def helper_secret; end\nend"
+
+    # A ClassMethods module keeps its macro helpers private the same way.
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Declaring
+        def self.included(base); base.extend(ClassMethods); end
+        module ClassMethods
+          extend Swill::Declarations
+          macro def field(name)
+            declare_field(name, "String")
+          end
+          private
+          macro def declare_field(name, type)
+            property name, type: type, default: ""
+          end
+        end
+      end
+      class Declared < TestObject
+        include Declaring
+        field :title
+      end
+    RUBY
+    assert_includes compiler.rbi, "def title=(value)"
+    assert_raises(NoMethodError) { compiler.knowledge.loader.constant("Declared").declare_field(:other, "String") }
+
+    error = assert_raises(Swill::Ruby2JS::CompileError) { compile("private :missing") }
+    assert_includes error.message, "undefined method 'missing'", "Ruby rejects the name as the body runs"
+  end
+
   private
 
   def execute(js)

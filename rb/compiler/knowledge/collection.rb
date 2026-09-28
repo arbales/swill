@@ -31,6 +31,8 @@ module Swill
         def preflight_entry!(node, kind, declarations)
           statements(node.children.last).each do |statement|
             next if self.class.macro_wrapper?(statement)
+            next if self.class.visibility_statement?(statement)
+            statement = self.class.unwrap_visibility(statement)
             async = self.class.async_wrapper?(statement)
             child = async ? statement.children[2] : statement
             if child.type == :def
@@ -65,6 +67,7 @@ module Swill
         def preflight_class_methods!(node, declarations)
           statements(node.children.last).each do |statement|
             next if self.class.macro_wrapper?(statement) || signature?(statement)
+            next if self.class.visibility_statement?(statement)
             if statement.type == :def
               validate_expression!(statement.children.last)
             elsif statement.type == :send && statement.children.first.nil? &&
@@ -182,6 +185,12 @@ module Swill
           target = loader.constant(name)
           raise CompileError, "#{name} did not load" if target.nil?
           pending_signature = nil
+          # Ruby's visibility rules, read as Ruby reads them: a bare
+          # `private` applies to the definitions after it, `private def`
+          # to that one definition, and `private :name` to methods by name
+          # once the body has run.
+          visibility = "public"
+          named_visibility = {}
           statements(node.children.last).each do |child|
             # async def name ... end parses as async(def ...): the method is
             # asynchronous and may await.
@@ -189,6 +198,15 @@ module Swill
             # implementation. The compiler lowers the declaration and never
             # compiles the body.
             next if self.class.macro_wrapper?(child)
+            if self.class.visibility_toggle?(child)
+              visibility = child.children[1].to_s
+              next
+            elsif self.class.visibility_names?(child)
+              child.children[2..].each { |symbol| named_visibility[symbol.children.first.to_s] = child.children[1].to_s }
+              next
+            end
+            explicit = self.class.visibility_wrapper?(child) ? child.children[1].to_s : nil
+            child = self.class.unwrap_visibility(child)
             async = self.class.async_wrapper?(child)
             child = child.children[2] if async
             if child.type == :def
@@ -216,10 +234,14 @@ module Swill
               if optionals.any? && !complex
                 collected["optionals"] = optionals.map { |formal| formal["name"] }
               end
+              member_visibility = explicit || visibility
+              collected["visibility"] = member_visibility unless member_visibility == "public"
               entry["methods"] << collected
               pending_signature = nil
             elsif attribute_accessor?(child)
-              entry["methods"].concat(collect_attribute_accessors(child, pending_signature))
+              accessors = collect_attribute_accessors(child, pending_signature)
+              accessors.each { |accessor| accessor["visibility"] = visibility } unless visibility == "public"
+              entry["methods"].concat(accessors)
               pending_signature = nil
             elsif signature?(child)
               # Sorbet checks these; executable definitions omit annotations.
@@ -270,6 +292,15 @@ module Swill
               # records what it did and nothing is interpreted here.
             else
               raise CompileError, "unsupported class body in #{name}: #{child.loc.expression.source}"
+            end
+          end
+          named_visibility.each do |method_name, member_visibility|
+            method = entry["methods"].find { |candidate| candidate["name"] == method_name }
+            raise CompileError, "#{member_visibility} names an undefined method #{method_name} in #{name}" unless method
+            if member_visibility == "public"
+              method.delete("visibility")
+            else
+              method["visibility"] = member_visibility
             end
           end
           Reflection.fill(entry, target, @blocks)
@@ -380,6 +411,7 @@ module Swill
         end
 
         def defined_method_key(statement)
+          statement = self.class.unwrap_visibility(statement)
           statement = statement.children[2] if self.class.async_wrapper?(statement)
           case statement.type
           when :def then ["instance", statement.children.first.to_s]
@@ -510,6 +542,39 @@ module Swill
             node.children.length == 3 && node.children[2].respond_to?(:type) && %i[def defs].include?(node.children[2].type)
         end
 
+        VISIBILITIES = %i[private protected public].freeze
+
+        # A bare `private` (or `protected`, `public`): the visibility of the
+        # definitions that follow it in the body.
+        def self.visibility_toggle?(node)
+          node.type == :send && node.children[0].nil? && VISIBILITIES.include?(node.children[1]) &&
+            node.children.length == 2
+        end
+
+        # `private :a, :b`: a visibility applied to methods by name.
+        def self.visibility_names?(node)
+          node.type == :send && node.children[0].nil? && VISIBILITIES.include?(node.children[1]) &&
+            node.children.length > 2 && node.children[2..].all? { |arg| arg.respond_to?(:type) && arg.type == :sym }
+        end
+
+        # `private def name ... end`, with `async def` allowed inside: the
+        # visibility of that one definition.
+        def self.visibility_wrapper?(node)
+          return false unless node.type == :send && node.children[0].nil? && VISIBILITIES.include?(node.children[1]) &&
+                              node.children.length == 3 && node.children[2].respond_to?(:type)
+          inner = node.children[2]
+          inner.type == :def || async_wrapper?(inner)
+        end
+
+        def self.visibility_statement?(node)
+          visibility_toggle?(node) || visibility_names?(node)
+        end
+
+        # The definition inside a visibility wrapper, or the node itself.
+        def self.unwrap_visibility(node)
+          visibility_wrapper?(node) ? node.children[2] : node
+        end
+
         def collect_static_method(entry, node, signature, async)
           receiver, method, args, body = node.children
           raise CompileError, "class methods are defined on self" unless receiver.type == :self
@@ -571,6 +636,11 @@ module Swill
               # A declaration macro's implementation. The compiler lowers the
               # declaration itself and never compiles this body.
               pending_signature = nil
+              next
+            elsif self.class.visibility_statement?(statement)
+              # Ruby's visibility for the macros and class methods after it,
+              # which Sorbet checks on MRI; the browser's class methods stay
+              # ordinary.
               next
             elsif statement.type == :def
               method, args, = statement.children

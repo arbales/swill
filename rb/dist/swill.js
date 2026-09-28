@@ -719,10 +719,10 @@
           if (descriptor.willAccess) this.propertyWillAccess(descriptor.name);
           return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
         },
-        ...descriptor.computed && !descriptor.writer ? {} : {
-          set(value) {
-            writeProperty(this, descriptor, value);
-          }
+        // A computed property without a writer has a setter all the same, so
+        // an assignment raises `Read-only property` rather than TypeError.
+        set(value) {
+          writeProperty(this, descriptor, value);
         }
       });
     }
@@ -1588,8 +1588,13 @@
     Swill__Awakening: () => Swill__Awakening,
     Swill__Binding: () => Swill__Binding,
     Swill__BindingDestination: () => Swill__BindingDestination,
+    Swill__BindingDestination__Checkbox: () => Swill__BindingDestination__Checkbox,
+    Swill__BindingDestination__ElementProperty: () => Swill__BindingDestination__ElementProperty,
+    Swill__BindingDestination__Field: () => Swill__BindingDestination__Field,
+    Swill__BindingDestination__ObjectProperty: () => Swill__BindingDestination__ObjectProperty,
+    Swill__BindingDestination__Select: () => Swill__BindingDestination__Select,
+    Swill__BindingDestination__Text: () => Swill__BindingDestination__Text,
     Swill__BooleanTransformer: () => Swill__BooleanTransformer,
-    Swill__CheckboxBindingDestination: () => Swill__CheckboxBindingDestination,
     Swill__CollectionArrangement: () => Swill__CollectionArrangement,
     Swill__Connections__Actions: () => Swill__Connections__Actions,
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
@@ -1611,8 +1616,6 @@
     Swill__Distant__Fields: () => Swill__Distant__Fields,
     Swill__Distant__Fields_ClassMethods: () => Swill__Distant__Fields_ClassMethods,
     Swill__Distant__Object: () => Swill__Distant__Object,
-    Swill__ElementPropertyBindingDestination: () => Swill__ElementPropertyBindingDestination,
-    Swill__FieldBindingDestination: () => Swill__FieldBindingDestination,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Model__Association: () => Swill__Model__Association,
     Swill__Model__AssociationCollection: () => Swill__Model__AssociationCollection,
@@ -1639,16 +1642,13 @@
     Swill__NumberTransformer: () => Swill__NumberTransformer,
     Swill__Object: () => Swill__Object,
     Swill__ObjectBindings: () => Swill__ObjectBindings,
-    Swill__ObjectPropertyBindingDestination: () => Swill__ObjectPropertyBindingDestination,
     Swill__Observable: () => Swill__Observable,
     Swill__OutletOwner: () => Swill__OutletOwner,
     Swill__OutletOwner_ClassMethods: () => Swill__OutletOwner_ClassMethods,
     Swill__Responder: () => Swill__Responder,
     Swill__RowEdit: () => Swill__RowEdit,
-    Swill__SelectBindingDestination: () => Swill__SelectBindingDestination,
     Swill__Swell: () => Swill__Swell,
     Swill__Templates: () => Swill__Templates,
-    Swill__TextBindingDestination: () => Swill__TextBindingDestination,
     Swill__URLFragment: () => Swill__URLFragment,
     Swill__ValueTransformer: () => Swill__ValueTransformer,
     Swill__View: () => Swill__View,
@@ -2268,19 +2268,19 @@
       if (known) return known;
       this._shared = Runtime2.cast(
         {
-          text: new Swill__TextBindingDestination(),
-          field: new Swill__FieldBindingDestination(),
-          select: new Swill__SelectBindingDestination(),
-          checkbox: new Swill__CheckboxBindingDestination(),
-          property: new Swill__ElementPropertyBindingDestination(),
-          object: new Swill__ObjectPropertyBindingDestination()
+          text: new Swill__BindingDestination__Text(),
+          field: new Swill__BindingDestination__Field(),
+          select: new Swill__BindingDestination__Select(),
+          checkbox: new Swill__BindingDestination__Checkbox(),
+          property: new Swill__BindingDestination__ElementProperty(),
+          object: new Swill__BindingDestination__ObjectProperty()
         },
         "T.nilable(T::Hash[String, BindingDestination])"
       );
       return Runtime2.must(this._shared);
     }
   };
-  var Swill__TextBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__Text = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return receiver.textContent = value;
     }
@@ -2288,7 +2288,7 @@
       return receiver.textContent;
     }
   };
-  var Swill__FieldBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__Field = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return receiver.value = value;
     }
@@ -2310,12 +2310,12 @@
       return "input";
     }
   };
-  var Swill__SelectBindingDestination = class extends Swill__FieldBindingDestination {
+  var Swill__BindingDestination__Select = class extends Swill__BindingDestination__Field {
     eventName() {
       return "change";
     }
   };
-  var Swill__CheckboxBindingDestination = class extends Swill__FieldBindingDestination {
+  var Swill__BindingDestination__Checkbox = class extends Swill__BindingDestination__Field {
     write(receiver, binding, value) {
       return receiver.checked = Runtime2.isTruthy(value);
     }
@@ -2332,7 +2332,7 @@
       return "change";
     }
   };
-  var Swill__ElementPropertyBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__ElementProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       let property = Runtime2.must(binding);
       if (property.startsWith("data-") || property.startsWith("aria-")) {
@@ -2374,7 +2374,7 @@
       return false;
     }
   };
-  var Swill__ObjectPropertyBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__ObjectProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return Runtime2.write(receiver, Runtime2.must(binding), value);
     }
@@ -5987,17 +5987,42 @@
   }
   function Swill__Model__Drafts(Superclass) {
     class Swill__Model__Drafts_Layer extends Superclass {
+      // Returns a new instance of the model's class holding every attribute
+      // of this object, made from this object: `draft?` is true on the copy
+      // and `draft_of?` names this object. The copy is clean.
       draft() {
         let copy = new this.constructor();
         copy.applyAttributes(this.collectAttributes());
+        copy.draftOriginal = this;
         return copy;
       }
-      // Take a draft's attributes back. Application is clean, as any
-      // apply_attributes is; the values already passed the validators when
-      // the draft was written.
+      // Applies the attributes of `copy`, a draft made by this object, to
+      // this object and returns it. The application is clean, as any
+      // `apply_attributes` is; the values passed the validators when the
+      // draft was written. Raises when `copy` was not drafted from this
+      // object.
       applyDraft(copy) {
+        if (!Runtime2.isTruthy(Runtime2.invoke(copy, "draft_of?", this))) {
+          throw new Error("apply_draft requires a draft made from this object");
+        }
+        ;
         this.applyAttributes(Runtime2.send(copy, "collect_attributes"));
         return this;
+      }
+      // Whether this object is a draft made by `draft`.
+      isDraft() {
+        return !!Runtime2.isTruthy(this._draft_original);
+      }
+      // Whether this object is a draft made from `original`.
+      isDraftOf(original) {
+        return Runtime2.isEqual(this._draft_original, original);
+      }
+      // Records `original` as the object this copy was drafted from. `draft`
+      // sets it on the copy it makes; protected so that a subclass's own
+      // `draft` can do the same and nothing else can.
+      set draftOriginal(original) {
+        this._draft_original = original;
+        return this._draft_original;
       }
     }
     return Swill__Model__Drafts_Layer;
@@ -6126,13 +6151,32 @@
     }
   };
   var Swill__Model__AssociationCollection = class extends Swill__Model__Collection {
+    // The records the server last sent, frozen. Reading them on a saved
+    // owner requests the association when it is unloaded or stale.
+    // Whether the owner holds a membership the server sent, nil included.
+    // Whether the server has invalidated the membership since it was sent.
+    // A stale collection keeps its records until it refreshes.
+    // Whether a request for the membership is in flight.
+    // The message of the last failed request for the membership, or nil.
+    // `stale`, as a predicate.
     isStale() {
       return this.stale;
     }
+    // Makes this collection the value of the association `name` on
+    // `owner`. `Distant::Object` calls this as it creates the collection;
+    // from then on the collection's state is read from the owner.
     attachAssociation(owner, name) {
       this._association_owner = owner;
       this._association_name = name;
       return this._association_name;
+    }
+    // The owner's `<name>_<state>` property, or nil before an owner is
+    // attached. Reading it inside a computed property makes that property
+    // follow the owner's.
+    associationState(state2) {
+      let owner = this._association_owner;
+      if (!owner) return null;
+      return Runtime2.read(owner, `${this._association_name}_${state2}`);
     }
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
@@ -6151,6 +6195,8 @@
       this._association_name = Runtime2.cast("", "String");
       Object.freeze(this.records);
     }
+    // Raises: association membership is read-only and changes through a
+    // server operation.
     replace(_records) {
       return (() => {
         throw new Error("Association membership is read-only; use a server operation");
@@ -6163,7 +6209,8 @@
       ;
       return super.coercePropertyValue(name, value, previous);
     }
-    // Internal hydration entry point. Copy once per patch, never per read.
+    // Replaces the membership with a frozen copy of `records`. The owner
+    // calls this as it applies the server's value for the association.
     applyMembership(records) {
       this._applying_membership = true;
       try {
@@ -6597,46 +6644,6 @@
   };
   function Swill__Distant__Fields(Superclass) {
     class Swill__Distant__Fields_Layer extends Superclass {
-      // :nodoc:
-      // The declarations of a generated distant model. The generator writes
-      // them; an application reads them on the class page and does not call
-      // them.
-      // Declares the server model this class represents, as named on the
-      // wire.
-      // Declares a scalar field: an attribute that is nil until loaded and
-      // whose read, on a saved object, requests it.
-      // Declares a to-one association to `class:`, read-only and nil until
-      // loaded. The five macros are Sequel's association kinds; every
-      // option but `class:` stays on the server.
-      // Declares a to-one association to `class:`, as `many_to_one` does.
-      // Declares a to-many association to `class:`: a stable, read-only
-      // `AssociationCollection` the server keeps current, and a
-      // `<name>_controller` accessor for arranging it.
-      // Declares a to-many association to `class:`, as `one_to_many` does.
-      // Declares a to-one association to `class:`, as `many_to_one` does.
-      // :nodoc:
-      // :nodoc:
-      // :section: Field State
-      // What the client knows about each field.
-      // Whether the field `name` holds a value the server sent, nil included.
-      isFieldLoaded(name) {
-        return this.dataFieldLoaded(name);
-      }
-      // Whether the server has invalidated the association `name` since it
-      // was loaded. A stale association keeps its records readable until it
-      // refreshes.
-      isFieldStale(name) {
-        return this.dataFieldStale(name);
-      }
-      // Whether a request for the field `name` is in flight.
-      isFieldLoading(name) {
-        return this.dataFieldLoading(name);
-      }
-      // The message of the last failed request for the field `name`, or nil
-      // when its last request succeeded or none was made.
-      fieldError(name) {
-        return this.dataFieldError(name);
-      }
     }
     return Swill__Distant__Fields_Layer;
   }
@@ -6658,33 +6665,50 @@
     // `deleted`, as a predicate.
     // Creates an object with no loaded fields and a stable, empty
     // `AssociationCollection` for each to-many association.
-    // Gives each to-many association its stable collection.
     constructor() {
       super();
-      this._data_field_states = Runtime2.cast(
+      this._data_generations = Runtime2.cast(
         {},
-        "T::Hash[String, T::Hash[String, T.untyped]]"
+        "T::Hash[String, T::Hash[String, Integer]]"
       );
-      this._data_draft_source = Runtime2.cast(
-        null,
-        "T.nilable(Swill::Distant::Object)"
-      );
-      this._applying_association = Runtime2.cast(false, "T::Boolean");
       this._data_controllers = Runtime2.cast(
         {},
         "T::Hash[String, ArrayController]"
-      );
-      this._data_collections = Runtime2.cast(
-        {},
-        "T::Hash[String, Model::AssociationCollection[T.untyped]]"
       );
       Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
         if (descriptor.kind !== "many") return;
         let collection = new Swill__Model__AssociationCollection();
         collection.attachAssociation(this, name);
-        this._data_collections[name] = collection;
-        return this.writeDataAssociation(name, collection);
+        return Runtime2.write(this, `data_${name}`, collection);
       });
+    }
+    // :section: Field State
+    // What the client knows about each field. Each predicate reads the
+    // field's state property, so a binding may read the property instead.
+    // Whether the field `name` holds a value the server sent, nil included.
+    // Reads `<name>_loaded`.
+    isFieldLoaded(name) {
+      return this.readDataState(name, "loaded") === true;
+    }
+    // Whether the server has invalidated the association `name` since it
+    // was loaded. A stale association keeps its records readable until it
+    // refreshes. Reads `<name>_stale`; false for a scalar field.
+    isFieldStale(name) {
+      return this.readDataState(name, "stale") === true;
+    }
+    // Whether a request for the field `name` is in flight. Reads
+    // `<name>_loading`.
+    isFieldLoading(name) {
+      return this.readDataState(name, "loading") === true;
+    }
+    // The message of the last failed request for the field `name`, or nil
+    // when its last request succeeded or none was made. Reads
+    // `<name>_error`.
+    fieldError(name) {
+      return Runtime2.cast(
+        this.readDataState(name, "error"),
+        "T.nilable(String)"
+      );
     }
     // :section: Associations
     // To-many associations as collections and controllers.
@@ -6692,60 +6716,26 @@
     // `name`, creating it on first call and keeping it for the object's
     // lifetime, so views that bind to it share one sort and selection. The
     // generated `<name>_controller` accessor calls this. Constructing the
-    // controller loads nothing. Raises when `name` is not a to-many association.
-    // Shared presentation is opt-in; constructing the controller does not load.
+    // controller loads nothing. The controller is released when the object
+    // deallocs, which the client does when it forgets the object. Raises
+    // when `name` is not a to-many association.
     associationController(name) {
       let existing = this._data_controllers[name];
       if (existing) return existing;
-      let collection = this._data_collections[name];
-      if (!collection) throw new Error(`Unknown to-many association ${name}`);
-      let controller = new Swill__ArrayController();
-      controller.content = collection;
-      this._data_controllers[name] = controller;
-      return controller;
-    }
-    releaseAssociationControllers() {
-      Object.entries(this._data_controllers).forEach(([_name, controller]) => {
-        Runtime2.write(controller, "content", null);
-        return Runtime2.send(controller, "dealloc");
-      });
-      this._data_controllers = {};
-      return this._data_controllers;
-    }
-    // Releases the object's association controllers, then disconnects as an
-    // `Editable` does. The client calls this when the object is deleted or the
-    // connection is reset.
-    disconnect() {
-      this.releaseAssociationControllers();
-      return super.disconnect();
-    }
-    coercePropertyValue(name, value, previous) {
       let descriptor = this.constructor.dataFields()[name];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        Runtime2.logicalAnd(descriptor, () => descriptor.kind !== "field"),
-        () => !this._applying_association
-      ))) {
-        throw new Error(`Association ${name} is read-only; use a server operation`);
-      }
-      ;
-      return super.coercePropertyValue(name, value, previous);
-    }
-    // Internal writes still use the ordinary observation machinery.
-    writeDataAssociation(name, value) {
-      this._applying_association = true;
-      try {
-        return Runtime2.write(this, name, value);
-      } finally {
-        this._applying_association = false;
-      }
-    }
-    // Schedules hydration when a declared member is unknown.
-    propertyWillAccess(name) {
-      super.propertyWillAccess(name);
-      if (this._syncing_data_collection || this.isDraft() || this.isDeleted) return;
-      if (Object.hasOwn(this.constructor.dataFields(), name)) {
-        return Swill__Distant__Client.default().demand(this, name);
-      }
+      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+        descriptor,
+        () => descriptor.kind === "many"
+      ))) throw new Error(`Unknown to-many association ${name}`);
+      let controller = new Swill__ArrayController();
+      controller.content = this.dataCollection(name);
+      this._data_controllers[name] = controller;
+      this.retain(() => {
+        controller.content = null;
+        controller.dealloc();
+        return Runtime2.deleteKey(this._data_controllers, name);
+      });
+      return controller;
     }
     async loadField(name) {
       if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
@@ -6801,7 +6791,7 @@
     }
     async applyDraft(copy) {
       if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (!copy.isDraftFrom(this)) {
+      if (!copy.isDraftOf(this)) {
         throw new Error("apply_draft requires a draft created from this distant object");
       }
       ;
@@ -6827,10 +6817,10 @@
     // :section: Drafting
     // Editing a copy and applying it.
     // Returns a detached copy of this object holding its id and every loaded
-    // field, for editing without touching the original. A draft never loads
-    // fields on its own; `apply_draft` on the original saves it. Raises for a
-    // deleted or unsaved object.
-    // Returns a detached editable copy that never hydrates independently.
+    // scalar field, marked loaded on the copy, for editing without touching
+    // the original. A draft never loads fields on its own; `apply_draft` on
+    // the original saves it, and `draft?` and `draft_of?` name the lineage.
+    // Raises for a deleted or unsaved object.
     draft() {
       if (this.isDeleted) throw new Error("Cannot draft a deleted distant object");
       if (this.id == null) {
@@ -6838,183 +6828,199 @@
       }
       ;
       let copy = new this.constructor();
-      copy.attachDataDraft(this);
-      let attributes = Runtime2.cast(
-        { id: this.id },
-        "T::Hash[T.untyped, T.untyped]"
-      );
+      copy.applyDataField("id", this.id, 0, true);
       Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (!Runtime2.isTruthy(descriptor.kind === "field" && this.dataFieldLoaded(name))) {
-          return;
-        }
-        ;
-        return attributes[name] = Runtime2.read(this, name);
+        if (!Runtime2.isTruthy(descriptor.kind === "field" && this.readDataState(
+          name,
+          "loaded"
+        ) === true)) return;
+        return copy.applyDataField(name, Runtime2.read(this, name), 0, true);
       });
-      copy.applyAttributes(attributes);
-      copy.presentDataField("id");
-      Object.entries(attributes).forEach(([name, _value]) => copy.presentDataField(Runtime2.send(name, "to_s")));
       copy.markCleanBang();
+      copy.draftOriginal = this;
       return copy;
     }
-    // Whether this object is a draft made by `draft`.
-    // Whether this object is a detached editing copy.
-    isDraft() {
-      return this._data_draft_source != null;
+    // :section: Driven by the Client
+    // The protocol between `Client` and the objects it holds. The client
+    // calls these as responses, invalidations and failures arrive; an
+    // application reads the field state they leave behind and does not
+    // call them.
+    //
+    // Responses arrive out of order, so each field keeps two generation
+    // watermarks: the generation of the response last applied to it, and
+    // of the request last sent for it. A response older than what a field
+    // already holds is ignored, and a failure older than either is ignored,
+    // so a slow reply cannot undo a newer value or a newer invalidation.
+    // Requests the field `name` from the client when it is read on a saved
+    // object that is neither a draft nor deleted. The property system
+    // invokes this before resolving a property declared `will_access:`,
+    // and an `AssociationCollection` invokes it on its owner when its
+    // records are read. Public because the collection calls it.
+    propertyWillAccess(name) {
+      super.propertyWillAccess(name);
+      if (this.isDraft() || this.isDeleted) return;
+      if (Object.hasOwn(this.constructor.dataFields(), name)) {
+        return Swill__Distant__Client.default().demand(this, name);
+      }
     }
-    // :section: Field State
-    // How the client records what each field holds; internal.
-    // Internal distant-data state. It is ordinary Ruby state so the model's
-    // behavior is the same on MRI and in compiled applications.
-    attachDataDraft(original) {
-      this._data_draft_source = original;
-      return this._data_draft_source;
+    // Applies `value` as the server's value for the field `name` from a
+    // response of `generation`, and marks the field loaded, current and
+    // without error. Ignored when a newer response already applied. A
+    // to-many association's collection replaces its membership; a scalar
+    // field and `id` apply as attributes, cleanly; a to-one association is
+    // written to its stored property. The value is left alone, and only
+    // the state marked, when the field is dirty and `overwrite_dirty` is
+    // false: a background patch does not replace a local edit.
+    applyDataField(name, value, generation, overwrite_dirty) {
+      let descriptor;
+      let generations = this.dataGeneration(name);
+      if (generation < Runtime2.must(generations.applied)) return;
+      generations.applied = generation;
+      if (!Runtime2.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
+        descriptor = this.constructor.dataFields()[name];
+        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+          descriptor,
+          () => descriptor.kind === "many"
+        ))) {
+          this.dataCollection(name).applyMembership(Runtime2.cast(
+            Runtime2.logicalOr(value, () => []),
+            "T::Array[T.untyped]"
+          ));
+        } else if (Runtime2.isTruthy(Runtime2.logicalOr(
+          Runtime2.logicalAnd(descriptor, () => descriptor.kind === "field"),
+          () => name === "id"
+        ))) {
+          this.applyAttributes({ [name]: value });
+        } else {
+          Runtime2.write(this, `data_${name}`, value);
+        }
+      }
+      ;
+      return this.presentDataField(name);
     }
-    isDraftFrom(original) {
-      return this._data_draft_source === original;
-    }
-    dataFieldLoaded(name) {
-      return this.dataFieldState(name).loaded === true;
-    }
-    dataFieldStale(name) {
-      return this.dataFieldState(name).stale === true;
-    }
-    // A generation watermark prevents older hydration from clearing staleness.
+    // Marks the association `name` stale from an invalidation of
+    // `generation`, clearing its error and its loading flag; its records
+    // stay readable. Ignored for a scalar field, and when a newer response
+    // already applied. The client then requests the association again if
+    // something observes it (`data_field_observed`), or when it is next
+    // read.
     invalidateDataField(name, generation) {
       let descriptor = this.constructor.dataFields()[name];
       if (!Runtime2.isTruthy(Runtime2.logicalAnd(
         descriptor,
         () => descriptor.kind !== "field"
       ))) return;
-      let state2 = this.dataFieldState(name);
-      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
-      state2.generation = generation;
-      state2.stale = true;
-      state2.status = "stale";
-      state2.error = null;
-      return this.syncDataCollection(name);
+      let generations = this.dataGeneration(name);
+      if (generation < Runtime2.must(generations.applied)) return;
+      generations.applied = generation;
+      this.writeDataState(name, "stale", true);
+      this.writeDataState(name, "loading", false);
+      return this.writeDataState(name, "error", null);
     }
+    // Whether something observes the field `name`: an observer or a live
+    // computed property on the property itself, or on the `records` of a
+    // to-many association's collection, as `Runtime.observed` reports.
+    // The client refreshes an invalidated association only when this is
+    // true; otherwise the next read requests it.
     dataFieldObserved(name) {
       if (Runtime2.isTruthy(Runtime2.observed(this, name))) return true;
-      let collection = this._data_collections[name];
-      return collection != null && Runtime2.observed(collection, "records");
-    }
-    dataRequestStarted(name, generation) {
-      return this.dataFieldState(name).request_generation = generation;
-    }
-    dataFieldLoading(name) {
-      return this.dataFieldState(name).status === "loading";
-    }
-    dataFieldError(name) {
-      return Runtime2.cast(
-        this.dataFieldState(name).error,
-        "T.nilable(String)"
-      );
-    }
-    // Returns whether a request should be made.
-    beginDataFieldLoad(name, reload) {
-      let state2 = this.dataFieldState(name);
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        !reload && state2.loaded,
-        () => !Runtime2.isTruthy(state2.stale)
-      ))) return false;
-      if (Runtime2.isTruthy(!reload && state2.status === "loading")) return false;
-      state2.status = "loading";
-      state2.error = null;
-      this.syncDataCollection(name);
-      return true;
-    }
-    failDataFieldWithGeneration(name, message, generation) {
-      let state2 = this.dataFieldState(name);
-      if (Runtime2.isTruthy(generation != null ? (() => {
-        return generation < Runtime2.cast(state2.generation, "Integer") || generation < Runtime2.cast(
-          state2.request_generation,
-          "Integer"
-        );
-      })() : generation)) return;
-      state2.status = "failed";
-      state2.error = message;
-      return this.syncDataCollection(name);
-    }
-    presentDataField(name) {
-      let state2 = this.dataFieldState(name);
-      state2.status = "present";
-      state2.loaded = true;
-      state2.stale = false;
-      state2.error = null;
-      return this.syncDataCollection(name);
-    }
-    // Apply one authoritative member unless a newer response already won.
-    applyDataField(name, value, generation, overwrite_dirty) {
-      let state2 = this.dataFieldState(name);
-      if (generation < Runtime2.cast(state2.generation, "Integer")) return;
-      state2.generation = generation;
-      state2.status = "present";
-      state2.loaded = true;
-      state2.stale = false;
-      state2.error = null;
-      if (Runtime2.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
-        return;
-      }
-      ;
-      let descriptor = this.constructor.dataFields()[name];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        descriptor,
-        () => descriptor.kind === "many"
-      ))) {
-        let collection = Runtime2.must(this._data_collections[name]);
-        collection.applyMembership(Runtime2.cast(
-          Runtime2.logicalOr(value, () => []),
-          "T::Array[T.untyped]"
-        ));
-      } else if (Runtime2.isTruthy(Runtime2.logicalOr(
-        Runtime2.logicalAnd(descriptor, () => descriptor.kind === "field"),
-        () => name === "id"
-      ))) {
-        this.applyAttributes({ [name]: value });
-      } else {
-        this.writeDataAssociation(name, value);
-      }
-      ;
-      return this.syncDataCollection(name);
-    }
-    resetDataFields() {
-      this.releaseAssociationControllers();
-      this._data_field_states = {};
-      return Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (descriptor.kind === "many") this.syncDataCollection(name);
-      });
-    }
-    // Mirror the owner's authoritative state without demanding another load.
-    syncDataCollection(name) {
       let descriptor = this.constructor.dataFields()[name];
       if (!Runtime2.isTruthy(Runtime2.logicalAnd(
         descriptor,
         () => descriptor.kind === "many"
-      ))) return;
-      this._syncing_data_collection = true;
-      try {
-        let collection = Runtime2.must(this._data_collections[name]);
-        let state2 = this.dataFieldState(name);
-        collection.loaded = state2.loaded === true;
-        collection.stale = state2.stale === true;
-        collection.loading = state2.status === "loading";
-        return collection.error = Runtime2.cast(
-          state2.error,
-          "T.nilable(String)"
-        );
-      } finally {
-        this._syncing_data_collection = false;
-      }
+      ))) return false;
+      return Runtime2.observed(this.dataCollection(name), "records");
     }
-    dataFieldState(name) {
-      return this._data_field_states[name] ||= {
-        status: "unknown",
-        loaded: false,
-        stale: false,
-        error: null,
-        generation: -1,
-        request_generation: -1
-      };
+    // Records that a request of `generation` for the field `name` was sent,
+    // so that `fail_data_field` can ignore the failure of an older one.
+    dataRequestStarted(name, generation) {
+      return this.dataGeneration(name).requested = generation;
+    }
+    // Marks the field `name` loading and clears its error, and returns
+    // whether a request should be made: false, with nothing changed, when
+    // the field is already loading, or is loaded and not stale — unless
+    // `reload` is true, which always requests.
+    beginDataFieldLoad(name, reload) {
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        !reload && this.readDataState(name, "loaded") === true,
+        () => this.readDataState(name, "stale") !== true
+      ))) return false;
+      if (Runtime2.isTruthy(!reload && this.readDataState(name, "loading") === true)) {
+        return false;
+      }
+      ;
+      this.writeDataState(name, "loading", true);
+      this.writeDataState(name, "error", null);
+      return true;
+    }
+    // Records `message` as the error of the field `name` and clears its
+    // loading flag; its value and its loaded and stale state are kept. With
+    // a `generation`, ignored when a newer response has applied or a newer
+    // request has started, so an old failure cannot mark a field that has
+    // since moved on.
+    failDataFieldWithGeneration(name, message, generation) {
+      let generations = this.dataGeneration(name);
+      if (Runtime2.isTruthy(generation != null ? (() => {
+        return generation < Runtime2.must(generations.applied) || generation < Runtime2.must(generations.requested);
+      })() : generation)) return;
+      this.writeDataState(name, "loading", false);
+      return this.writeDataState(name, "error", message);
+    }
+    // Returns every field to unloaded: not loaded, not stale, not loading,
+    // without error, and with its generations forgotten. Values are kept.
+    // The client calls this on each object it forgets when the connection
+    // is reset, before the object deallocs.
+    resetDataFields() {
+      this._data_generations = {};
+      return Object.entries(this.constructor.dataFields()).forEach(([name, _descriptor]) => {
+        this.writeDataState(name, "loaded", false);
+        this.writeDataState(name, "stale", false);
+        this.writeDataState(name, "loading", false);
+        return this.writeDataState(name, "error", null);
+      });
+    }
+    // The two generation watermarks of the field `name`, created at -1 so
+    // the first response of any generation applies. `id` has an entry
+    // too; it is the one field with a generation and no state.
+    dataGeneration(name) {
+      return this._data_generations[name] ||= { applied: -1, requested: -1 };
+    }
+    // Marks the field `name` loaded, current, not loading and without
+    // error, as a response for it leaves it.
+    presentDataField(name) {
+      this.writeDataState(name, "loaded", true);
+      this.writeDataState(name, "stale", false);
+      this.writeDataState(name, "loading", false);
+      return this.writeDataState(name, "error", null);
+    }
+    // Writes `value` to the state property `<name>_<state>`, an ordinary
+    // observable write. Nothing is written for a name that is not a
+    // declared field, such as `id`, or for `stale` on a scalar field,
+    // which declares no such property.
+    writeDataState(name, state2, value) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime2.isTruthy(descriptor)) return;
+      if (Runtime2.isTruthy(state2 === "stale" && descriptor.kind === "field")) return;
+      return Runtime2.write(this, `${name}_${state2}`, value);
+    }
+    // Reads the state property `<name>_<state>`; nil where
+    // `write_data_state` would write nothing.
+    readDataState(name, state2) {
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime2.isTruthy(descriptor)) return null;
+      if (Runtime2.isTruthy(state2 === "stale" && descriptor.kind === "field")) {
+        return null;
+      }
+      ;
+      return Runtime2.read(this, `${name}_${state2}`);
+    }
+    // The stable collection of the to-many association `name`, held by
+    // its stored `data_<name>` property.
+    dataCollection(name) {
+      return Runtime2.cast(
+        Runtime2.read(this, `data_${name}`),
+        "Swill::Model::AssociationCollection"
+      );
     }
     failDataField(name, message) {
       return _Swill__Distant__Object.prototype.failDataFieldWithGeneration.call(
@@ -7144,17 +7150,18 @@
       };
       object.deleted = true;
       Runtime2.deleteKey(this._queued_demands, `${model}:${id}`);
-      object.disconnect();
+      object.dealloc();
       this.pruneTombstones();
       return object;
     }
-    // :section: Loading Fields
+    // :section: Called by Distant Objects
     // What a distant object asks for when a field is read or loaded.
     // Queues a load of the field `name` on `object`, joining every other
-    // field demanded in this JavaScript turn into one request. Does nothing for
-    // an unsaved object, or for a field already loaded or loading. Reading an
-    // unloaded field of a saved object calls this.
-    // Queue all members read in this JavaScript turn into one GET.
+    // field demanded in this JavaScript turn into one `GET`. Does nothing
+    // for an unsaved object, or for a field already loaded or loading;
+    // `Object#begin_data_field_load` decides, and marks the field loading.
+    // `Object#property_will_access` calls this when an unloaded field of a
+    // saved object is read.
     demand(object, name) {
       if (object.id == null) return;
       if (!object.beginDataFieldLoad(name, false)) return;
@@ -7172,8 +7179,8 @@
     }
     async loadField(object, name, reload) {
       if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        !reload && object.dataFieldLoaded(name),
-        () => !object.dataFieldStale(name)
+        !reload && Runtime2.read(object, `${name}_loaded`) === true,
+        () => Runtime2.read(object, `${name}_stale`) !== true
       ))) return Runtime2.read(object, name);
       object.beginDataFieldLoad(name, true);
       await this.request(
@@ -7184,20 +7191,21 @@
       );
       return Runtime2.read(object, name);
     }
-    // :section: Identity
-    // The one canonical object per (model, id).
-    // Forgets every object the client holds: each is reset to unloaded and
-    // disconnected, and queued demands are dropped. The runtime calls this when
+    // :section: Called by the Runtime
+    // The connection's lifecycle, as the runtime reports it.
+    // Forgets every object the client holds: each has its fields reset to
+    // unloaded and deallocs, which releases its association controllers, and
+    // queued demands and tombstones are dropped. The runtime calls this when
     // the connection is lost, and the client calls it when a response arrives
-    // under a different actor scope than the one before.
-    // A changed actor or an explicit close invalidates every identity.
+    // under a different actor scope than the one before: another actor's
+    // records are another identity.
     reset() {
       Object.entries(this._stores).forEach(([_model, store]) => {
         let typed_store = Runtime2.cast(store, "T::Hash[String, T.untyped]");
         return Object.entries(typed_store).forEach(([_id, object]) => {
           let distant = Runtime2.cast(object, "Swill::Distant::Object");
           distant.resetDataFields();
-          return distant.disconnect();
+          return distant.dealloc();
         });
       });
       this._stores = {};
@@ -7206,9 +7214,13 @@
       this._actor_scope = null;
       return this._actor_scope;
     }
+    // Sends the demands queued while the connection was down. The runtime
+    // calls this when the connection opens.
     connectionOpened() {
       if (!Runtime2.isEmpty(this._queued_demands)) return this.scheduleDemands();
     }
+    // The body of a `QUERY`, `RESOLVE` or `COMMAND` message: the model
+    // and remote method named, with the arguments encoded for the wire.
     operation(model, name, positional, keywords) {
       return {
         model,
@@ -7217,6 +7229,9 @@
         keywords: this.encodeKeywords(keywords)
       };
     }
+    // A remote method's decoded value as the generated method returns it:
+    // a `ResultSet` over the array when the schema says `result_set`, the
+    // value itself otherwise.
     wrapResult(value, result_kind) {
       if (result_kind !== "result_set") return value;
       return new Swill__Model__ResultSet().replace(Runtime2.cast(
@@ -7224,9 +7239,11 @@
         "T::Array[T.untyped]"
       ));
     }
+    // Positional arguments for the wire, an omitted optional dropped.
     encodeArguments(values) {
       return values.filter((value) => !Runtime2.isTruthy(Runtime2.isOmittedArgument(value))).map((value) => this.encodeValue(value));
     }
+    // Keyword arguments for the wire, an omitted optional dropped.
     encodeKeywords(values) {
       let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
       Object.entries(values).forEach(([name, value]) => {
@@ -7236,6 +7253,9 @@
       });
       return result;
     }
+    // One value as the protocol carries it: a saved distant object as a
+    // `$ref` of its model and id, a time as an ISO `$time`, and arrays
+    // and records element by element. Anything else is sent as it is.
     encodeValue(value) {
       if (Runtime2.isTruthy(value instanceof Swill__Distant__Object && Runtime2.send(
         value,
@@ -7264,6 +7284,14 @@
       ;
       return value;
     }
+    // One value from the protocol: a `$ref` resolves to the canonical
+    // object for its model and id, created if the client holds none — or
+    // to `preferred`, an unsaved object of that model awaiting its id; a
+    // `$time` and a `$date` become the runtime's time values; a `$value`
+    // becomes an instance of the value class it names with its fields
+    // written; arrays and records decode element by element.
+    // `response_generation` is the generation a new object's id is applied
+    // under, so a tombstone of a newer deletion is not brought back.
     decodeValueWithPreferred(value, response_generation, preferred) {
       if (Array.isArray(value)) {
         return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.decodeValueWithPreferred(item, response_generation, preferred));
@@ -7322,6 +7350,11 @@
       ));
       return result;
     }
+    // The one object for `model` and `id`: the held object when there is
+    // one; the tombstone when the record was deleted at a generation no
+    // older than `response_generation`, so an old response cannot revive
+    // it; otherwise a new object — `preferred` when given — with its id
+    // applied under `response_generation`, held from now on.
     canonicalWithPreferred(model, id, response_generation, preferred) {
       let store = this.modelStore(model);
       let existing = store[id];
@@ -7350,6 +7383,12 @@
       store[id] = object;
       return object;
     }
+    // Applies one patch — a record's model, id, generation and fields —
+    // to its canonical object through `Object#apply_data_field`, which
+    // ignores a field a newer response already applied. A patch for a
+    // record deleted at a newer generation is dropped. `overwrite_dirty`
+    // says whether the patch replaces a dirty field: true for the
+    // application's own writes, false for what arrives alongside a query.
     applyPatch(patch, preferred, overwrite_dirty) {
       let model = Runtime2.send(patch.model, "to_s");
       let id = Runtime2.send(patch.id, "to_s");
@@ -7387,7 +7426,10 @@
       });
       return object;
     }
-    // Invalidations affect cached objects only; they never instantiate a graph.
+    // Marks the fields an invalidation names stale on the object it
+    // names, through `Object#invalidate_data_field`. An invalidation of an
+    // object the client does not hold, or has deleted, does nothing: it
+    // never creates an object.
     applyInvalidation(effect) {
       let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
         effect.id,
@@ -7401,6 +7443,9 @@
         Runtime2.cast(effect.generation, "Integer")
       ));
     }
+    // Demands each field an invalidation left stale that something
+    // observes (`Object#data_field_observed`), so a bound view refreshes
+    // without a read; an unobserved stale field waits for its next read.
     refreshObserved(effect) {
       let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
         effect.id,
@@ -7410,11 +7455,15 @@
       let distant = Runtime2.cast(object, "Swill::Distant::Object");
       if (distant.isDeleted) return;
       return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => {
-        if (Runtime2.isTruthy(distant.dataFieldStale(name) && distant.dataFieldObserved(name))) {
+        if (Runtime2.isTruthy(Runtime2.read(distant, `${name}_stale`) === true && distant.dataFieldObserved(name))) {
           this.demand(distant, name);
         }
       });
     }
+    // Applies a response message in order — its invalidations, then its
+    // patches, then a demand for each invalidated field that is observed
+    // — and returns its decoded value. Patches follow invalidations so a
+    // patch carrying the invalidated field satisfies it without a request.
     applyEnvelope(message, response_generation, preferred, overwrite_dirty) {
       let invalidations = Runtime2.cast(
         Runtime2.logicalOr(message.invalidations, () => []),
@@ -7490,6 +7539,11 @@
         this.pruneTombstones();
       }
     }
+    // Tells each object a `GET`'s demands name what became of the request
+    // of `generation`: with no `error`, that it started
+    // (`Object#data_request_started`); with one, that it failed
+    // (`Object#fail_data_field`). An object the client no longer holds is
+    // skipped.
     updateDemandState(contents, generation, error) {
       return Runtime2.cast(
         contents.demands,
@@ -7508,12 +7562,18 @@
         ) : distant.dataRequestStarted(name, generation));
       });
     }
+    // The held objects of `model` by id, created empty on first use.
     modelStore(model) {
       return this._stores[model] ||= {};
     }
+    // The deleted objects of `model` by id, each with the generation of
+    // its deletion, created empty on first use.
     modelTombstones(model) {
       return this._tombstones[model] ||= {};
     }
+    // Drops every tombstone older than the oldest request still in
+    // flight: no response can arrive that predates it. Runs after every
+    // response and every deletion.
     pruneTombstones() {
       let oldest = Runtime2.logicalOr(
         Runtime2.min(this._active_generations),
@@ -7535,6 +7595,8 @@
         }
       });
     }
+    // One demand of a `GET`: the model and id of `object` and the
+    // `fields` wanted from it.
     demandHash(object, fields) {
       return {
         model: object.constructor.dataModelName(),
@@ -7542,11 +7604,11 @@
         fields
       };
     }
+    // Arranges for `flush_demands` to run in a microtask, once, however
+    // many fields are demanded before it does: every field read in one
+    // JavaScript turn goes in one `GET`.
     scheduleDemands() {
-      if (this._demand_scheduled) {
-        return;
-      }
-      ;
+      if (this._demand_scheduled) return;
       this._demand_scheduled = true;
       return queueMicrotask(() => this.flushDemands());
     }
@@ -7870,6 +7932,19 @@
           "apply_draft": {
             "arity": 1,
             "js": "applyDraft"
+          },
+          "draft?": {
+            "arity": 0,
+            "js": "isDraft"
+          },
+          "draft_of?": {
+            "arity": 1,
+            "js": "isDraftOf"
+          },
+          "draft_original=": {
+            "arity": 1,
+            "js": "draftOriginal=",
+            "visibility": "protected"
           }
         }
       },
@@ -7886,24 +7961,7 @@
       "Swill::Distant::Fields": {
         factory: Swill__Distant__Fields,
         classFactory: Swill__Distant__Fields_ClassMethods,
-        methods: {
-          "field_loaded?": {
-            "arity": 1,
-            "js": "isFieldLoaded"
-          },
-          "field_stale?": {
-            "arity": 1,
-            "js": "isFieldStale"
-          },
-          "field_loading?": {
-            "arity": 1,
-            "js": "isFieldLoading"
-          },
-          "field_error": {
-            "arity": 1,
-            "js": "fieldError"
-          }
-        }
+        methods: {}
       }
     },
     classes: {
@@ -8156,8 +8214,8 @@
           }
         }
       },
-      "Swill::TextBindingDestination": {
-        constructor: Swill__TextBindingDestination,
+      "Swill::BindingDestination::Text": {
+        constructor: Swill__BindingDestination__Text,
         properties: {},
         methods: {
           "write": {
@@ -8168,8 +8226,8 @@
           }
         }
       },
-      "Swill::FieldBindingDestination": {
-        constructor: Swill__FieldBindingDestination,
+      "Swill::BindingDestination::Field": {
+        constructor: Swill__BindingDestination__Field,
         properties: {},
         methods: {
           "write": {
@@ -8191,8 +8249,8 @@
           }
         }
       },
-      "Swill::SelectBindingDestination": {
-        constructor: Swill__SelectBindingDestination,
+      "Swill::BindingDestination::Select": {
+        constructor: Swill__BindingDestination__Select,
         properties: {},
         methods: {
           "event_name": {
@@ -8201,8 +8259,8 @@
           }
         }
       },
-      "Swill::CheckboxBindingDestination": {
-        constructor: Swill__CheckboxBindingDestination,
+      "Swill::BindingDestination::Checkbox": {
+        constructor: Swill__BindingDestination__Checkbox,
         properties: {},
         methods: {
           "write": {
@@ -8225,8 +8283,8 @@
           }
         }
       },
-      "Swill::ElementPropertyBindingDestination": {
-        constructor: Swill__ElementPropertyBindingDestination,
+      "Swill::BindingDestination::ElementProperty": {
+        constructor: Swill__BindingDestination__ElementProperty,
         properties: {},
         methods: {
           "write": {
@@ -8246,8 +8304,8 @@
           }
         }
       },
-      "Swill::ObjectPropertyBindingDestination": {
-        constructor: Swill__ObjectPropertyBindingDestination,
+      "Swill::BindingDestination::ObjectProperty": {
+        constructor: Swill__BindingDestination__ObjectProperty,
         properties: {},
         methods: {
           "write": {
@@ -9974,11 +10032,35 @@
               return [];
             }
           },
+          "loaded": {
+            type: "T::Boolean",
+            attribute: false,
+            compute: function computeLoaded() {
+              return this.associationState("loaded") === true;
+            }
+          },
           "stale": {
             type: "T::Boolean",
             attribute: false,
-            defaultValue() {
-              return false;
+            compute: function computeStale() {
+              return this.associationState("stale") === true;
+            }
+          },
+          "loading": {
+            type: "T::Boolean",
+            attribute: false,
+            compute: function computeLoading() {
+              return this.associationState("loading") === true;
+            }
+          },
+          "error": {
+            type: "T.nilable(String)",
+            attribute: false,
+            compute: function computeError() {
+              return Runtime2.cast(
+                this.associationState("error"),
+                "T.nilable(String)"
+              );
             }
           }
         },
@@ -9990,6 +10072,10 @@
           "attach_association": {
             "arity": 2,
             "js": "attachAssociation"
+          },
+          "association_state": {
+            "arity": 1,
+            "js": "associationState"
           },
           "property_will_access": {
             "arity": 1,
@@ -10181,28 +10267,25 @@
           "initialize": {
             "arity": 0
           },
+          "field_loaded?": {
+            "arity": 1,
+            "js": "isFieldLoaded"
+          },
+          "field_stale?": {
+            "arity": 1,
+            "js": "isFieldStale"
+          },
+          "field_loading?": {
+            "arity": 1,
+            "js": "isFieldLoading"
+          },
+          "field_error": {
+            "arity": 1,
+            "js": "fieldError"
+          },
           "association_controller": {
             "arity": 1,
             "js": "associationController"
-          },
-          "release_association_controllers": {
-            "arity": 0,
-            "js": "releaseAssociationControllers"
-          },
-          "disconnect": {
-            "arity": 0
-          },
-          "coerce_property_value": {
-            "arity": 3,
-            "js": "coercePropertyValue"
-          },
-          "write_data_association": {
-            "arity": 2,
-            "js": "writeDataAssociation"
-          },
-          "property_will_access": {
-            "arity": 1,
-            "js": "propertyWillAccess"
           },
           "load_field": {
             "arity": 1,
@@ -10225,25 +10308,13 @@
           "draft": {
             "arity": 0
           },
-          "draft?": {
-            "arity": 0,
-            "js": "isDraft"
-          },
-          "attach_data_draft": {
+          "property_will_access": {
             "arity": 1,
-            "js": "attachDataDraft"
+            "js": "propertyWillAccess"
           },
-          "draft_from?": {
-            "arity": 1,
-            "js": "isDraftFrom"
-          },
-          "data_field_loaded": {
-            "arity": 1,
-            "js": "dataFieldLoaded"
-          },
-          "data_field_stale": {
-            "arity": 1,
-            "js": "dataFieldStale"
+          "apply_data_field": {
+            "arity": 4,
+            "js": "applyDataField"
           },
           "invalidate_data_field": {
             "arity": 2,
@@ -10256,14 +10327,6 @@
           "data_request_started": {
             "arity": 2,
             "js": "dataRequestStarted"
-          },
-          "data_field_loading": {
-            "arity": 1,
-            "js": "dataFieldLoading"
-          },
-          "data_field_error": {
-            "arity": 1,
-            "js": "dataFieldError"
           },
           "begin_data_field_load": {
             "arity": 2,
@@ -10278,25 +10341,34 @@
             "js": "failDataFieldWithGeneration",
             "family": "fail_data_field"
           },
-          "present_data_field": {
-            "arity": 1,
-            "js": "presentDataField"
-          },
-          "apply_data_field": {
-            "arity": 4,
-            "js": "applyDataField"
-          },
           "reset_data_fields": {
             "arity": 0,
             "js": "resetDataFields"
           },
-          "sync_data_collection": {
+          "data_generation": {
             "arity": 1,
-            "js": "syncDataCollection"
+            "js": "dataGeneration",
+            "visibility": "private"
           },
-          "data_field_state": {
+          "present_data_field": {
             "arity": 1,
-            "js": "dataFieldState"
+            "js": "presentDataField",
+            "visibility": "private"
+          },
+          "write_data_state": {
+            "arity": 3,
+            "js": "writeDataState",
+            "visibility": "private"
+          },
+          "read_data_state": {
+            "arity": 2,
+            "js": "readDataState",
+            "visibility": "private"
+          },
+          "data_collection": {
+            "arity": 1,
+            "js": "dataCollection",
+            "visibility": "private"
           }
         }
       },
@@ -10344,91 +10416,113 @@
             "js": "connectionOpened"
           },
           "operation": {
-            "arity": 4
+            "arity": 4,
+            "visibility": "private"
           },
           "wrap_result": {
             "arity": 2,
-            "js": "wrapResult"
+            "js": "wrapResult",
+            "visibility": "private"
           },
           "encode_arguments": {
             "arity": 1,
-            "js": "encodeArguments"
+            "js": "encodeArguments",
+            "visibility": "private"
           },
           "encode_keywords": {
             "arity": 1,
-            "js": "encodeKeywords"
+            "js": "encodeKeywords",
+            "visibility": "private"
           },
           "encode_value": {
             "arity": 1,
-            "js": "encodeValue"
+            "js": "encodeValue",
+            "visibility": "private"
           },
           "decode_value": {
             "arity": 2,
-            "js": "decodeValue"
+            "js": "decodeValue",
+            "visibility": "private"
           },
           "decode_value_with_preferred": {
             "arity": 3,
             "js": "decodeValueWithPreferred",
-            "family": "decode_value"
+            "family": "decode_value",
+            "visibility": "private"
           },
           "canonical": {
-            "arity": 3
+            "arity": 3,
+            "visibility": "private"
           },
           "canonical_with_preferred": {
             "arity": 4,
             "js": "canonicalWithPreferred",
-            "family": "canonical"
+            "family": "canonical",
+            "visibility": "private"
           },
           "apply_patch": {
             "arity": 3,
-            "js": "applyPatch"
+            "js": "applyPatch",
+            "visibility": "private"
           },
           "apply_invalidation": {
             "arity": 1,
-            "js": "applyInvalidation"
+            "js": "applyInvalidation",
+            "visibility": "private"
           },
           "refresh_observed": {
             "arity": 1,
-            "js": "refreshObserved"
+            "js": "refreshObserved",
+            "visibility": "private"
           },
           "apply_envelope": {
             "arity": 4,
-            "js": "applyEnvelope"
+            "js": "applyEnvelope",
+            "visibility": "private"
           },
           "request": {
-            "arity": 4
+            "arity": 4,
+            "visibility": "private"
           },
           "request_with_generation": {
             "arity": 4,
-            "js": "requestWithGeneration"
+            "js": "requestWithGeneration",
+            "visibility": "private"
           },
           "update_demand_state": {
             "arity": 3,
-            "js": "updateDemandState"
+            "js": "updateDemandState",
+            "visibility": "private"
           },
           "model_store": {
             "arity": 1,
-            "js": "modelStore"
+            "js": "modelStore",
+            "visibility": "private"
           },
           "model_tombstones": {
             "arity": 1,
-            "js": "modelTombstones"
+            "js": "modelTombstones",
+            "visibility": "private"
           },
           "prune_tombstones": {
             "arity": 0,
-            "js": "pruneTombstones"
+            "js": "pruneTombstones",
+            "visibility": "private"
           },
           "demand_hash": {
             "arity": 2,
-            "js": "demandHash"
+            "js": "demandHash",
+            "visibility": "private"
           },
           "schedule_demands": {
             "arity": 0,
-            "js": "scheduleDemands"
+            "js": "scheduleDemands",
+            "visibility": "private"
           },
           "flush_demands": {
             "arity": 0,
-            "js": "flushDemands"
+            "js": "flushDemands",
+            "visibility": "private"
           }
         }
       }

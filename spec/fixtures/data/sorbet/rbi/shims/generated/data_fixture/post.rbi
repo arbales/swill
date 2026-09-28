@@ -4,20 +4,72 @@ module DataFixture
   class Post < Swill::Distant::Object
     sig { returns(Integer) }
     def author_id; end
+    sig { returns(T::Boolean) }
+    def author_id_loaded; end
+    sig { returns(T::Boolean) }
+    def author_id_loading; end
+    sig { returns(T.nilable(String)) }
+    def author_id_error; end
     sig { returns(T.nilable(String)) }
     def body; end
+    sig { returns(T::Boolean) }
+    def body_loaded; end
+    sig { returns(T::Boolean) }
+    def body_loading; end
+    sig { returns(T.nilable(String)) }
+    def body_error; end
     sig { returns(T.nilable(String)) }
     def excerpt; end
     sig { returns(T::Boolean) }
+    def excerpt_loaded; end
+    sig { returns(T::Boolean) }
+    def excerpt_loading; end
+    sig { returns(T.nilable(String)) }
+    def excerpt_error; end
+    sig { returns(T::Boolean) }
     def published; end
+    sig { returns(T::Boolean) }
+    def published_loaded; end
+    sig { returns(T::Boolean) }
+    def published_loading; end
+    sig { returns(T.nilable(String)) }
+    def published_error; end
     sig { returns(T.nilable(Time)) }
     def published_at; end
+    sig { returns(T::Boolean) }
+    def published_at_loaded; end
+    sig { returns(T::Boolean) }
+    def published_at_loading; end
+    sig { returns(T.nilable(String)) }
+    def published_at_error; end
     sig { returns(String) }
     def title; end
+    sig { returns(T::Boolean) }
+    def title_loaded; end
+    sig { returns(T::Boolean) }
+    def title_loading; end
+    sig { returns(T.nilable(String)) }
+    def title_error; end
     sig { returns(T.nilable(DataFixture::User)) }
     def author; end
+    sig { returns(T::Boolean) }
+    def author_loaded; end
+    sig { returns(T::Boolean) }
+    def author_stale; end
+    sig { returns(T::Boolean) }
+    def author_loading; end
+    sig { returns(T.nilable(String)) }
+    def author_error; end
     sig { returns(Swill::Model::AssociationCollection[DataFixture::Comment]) }
     def comments; end
+    sig { returns(T::Boolean) }
+    def comments_loaded; end
+    sig { returns(T::Boolean) }
+    def comments_stale; end
+    sig { returns(T::Boolean) }
+    def comments_loading; end
+    sig { returns(T.nilable(String)) }
+    def comments_error; end
     sig { returns(Swill::ArrayController) }
     def comments_controller; end
     sig { returns(T::Boolean) }

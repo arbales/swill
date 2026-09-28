@@ -54,6 +54,7 @@ module Swill
                 descriptor["js"] = variant["js"] if variant["js"] != variant["name"]
                 descriptor["family"] = variant["family"] if variant["family"]
                 descriptor["accessor"] = true if method["accessor"]
+                descriptor["visibility"] = method["visibility"] if method["visibility"]
                 "#{object_key(variant['name'])}: #{JSON.pretty_generate(descriptor)}"
               end
             end

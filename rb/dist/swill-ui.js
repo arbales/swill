@@ -719,10 +719,10 @@
           if (descriptor.willAccess) this.propertyWillAccess(descriptor.name);
           return descriptor.computed ? computedValue(this, descriptor) : storedValue(this, descriptor);
         },
-        ...descriptor.computed && !descriptor.writer ? {} : {
-          set(value) {
-            writeProperty(this, descriptor, value);
-          }
+        // A computed property without a writer has a setter all the same, so
+        // an assignment raises `Read-only property` rather than TypeError.
+        set(value) {
+          writeProperty(this, descriptor, value);
         }
       });
     }
@@ -1215,8 +1215,13 @@
     Swill__Awakening: () => Swill__Awakening,
     Swill__Binding: () => Swill__Binding,
     Swill__BindingDestination: () => Swill__BindingDestination,
+    Swill__BindingDestination__Checkbox: () => Swill__BindingDestination__Checkbox,
+    Swill__BindingDestination__ElementProperty: () => Swill__BindingDestination__ElementProperty,
+    Swill__BindingDestination__Field: () => Swill__BindingDestination__Field,
+    Swill__BindingDestination__ObjectProperty: () => Swill__BindingDestination__ObjectProperty,
+    Swill__BindingDestination__Select: () => Swill__BindingDestination__Select,
+    Swill__BindingDestination__Text: () => Swill__BindingDestination__Text,
     Swill__BooleanTransformer: () => Swill__BooleanTransformer,
-    Swill__CheckboxBindingDestination: () => Swill__CheckboxBindingDestination,
     Swill__CollectionArrangement: () => Swill__CollectionArrangement,
     Swill__Connections__Actions: () => Swill__Connections__Actions,
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
@@ -1225,23 +1230,18 @@
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__DOM: () => Swill__DOM,
-    Swill__ElementPropertyBindingDestination: () => Swill__ElementPropertyBindingDestination,
-    Swill__FieldBindingDestination: () => Swill__FieldBindingDestination,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Notification: () => Swill__Notification,
     Swill__NotificationCenter: () => Swill__NotificationCenter,
     Swill__NumberTransformer: () => Swill__NumberTransformer,
     Swill__Object: () => Swill__Object,
     Swill__ObjectBindings: () => Swill__ObjectBindings,
-    Swill__ObjectPropertyBindingDestination: () => Swill__ObjectPropertyBindingDestination,
     Swill__Observable: () => Swill__Observable,
     Swill__OutletOwner: () => Swill__OutletOwner,
     Swill__OutletOwner_ClassMethods: () => Swill__OutletOwner_ClassMethods,
     Swill__Responder: () => Swill__Responder,
-    Swill__SelectBindingDestination: () => Swill__SelectBindingDestination,
     Swill__Swell: () => Swill__Swell,
     Swill__Templates: () => Swill__Templates,
-    Swill__TextBindingDestination: () => Swill__TextBindingDestination,
     Swill__URLFragment: () => Swill__URLFragment,
     Swill__ValueTransformer: () => Swill__ValueTransformer,
     Swill__View: () => Swill__View,
@@ -1729,19 +1729,19 @@
       if (known) return known;
       this._shared = Runtime.cast(
         {
-          text: new Swill__TextBindingDestination(),
-          field: new Swill__FieldBindingDestination(),
-          select: new Swill__SelectBindingDestination(),
-          checkbox: new Swill__CheckboxBindingDestination(),
-          property: new Swill__ElementPropertyBindingDestination(),
-          object: new Swill__ObjectPropertyBindingDestination()
+          text: new Swill__BindingDestination__Text(),
+          field: new Swill__BindingDestination__Field(),
+          select: new Swill__BindingDestination__Select(),
+          checkbox: new Swill__BindingDestination__Checkbox(),
+          property: new Swill__BindingDestination__ElementProperty(),
+          object: new Swill__BindingDestination__ObjectProperty()
         },
         "T.nilable(T::Hash[String, BindingDestination])"
       );
       return Runtime.must(this._shared);
     }
   };
-  var Swill__TextBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__Text = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return receiver.textContent = value;
     }
@@ -1749,7 +1749,7 @@
       return receiver.textContent;
     }
   };
-  var Swill__FieldBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__Field = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return receiver.value = value;
     }
@@ -1771,12 +1771,12 @@
       return "input";
     }
   };
-  var Swill__SelectBindingDestination = class extends Swill__FieldBindingDestination {
+  var Swill__BindingDestination__Select = class extends Swill__BindingDestination__Field {
     eventName() {
       return "change";
     }
   };
-  var Swill__CheckboxBindingDestination = class extends Swill__FieldBindingDestination {
+  var Swill__BindingDestination__Checkbox = class extends Swill__BindingDestination__Field {
     write(receiver, binding, value) {
       return receiver.checked = Runtime.isTruthy(value);
     }
@@ -1793,7 +1793,7 @@
       return "change";
     }
   };
-  var Swill__ElementPropertyBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__ElementProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       let property = Runtime.must(binding);
       if (property.startsWith("data-") || property.startsWith("aria-")) {
@@ -1835,7 +1835,7 @@
       return false;
     }
   };
-  var Swill__ObjectPropertyBindingDestination = class extends Swill__BindingDestination {
+  var Swill__BindingDestination__ObjectProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
       return Runtime.write(receiver, Runtime.must(binding), value);
     }
@@ -4817,8 +4817,8 @@
           }
         }
       },
-      "Swill::TextBindingDestination": {
-        constructor: Swill__TextBindingDestination,
+      "Swill::BindingDestination::Text": {
+        constructor: Swill__BindingDestination__Text,
         properties: {},
         methods: {
           "write": {
@@ -4829,8 +4829,8 @@
           }
         }
       },
-      "Swill::FieldBindingDestination": {
-        constructor: Swill__FieldBindingDestination,
+      "Swill::BindingDestination::Field": {
+        constructor: Swill__BindingDestination__Field,
         properties: {},
         methods: {
           "write": {
@@ -4852,8 +4852,8 @@
           }
         }
       },
-      "Swill::SelectBindingDestination": {
-        constructor: Swill__SelectBindingDestination,
+      "Swill::BindingDestination::Select": {
+        constructor: Swill__BindingDestination__Select,
         properties: {},
         methods: {
           "event_name": {
@@ -4862,8 +4862,8 @@
           }
         }
       },
-      "Swill::CheckboxBindingDestination": {
-        constructor: Swill__CheckboxBindingDestination,
+      "Swill::BindingDestination::Checkbox": {
+        constructor: Swill__BindingDestination__Checkbox,
         properties: {},
         methods: {
           "write": {
@@ -4886,8 +4886,8 @@
           }
         }
       },
-      "Swill::ElementPropertyBindingDestination": {
-        constructor: Swill__ElementPropertyBindingDestination,
+      "Swill::BindingDestination::ElementProperty": {
+        constructor: Swill__BindingDestination__ElementProperty,
         properties: {},
         methods: {
           "write": {
@@ -4907,8 +4907,8 @@
           }
         }
       },
-      "Swill::ObjectPropertyBindingDestination": {
-        constructor: Swill__ObjectPropertyBindingDestination,
+      "Swill::BindingDestination::ObjectProperty": {
+        constructor: Swill__BindingDestination__ObjectProperty,
         properties: {},
         methods: {
           "write": {

@@ -334,11 +334,11 @@ export function installClass(klass, name, properties, methods, registries = {}, 
           ? computedValue(this, descriptor)
           : storedValue(this, descriptor);
       },
-      ...(descriptor.computed && !descriptor.writer ? {} : {
-        set(value) {
-          writeProperty(this, descriptor, value);
-        }
-      })
+      // A computed property without a writer has a setter all the same, so
+      // an assignment raises `Read-only property` rather than TypeError.
+      set(value) {
+        writeProperty(this, descriptor, value);
+      }
     });
   }
 

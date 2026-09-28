@@ -157,6 +157,7 @@ module Swill
 
           type = ruby_type(field["type"])
           body.push("sig { returns(#{type}) }", "def #{field['name']}; end")
+          body.concat(field_state_rbi(field["name"], false))
         end
         model.fetch("associations").each_value do |association|
           target = association.fetch("model")
@@ -166,6 +167,7 @@ module Swill
                    "T.nilable(#{target})"
                  end
           body.push("sig { returns(#{type}) }", "def #{association['name']}; end")
+          body.concat(field_state_rbi(association["name"], true))
           if association["kind"] == "many"
             body.push("sig { returns(Swill::ArrayController) }", "def #{association['name']}_controller; end")
           end
@@ -182,6 +184,17 @@ module Swill
           )
         end
         ["# typed: true", "", render_class(model["name"], body), ""].join("\n")
+      end
+
+      # The readers of a field's state properties, as Distant::Object's
+      # attribute and association macros declare them: loaded, loading and
+      # error for every field, and stale for an association.
+      def field_state_rbi(name, association)
+        lines = ["sig { returns(T::Boolean) }", "def #{name}_loaded; end"]
+        lines.push("sig { returns(T::Boolean) }", "def #{name}_stale; end") if association
+        lines.push("sig { returns(T::Boolean) }", "def #{name}_loading; end")
+        lines.push("sig { returns(T.nilable(String)) }", "def #{name}_error; end")
+        lines
       end
 
       def schema_source
