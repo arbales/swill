@@ -165,7 +165,7 @@ RDOC_OPTS = [
 # fails when the number grows, and the baseline comes down as the framework
 # gets documented. Internals drop out of the count as they are marked :nodoc:.
 # Declared properties and outlets count as they do on the class page.
-DOC_COVERAGE_BASELINE = 247
+DOC_COVERAGE_BASELINE = 176
 
 desc "Report undocumented public framework API (fails if it grew)"
 task :doc_coverage do

@@ -3,22 +3,44 @@
 
 module Swill
   module Distant
-    # Client-side protocol semantics for generated distant models. The browser
-    # runtime supplies a transport; this object owns identity and materializes
-    # its responses as Ruby objects.
+    # `Swill::Distant::Client` is the browser's end of a Distant Objects
+    # connection. It holds one canonical object per `(model, id)`, so every
+    # query, association, patch and write that names a record updates the same
+    # object; it batches the fields read in one turn into one request; and it
+    # applies each response — the value, the patches for every record it
+    # touched, and the invalidations — before handing the value back. The
+    # runtime supplies the WebSocket; the client owns what comes over it.
+    #
+    # An application configures the shared client once, in its
+    # `Application#initialize`, and otherwise works through its distant
+    # objects:
+    #
+    #     Swill::Distant::Client.configure(url: "/data", schema_hash: MyApp::DataSchema::HASH)
+    #
+    # See [Models](rdoc-ref:doc/models.md) for the client side of Distant
+    # Objects and [Server Data](rdoc-ref:doc/server_data.md) for the server.
     class Client < Swill::Object
       extend T::Sig
 
+      # Returns the client the application shares: every distant object's
+      # queries, writes and field loads go through it.
       sig { returns(T.attached_class) }
       def self.default
         @default ||= new
       end
 
+      # Names the connection the runtime opens: `url` is the path the server
+      # mounted `Swill::Distant::Connection` at, and `schema_hash` the
+      # `DataSchema::HASH` the generator wrote. Called once, before the first
+      # remote method; the handshake fails with `schema_mismatch` when the hash is
+      # not the server's.
       sig { params(url: String, schema_hash: String).void }
       def self.configure(url:, schema_hash:)
         Runtime.configure_data(url, schema_hash)
       end
 
+      # Creates a client with no objects, and registers with the runtime to be
+      # reset when the connection is lost and to send queued demands when it opens.
       sig { void }
       def initialize
         super
@@ -32,11 +54,14 @@ module Swill
         Runtime.register_data_lifecycle(-> { reset }, -> { connection_opened })
       end
 
+      # :section: Remote Methods and Writes
+      # What a generated model calls; each sends one message and applies the response.
+
       sig do
         params(model: String, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
       end
-      async def query(model, name, positional, keywords, result_kind)
+      async def query(model, name, positional, keywords, result_kind) # :nodoc:
         value = await request("QUERY", operation(model, name, positional, keywords), nil, false)
         wrap_result(value, result_kind)
       end
@@ -45,7 +70,7 @@ module Swill
         params(model: String, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
       end
-      async def resolve(model, name, positional, keywords, result_kind)
+      async def resolve(model, name, positional, keywords, result_kind) # :nodoc:
         value = await request("RESOLVE", operation(model, name, positional, keywords), nil, false)
         wrap_result(value, result_kind)
       end
@@ -54,7 +79,7 @@ module Swill
         params(object: Object, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
       end
-      async def command(object, name, positional, keywords, result_kind)
+      async def command(object, name, positional, keywords, result_kind) # :nodoc:
         contents = operation(object.class.data_model_name, name, positional, keywords)
         contents["id"] = object.id
         value = await request("COMMAND", contents, nil, true)
@@ -65,13 +90,13 @@ module Swill
         params(model: String, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
       end
-      async def class_command(model, name, positional, keywords, result_kind)
+      async def class_command(model, name, positional, keywords, result_kind) # :nodoc:
         value = await request("COMMAND", operation(model, name, positional, keywords), nil, true)
         wrap_result(value, result_kind)
       end
 
       sig { params(object: Object, attributes: T::Hash[T.untyped, T.untyped]).returns(Object) }
-      async def create(object, attributes)
+      async def create(object, attributes) # :nodoc:
         await request("CREATE", {
           "model" => object.class.data_model_name,
           "attributes" => encode_value(attributes)
@@ -80,7 +105,7 @@ module Swill
       end
 
       sig { params(object: Object, attributes: T::Hash[T.untyped, T.untyped]).returns(Object) }
-      async def update(object, attributes)
+      async def update(object, attributes) # :nodoc:
         await request("UPDATE", {
           "model" => object.class.data_model_name,
           "id" => object.id,
@@ -90,7 +115,7 @@ module Swill
       end
 
       sig { params(object: Object).returns(Object) }
-      async def delete(object)
+      async def delete(object) # :nodoc:
         model = object.class.data_model_name
         id = object.id.to_s
         _value, removed_generation = await request_with_generation("DELETE", {
@@ -105,6 +130,13 @@ module Swill
         object
       end
 
+      # :section: Loading Fields
+      # What a distant object asks for when a field is read or loaded.
+
+      # Queues a load of the field `name` on `object`, joining every other
+      # field demanded in this JavaScript turn into one request. Does nothing for
+      # an unsaved object, or for a field already loaded or loading. Reading an
+      # unloaded field of a saved object calls this.
       # Queue all members read in this JavaScript turn into one GET.
       sig { params(object: Object, name: String).void }
       def demand(object, name)
@@ -122,6 +154,9 @@ module Swill
         schedule_demands
       end
 
+      # Loads the field `name` on `object` and returns its value; returns the
+      # current value without a request when the field is loaded and not stale,
+      # unless `reload` is true. Raises when the request fails.
       sig { params(object: Object, name: String, reload: T::Boolean).returns(T.untyped) }
       async def load_field(object, name, reload)
         return Runtime.read(object, name) if !reload && object.data_field_loaded(name) && !object.data_field_stale(name)
@@ -130,6 +165,13 @@ module Swill
         Runtime.read(object, name)
       end
 
+      # :section: Identity
+      # The one canonical object per (model, id).
+
+      # Forgets every object the client holds: each is reset to unloaded and
+      # disconnected, and queued demands are dropped. The runtime calls this when
+      # the connection is lost, and the client calls it when a response arrives
+      # under a different actor scope than the one before.
       # A changed actor or an explicit close invalidates every identity.
       sig { void }
       def reset
@@ -148,7 +190,7 @@ module Swill
       end
 
       sig { void }
-      def connection_opened
+      def connection_opened # :nodoc:
         schedule_demands unless @queued_demands.empty?
       end
 
@@ -156,7 +198,7 @@ module Swill
         params(model: String, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped]).returns(T::Hash[String, T.untyped])
       end
-      def operation(model, name, positional, keywords)
+      def operation(model, name, positional, keywords) # :nodoc:
         {
           "model" => model,
           "name" => name,
@@ -166,18 +208,18 @@ module Swill
       end
 
       sig { params(value: T.untyped, result_kind: String).returns(T.untyped) }
-      def wrap_result(value, result_kind)
+      def wrap_result(value, result_kind) # :nodoc:
         return value unless result_kind == "result_set"
         Model::ResultSet.new.replace(T.cast(value, T::Array[T.untyped]))
       end
 
       sig { params(values: T::Array[T.untyped]).returns(T::Array[T.untyped]) }
-      def encode_arguments(values)
+      def encode_arguments(values) # :nodoc:
         values.reject { |value| Runtime.omitted_argument?(value) }.map { |value| encode_value(value) }
       end
 
       sig { params(values: T::Hash[T.untyped, T.untyped]).returns(T::Hash[T.untyped, T.untyped]) }
-      def encode_keywords(values)
+      def encode_keywords(values) # :nodoc:
         result = T.let({}, T::Hash[T.untyped, T.untyped])
         values.each do |name, value|
           result[name] = encode_value(value) unless Runtime.omitted_argument?(value)
@@ -186,7 +228,7 @@ module Swill
       end
 
       sig { params(value: T.untyped).returns(T.untyped) }
-      def encode_value(value)
+      def encode_value(value) # :nodoc:
         if value.is_a?(Object) && value.id
           distant = T.cast(value, Object)
           return {"$ref" => [distant.class.data_model_name, distant.id.to_s]}
@@ -206,7 +248,7 @@ module Swill
       end
 
       sig { params(value: T.untyped, response_generation: Integer, preferred: T.nilable(Object)).returns(T.untyped) }
-      def decode_value(value, response_generation, preferred = nil)
+      def decode_value(value, response_generation, preferred = nil) # :nodoc:
         if value.is_a?(Array)
           return T.cast(value, T::Array[T.untyped]).map do |item|
             decode_value(item, response_generation, preferred)
@@ -241,7 +283,7 @@ module Swill
         params(model: String, id: String, response_generation: Integer,
                preferred: T.nilable(Object)).returns(Object)
       end
-      def canonical(model, id, response_generation, preferred = nil)
+      def canonical(model, id, response_generation, preferred = nil) # :nodoc:
         store = model_store(model)
         existing = store[id]
         return T.cast(existing, Object) if existing
@@ -259,7 +301,7 @@ module Swill
       end
 
       sig { params(patch: T::Hash[String, T.untyped], preferred: T.nilable(Object), overwrite_dirty: T::Boolean).returns(Object) }
-      def apply_patch(patch, preferred, overwrite_dirty)
+      def apply_patch(patch, preferred, overwrite_dirty) # :nodoc:
         model = patch["model"].to_s
         id = patch["id"].to_s
         patch_generation = T.cast(patch["generation"], Integer)
@@ -278,7 +320,7 @@ module Swill
 
       # Invalidations affect cached objects only; they never instantiate a graph.
       sig { params(effect: T::Hash[String, T.untyped]).void }
-      def apply_invalidation(effect)
+      def apply_invalidation(effect) # :nodoc:
         object = model_store(effect["model"].to_s)[effect["id"].to_s]
         return unless object
         distant = T.cast(object, Object)
@@ -289,7 +331,7 @@ module Swill
       end
 
       sig { params(effect: T::Hash[String, T.untyped]).void }
-      def refresh_observed(effect)
+      def refresh_observed(effect) # :nodoc:
         object = model_store(effect["model"].to_s)[effect["id"].to_s]
         return unless object
         distant = T.cast(object, Object)
@@ -303,7 +345,7 @@ module Swill
         params(message: T::Hash[String, T.untyped], response_generation: Integer,
                preferred: T.nilable(Object), overwrite_dirty: T::Boolean).returns(T.untyped)
       end
-      def apply_envelope(message, response_generation, preferred, overwrite_dirty)
+      def apply_envelope(message, response_generation, preferred, overwrite_dirty) # :nodoc:
         invalidations = T.cast(message["invalidations"] || [], T::Array[T::Hash[String, T.untyped]])
         invalidations.each { |effect| apply_invalidation(effect) }
         patches = T.cast(message["patches"] || [], T::Array[T::Hash[String, T.untyped]])
@@ -316,7 +358,7 @@ module Swill
         params(type: String, contents: T::Hash[String, T.untyped], preferred: T.nilable(Object),
                overwrite_dirty: T::Boolean).returns(T.untyped)
       end
-      async def request(type, contents, preferred, overwrite_dirty)
+      async def request(type, contents, preferred, overwrite_dirty) # :nodoc:
         value, _operation_generation = await request_with_generation(type, contents, preferred, overwrite_dirty)
         value
       end
@@ -325,7 +367,7 @@ module Swill
         params(type: String, contents: T::Hash[String, T.untyped], preferred: T.nilable(Object),
                overwrite_dirty: T::Boolean).returns(T::Array[T.untyped])
       end
-      async def request_with_generation(type, contents, preferred, overwrite_dirty)
+      async def request_with_generation(type, contents, preferred, overwrite_dirty) # :nodoc:
         @generation += 1
         operation_generation = @generation
         @active_generations << operation_generation
@@ -349,7 +391,7 @@ module Swill
       end
 
       sig { params(contents: T::Hash[String, T.untyped], generation: Integer, error: T.nilable(String)).void }
-      def update_demand_state(contents, generation, error)
+      def update_demand_state(contents, generation, error) # :nodoc:
         T.cast(contents["demands"], T::Array[T::Hash[String, T.untyped]]).each do |item|
           object = model_store(item["model"].to_s)[item["id"].to_s]
           next unless object
@@ -365,17 +407,17 @@ module Swill
       end
 
       sig { params(model: String).returns(T::Hash[String, T.untyped]) }
-      def model_store(model)
+      def model_store(model) # :nodoc:
         @stores[model] ||= {}
       end
 
       sig { params(model: String).returns(T::Hash[String, T.untyped]) }
-      def model_tombstones(model)
+      def model_tombstones(model) # :nodoc:
         @tombstones[model] ||= {}
       end
 
       sig { void }
-      def prune_tombstones
+      def prune_tombstones # :nodoc:
         oldest = @active_generations.min || @generation + 1
         @tombstones.each do |_model, removed_objects|
           typed_removed = T.cast(removed_objects, T::Hash[String, T.untyped])
@@ -390,19 +432,19 @@ module Swill
       end
 
       sig { params(object: Object, fields: T::Array[String]).returns(T::Hash[String, T.untyped]) }
-      def demand_hash(object, fields)
+      def demand_hash(object, fields) # :nodoc:
         {"model" => object.class.data_model_name, "id" => object.id, "fields" => fields}
       end
 
       sig { void }
-      def schedule_demands
+      def schedule_demands # :nodoc:
         return if @demand_scheduled
         @demand_scheduled = true
         queueMicrotask(-> { flush_demands })
       end
 
       sig { void }
-      async def flush_demands
+      async def flush_demands # :nodoc:
         @demand_scheduled = false
         batch = @queued_demands.values
         @queued_demands = {}

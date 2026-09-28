@@ -6598,23 +6598,42 @@
   function Swill__Distant__Fields(Superclass) {
     class Swill__Distant__Fields_Layer extends Superclass {
       // :nodoc:
+      // The declarations of a generated distant model. The generator writes
+      // them; an application reads them on the class page and does not call
+      // them.
+      // Declares the server model this class represents, as named on the
+      // wire.
+      // Declares a scalar field: an attribute that is nil until loaded and
+      // whose read, on a saved object, requests it.
+      // Declares a to-one association to `class:`, read-only and nil until
+      // loaded. The five macros are Sequel's association kinds; every
+      // option but `class:` stays on the server.
+      // Declares a to-one association to `class:`, as `many_to_one` does.
+      // Declares a to-many association to `class:`: a stable, read-only
+      // `AssociationCollection` the server keeps current, and a
+      // `<name>_controller` accessor for arranging it.
+      // Declares a to-many association to `class:`, as `one_to_many` does.
+      // Declares a to-one association to `class:`, as `many_to_one` does.
       // :nodoc:
-      // Declares the authoritative server model name used on the wire.
-      // Declares a partially loadable scalar field.
-      // Names mirror Sequel; persistence options stay on the server.
-      // Whether +name+ has an authoritative value, including nil.
+      // :nodoc:
+      // :section: Field State
+      // What the client knows about each field.
+      // Whether the field `name` holds a value the server sent, nil included.
       isFieldLoaded(name) {
         return this.dataFieldLoaded(name);
       }
-      // Cached data remains readable while an invalidated association refreshes.
+      // Whether the server has invalidated the association `name` since it
+      // was loaded. A stale association keeps its records readable until it
+      // refreshes.
       isFieldStale(name) {
         return this.dataFieldStale(name);
       }
-      // Whether +name+ currently has a request in flight.
+      // Whether a request for the field `name` is in flight.
       isFieldLoading(name) {
         return this.dataFieldLoading(name);
       }
-      // The last loading error for +name+, if any.
+      // The message of the last failed request for the field `name`, or nil
+      // when its last request succeeded or none was made.
       fieldError(name) {
         return this.dataFieldError(name);
       }
@@ -6634,6 +6653,11 @@
     return Swill__Distant__Fields_ClassMethods_Layer.prototype;
   }
   var Swill__Distant__Object = class _Swill__Distant__Object extends Swill__Model__Editable {
+    // Whether the server has deleted this record. A deleted object stays as
+    // a tombstone: it cannot be saved, drafted or loaded.
+    // `deleted`, as a predicate.
+    // Creates an object with no loaded fields and a stable, empty
+    // `AssociationCollection` for each to-many association.
     // Gives each to-many association its stable collection.
     constructor() {
       super();
@@ -6662,6 +6686,13 @@
         return this.writeDataAssociation(name, collection);
       });
     }
+    // :section: Associations
+    // To-many associations as collections and controllers.
+    // Returns the `ArrayController` that arranges the to-many association
+    // `name`, creating it on first call and keeping it for the object's
+    // lifetime, so views that bind to it share one sort and selection. The
+    // generated `<name>_controller` accessor calls this. Constructing the
+    // controller loads nothing. Raises when `name` is not a to-many association.
     // Shared presentation is opt-in; constructing the controller does not load.
     associationController(name) {
       let existing = this._data_controllers[name];
@@ -6681,6 +6712,9 @@
       this._data_controllers = {};
       return this._data_controllers;
     }
+    // Releases the object's association controllers, then disconnects as an
+    // `Editable` does. The client calls this when the object is deleted or the
+    // connection is reset.
     disconnect() {
       this.releaseAssociationControllers();
       return super.disconnect();
@@ -6790,6 +6824,12 @@
       await Swill__Distant__Client.default().delete(this);
       return this;
     }
+    // :section: Drafting
+    // Editing a copy and applying it.
+    // Returns a detached copy of this object holding its id and every loaded
+    // field, for editing without touching the original. A draft never loads
+    // fields on its own; `apply_draft` on the original saves it. Raises for a
+    // deleted or unsaved object.
     // Returns a detached editable copy that never hydrates independently.
     draft() {
       if (this.isDeleted) throw new Error("Cannot draft a deleted distant object");
@@ -6816,10 +6856,13 @@
       copy.markCleanBang();
       return copy;
     }
+    // Whether this object is a draft made by `draft`.
     // Whether this object is a detached editing copy.
     isDraft() {
       return this._data_draft_source != null;
     }
+    // :section: Field State
+    // How the client records what each field holds; internal.
     // Internal distant-data state. It is ordinary Ruby state so the model's
     // behavior is the same on MRI and in compiled applications.
     attachDataDraft(original) {
@@ -7000,6 +7043,8 @@
       let schema_hash = Runtime2.argument(__swill_bound, "schema_hash");
       return Runtime2.configureData(url, schema_hash);
     }
+    // Creates a client with no objects, and registers with the runtime to be
+    // reset when the connection is lost and to send queued demands when it opens.
     constructor() {
       super();
       this._stores = Runtime2.cast(
@@ -7103,6 +7148,12 @@
       this.pruneTombstones();
       return object;
     }
+    // :section: Loading Fields
+    // What a distant object asks for when a field is read or loaded.
+    // Queues a load of the field `name` on `object`, joining every other
+    // field demanded in this JavaScript turn into one request. Does nothing for
+    // an unsaved object, or for a field already loaded or loading. Reading an
+    // unloaded field of a saved object calls this.
     // Queue all members read in this JavaScript turn into one GET.
     demand(object, name) {
       if (object.id == null) return;
@@ -7133,6 +7184,12 @@
       );
       return Runtime2.read(object, name);
     }
+    // :section: Identity
+    // The one canonical object per (model, id).
+    // Forgets every object the client holds: each is reset to unloaded and
+    // disconnected, and queued demands are dropped. The runtime calls this when
+    // the connection is lost, and the client calls it when a response arrives
+    // under a different actor scope than the one before.
     // A changed actor or an explicit close invalidates every identity.
     reset() {
       Object.entries(this._stores).forEach(([_model, store]) => {
@@ -7486,7 +7543,10 @@
       };
     }
     scheduleDemands() {
-      if (this._demand_scheduled) return;
+      if (this._demand_scheduled) {
+        return;
+      }
+      ;
       this._demand_scheduled = true;
       return queueMicrotask(() => this.flushDemands());
     }
