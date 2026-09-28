@@ -1959,18 +1959,14 @@
         ;
         return super.coercePropertyValue(name, value, previous);
       }
-      // Returns `arranged_content`.
-      arrangedObjects() {
-        return this.arrangedContent;
-      }
       // Returns the content filtered by `includes_object?` and sorted by
       // `sort_key` and `sort_direction`, with the object `show_first` placed
       // ahead of the rest. Nil values sort last, numbers and booleans by value,
       // and everything else as text. The default implementation is what
-      // `arranged_content` computes; override it to arrange another way.
+      // `arranged_objects` computes; override it to arrange another way.
       arrangeContent() {
         let controller = this.arrayController;
-        if (controller) return controller.arrangedObjects();
+        if (controller) return controller.arrangedObjects;
         let source = this.content;
         if (this.isCollection(source)) source = Runtime.send(source, "records");
         let objects = Runtime.cast(
@@ -2120,7 +2116,7 @@
       arrangedSelection() {
         let controller = this.arrayController;
         if (controller) return controller.selectedObjects;
-        let objects = this.arrangedObjects();
+        let objects = this.arrangedObjects;
         let requested = Runtime.cast(
           Runtime.logicalOr(this.selectionState.objects, () => []),
           "T::Array[T.untyped]"
@@ -2160,7 +2156,7 @@
       // Selects the objects at `indexes` in the arranged content, replacing
       // the current selection. An index outside the content is ignored.
       selectIndexes(indexes) {
-        let arranged = this.arrangedObjects();
+        let arranged = this.arrangedObjects;
         let objects = Runtime.cast([], "T::Array[T.untyped]");
         indexes.forEach((index) => {
           if (Runtime.isTruthy(index >= 0 && index < arranged.length)) {
@@ -2180,14 +2176,14 @@
       // Selects the first arranged object when nothing is selected and there
       // is one.
       selectFirstIfNothingSelected() {
-        if (Runtime.isTruthy(Runtime.isEmpty(this.selectedObjects) && !Runtime.isEmpty(this.arrangedObjects()))) {
+        if (Runtime.isTruthy(Runtime.isEmpty(this.selectedObjects) && !Runtime.isEmpty(this.arrangedObjects))) {
           return this.selectIndexes([0]);
         }
       }
       // Returns the arranged object at `index`, or nil when `index` is outside
       // the arranged content.
       objectAt(index) {
-        let objects = this.arrangedObjects();
+        let objects = this.arrangedObjects;
         return Runtime.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
       }
       // Returns `object`'s `id` as a string, or nil when `object` is nil, has
@@ -2203,7 +2199,7 @@
       // has it or `identifier` is nil or empty.
       objectWithId(identifier) {
         if (identifier == null || Runtime.isEmpty(identifier)) return null;
-        return this.arrangedObjects().find((object) => this.identifierFor(object) === identifier);
+        return this.arrangedObjects.find((object) => this.identifierFor(object) === identifier);
       }
       currentSelection() {
         return this.selectedObjects;
@@ -4102,7 +4098,7 @@
     representedObjectDidChange(_previous, _objects) {
       return null;
     }
-    arrangedContentDidChange(_previous, _objects) {
+    arrangedObjectsDidChange(_previous, _objects) {
       this._selection_anchor = null;
       if (Runtime.isTruthy(this._awakened && !this._setting_content)) {
         return this.renderAll();
@@ -4121,7 +4117,7 @@
     // Arrow keys move a single selection; everything else continues up.
     keyDown(event) {
       let index;
-      let total = this.arrangedObjects().length;
+      let total = this.arrangedObjects.length;
       if (total === 0) return super.keyDown(event);
       let indexes = this.currentIndexes();
       let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
@@ -4207,7 +4203,7 @@
     }
     renderAll() {
       this.clearRows();
-      this.arrangedObjects().forEach((item) => this.attachRow(item));
+      this.arrangedObjects.forEach((item) => this.attachRow(item));
       return this.syncSelectedRows();
     }
     attachRow(item) {
@@ -4398,10 +4394,6 @@
           "coerce_property_value": {
             "arity": 3,
             "js": "coercePropertyValue"
-          },
-          "arranged_objects": {
-            "arity": 0,
-            "js": "arrangedObjects"
           },
           "arrange_content": {
             "arity": 0,
@@ -4884,11 +4876,11 @@
               return {};
             }
           },
-          "arranged_content": {
-            js: "arrangedContent",
+          "arranged_objects": {
+            js: "arrangedObjects",
             type: "T::Array[T.untyped]",
             attribute: false,
-            compute: function compute_arrangedContent() {
+            compute: function compute_arrangedObjects() {
               return this.arrangeContent();
             }
           },
@@ -4975,7 +4967,7 @@
             compute: function compute_selectedIndexes() {
               let selected = this.selectedObjects;
               let indexes = Runtime.cast([], "T::Array[Integer]");
-              this.arrangedObjects().forEach((object, index) => {
+              this.arrangedObjects.forEach((object, index) => {
                 if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
@@ -5621,11 +5613,11 @@
               return {};
             }
           },
-          "arranged_content": {
-            js: "arrangedContent",
+          "arranged_objects": {
+            js: "arrangedObjects",
             type: "T::Array[T.untyped]",
             attribute: false,
-            compute: function compute_arrangedContent2() {
+            compute: function compute_arrangedObjects2() {
               return this.arrangeContent();
             }
           },
@@ -5712,7 +5704,7 @@
             compute: function compute_selectedIndexes2() {
               let selected = this.selectedObjects;
               let indexes = Runtime.cast([], "T::Array[Integer]");
-              this.arrangedObjects().forEach((object, index) => {
+              this.arrangedObjects.forEach((object, index) => {
                 if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
@@ -5784,9 +5776,9 @@
             "arity": 2,
             "js": "representedObjectDidChange"
           },
-          "arranged_content_did_change": {
+          "arranged_objects_did_change": {
             "arity": 2,
-            "js": "arrangedContentDidChange"
+            "js": "arrangedObjectsDidChange"
           },
           "selected_objects_did_change": {
             "arity": 2,

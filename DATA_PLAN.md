@@ -214,8 +214,8 @@ client; they are not cross-client subscriptions or automatic mutation capture.
 | List and its view | Row rendering/lifecycle, focus, keyboard/mouse input, scrolling, header actions |
 
 `CollectionArrangement` can be included on a view controller; `ArrayController`
-is the optional DOM-independent owner. `arranged_objects` reads the cached
-`arranged_content` property. Override `includes_object?` for local filtering;
+is the optional DOM-independent owner. `arranged_objects` is the cached,
+observable property. Override `includes_object?` for local filtering;
 observed property reads track relevant dependencies. Preserve existing `sort`,
 `toggle_sort`, `sort_key`, and `sort_direction` APIs.
 

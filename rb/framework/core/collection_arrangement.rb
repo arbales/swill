@@ -5,7 +5,7 @@ module Swill
   # `CollectionArrangement` adds arrangement and selection to the objects that
   # include it, with no dependence on the DOM. It gives an object:
   #
-  # - `content`, and `arranged_content`: the content filtered by
+  # - `content`, and `arranged_objects`: the content filtered by
   #   `includes_object?` and sorted by `sort_key` and `sort_direction`;
   # - a selection held by object identity, so it survives filtering, sorting
   #   and replacement of the content, and `selected_object_id`, which names
@@ -53,7 +53,7 @@ module Swill
       # The content after filtering and sorting, in display order; an empty
       # array when there is no content. Properties read while arranging are
       # its dependencies, so it rearranges when they change.
-      base.property :arranged_content, type: T::Array[T.untyped] do
+      base.property :arranged_objects, type: T::Array[T.untyped] do
         arrange_content
       end
 
@@ -137,17 +137,11 @@ module Swill
       super
     end
 
-    # Returns `arranged_content`.
-    sig { returns(T::Array[T.untyped]) }
-    def arranged_objects
-      arranged_content
-    end
-
     # Returns the content filtered by `includes_object?` and sorted by
     # `sort_key` and `sort_direction`, with the object `show_first` placed
     # ahead of the rest. Nil values sort last, numbers and booleans by value,
     # and everything else as text. The default implementation is what
-    # `arranged_content` computes; override it to arrange another way.
+    # `arranged_objects` computes; override it to arrange another way.
     sig { returns(T::Array[T.untyped]) }
     def arrange_content
       controller = array_controller

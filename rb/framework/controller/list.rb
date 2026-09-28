@@ -98,7 +98,7 @@ module Swill
     def represented_object_did_change(_previous, _objects); end
 
     sig { params(_previous: T.untyped, _objects: T.untyped).void }
-    def arranged_content_did_change(_previous, _objects)
+    def arranged_objects_did_change(_previous, _objects)
       @selection_anchor = nil
       render_all if @awakened && !@setting_content
     end

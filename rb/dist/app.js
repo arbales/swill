@@ -1190,11 +1190,11 @@
               return {};
             }
           },
-          "arranged_content": {
-            js: "arrangedContent",
+          "arranged_objects": {
+            js: "arrangedObjects",
             type: "T::Array[T.untyped]",
             attribute: false,
-            compute: function compute_arrangedContent() {
+            compute: function compute_arrangedObjects() {
               return this.arrangeContent();
             }
           },
@@ -1281,7 +1281,7 @@
             compute: function compute_selectedIndexes() {
               let selected = this.selectedObjects;
               let indexes = Runtime.cast([], "T::Array[Integer]");
-              this.arrangedObjects().forEach((object, index) => {
+              this.arrangedObjects.forEach((object, index) => {
                 if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;

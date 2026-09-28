@@ -145,7 +145,7 @@ module Swill
 
     # An external arrangement or background refresh can also remove the row.
     sig { override.params(previous: T.untyped, objects: T.untyped).void }
-    def arranged_content_did_change(previous, objects)
+    def arranged_objects_did_change(previous, objects)
       end_editing(false) if editing?
       super
     end

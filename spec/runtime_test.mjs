@@ -2631,24 +2631,46 @@ test("array controllers cache arrangement and track filter and sort property rea
   controller.content = [grace, ada];
   assert.equal(visits, 0, "constructing or assigning content is lazy");
   controller.sort("name", "ascending");
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [ada, grace]);
+  assert.deepEqual(Array.from(controller.arrangedObjects), [ada, grace]);
   const initialVisits = visits;
   controller.selectObject(grace);
-  for (let i = 0; i < 10; i++) { controller.arrangedObjects(); controller.selectedIndexes; }
+  for (let i = 0; i < 10; i++) { controller.arrangedObjects; controller.selectedIndexes; }
   assert.equal(visits, initialVisits, "selection and index reads do not repeat filtering");
   controller.query = "ada";
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [ada]);
+  assert.deepEqual(Array.from(controller.arrangedObjects), [ada]);
   assert.equal(controller.selectedObject, null);
   controller.query = "";
   assert.equal(controller.selectedObject, grace, "clearing the filter restores the requested selection");
   grace.name = "Aaron";
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [grace, ada]);
+  assert.deepEqual(Array.from(controller.arrangedObjects), [grace, ada]);
   const other = new ArrayController(); other.content = controller.content;
   other.sort("name", "descending");
-  assert.deepEqual(Array.from(other.arrangedObjects()), [ada, grace]);
+  assert.deepEqual(Array.from(other.arrangedObjects), [ada, grace]);
   assert.deepEqual(Array.from(controller.content), [grace, ada], "arrangement does not reorder content");
   controller.dealloc(); other.dealloc();
   assert.equal(Runtime.observed(grace, "name"), false);
+});
+
+test("arranged_objects is the observable and bindable arrangement property", () => {
+  const ArrayController = Runtime.resolve("Swill::ArrayController");
+  const source = new ArrayController();
+  const consumer = new ArrayController();
+  const ada = new Person(); ada.name = "Ada";
+  const grace = new Person(); grace.name = "Grace";
+  source.content = [grace, ada];
+  const changes = [];
+  const dispose = source.observe("arranged_objects", value => changes.push(Array.from(value)));
+  consumer.bind("content", Runtime.keywordArguments({to: source, key_path: "arranged_objects"}));
+  assert.deepEqual(Array.from(consumer.content), [grace, ada]);
+  changes.length = 0;
+  source.sort("name", "ascending");
+  assert.deepEqual(changes, [[ada, grace]]);
+  assert.deepEqual(Array.from(consumer.content), [ada, grace]);
+  assert.equal(source.arrangedObjects, source.arrangedObjects, "reads reuse the cached array");
+  assert.equal("arrangedContent" in source, false, "there is only one arrangement property");
+  consumer.unbind("content");
+  dispose();
+  consumer.dealloc(); source.dealloc();
 });
 
 test("replacing array controller content releases obsolete member dependencies", () => {
@@ -2660,8 +2682,8 @@ test("replacing array controller content releases obsolete member dependencies",
   controller.sort("name", "ascending");
   // Two members ensure sorting reads names and subscribes to them.
   controller.content = [second, first];
-  controller.arrangedObjects();
-  const dispose = controller.observe("arranged_content", () => {});
+  controller.arrangedObjects;
+  const dispose = controller.observe("arranged_objects", () => {});
   assert.equal(Runtime.observed(first, "name"), true);
   controller.content = [];
   assert.equal(Runtime.observed(first, "name"), false);
@@ -2695,7 +2717,7 @@ test("lists accept an array controller through ordinary bind and share one selec
   controller.sort("name", "descending");
   assert.equal(renders, 1, "one sort operation renders once");
   f.controller.unload();
-  assert.equal(Runtime.observed(controller, "arranged_content"), false);
+  assert.equal(Runtime.observed(controller, "arranged_objects"), false);
   controller.sort("name", "ascending");
   assert.equal(renders, 1, "unloading the list releases its observations");
   controller.dealloc();
@@ -2709,16 +2731,16 @@ test("temporary first placement belongs to presentation and clears on sorting or
   const source = new Collection().replace([first]);
   const controller = new ArrayController(); controller.content = source;
   controller.showFirst(added);
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [added, first]);
+  assert.deepEqual(Array.from(controller.arrangedObjects), [added, first]);
   assert.equal(controller.selectedObject, added);
   assert.deepEqual(Array.from(source.records), [first]);
   controller.sort("name", "ascending");
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [first]);
+  assert.deepEqual(Array.from(controller.arrangedObjects), [first]);
   controller.showFirst(added);
   controller.content = new Collection().replace([first]);
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [first]);
+  assert.deepEqual(Array.from(controller.arrangedObjects), [first]);
   controller.content = source;
-  assert.deepEqual(Array.from(controller.arrangedObjects()), [first], "returning to old content does not restore temporary placement");
+  assert.deepEqual(Array.from(controller.arrangedObjects), [first], "returning to old content does not restore temporary placement");
   assert.throws(() => { controller.arrayController = controller; }, /either content|delegate to itself/);
   controller.dealloc();
 });
@@ -2739,7 +2761,7 @@ test("compiled filtering works directly on lists or on an including view control
   const Owner = Runtime.resolve("Demo::FilteredPeopleController");
   const owner = new Owner(); owner.content = [ada, grace];
   owner.filterText = "aaron";
-  assert.deepEqual(Array.from(owner.arrangedObjects()), [grace]);
+  assert.deepEqual(Array.from(owner.arrangedObjects), [grace]);
   owner.selectObject(grace);
   assert.equal(owner.selectedObject, grace);
   owner.dealloc();
@@ -2756,7 +2778,7 @@ test("failed remote edits reopen beside the record's current row", async () => {
   reject(new Error("save failed"));
   await pending;
   assert.equal(f.controller.isEditing(), true);
-  const index = Array.from(f.controller.arrangedObjects()).indexOf(ada);
+  const index = Array.from(f.controller.arrangedObjects).indexOf(ada);
   const row = f.controller.rowElements()[index];
   assert.ok(f.rows.children.indexOf(editorOf(f).row) === f.rows.children.indexOf(row) + 1, "editor follows the current row");
   assert.equal(f.controller.editedObject.name, "Ada");
