@@ -247,11 +247,27 @@ WebSocket, codec, request correlation, and connection notifications.
 
 JSON:API and plain JSON remain supported through `Swill::Model::Resource`,
 including their existing `has_one`/`has_many`, codecs, datasets, association
-URLs, and persistence APIs. Distant models use `Swill::Model::DistantObject`.
+URLs, and persistence APIs. Distant models use `Swill::Distant::Object`.
 The strategies share observation/editing foundations, but keep stores, loading,
 and transport paths separate. New data investment follows the distant path.
 
 ## Validation and deferred work
+
+### Converging the two model frameworks
+
+`Resource` and Distant Objects share `Base` and `Editable` and nothing above
+them. Two convergences are open:
+
+- **Loading state.** `Resource` associations expose `<name>_loading`,
+  `<name>_loaded` and `<name>_error` properties; distant fields and
+  collections expose `loaded?`, `stale?`, `loading?` and `error`. One
+  vocabulary on `Editable`, with `stale?` meaningful for both, would let a
+  view bind to either kind of model the same way.
+- **Identity.** `Resource` pools instances through `Identity`/`Store`;
+  `Swill::Distant::Client` holds canonical distant objects. One pool
+  protocol on `Editable`, with the transport supplying the fetch, would
+  remove the second implementation.
+
 
 For each milestone, run checks appropriate to changed behavior: deterministic
 schema generation, compiler and Sorbet checks, MRI/runtime parity, generated

@@ -76,10 +76,10 @@ A registered class extends one of the framework's public classes:
 `Swill.Controller`, `Swill.Application`, `Swill.View`, and the lists and
 editors; `Swill.Control` and its subclasses; `Swill.ValueTransformer`, whose
 instances `Swill.ValueTransformer.register` makes available to markup by name;
-and `Swill.Model.Base`, `Swill.Model.Resource`, and `Swill.Model.DistantObject`.
+and `Swill.Model.Base`, `Swill.Model.Resource`, and `Swill.Distant.Object`.
 A model's `static properties` are observable properties, not persisted
 attributes; attributes are declared in Ruby. The other public classes, such as
-`Swill.NotificationCenter` and `Swill.Model.DistantClient`, are used as they
+`Swill.NotificationCenter` and `Swill.Distant.Client`, are used as they
 are.
 
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.

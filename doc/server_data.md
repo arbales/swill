@@ -7,7 +7,7 @@ serializers or other ceremony.
 This guide describes how a model exposes itself to clients, client code
 generation, the wire format, and how client and server connect.
 
-The client side of the same objects — `Swill::Model::DistantObject`, partial
+The client side of the same objects — `Swill::Distant::Object`, partial
 fields and collections — is in the [Models guide](models.md#distant-objects).
 
 ## Distant Objects
@@ -330,7 +330,7 @@ module MyApp
   class Application < Swill::Application
     def initialize
       super
-      Swill::Model::DistantClient.configure(url: "/data", schema_hash: MyApp::DataSchema::HASH)
+      Swill::Distant::Client.configure(url: "/data", schema_hash: MyApp::DataSchema::HASH)
     end
   end
 end

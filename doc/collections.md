@@ -93,7 +93,7 @@ asks the copy's own `validate`, when it has one; an error invokes
 `editing_did_fail_validation`, which warns by default, and the editor stays
 open. Override `editing_did_fail_validation` to show the error.
 
-An accepted commit applies the copy back to the original. A `DistantObject`
+An accepted commit applies the copy back to the original. A `Swill::Distant::Object`
 awaits `apply_draft` and, when the server rejects it, invokes
 `editing_did_fail_save` and mounts the same draft again. Another model takes
 its draft back through `apply_draft` and remains the row's object. A plain

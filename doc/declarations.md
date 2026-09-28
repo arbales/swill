@@ -2,7 +2,7 @@
 
 A declaration is a class-body statement that describes a value the class
 provides: `property`, `attribute`, `outlet`, `restorable`, and the association
-macros of `Swill::Model::Resource` and `Swill::Model::DistantObject`. This
+macros of `Swill::Model::Resource` and `Swill::Distant::Object`. This
 guide covers the keywords each accepts and the property protocol: the access
 and notification rules every declared property follows on MRI and in the
 browser. How the compiler collects a declaration and emits it is described in
@@ -53,10 +53,10 @@ The framework provides these declaration macros:
 | `restorable :path, key: :k` | A dotted property path the application keeps in the URL fragment; see [restoration](lifecycle.md#restoration). Declared on `Swill::Controller` |
 | `Resource.has_many :name, type:, key:, url:, will_access:` | An endpoint-backed array association, its loading properties, descriptor, and typed load/reload methods |
 | `Resource.has_one :name, ...` | The endpoint-backed nilable form of the same declaration |
-| `DistantObject.model_name "Name"` | The server model name as a class setting |
-| `DistantObject.attribute :name, type:` | A partial scalar whose reads participate in data demand collection |
-| `DistantObject.many_to_one`, `one_to_one`, `one_through_one` with `class:` | A read-only partial nilable model reference |
-| `DistantObject.one_to_many`, `many_to_many` with `class:` | A read-only partial stable `AssociationCollection` of model references |
+| `Distant::Object.model_name "Name"` | The server model name as a class setting |
+| `Distant::Object.attribute :name, type:` | A partial scalar whose reads participate in data demand collection |
+| `Distant::Object.many_to_one`, `one_to_one`, `one_through_one` with `class:` | A read-only partial nilable model reference |
+| `Distant::Object.one_to_many`, `many_to_many` with `class:` | A read-only partial stable `AssociationCollection` of model references |
 
 An outlet or resource association may name a class defined later by writing
 its name as a string. Generated distant association declarations use server
@@ -92,7 +92,7 @@ evaluated. For a property declared with `will_access:`, it also invokes
 `property_will_access(name)` before returning the value.
 
 `Swill::Model::Resource` uses this hook to load endpoint associations on
-access. `Swill::Model::DistantObject` uses it to request fields and
+access. `Swill::Distant::Object` uses it to request fields and
 associations absent from a partial object. Reads and explicit loads share
 in-flight requests. See [Models](models.md) for loading behavior and error
 handling.

@@ -3,17 +3,24 @@
 Swill makes it easy for you (or maybe just me!) to work with data from your
 web services.
 
-`Swill::Model` has two concrete subclasses, chosen by how the application
-reaches its data. `Swill::Model::Resource` fetches models and associations
-over JSON:API (or plain JSON). It keeps one instance per id, so a record
-fetched twice is the same object; saves, deletes and reloads a record against
-its endpoint; and loads `has_many` and `has_one` associations from their own
-URLs the first time they are read.
+A Swill model is a `Swill::Model::Base`: observable attributes, validation,
+and identity by id. `Editable` adds dirty tracking and drafts. Above that
+core there are two ways to reach a server, and they differ in who declares
+the model and how it travels:
 
-`Swill::Model::DistantObject` is a sort of homeage to Distributed Objects in
-Cocoa, or a hand-rolled RPC-like thing that you might not enjoy but I do! The
-server generates these models from `Sequel::Model` classes; they support
-partial hydration, canonical identity, typed operations and more.
+| | `Swill::Model::Resource` | Distant Objects (`Swill::Distant::Object`) |
+| --- | --- | --- |
+| Declared by | the client: `endpoint`, `attribute`, `has_many … url:` | the server's distant interface, then generated |
+| Transport | JSON:API or plain JSON over HTTP | MessagePack over a WebSocket |
+| Identity | one instance per id in the class's pool | one canonical object per `(model, id)` held by `Swill::Distant::Client` |
+| Associations | loaded from their own URLs on first read | `AssociationCollection`s the server keeps current |
+| Server side | none; any endpoint that serves JSON | queries, resolvers, commands and effects |
+
+`Resource` suits an API the browser does not own. Distant Objects is a sort
+of homeage to Distributed Objects in Cocoa, or a hand-rolled RPC-like thing
+that you might not enjoy but I do! The server generates these models from
+`Sequel::Model` classes; they support partial hydration, canonical identity,
+typed operations and more.
 
 You can use both together in an application if you like.
 
@@ -59,7 +66,7 @@ interface](server_data.md#creating-a-distant-interface) for the declaration
 and its rules. `swill data generate` emits a client class like:
 
 ```ruby
-class Contact < Swill::Model::DistantObject
+class Contact < Swill::Distant::Object
   model_name "Contact"
   attribute :name, type: String
   attribute :email, type: String
@@ -116,7 +123,7 @@ how a remote method marks an association stale.
 
 ## Identity, Partial Fields, and Collections
 
-The compiled Ruby `DistantClient` keeps one canonical distant object for each
+`Swill::Distant::Client` keeps one canonical distant object for each
 `(model, id)`. Queries, associations, resolvers, commands, hydration, and
 persistence patches all update that object. Per-field generations prevent
 older responses from replacing newer values, and a background patch leaves a

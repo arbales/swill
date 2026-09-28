@@ -97,10 +97,11 @@ Writing an application:
 | [Declarations](doc/declarations.md) | The `property`, `attribute`, `outlet` and `restorable` keywords, the framework macros, and the property protocol |
 | [Bindings](doc/bindings.md) | Key paths, binding roots, writing back, value transformers, observers, and computed properties |
 | [Swell](doc/swell.md) | Chained DOM edits, attribute and property values, descendant lookup, and event listeners |
+| [Controls](doc/controls.md) | Buttons, text fields, selects, segmented choices, value bindings, keyboard behavior, and control templates |
 | [Lifecycle](doc/lifecycle.md) | Activation order, restoration from the URL fragment, unloading, and ownership |
 | [Responders](doc/responders.md) | The responder chain, actions, key events, first responder, and focus |
 | [Collections](doc/collections.md) | Lists and tables: row templates, sorting, filtering, editing in place, `ArrayController`, and shared selection |
-| [Models & Data](doc/models.md) | Client models: `Base`, `Editable`, `Resource` and `DistantObject`; identity, partial fields, collection state, and drafts |
+| [Models & Data](doc/models.md) | Client models: `Base`, `Editable`, `Resource` and `Distant::Object`; identity, partial fields, collection state, and drafts |
 | [Server Data](doc/server_data.md) | Distant Objects: distant interfaces, remote methods, effects, types and authorization, generation, and the MessagePack WebSocket connection |
 | [A bound data form](doc/data_form.md) | A complete plain-Sequel model, endpoint, Ruby form, and project build |
 
