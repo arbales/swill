@@ -139,6 +139,9 @@ RDoc::Parser::Ruby.prepend(SwillRDoc::NameImplicitSuperclass)
 # `attr_accessor`: the comment above the declaration becomes its description,
 # and it is listed on the class page. The declaration's keywords are kept, so
 # the page can show the type and default as they were written.
+#
+# A module declares for its includers with `base.property` inside
+# `def self.included(base)`; those are documented as the module's own.
 module SwillRDoc
   class Declaration < RDoc::Attr
     # "property", "outlet" or "attribute".
@@ -165,20 +168,54 @@ module SwillRDoc
 
       @scanner.process_comments_until(node.location.start_line - 1)
       return if @scanner.in_proc_block
+      declaration = declaration_for(node)
+      return super unless declaration
+      @scanner.add_declaration(declaration, node.location.start_line)
+    end
+
+    # RDoc does not look inside a method body, so the included hook's
+    # declarations are read here, before its comments are skipped.
+    def visit_def_node(node)
+      after = node.location.start_line
+      included_declarations(node).each do |call, declaration|
+        line = call.location.start_line
+        @scanner.process_inner_directives(after, line)
+        @scanner.add_inner_declaration(declaration, line)
+        after = line
+      end
+      super
+    end
+
+    private
+
+    def included_declarations(node)
+      return [] unless node.receiver.is_a?(Prism::SelfNode) && node.name == :included && !@scanner.in_proc_block
+      base = node.parameters&.requireds&.first
+      return [] unless base.is_a?(Prism::RequiredParameterNode) && node.body.is_a?(Prism::StatementsNode)
+
+      node.body.body.filter_map do |call|
+        next unless call.is_a?(Prism::CallNode) && MACROS.include?(call.name)
+        next unless call.receiver.is_a?(Prism::LocalVariableReadNode) && call.receiver.name == base.name
+        declaration = declaration_for(call)
+        [call, declaration] if declaration
+      end
+    end
+
+    # A computed property is read-only unless it names a writer.
+    def declaration_for(node)
       name = node.arguments&.arguments&.first
-      return super unless name.is_a?(Prism::SymbolNode)
+      return unless name.is_a?(Prism::SymbolNode)
 
       keywords = declaration_keywords(node)
-      declaration = Declaration.new(name.value, node.block ? "R" : "RW", nil, singleton: false)
+      read_only = node.block && !keywords.key?("writer")
+      declaration = Declaration.new(name.value, read_only ? "R" : "RW", nil, singleton: false)
       declaration.declared_as = node.name.to_s
       declaration.declared_type = keywords["type"]
       declaration.default = keywords["default"]
       declaration.optional = keywords["optional"] == "true"
       declaration.computed = !node.block.nil?
-      @scanner.add_declaration(declaration, node.location.start_line)
+      declaration
     end
-
-    private
 
     def declaration_keywords(node)
       hash = node.arguments.arguments.find { |argument| argument.is_a?(Prism::KeywordHashNode) }
@@ -204,6 +241,27 @@ module SwillRDoc
       handle_modifier_directive(declaration, line_no)
       @container.add_attribute(declaration) if should_document?(declaration)
       declaration.visibility = visibility
+    end
+
+    # Standalone comments inside a method body, between two lines, read for
+    # their directives: a `:section:` there applies to the declarations that
+    # follow it, as it would in a class body.
+    def process_inner_directives(after_line, before_line)
+      inner = @unprocessed_comments.select { |line_no, _, _| line_no > after_line && line_no < before_line }
+      inner.each do |entry|
+        @unprocessed_comments.delete(entry)
+        _line_no, start_line, text = entry
+        _comment, directives = parse_comment_text_to_directives(text, start_line)
+        handle_code_object_directives(@container, directives) if directives
+      end
+    end
+
+    # add_declaration, for one inside a method body: its comment is brought
+    # to the front, ahead of the comment on the method itself.
+    def add_inner_declaration(declaration, line_no)
+      index = @unprocessed_comments.index { |entry| entry.first == line_no }
+      @unprocessed_comments.unshift(@unprocessed_comments.delete_at(index)) if index
+      add_declaration(declaration, line_no)
     end
   end
 end

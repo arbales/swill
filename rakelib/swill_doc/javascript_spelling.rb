@@ -35,7 +35,7 @@ module SwillDoc
       return [] unless found
       scope = klass
       if found["accessor"]
-        return [%(<span class="signature-name">#{h found['js']}</span>) +
+        return [%(#{member_prefix(method)}<span class="signature-name">#{h found['js']}</span>) +
                 %( <span class="signature-returns">: #{ts_type_html(found['returns'], scope)}</span>)]
       end
       ::Swill::Ruby2JS::Knowledge.variants(found).map do |variant|
@@ -45,7 +45,7 @@ module SwillDoc
           name = javascript_member(formal["name"])
           type ? "#{h name}: #{ts_type_html(type, scope)}" : h(name)
         end
-        %(<span class="signature-name">#{h variant['js']}</span>) +
+        %(#{member_prefix(method)}<span class="signature-name">#{h variant['js']}</span>) +
           %(<span class="signature-params">(#{params.join(', ')})</span>) +
           %( <span class="signature-returns">→ #{ts_type_html(found['returns'] || 'void', scope)}</span>)
       end
