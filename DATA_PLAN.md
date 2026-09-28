@@ -15,7 +15,7 @@ version 2; regenerate clients and deploy matching server/runtime versions.
 Step 3 is implemented in the working tree: shared `CollectionArrangement`,
 optional `ArrayController`, ordinary List binding to either content or its
 controller, and lazy relationship `_controller` accessors. The
-[sortable/filterable table examples](doc/collection_controller_examples.md)
+[sortable/filterable table examples](doc/collections.md)
 show the before/after API and lifetime and selection policies.
 
 ### 1. Align relationship declarations and make their contract truthful

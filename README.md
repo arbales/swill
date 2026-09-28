@@ -79,9 +79,10 @@ declarations and native getters into the same metadata rather than maintaining
 a second framework implementation. Generated identifiers remain on `Swill` so
 compiled application bundles can import them, but they are private browser API.
 
-[The compiler](doc/compiler.md) is the reference for the pipeline, the
-accepted Ruby subset, every lowering rule, the runtime API, and the rejected
-forms. Update it whenever the supported boundary changes.
+[Compiler and Runtime](doc/compiler.md) is the reference for the pipeline,
+the accepted Ruby subset, every lowering rule, and the rejected forms;
+[Runtime](doc/runtime.md) is the reference for the runtime API. Update them
+whenever the supported boundary changes.
 
 
 ## Guides
@@ -90,23 +91,28 @@ Writing an application:
 
 | Guide | Covers |
 | --- | --- |
-| [Getting started](doc/getting_started.md) | Building an application, installing the gem, application ports, and the static example |
-| [Awakening](doc/awakening.md) | How markup becomes objects: managed and inert elements, ownership, JSON outlets, and templates |
-| [Lifecycle](doc/lifecycle.md) | Activation order, restoration, and teardown |
-| [Bindings](doc/bindings.md) | Key paths, binding roots, value transformers, and observation |
-| [Responders](doc/responders.md) | The responder chain, actions, key events, and first responder |
-| [Markup](doc/markup.md) | Every attribute Swill reads, in one reference |
-| [Models](doc/models.md) | Base, editable, resource, and distant model roles; identity, drafts, and partial fields |
-| [Server data](doc/server_data.md) | Queries, resolvers, and commands over MessagePack WebSockets |
+| [Getting Started](doc/getting_started.md) | Building with the `swill` command, the `swill.yml` project workflow, and installing the gem |
+| [Awakening](doc/awakening.md) | How markup becomes objects: managed and inert elements, regions and ownership, the awakening order, windows and templates |
+| [Markup](doc/markup.md) | Every attribute Swill reads, each linking to the guide for its mechanism |
+| [Declarations](doc/declarations.md) | The `property`, `attribute`, `outlet` and `restorable` keywords, the framework macros, and the property protocol |
+| [Bindings](doc/bindings.md) | Key paths, binding roots, writing back, value transformers, observers, and computed properties |
+| [Lifecycle](doc/lifecycle.md) | Activation order, restoration from the URL fragment, unloading, and ownership |
+| [Responders](doc/responders.md) | The responder chain, actions, key events, first responder, and focus |
+| [Collections](doc/collections.md) | Lists and tables: row templates, sorting, filtering, editing in place, `ArrayController`, and shared selection |
+| [Models & Data](doc/models.md) | Client models: `Base`, `Editable`, `Resource` and `DistantObject`; identity, partial fields, collection state, and drafts |
+| [Server data](doc/server_data.md) | Declaring the client surface, queries, resolvers, commands, effects, types and authorization, and the MessagePack WebSocket endpoint |
 | [A bound data form](doc/data_form.md) | A complete plain-Sequel model, endpoint, Ruby form, and project build |
 
 Boundaries and tooling:
 
 | Guide | Covers |
 | --- | --- |
-| [Sorbet](doc/sorbet.md) | Typing the framework and typing an application |
+| [Sorbet](doc/sorbet.md) | How types drive lowering, the `T` operations a body may use, declared types, and typing an application |
 | [Plain JavaScript](doc/plain_javascript.md) | Using `swill.js` with no build step, through `Swill.register` and `Swill.start` |
-| [The compiler](doc/compiler.md) | The pipeline, the accepted Ruby subset, lowering rules, the runtime API, and rejected forms |
+| [Compiler and Runtime](doc/compiler.md) | The pipeline, the accepted Ruby subset, lowering rules, rejected forms, and extending the boundary |
+| [Runtime](doc/runtime.md) | The `Runtime` API generated code calls: installation, dispatch, values, Sorbet operations, and observation |
+| [Development](doc/development.md) | Working on Swill: browser checks, typechecking the framework, dependency updates, benchmarks, and build output |
+| [Documentation Style](doc/documentation_style.md) | How the guides, the README and API comments are written: voice, structure, examples, and vocabulary |
 
 ## Current scope
 

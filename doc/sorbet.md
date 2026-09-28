@@ -1,21 +1,22 @@
 # Sorbet
 
-Swill benefits from the use of Sorbet's type system, and aid Swill's Ruby2JS 
-compiler extensions in lowering method and property calls to their most accurate
-receivers. This allows more natural Ruby method calls like `post.reload` instead
-of `post.reload()` among other functional and sugary improvements.
+Sorbet's type declarations tell Swill's Ruby2JS compiler the type of each
+receiver, so it lowers method and property calls to the JavaScript form the
+receiver's class provides: a typed `post.reload` compiles to a direct call
+rather than a lookup at run time, and Ruby's parenthesis-free calls keep their
+spelling.
 
-Sorbet's type declarations are either erased from the outputted JavaScript -
-as in the case of `T::Sig` and `sig` or translated into helpful runtime checks. 
+A Sorbet declaration is either erased from the emitted JavaScript, as
+`T::Sig` and `sig` are, or compiled into a runtime check.
 
-## Typed applications
+## Typed Applications
 
-Typed applications that benefit from increased knowledge of receivers will have
-method and property calls lowered to cleaner and more efficient JavaScript.
+When the compiler knows a receiver's type, it lowers method and property calls
+to direct JavaScript calls and property reads.
 
-In untyped applications, a Ruby method call without parentheses or arguments
-could be a property read or a method call, so the compiler leaves it to the
-runtime to decide.
+In untyped code, a Ruby method call without parentheses or arguments could be
+a property read or a method call, so the compiler leaves the decision to the
+runtime.
 
 ```ruby
 sig { params(post: Post).returns(String) }
@@ -78,19 +79,19 @@ A typed call is an ordinary JavaScript call or property read, under the
 member's JavaScript name: `add_tag` is `addTag`, and `save!` is `saveBang`. An
 untyped one is looked up when it runs, by its Ruby name. Parentheses,
 arguments, or a bang make it a call, `Runtime.invoke`; a send with none of
-them, like `post.reload` or `post.title`, could be a property or a method, and
-`Runtime.send` resolves it to whichever the object has. An element and other
-browser objects answer with their own members. Either raises on a nil
-receiver, as Ruby does. It works, at the cost of a lookup per call.
+them, such as `post.reload` or `post.title`, could be a property or a method,
+and `Runtime.send` resolves it to whichever the object has. An element and
+other browser objects respond with their own members. Either raises on a nil
+receiver, as Ruby does. The untyped form costs a lookup per call.
 
 `document` is typed in both, since a constant always is. What
-`getElementById` answers is not: the DOM table does not list it. The
+`getElementById` returns is not: the DOM table does not list it. The
 `T.let` in the typed version supplies the type, so `element.tagName` and
 `element.remove` are plain JavaScript; for a browser type the `T.let` is an
 annotation only, with no check at run time. The [compiler
 reference](compiler.md) lists every rule the types drive.
 
-## Runtime operations
+## Runtime Operations
 
 The `T` methods below are the ones a method body may use. Each keeps
 sorbet-runtime's behavior, so shared Ruby fails the same way on MRI and in the
@@ -100,8 +101,8 @@ construct may appear in a method body, and sorbet-runtime is not bundled.
 | Ruby | JavaScript | At run time |
 | --- | --- | --- |
 | `extend T::Sig`, `sig { ... }` | nothing | Recorded for lowering, then erased |
-| `T.must(value)` | `Runtime.must(value)` | Raises `TypeError` for nil, otherwise answers the value |
-| `T.cast(value, Type)`, `T.let(value, Type)`, `T.assert_type!(value, Type)` | `Runtime.cast(value, "Type")` | Raises `TypeError` unless the value conforms, otherwise answers it |
+| `T.must(value)` | `Runtime.must(value)` | Raises `TypeError` for nil, otherwise returns the value |
+| `T.cast(value, Type)`, `T.let(value, Type)`, `T.assert_type!(value, Type)` | `Runtime.cast(value, "Type")` | Raises `TypeError` unless the value conforms, otherwise returns it |
 | The same, to `T.untyped` or a browser type such as `Element` | `value` | Nothing: an annotation for Sorbet and the compiler |
 | `T.unsafe(value)` | `value` | Nothing; the compiler treats the value as untyped, so calls on it are looked up at run time |
 | `T.absurd(value)` | `Runtime.absurd(value)` | Always raises `TypeError` |
@@ -126,7 +127,7 @@ A check conforms a value to its type the way sorbet-runtime does, shallowly:
 A union (`T.any`), a module, or a constant the compiler cannot resolve is a
 build error in a check.
 
-## Declared types
+## Declared Types
 
 A declaration's `type:` is a Sorbet type too, and serves both checkers:
 
@@ -134,25 +135,16 @@ A declaration's `type:` is a Sorbet type too, and serves both checkers:
   `outlet`, generated into an RBI.
 - A default or a computed block is compiled into a typed probe method, so
   Sorbet checks it against the declared type.
-- An outlet's value is checked against its type at awakening, shallowly, as
-  `T.cast` checks, so a JSON outlet of the wrong shape fails by name.
+- An outlet's value is checked against its type as the region awakens,
+  shallowly, as `T.cast` checks, so a JSON outlet of the wrong shape fails by
+  name.
 
-## Typing the framework
+## Typing the Framework
 
-`rake typecheck` builds the framework, which writes its Sorbet artifacts, and
-runs `srb tc` over `rb/framework/` and the examples in `examples/rb/`:
+`rake typecheck` checks the framework's own Ruby; see [typechecking the
+framework](development.md#typechecking-the-framework).
 
-| File | What it carries |
-| --- | --- |
-| `sorbet/rbi/generated.rbi` | The readers and writers every declaration creates |
-| `sorbet/rbi/dom.rbi` | The DOM and the browser globals, from `rb/compiler/knowledge/dom.rb`, the table the compiler lowers DOM calls from |
-| `sorbet/rbi/runtime.rbi` | The runtime and the declaration macros, handwritten |
-| `sorbet/checks/declarations.rb` | The typed probe for each declaration |
-
-The compiler and the JavaScript runtime are outside the check: they are the
-build, not the framework.
-
-## Typing an application
+## Typing an Application
 
 `swill types` writes the Sorbet artifacts an application needs to check
 itself:
@@ -172,7 +164,7 @@ swill types frontend        # writes frontend/sorbet/, then run srb tc there
 
 The config lists the application's sources, the framework's Ruby (where its
 methods and macros are declared), and the generated RBIs. The framework's MRI
-host is described by `swill-runtime.rbi` rather than checked as source, since
-checking both would declare the declaration macros twice. Because the config
-names absolute paths into the installed gem, it is regenerated rather than
-committed.
+host is described by `swill-runtime.rbi`, not checked as source. The config is
+written only when absent and belongs to the application afterwards: update its
+source list when adding client files. It names absolute paths into the
+installed gem, so delete it and rebuild after the gem moves.
