@@ -50,9 +50,9 @@ module Swill
       # child's represented object; its bind-* properties belong to the child.
       sig { params(object: Swill::Object, prefix: T.nilable(Symbol), element: Element, disposers: T::Array[T.proc.void]).void }
       def self.region_in(object, prefix, element, disposers)
-        DOM.each_owned(element, false, ->(child, controller_root) do
+        DOM.each_owned(element, false, ->(child, _controller_root) do
           disposers << connect(object, child, prefix) if child.hasAttribute("bind")
-          properties_in(object, prefix, child, disposers) unless controller_root
+          properties_in(object, prefix, child, disposers) unless child.hasAttribute("controller")
         end)
       end
 

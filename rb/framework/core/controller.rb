@@ -32,15 +32,7 @@ module Swill
   class Controller < Responder
     extend T::Sig
     include ObjectBindings
-
-    # An outlet is a property connected, at awakening, to the element in this
-    # controller's owned region that carries a matching outlet attribute.
-    # Unconnected until then, so its reader is nilable. Declared here rather
-    # than on Swill::Object because only a controller owns a region.
-    macro def self.outlet(name, type:, optional: false, &computed)
-      property name, type: Swill::Runtime.optional_type(type), default: nil,
-                     outlet: true, optional: optional, &computed
-    end
+    include OutletOwner
 
     # restorable :query, key: :q — a bindable path whose value the
     # application keeps in the URL fragment. The leaf type is derived when the
@@ -140,17 +132,10 @@ module Swill
       dealloc
       child_controllers.each { |child| child.unload }
       # Plain outlet views are released too; re-awakening adopts them again.
-      @view.subviews.each { |subview| @view.release_subview(subview) }
+      @view.subviews.dup.each { |subview| subview.unload }
       @view.remove_from_superview
       @view.controller = nil
       view_did_disappear
-    end
-
-    # Coercion hook for JSON outlets: turn parsed data into value objects
-    # before the outlet is assigned. nil means the script was empty.
-    sig { params(name: String, value: T.untyped).returns(T.untyped) }
-    def decode_outlet_data(name, value)
-      value
     end
 
     # Outlets are connected, and no binding has fired yet: state set here is

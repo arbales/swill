@@ -304,3 +304,13 @@ module Swill::CollectionArrangement
   extend T::Helpers
   requires_ancestor { Swill::Object }
 end
+
+module Swill::OutletOwner
+  extend T::Helpers
+  mixes_in_class_methods(ClassMethods)
+end
+
+module Swill::OutletOwner::ClassMethods
+  extend T::Helpers
+  requires_ancestor { T.class_of(Swill::Object) }
+end

@@ -263,6 +263,7 @@ module Static
     outlet :standalone_text_field, type: Swill::Control::TextField
     outlet :standalone_select, type: Swill::Control::Select
     outlet :custom_select, type: Swill::Control::CustomSelect
+    outlet :segmented, type: Swill::Control::Segmented
 
     sig { returns(String) }
     def example_name
@@ -275,6 +276,11 @@ module Static
       select = T.must(standalone_select)
       select.options = ["Ada", "Grace", "Katherine"]
       select.value = "Grace"
+      T.must(segmented).options = [
+        {"value" => "ada", "label" => "Ada"},
+        {"value" => "grace", "label" => "Grace"},
+        {"value" => "katherine", "label" => "Katherine"}
+      ]
       T.must(custom_select).options = [
         {"value" => "ada", "label" => "Ada Lovelace", "description" => "Mathematician"},
         {"value" => "grace", "label" => "Grace Hopper", "description" => "Computer scientist"},

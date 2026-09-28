@@ -25,6 +25,7 @@ class CLITest < Minitest::Test
       refute_includes js, "class Swill__Controller ", "no second copy of the framework"
       assert File.file?(File.join(dir, "assets", "app.js.map"))
       assert File.file?(File.join(dir, "assets", "swill.js")), "--with-framework copies the bundle"
+      assert File.file?(File.join(dir, "assets", "swill.css")), "--with-framework copies control styles"
       assert_operator js.index(/Fixture__Note\b/), :<, js.index(/Fixture__Notes\b/), "dependencies come first"
     end
   end

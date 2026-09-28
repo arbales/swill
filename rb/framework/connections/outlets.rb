@@ -6,23 +6,23 @@ module Swill
   # archives a connector object per connection and sends it establishConnection
   # as the nib loads; here the attributes are read from the document instead, so
   # there is nothing to archive and nothing to be an instance of. These are
-  # functions over a controller and its region.
+  # functions over an owner and its region.
   module Connections
-    # Connects a controller's declared outlets to the elements in its owned
+    # Connects an application or controller's declared outlets to the elements in its owned
     # region that carry an outlet attribute. A child controller's root is a
     # candidate; nothing inside it is. Values are a
     # child controller, a view, an inert template element, or decoded JSON.
     module Outlets
       extend T::Sig
 
-      sig { params(controller: Controller).returns(Controller) }
-      def self.establish(controller)
+      sig { params(controller: T.any(Controller, Application, Control), root: Element).returns(T.any(Controller, Application, Control)) }
+      def self.establish(controller, root)
         declared = T.let(Runtime.outlets(controller), T::Array[T.untyped])
         return controller if declared.empty?
         by_name = T.let({}, T::Hash[String, T.untyped])
         declared.each { |descriptor| by_name[descriptor.name] = descriptor }
         connected = T.let({}, T::Hash[String, T::Boolean])
-        candidates(controller.view.element).each do |element|
+        candidates(root).each do |element|
           name = T.must(element.getAttribute("outlet"))
           raise "Undeclared outlet: #{name}" unless by_name[name]
           raise "Duplicate outlet: #{name}" if connected[name]
@@ -51,7 +51,7 @@ module Swill
       # must be: a typed outlet's value is checked against the declared type,
       # shallowly, as T.cast checks, so a mismatch fails here by outlet name
       # rather than at first use.
-      sig { params(controller: Controller, descriptor: T.untyped, element: Element).returns(T.untyped) }
+      sig { params(controller: T.any(Controller, Application, Control), descriptor: T.untyped, element: Element).returns(T.untyped) }
       def self.value_for(controller, descriptor, element)
         name = descriptor.name
         value = materialize(controller, name, element)
@@ -60,7 +60,7 @@ module Swill
         value
       end
 
-      sig { params(controller: Controller, name: String, element: Element).returns(T.untyped) }
+      sig { params(controller: T.any(Controller, Application, Control), name: String, element: Element).returns(T.untyped) }
       def self.materialize(controller, name, element)
         return decode(controller, name, element) if element.tagName == "SCRIPT" && element.type == "application/json"
         return element if element.tagName == "TEMPLATE"
@@ -70,7 +70,7 @@ module Swill
         owner ? owner : view
       end
 
-      sig { params(controller: Controller, name: String, element: Element).returns(T.untyped) }
+      sig { params(controller: T.any(Controller, Application, Control), name: String, element: Element).returns(T.untyped) }
       def self.decode(controller, name, element)
         text = element.textContent.strip
         controller.decode_outlet_data(name, text.empty? ? nil : JSON.parse(text))

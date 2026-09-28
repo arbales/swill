@@ -35,6 +35,7 @@ module Swill
       rb/framework/core/observable.rb
       rb/framework/core/object.rb
       rb/framework/core/dom.rb
+      rb/framework/core/swell.rb
       rb/framework/core/notification_center.rb
       rb/framework/core/wire.rb
       rb/framework/core/value_transformer.rb
@@ -43,12 +44,15 @@ module Swill
       rb/framework/core/object_bindings.rb
       rb/framework/core/collection_arrangement.rb
       rb/framework/core/responder.rb
+      rb/framework/core/outlet_owner.rb
+      rb/framework/core/templates.rb
       rb/framework/core/view.rb
       rb/framework/control/base.rb
       rb/framework/control/button.rb
       rb/framework/control/text_field.rb
       rb/framework/control/select.rb
       rb/framework/control/custom_select.rb
+      rb/framework/control/segmented.rb
       rb/framework/core/controller.rb
       rb/framework/connections/bindings.rb
       rb/framework/connections/actions.rb
@@ -439,6 +443,7 @@ module Swill
             type = property["type"]
             inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
             next unless inner.match?(/\A[A-Z]\w*(?:::\w+)*\z/) && !%w[String Integer Float Symbol NilClass Array Hash].include?(inner)
+            next if DOM::CLASSES.key?(inner)
             resolved = knowledge.resolve(inner, entry["name"].split("::"))
             target = knowledge.entries.find { |candidate| candidate["name"] == resolved }
             raise CompileError, "outlet #{property['name']}: #{inner} is not a class" unless target["kind"] == "class"

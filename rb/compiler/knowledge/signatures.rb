@@ -32,9 +32,14 @@ module Swill
         def signature_return(signature)
           return nil unless signature
           body = signature.children.last
-          return "void" if find_send(body, :void)
-          returns = find_send(body, :returns)
-          returns&.children&.fetch(2, nil)&.loc&.expression&.source
+          # Follow the signature chain, not proc types nested in its arguments.
+          while body&.type == :send
+            receiver, method, type = body.children
+            return "void" if method == :void
+            return type&.loc&.expression&.source if method == :returns
+            body = receiver
+          end
+          nil
         end
 
         # The block body from its first expression to its closer, including

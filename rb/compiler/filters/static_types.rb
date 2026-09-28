@@ -432,7 +432,8 @@ module Swill
 
         # The parameter types of a T.proc.params(a: X, b: Y) type, in order.
         def proc_parameter_types(type)
-          inside = type.to_s[/\AT\.proc\.params\((.*)\)\.(?:void|returns\(.*\))\z/m, 1]
+          type = type.to_s.sub(/\AT\.nilable\((.*)\)\z/m, '\1')
+          inside = type[/\AT\.proc\.params\((.*)\)\.(?:void|returns\(.*\))\z/m, 1]
           return [] unless inside
           split_top_level(inside).map { |pair| pair.split(":", 2).last.strip }
         end

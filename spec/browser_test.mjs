@@ -404,6 +404,29 @@ try {
   ]);
   assert.deepEqual(exceptions, []);
 
+  assert.deepEqual(await evaluate(`(() => {
+    document.querySelector("[data-example=controls]").click();
+    const root = document.querySelector("[outlet=segmented]");
+    const control = root.__swill_view__;
+    const buttons = Array.from(root.querySelectorAll("[role=radio]"));
+    const changes = [];
+    root.addEventListener("change", () => changes.push(control.value));
+    Swill.Application.shared().makeFirstResponder(control);
+    const key = name => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {key: name, bubbles: true, cancelable: true}));
+    const result = [getComputedStyle(root.querySelector('.segmented-options')).display,
+      buttons.filter(b => b.tabIndex === 0).length, document.activeElement === buttons[0]];
+    key("ArrowRight");
+    result.push(control.value, document.activeElement === buttons[1],
+      document.querySelector("[outlet=custom_select] .custom-select-label").textContent);
+    key("End"); result.push(control.value);
+    key("Home"); result.push(control.value);
+    buttons[2].click(); result.push(control.value);
+    control.disabled = true;
+    buttons[0].click(); result.push(control.value, buttons.every(b => b.disabled));
+    result.push(changes.length);
+    return result;
+  })()`), ["inline-flex", 1, true, "grace", true, "Grace Hopper", "katherine", "ada", "katherine", "katherine", true, 4]);
+
   // A second page uses the same framework bundle directly from plain
   // JavaScript: registration is metadata-backed and startup is explicit.
   await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/rb/javascript.html`}, sessionId);

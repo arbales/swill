@@ -18,9 +18,9 @@ module Swill
       end
     end
 
-    # Walks the elements a controller owns. An element carrying controller is a
-    # child controller's root: it is visited, with +controller_root+ true, but
-    # not descended into. +include_root+ visits root as well.
+    # Walks one connection region. Child controllers and templated controls
+    # are visited as boundaries, but their internals belong to them.
+    # +include_root+ visits root as well.
     sig do
       params(root: Element, include_root: T::Boolean,
              callback: T.proc.params(element: Element, controller_root: T::Boolean).void).void
@@ -28,7 +28,8 @@ module Swill
     def self.each_owned(root, include_root, callback)
       callback.(root, false) if include_root
       DOM.each_child(root, ->(child) do
-        if child.hasAttribute("controller")
+        view = child.__swill_view__
+        if child.hasAttribute("controller") || (view && view.owns_content?)
           callback.(child, true)
         else
           DOM.each_owned(child, true, callback)
@@ -40,8 +41,8 @@ module Swill
     sig { params(root: Element, selector: String).returns(T::Array[Element]) }
     def self.owned_matching(root, selector)
       found = T.let([], T::Array[Element])
-      DOM.each_owned(root, true, ->(element, controller_root) do
-        found << element if !controller_root && element.matches(selector)
+      DOM.each_owned(root, true, ->(element, _controller_root) do
+        found << element if (element == root || !element.hasAttribute("controller")) && element.matches(selector)
       end)
       found
     end

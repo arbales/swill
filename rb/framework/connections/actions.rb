@@ -19,17 +19,17 @@ module Swill
 
       # Actions in +element+'s owned region dispatch from +controller+, as a
       # list row's do from its list. Answers the disposer.
-      sig { params(element: Element, controller: Controller).returns(T.proc.void) }
-      def self.establish_in(element, controller)
+      sig { params(element: Element, controller: Responder, include_root: T::Boolean).returns(T.proc.void) }
+      def self.establish_in(element, controller, include_root: true)
         disposers = DOM.owned_matching(element, "[data-action]").map do |target|
-          connect(target, controller)
+          target == element && !include_root ? ->() {} : connect(target, controller)
         end
         ->() { disposers.each { |dispose| dispose.() } }
       end
 
       # One element to one action. The attribute is "event:action", or an
       # action alone, which means click. Answers the disposer that severs it.
-      sig { params(element: Element, controller: Controller).returns(T.proc.void) }
+      sig { params(element: Element, controller: Responder).returns(T.proc.void) }
       def self.connect(element, controller)
         return ->() {} if element.__swill_action__
         attribute = element.getAttribute("data-action")

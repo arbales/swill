@@ -10,8 +10,19 @@ module Swill
   # Control is somewhat thin at the moment, but I imagine it growing over time.
   class Control < View
     extend T::Sig
+    include OutletOwner
 
     property :delegate, type: T.untyped, default: nil
+
+    # Copy the shared prototype, then connect its children to this control.
+    sig { params(name: String).void }
+    def load_template(name)
+      raise "Control template already loaded" if @owns_content
+      template = Templates.named(name, @element.ownerDocument)
+      @owns_content = true
+      @element.replaceChildren(template.content.cloneNode(true))
+      Awakening.awaken_owned(@element, self)
+    end
 
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
     def resign_first_responder(next_responder)

@@ -32,6 +32,8 @@ Gem::Specification.new do |spec|
   # and the handwritten RBI a consumer types against.
   spec.files =
     Dir["rb/**/*.{rb,mjs}"] +
+    Dir["rb/framework/resources/*.{html,css}"] +
+    Dir["rb/dist/*.css"] +
     Dir["rb/dist/swill*.{js,map}"] +
     Dir["sorbet/rbi/runtime.rbi"] +
     Dir["doc/*.md"] +

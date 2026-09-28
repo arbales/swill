@@ -21,6 +21,7 @@ module Swill
     # and the names the docs show cannot drift.
     JAVASCRIPT_NAMES = {
       "Object" => "Swill::Object",
+      "Swell" => "Swill::Swell",
       "ArrayController" => "Swill::ArrayController",
       "Controller" => "Swill::Controller",
       "Application" => "Swill::Application",
@@ -35,6 +36,7 @@ module Swill
       "Button" => "Swill::Control::Button",
       "Select" => "Swill::Control::Select",
       "CustomSelect" => "Swill::Control::CustomSelect",
+      "Segmented" => "Swill::Control::Segmented",
       "NotificationCenter" => "Swill::NotificationCenter",
       "Wire" => "Swill::Wire",
       "ValueTransformer" => "Swill::ValueTransformer",
@@ -85,6 +87,8 @@ module Swill
 
       def member(name)
         text = name.to_s
+        # Indexing on a declared class is a method, not JavaScript subscripting.
+        return "$index" if text == "[]"
         # Only a Ruby-shaped name is respelled; anything else (a leading
         # underscore, a double underscore) is left as written.
         return text unless text.match?(/\A[a-z][a-z0-9]*(?:_[a-z0-9]+)*[?!=]?\z/)

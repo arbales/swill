@@ -204,9 +204,8 @@ module Swill
     sig { params(_item: T.untyped).returns(Element) }
     def make_row_element(_item)
       template = row_template
-      node = template ? container_view.clone_template(template) : nil
-      raise 'List has no <template for="row"> and no make_row_element override' unless node
-      node
+      raise 'List has no <template for="row"> and no make_row_element override' unless template
+      container_view.clone_template(template)
     end
 
     # NSTableView willDisplayCell analog.

@@ -316,6 +316,17 @@ module Swill
 
         def on_send(node)
           receiver, method, *args = node.children
+          # Expand before typed dispatch; Ruby2JS's generic expansion runs
+          # after our collection checks and before block parameters are typed.
+          if node.type == :send && args.last&.type == :block_pass && args.last.children.first&.type == :sym
+            name = args.last.children.first.children.first
+            parameters = [:__swill_item]
+            parameters << :__swill_other if OPERATORS.include?(name)
+            body = node.updated(:send, [s(:lvar, parameters.first), name,
+                     *parameters.drop(1).map { |parameter| s(:lvar, parameter) }])
+            call = node.updated(nil, [receiver, method, *args[0...-1]])
+            return on_block(node.updated(:block, [call, s(:args, *parameters.map { |parameter| s(:arg, parameter) }), body]))
+          end
           return s(:send, s(:self), :new, *process_all(args)) if bare_new?(receiver, method)
           # The lowerings below would keep the call and drop the nil guard, and
           # JavaScript's ?. yields undefined where Ruby yields nil.
@@ -443,8 +454,8 @@ module Swill
           return @knowledge.class_member_entry(class_of_type(type), method) if class_of_type(type)
           return @knowledge.method_entry(swill_class(type), method) if swill_class(type)
           if receiver.type == :const
-            name = @knowledge.constant(receiver)
-            return @knowledge.class_member_entry(name, method) if @knowledge.entries.any? { |entry| entry["name"] == name }
+            name = swill_class(@knowledge.constant(receiver))
+            return @knowledge.class_member_entry(name, method) if name
           end
           nil
         rescue CompileError
@@ -619,7 +630,7 @@ module Swill
           if (kind = core_kind(type))
             return lower_core(node, kind, type, receiver, method, args)
           end
-          if method == :call && (type.nil? || type == "T.untyped" || type.start_with?("T.proc"))
+          if method == :call && (type.nil? || type == "T.untyped" || type.sub(/\AT\.nilable\((.*)\)\z/m, '\1').start_with?("T.proc"))
             return lower_call(receiver, args)
           end
           return nil unless dynamic_receiver?(receiver)

@@ -23,10 +23,31 @@ module Swill
     # between this and finish.
     sig { params(root: Element).returns(T::Array[Controller]) }
     def self.awaken(root)
-      controllers = T.let([], T::Array[Controller])
-      walk(root, nearest_view(root.parentElement), controllers)
+      controllers = prepare(root)
       controllers.reverse.each { |controller| load(controller) }
       controllers
+    end
+
+    # Build the object tree before any lifecycle callbacks run.
+    sig { params(root: Element).returns(T::Array[Controller]) }
+    def self.prepare(root)
+      controllers = T.let([], T::Array[Controller])
+      walk(root, nearest_view(root.parentElement), controllers)
+      controllers
+    end
+
+    # The host already exists. Only its copied children need awakening.
+    sig { params(root: Element, owner: Control).void }
+    def self.awaken_owned(root, owner)
+      controllers = T.let([], T::Array[Controller])
+      DOM.each_child(root, ->(child) { walk(child, owner, controllers) })
+      Connections::Outlets.establish(owner, root)
+      disposers = T.let([], T::Array[T.proc.void])
+      Connections::Bindings.region_in(owner, nil, root, disposers)
+      owner.retain(Connections::Bindings.releasing(disposers))
+      owner.retain(Connections::Actions.establish_in(root, owner, include_root: false))
+      controllers.reverse.each { |controller| load(controller) }
+      finish(controllers)
     end
 
     # controller_did_load once per controller, then appearance.
@@ -39,7 +60,7 @@ module Swill
 
     sig { params(controller: Controller).void }
     def self.load(controller)
-      Connections::Outlets.establish(controller)
+      Connections::Outlets.establish(controller, controller.view.element)
       controller.view_did_load
       Connections::Bindings.establish(controller)
       Connections::Actions.establish(controller)
@@ -60,6 +81,7 @@ module Swill
           controllers << controller
         end
       end
+      return if view && view.owns_content?
       next_owner = view || owner
       DOM.each_child(element, ->(child) { walk(child, next_owner, controllers) })
     end
@@ -103,7 +125,15 @@ module Swill
     # into descendants and is idempotent, so document order is fine.
     sig { params(node: Element).void }
     def self.detach(node)
-      controllers_within(node).each { |controller| controller.unload }
+      view = node.__swill_view__
+      controller = view ? view.controller_value : nil
+      if controller
+        controller.unload
+      elsif view
+        view.unload
+      else
+        DOM.each_child(node, ->(child) { detach(child) })
+      end
     end
 
     sig { params(element: T.nilable(Element)).returns(T.nilable(View)) }

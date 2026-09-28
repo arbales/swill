@@ -276,7 +276,7 @@ module Swill
             Reflection.fill_included(entry, probe, @blocks)
           end
           if entry["extends_class_methods"] && entry["class_methods"].empty? &&
-             entry["registries"].empty? && entry["settings"].empty?
+             entry["registries"].empty? && entry["settings"].empty? && entry["macros"].empty?
             raise CompileError, "ClassMethods module is missing or empty"
           end
           source_methods = merge_methods([], entry["methods"].reject { |method| method["to"] })
@@ -507,7 +507,7 @@ module Swill
         def collect_static_method(entry, node, signature, async)
           receiver, method, args, body = node.children
           raise CompileError, "class methods are defined on self" unless receiver.type == :self
-          unless method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :new
+          unless method == :[] || (method.to_s.match?(/\A[a-z_]\w*[!?=]?\z/) && method != :new)
             raise CompileError, "unsupported method definition self.#{method}"
           end
           formals = collect_parameters(args)

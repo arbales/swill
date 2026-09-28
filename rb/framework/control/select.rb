@@ -18,7 +18,17 @@ module Swill
       initial = element.value
       initial = element.getAttribute("value").to_s if initial.empty? && element.hasAttribute("value")
       self.value = initial
-      element.addEventListener("change", ->(_event) { self.value = element.value })
+      handler = ->(_event) { self.value = element.value }
+      element.addEventListener("change", handler)
+      retain(->() { element.removeEventListener("change", handler) })
+    end
+
+    # Reawakening must see only the original option prefix.
+    sig { override.void }
+    def unload
+      children = @element.children
+      children[@template_option_count].remove while children.length > @template_option_count
+      super
     end
 
     sig { params(_previous: T.untyped, values: T::Array[String]).void }

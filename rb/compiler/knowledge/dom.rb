@@ -40,17 +40,20 @@ module Swill
         "Element" => ["Node", {
           "tagName" => [:attr, "String"],
           "id" => [:accessor, "String"],
+          "innerHTML" => [:accessor, "String"],
           "children" => [:attr, "HTMLCollection"],
           "firstElementChild" => [:attr, "T.nilable(Element)"],
           "nextElementSibling" => [:attr, "T.nilable(Element)"],
           "classList" => [:attr, "DOMTokenList"],
           "getAttribute" => [:method, "T.nilable(String)", "name: String"],
           "getAttributeNames" => [:method, "T::Array[String]", ""],
+          "[]" => [:method, "T.untyped", "name: String"],
           "[]=" => [:method, "void", "name: String, value: T.untyped"],
           "hasAttribute" => [:method, "T::Boolean", "name: String"],
           "setAttribute" => [:method, "void", "name: String, value: String"],
           "removeAttribute" => [:method, "void", "name: String"],
           "matches" => [:method, "T::Boolean", "selector: String"],
+          "closest" => [:method, "T.nilable(Element)", "selector: String"],
           "querySelector" => [:method, "T.nilable(Element)", "selector: String"],
           "querySelectorAll" => [:method, "NodeList", "selector: String"],
           "remove" => [:method, "void", ""],
@@ -92,6 +95,7 @@ module Swill
           "querySelectorAll" => [:method, "NodeList", "selector: String"]
         }],
         "Document" => ["Node", {
+          "__swill_templates__" => [:accessor, "T.nilable(HTMLTemplateElement)"],
           "body" => [:attr, "Element"],
           "documentElement" => [:attr, "Element"],
           "activeElement" => [:attr, "T.nilable(Element)"],

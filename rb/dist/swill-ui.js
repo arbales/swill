@@ -1235,8 +1235,12 @@
     Swill__ObjectBindings: () => Swill__ObjectBindings,
     Swill__ObjectPropertyBindingDestination: () => Swill__ObjectPropertyBindingDestination,
     Swill__Observable: () => Swill__Observable,
+    Swill__OutletOwner: () => Swill__OutletOwner,
+    Swill__OutletOwner_ClassMethods: () => Swill__OutletOwner_ClassMethods,
     Swill__Responder: () => Swill__Responder,
     Swill__SelectBindingDestination: () => Swill__SelectBindingDestination,
+    Swill__Swell: () => Swill__Swell,
+    Swill__Templates: () => Swill__Templates,
     Swill__TextBindingDestination: () => Swill__TextBindingDestination,
     Swill__URLFragment: () => Swill__URLFragment,
     Swill__ValueTransformer: () => Swill__ValueTransformer,
@@ -1327,16 +1331,18 @@
     }
     static eachOwned(root, include_root, callback) {
       if (include_root) callback(root, false);
-      return Swill__DOM.eachChild(root, (child) => child.hasAttribute("controller") ? callback(child, true) : Swill__DOM.eachOwned(
-        child,
-        true,
-        callback
-      ));
+      return Swill__DOM.eachChild(root, (child) => {
+        let view = child.__swill_view__;
+        return Runtime.isTruthy(child.hasAttribute("controller") || view && view.isOwnsContent()) ? callback(
+          child,
+          true
+        ) : Swill__DOM.eachOwned(child, true, callback);
+      });
     }
     static ownedMatching(root, selector) {
       let found = Runtime.cast([], "T::Array[Element]");
-      Swill__DOM.eachOwned(root, true, (element, controller_root) => {
-        if (Runtime.isTruthy(!controller_root && element.matches(selector))) {
+      Swill__DOM.eachOwned(root, true, (element, _controller_root) => {
+        if (Runtime.isTruthy((element === root || !element.hasAttribute("controller")) && element.matches(selector))) {
           return Runtime.append(found, element);
         }
       });
@@ -1346,6 +1352,160 @@
   Swill__DOM.eachChild = Swill__DOM_Functions.eachChild;
   Swill__DOM.eachOwned = Swill__DOM_Functions.eachOwned;
   Swill__DOM.ownedMatching = Swill__DOM_Functions.ownedMatching;
+  var Swill__Swell = class _Swill__Swell extends Swill__Object {
+    static $index(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [{ name: "element", kind: "req" }],
+        keywords: [],
+        keywordRest: null,
+        block: "block"
+      });
+      let element = Runtime.argument(__swill_bound, "element");
+      let block = Runtime.argument(__swill_bound, "block");
+      let dom = new this(element);
+      if (block) block(dom);
+      return dom;
+    }
+    constructor(element) {
+      super();
+      this._element = element;
+    }
+    get element() {
+      return this._element;
+    }
+    addClass(name) {
+      this._element.classList.add(name);
+      return this;
+    }
+    removeClass(name) {
+      this._element.classList.remove(name);
+      return this;
+    }
+    toggleClassWithOn(name, on) {
+      if (on == null) {
+        this._element.classList.toggle(name);
+      } else {
+        this._element.classList.toggle(name, on);
+      }
+      ;
+      return this;
+    }
+    hasClass(name) {
+      return this._element.classList.contains(name);
+    }
+    // HTML booleans are presence/absence; nil also removes the attribute.
+    attr(name, value) {
+      if (value == null || value === false) {
+        this._element.removeAttribute(name);
+      } else {
+        this._element.setAttribute(
+          name,
+          value === true ? "" : Runtime.send(value, "to_s")
+        );
+      }
+      ;
+      return this;
+    }
+    attribute(name) {
+      return this._element.getAttribute(name);
+    }
+    hasAttribute(name) {
+      return this._element.hasAttribute(name);
+    }
+    removeAttr(name) {
+      this._element.removeAttribute(name);
+      return this;
+    }
+    // ARIA and data values are strings: false means "false", not absence.
+    aria(name, value) {
+      return this.attr(
+        `aria-${name}`,
+        value == null ? null : Runtime.send(value, "to_s")
+      );
+    }
+    data(name, value) {
+      return this.attr(
+        `data-${name}`,
+        value == null ? null : Runtime.send(value, "to_s")
+      );
+    }
+    ariaValue(name) {
+      return this.attribute(`aria-${name}`);
+    }
+    dataValue(name) {
+      return this.attribute(`data-${name}`);
+    }
+    // Properties retain their values and types, unlike serialized attributes.
+    prop(name, value) {
+      this._element[name] = value;
+      return this;
+    }
+    propertyValue(name) {
+      return this._element[name];
+    }
+    // Text is always literal. Markup belongs in templates.
+    text(value) {
+      this._element.textContent = Runtime.send(value, "to_s");
+      return this;
+    }
+    textContent() {
+      return this._element.textContent;
+    }
+    hide() {
+      this._element.hidden = true;
+      return this;
+    }
+    show() {
+      this._element.hidden = false;
+      return this;
+    }
+    empty() {
+      this._element.replaceChildren();
+      return this;
+    }
+    append(node) {
+      this._element.appendChild(node);
+      return this;
+    }
+    remove() {
+      this._element.remove();
+      return this;
+    }
+    find(selector) {
+      let found = this._element.querySelector(selector);
+      return found ? _Swill__Swell.$index(found) : null;
+    }
+    findBang(selector) {
+      let found = this.find(selector);
+      if (!found) throw new Error(`No element matching ${selector}`);
+      return found;
+    }
+    // Retain the returned disposer on the object that owns the listener.
+    listen(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "type", kind: "req" },
+          { name: "handler", kind: "req" }
+        ],
+        keywords: [{ name: "capture", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let type = Runtime.argument(__swill_bound, "type");
+      let handler = Runtime.argument(__swill_bound, "handler");
+      let capture = Runtime.argument(__swill_bound, "capture");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(capture))) capture = false;
+      this._element.addEventListener(type, handler, capture);
+      return () => this._element.removeEventListener(type, handler, capture);
+    }
+    toggleClass(name) {
+      return _Swill__Swell.prototype.toggleClassWithOn.call(
+        this,
+        name,
+        null
+      );
+    }
+  };
   var Swill__Notification = class extends Swill__Object {
     constructor(name, object, user_info) {
       super();
@@ -2047,15 +2207,86 @@
       if (target) return target.complete(event);
     }
   };
+  function Swill__OutletOwner(Superclass) {
+    class Swill__OutletOwner_Layer extends Superclass {
+      // Connected at launch/awakening; nil until then, even when required.
+      // Coercion hook for JSON outlets: turn parsed data into value objects
+      // before the outlet is assigned. nil means the script was empty.
+      decodeOutletData(name, value) {
+        return value;
+      }
+    }
+    return Swill__OutletOwner_Layer;
+  }
+  function Swill__OutletOwner_ClassMethods(Superclass) {
+    class Swill__OutletOwner_ClassMethods_Layer extends Object {
+    }
+    Object.setPrototypeOf(Swill__OutletOwner_ClassMethods_Layer.prototype, Superclass);
+    return Swill__OutletOwner_ClassMethods_Layer.prototype;
+  }
+  function Swill__Templates(Superclass) {
+    class Swill__Templates_Layer extends Superclass {
+    }
+    return Swill__Templates_Layer;
+  }
+  var Swill__Templates_Functions = class extends Object {
+    static install(source) {
+      this._source = Runtime.cast(source, "T.nilable(String)");
+      return this._source;
+    }
+    static named(name, document2) {
+      let catalog = document2.__swill_templates__;
+      if (!catalog) {
+        catalog = document2.createElement("template");
+        catalog.innerHTML = Runtime.must(this._source);
+        document2.__swill_templates__ = catalog;
+      }
+      ;
+      let templates = catalog.content.children;
+      let index = 0;
+      while (index < templates.length) {
+        let template = Runtime.must(templates[index]);
+        if (template.getAttribute("name") === name) return template;
+        index++;
+      }
+      ;
+      return (() => {
+        throw new Error(`Unknown control template: ${name}`);
+      })();
+    }
+  };
+  Swill__Templates.install = Swill__Templates_Functions.install;
+  Swill__Templates.named = Swill__Templates_Functions.named;
   var Swill__View = class _Swill__View extends Swill__Responder {
     // Wraps +element+, marking it managed.
     constructor(element) {
       super();
+      this._owns_content = Runtime.cast(false, "T::Boolean");
       this._element = element;
       this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
       this._superview = Runtime.cast(null, "T.nilable(Swill::View)");
       this._subviews = Runtime.cast([], "T::Array[View]");
       element.__swill_view__ = this;
+    }
+    // Template internals have their own connections, but stay in the view tree.
+    isOwnsContent() {
+      return this._owns_content;
+    }
+    unload() {
+      let owning_controller = this._controller;
+      if (owning_controller) {
+        owning_controller.unload();
+        return;
+      }
+      ;
+      if (Swill__Application.isRunning()) {
+        Swill__Application.shared().releaseFirstResponder(this._element);
+      }
+      ;
+      this._subviews.slice().forEach((__swill_item) => __swill_item.unload());
+      this.dealloc();
+      this.removeFromSuperview();
+      return this._element.__swill_view__ = null;
     }
     // The element this view wraps.
     get element() {
@@ -2089,20 +2320,20 @@
     // Structural only: it does not awaken or lay anything out.
     adoptSubview(child) {
       let previous = child.superview;
-      if (previous) previous.releaseSubview(child);
+      Runtime.nilable(previous?.releaseSubview(child));
       child.assignSuperview(this);
       Runtime.append(this._subviews, child);
       return child;
     }
     // Drops +child+ from this view.
     releaseSubview(child) {
-      this._subviews = this._subviews.filter((candidate) => candidate !== child);
+      this._subviews = this._subviews.filter((candidate) => !(candidate === child));
       return child.assignSuperview(null);
     }
     // Drops this view from its superview, if it has one.
     removeFromSuperview() {
       let superview = this._superview;
-      if (superview) return superview.releaseSubview(this);
+      return Runtime.nilable(superview?.releaseSubview(this));
     }
     // Tree-internal; adopt_subview and release_subview keep both sides consistent.
     assignSuperview(superview) {
@@ -2118,7 +2349,7 @@
     }
     static controllerFor(element) {
       let view = _Swill__View.of(element);
-      return view ? view.controllerValue() : null;
+      return Runtime.nilable(view?.controllerValue());
     }
     // Whether the element carries +name+.
     hasAttribute(name) {
@@ -2128,11 +2359,10 @@
     contains(element) {
       return this._element.contains(element);
     }
-    // A fresh element from an inert template's content, or nil when the
-    // template has none.
+    // A fresh template root, or a blank div when the template has no element.
     cloneTemplate(template) {
       let node = template.content.firstElementChild;
-      return node ? node.cloneNode(true) : null;
+      return node ? node.cloneNode(true) : this._element.ownerDocument.createElement("div");
     }
     // Appends +element+ to this view's element.
     append(element) {
@@ -2177,7 +2407,7 @@
     // Drop the browser's text selection, as before a shift-click sweep.
     clearTextSelection() {
       let selection = this._element.ownerDocument.getSelection();
-      if (selection) return selection.removeAllRanges();
+      return selection?.removeAllRanges;
     }
     // An event listener on this view's element; the returned callable
     // removes it.
@@ -2210,12 +2440,12 @@
     // Focuses the first focusable element, if there is one.
     focusElement() {
       let target = this.firstFocusableElement();
-      if (target) return target.focus({ preventScroll: true });
+      return target?.focus({ preventScroll: true });
     }
     // Blurs the first focusable element, if there is one.
     blurElement() {
       let target = this.firstFocusableElement();
-      if (target) return target.blur();
+      return target?.blur;
     }
     // A view wraps a focusable element, so it accepts by default; becoming
     // first responder focuses it.
@@ -2229,6 +2459,17 @@
     }
   };
   var Swill__Control = class extends Swill__View {
+    // Copy the shared prototype, then connect its children to this control.
+    loadTemplate(name) {
+      if (this._owns_content) throw new Error("Control template already loaded");
+      let template = Swill__Templates.named(
+        name,
+        this._element.ownerDocument
+      );
+      this._owns_content = true;
+      this._element.replaceChildren(template.content.cloneNode(true));
+      return Swill__Awakening.awakenOwned(this._element, this);
+    }
     resignFirstResponder(next_responder) {
       let current = this.delegate;
       if (Runtime.isTruthy(Runtime.logicalAnd(
@@ -2247,10 +2488,6 @@
     }
   };
   var Swill__Controller = class extends Swill__Responder {
-    // An outlet is a property connected, at awakening, to the element in this
-    // controller's owned region that carries a matching outlet attribute.
-    // Unconnected until then, so its reader is nilable. Declared here rather
-    // than on Swill::Object because only a controller owns a region.
     // restorable :query, key: :q — a bindable path whose value the
     // application keeps in the URL fragment. The leaf type is derived when the
     // class is compiled; the runtime checks the path at installation.
@@ -2324,15 +2561,10 @@
       this.unbindAll();
       this.dealloc();
       this.childControllers().forEach((child) => child.unload());
-      this._view.subviews.forEach((subview) => this._view.releaseSubview(subview));
+      this._view.subviews.slice().forEach((subview) => subview.unload());
       this._view.removeFromSuperview();
       this._view.controller = null;
       return this.viewDidDisappear();
-    }
-    // Coercion hook for JSON outlets: turn parsed data into value objects
-    // before the outlet is assigned. nil means the script was empty.
-    decodeOutletData(name, value) {
-      return value;
     }
     // Outlets are connected, and no binding has fired yet: state set here is
     // what bindings push first.
@@ -2413,12 +2645,12 @@
       return Swill__DOM.eachOwned(
         element,
         false,
-        (child, controller_root) => {
+        (child, _controller_root) => {
           if (child.hasAttribute("bind")) {
             Runtime.append(disposers, this.connect(object, child, prefix));
           }
           ;
-          if (!controller_root) {
+          if (!child.hasAttribute("controller")) {
             return this.propertiesIn(object, prefix, child, disposers);
           }
         }
@@ -2550,8 +2782,27 @@
       ));
       return controller;
     }
-    static establishIn(element, controller) {
-      let disposers = Swill__DOM.ownedMatching(element, "[data-action]").map((target) => this.connect(target, controller));
+    static establishIn(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "element", kind: "req" },
+          { name: "controller", kind: "req" }
+        ],
+        keywords: [{ name: "include_root", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let element = Runtime.argument(__swill_bound, "element");
+      let controller = Runtime.argument(__swill_bound, "controller");
+      let include_root = Runtime.argument(__swill_bound, "include_root");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(include_root))) {
+        include_root = true;
+      }
+      ;
+      let disposers = Swill__DOM.ownedMatching(element, "[data-action]").map((target) => Runtime.isTruthy(target === element && !include_root) ? () => null : this.connect(
+        target,
+        controller
+      ));
       return () => disposers.forEach((dispose) => dispose());
     }
     static connect(element, controller) {
@@ -2587,7 +2838,7 @@
     return Swill__Connections__Outlets_Layer;
   }
   var Swill__Connections__Outlets_Functions = class extends Object {
-    static establish(controller) {
+    static establish(controller, root) {
       let declared = Runtime.cast(
         Runtime.outlets(controller),
         "T::Array[T.untyped]"
@@ -2596,7 +2847,7 @@
       let by_name = Runtime.cast({}, "T::Hash[String, T.untyped]");
       declared.forEach((descriptor) => by_name[Runtime.send(descriptor, "name")] = descriptor);
       let connected = Runtime.cast({}, "T::Hash[String, T::Boolean]");
-      this.candidates(controller.view.element).forEach((element) => {
+      this.candidates(root).forEach((element) => {
         let name = Runtime.must(element.getAttribute("outlet"));
         if (!Runtime.isTruthy(by_name[name])) {
           throw new Error(`Undeclared outlet: ${name}`);
@@ -2685,10 +2936,32 @@
       return controllers;
     }
     static awaken(root) {
-      let controllers = Runtime.cast([], "T::Array[Controller]");
-      this.walk(root, this.nearestView(root.parentElement), controllers);
+      let controllers = this.prepare(root);
       Runtime.reverse(controllers).forEach((controller) => this.load(controller));
       return controllers;
+    }
+    static prepare(root) {
+      let controllers = Runtime.cast([], "T::Array[Controller]");
+      this.walk(root, this.nearestView(root.parentElement), controllers);
+      return controllers;
+    }
+    static awakenOwned(root, owner) {
+      let controllers = Runtime.cast([], "T::Array[Controller]");
+      Swill__DOM.eachChild(
+        root,
+        (child) => this.walk(child, owner, controllers)
+      );
+      Swill__Connections__Outlets.establish(owner, root);
+      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
+      Swill__Connections__Bindings.regionIn(owner, null, root, disposers);
+      owner.retain(Swill__Connections__Bindings.releasing(disposers));
+      owner.retain(Swill__Connections__Actions.establishIn(
+        root,
+        owner,
+        Runtime.keywordArguments({ include_root: false })
+      ));
+      Runtime.reverse(controllers).forEach((controller) => this.load(controller));
+      return this.finish(controllers);
     }
     static finish(controllers) {
       Runtime.reverse(controllers).forEach((controller) => controller.controllerDidLoad());
@@ -2696,7 +2969,10 @@
       return Runtime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
     }
     static load(controller) {
-      Swill__Connections__Outlets.establish(controller);
+      Swill__Connections__Outlets.establish(
+        controller,
+        controller.view.element
+      );
       controller.viewDidLoad();
       Swill__Connections__Bindings.establish(controller);
       Swill__Connections__Actions.establish(controller);
@@ -2720,6 +2996,7 @@
         }
       }
       ;
+      if (Runtime.isTruthy(view && view.isOwnsContent())) return;
       let next_owner = view || owner;
       return Swill__DOM.eachChild(
         element,
@@ -2759,7 +3036,15 @@
       );
     }
     static detach(node) {
-      return this.controllersWithin(node).forEach((controller) => controller.unload());
+      let view = node.__swill_view__;
+      let controller = view ? view.controllerValue() : null;
+      if (controller) {
+        return controller.unload();
+      } else if (view) {
+        return view.unload();
+      } else {
+        return Swill__DOM.eachChild(node, (child) => this.detach(child));
+      }
     }
     static nearestView(element) {
       if (!element) return null;
@@ -2769,6 +3054,8 @@
   };
   Swill__Awakening.instantiate = Swill__Awakening_Functions.instantiate;
   Swill__Awakening.awaken = Swill__Awakening_Functions.awaken;
+  Swill__Awakening.prepare = Swill__Awakening_Functions.prepare;
+  Swill__Awakening.awakenOwned = Swill__Awakening_Functions.awakenOwned;
   Swill__Awakening.finish = Swill__Awakening_Functions.finish;
   Swill__Awakening.load = Swill__Awakening_Functions.load;
   Swill__Awakening.walk = Swill__Awakening_Functions.walk;
@@ -3022,7 +3309,9 @@
       this._fragments = new Swill__URLFragment(root.ownerDocument.defaultView);
       this.scanTemplates();
       this.prepareWindowContainers();
-      this._controllers = Swill__Awakening.awaken(root);
+      this._controllers = Swill__Awakening.prepare(root);
+      Swill__Connections__Outlets.establish(this, root);
+      Runtime.reverse(this._controllers).forEach((controller) => Swill__Awakening.load(controller));
       this.registerWindowContainers();
       this.restoreLaunchedWindows();
       Swill__Awakening.finish(this._controllers);
@@ -3057,6 +3346,7 @@
       this._windows.forEach((window) => this.releaseWindow(window));
       this._windows = [];
       this._controllers.forEach((controller) => Runtime.send(controller, "unload"));
+      Swill__Awakening.detach(this._root);
       this._controllers = [];
       this._root.removeEventListener("focusin", this._on_focus);
       this._root.removeEventListener("focusout", this._on_focus_out);
@@ -3768,12 +4058,11 @@
     // in code. Bindings, actions, selection, and configure_row still apply.
     makeRowElement(_item) {
       let template = this.rowTemplate();
-      let node = template ? this.containerView().cloneTemplate(template) : null;
-      if (!node) {
+      if (!template) {
         throw new Error('List has no <template for="row"> and no make_row_element override');
       }
       ;
-      return node;
+      return this.containerView().cloneTemplate(template);
     }
     // NSTableView willDisplayCell analog.
     configureRow(_element, _item) {
@@ -3815,7 +4104,7 @@
       Swill__Awakening.detach(element);
       let release2 = element.__swill_row__;
       if (release2) {
-        release2.call();
+        release2();
         element.__swill_row__ = null;
       }
       ;
@@ -4074,6 +4363,20 @@
           }
         }
       },
+      "Swill::OutletOwner": {
+        factory: Swill__OutletOwner,
+        classFactory: Swill__OutletOwner_ClassMethods,
+        methods: {
+          "decode_outlet_data": {
+            "arity": 2,
+            "js": "decodeOutletData"
+          }
+        }
+      },
+      "Swill::Templates": {
+        factory: Swill__Templates,
+        methods: {}
+      },
       "Swill::Connections::Bindings": {
         factory: Swill__Connections__Bindings,
         methods: {}
@@ -4097,6 +4400,109 @@
         mixins: [Swill__Observable],
         properties: {},
         methods: {}
+      },
+      "Swill::Swell": {
+        constructor: Swill__Swell,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "element": {
+            "arity": 0,
+            "accessor": true
+          },
+          "add_class": {
+            "arity": 1,
+            "js": "addClass"
+          },
+          "remove_class": {
+            "arity": 1,
+            "js": "removeClass"
+          },
+          "toggle_class": {
+            "arity": 1,
+            "js": "toggleClass"
+          },
+          "toggle_class_with_on": {
+            "arity": 2,
+            "js": "toggleClassWithOn",
+            "family": "toggle_class"
+          },
+          "has_class?": {
+            "arity": 1,
+            "js": "hasClass"
+          },
+          "attr": {
+            "arity": 2
+          },
+          "attribute": {
+            "arity": 1
+          },
+          "has_attribute?": {
+            "arity": 1,
+            "js": "hasAttribute"
+          },
+          "remove_attr": {
+            "arity": 1,
+            "js": "removeAttr"
+          },
+          "aria": {
+            "arity": 2
+          },
+          "data": {
+            "arity": 2
+          },
+          "aria_value": {
+            "arity": 1,
+            "js": "ariaValue"
+          },
+          "data_value": {
+            "arity": 1,
+            "js": "dataValue"
+          },
+          "prop": {
+            "arity": 2
+          },
+          "property_value": {
+            "arity": 1,
+            "js": "propertyValue"
+          },
+          "text": {
+            "arity": 1
+          },
+          "text_content": {
+            "arity": 0,
+            "js": "textContent"
+          },
+          "hide": {
+            "arity": 0
+          },
+          "show": {
+            "arity": 0
+          },
+          "empty": {
+            "arity": 0
+          },
+          "append": {
+            "arity": 1
+          },
+          "remove": {
+            "arity": 0
+          },
+          "find": {
+            "arity": 1
+          },
+          "find!": {
+            "arity": 1,
+            "js": "findBang"
+          },
+          "listen": {
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2
+          }
+        }
       },
       "Swill::Notification": {
         constructor: Swill__Notification,
@@ -4497,6 +4903,13 @@
           "initialize": {
             "arity": 1
           },
+          "owns_content?": {
+            "arity": 0,
+            "js": "isOwnsContent"
+          },
+          "unload": {
+            "arity": 0
+          },
           "element": {
             "arity": 0,
             "accessor": true
@@ -4616,6 +5029,7 @@
       },
       "Swill::Control": {
         constructor: Swill__Control,
+        mixins: [Swill__OutletOwner],
         properties: {
           "delegate": {
             type: "T.untyped",
@@ -4626,6 +5040,10 @@
           }
         },
         methods: {
+          "load_template": {
+            "arity": 1,
+            "js": "loadTemplate"
+          },
           "resign_first_responder": {
             "arity": 1,
             "js": "resignFirstResponder"
@@ -4634,7 +5052,7 @@
       },
       "Swill::Controller": {
         constructor: Swill__Controller,
-        mixins: [Swill__ObjectBindings],
+        mixins: [Swill__ObjectBindings, Swill__OutletOwner],
         properties: {
           "represented_object": {
             js: "representedObject",
@@ -4689,10 +5107,6 @@
           },
           "unload": {
             "arity": 0
-          },
-          "decode_outlet_data": {
-            "arity": 2,
-            "js": "decodeOutletData"
           },
           "view_did_load": {
             "arity": 0,
@@ -4834,6 +5248,7 @@
       },
       "Swill::Application": {
         constructor: Swill__Application,
+        mixins: [Swill__OutletOwner],
         properties: {},
         methods: {
           "initialize": {
@@ -5479,7 +5894,8 @@
 
   // build/ui/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.DistantObject": "Swill__Model__DistantObject", "Model.DistantClient": "Swill__Model__DistantClient", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Model.DistantObject"]);
+  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.DistantObject": "Swill__Model__DistantObject", "Model.DistantClient": "Swill__Model__DistantClient", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Model.DistantObject"]);
+  Swill__Templates.install('<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" role="listbox" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" role="option" tabindex="-1">\n      <span class="custom-select-icon" aria-hidden="true"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>\n  </template>\n</template>\n');
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();
 //# sourceMappingURL=swill-ui.js.map

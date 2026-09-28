@@ -12,11 +12,32 @@ module Swill
     sig { params(element: Element).void }
     def initialize(element)
       super()
+      @owns_content = T.let(false, T::Boolean)
       @element = element
       @controller = T.let(nil, T.nilable(Controller))
       @superview = T.let(nil, T.nilable(View))
       @subviews = T.let([], T::Array[View])
       element.__swill_view__ = self
+    end
+
+    # Template internals have their own connections, but stay in the view tree.
+    sig { returns(T::Boolean) }
+    def owns_content?
+      @owns_content
+    end
+
+    sig { void }
+    def unload
+      owning_controller = @controller
+      if owning_controller
+        owning_controller.unload
+        return
+      end
+      Application.shared.release_first_responder(@element) if Application.running?
+      @subviews.dup.each(&:unload)
+      dealloc
+      remove_from_superview
+      @element.__swill_view__ = nil
     end
 
     # The element this view wraps.
@@ -47,6 +68,7 @@ module Swill
     def owner
       own = @controller
       return own if own
+
       @superview&.owner
     end
 
@@ -55,7 +77,7 @@ module Swill
     sig { params(child: View).returns(View) }
     def adopt_subview(child)
       previous = child.superview()
-      previous.release_subview(child) if previous
+      previous&.release_subview(child)
       child.assign_superview(self)
       @subviews << child
       child
@@ -64,7 +86,7 @@ module Swill
     # Drops +child+ from this view.
     sig { params(child: View).void }
     def release_subview(child)
-      @subviews = @subviews.select { |candidate| candidate != child }
+      @subviews = @subviews.reject { |candidate| candidate == child }
       child.assign_superview(nil)
     end
 
@@ -72,7 +94,7 @@ module Swill
     sig { void }
     def remove_from_superview
       superview = @superview
-      superview.release_subview(self) if superview
+      superview&.release_subview(self)
     end
 
     # Tree-internal; adopt_subview and release_subview keep both sides consistent.
@@ -99,7 +121,7 @@ module Swill
     sig { params(element: Element).returns(T.nilable(Controller)) }
     def self.controller_for(element)
       view = View.of(element)
-      view ? view.controller_value() : nil
+      view&.controller_value
     end
 
     # Whether the element carries +name+.
@@ -114,12 +136,11 @@ module Swill
       @element.contains(element)
     end
 
-    # A fresh element from an inert template's content, or nil when the
-    # template has none.
-    sig { params(template: HTMLTemplateElement).returns(T.nilable(Element)) }
+    # A fresh template root, or a blank div when the template has no element.
+    sig { params(template: HTMLTemplateElement).returns(Element) }
     def clone_template(template)
       node = template.content.firstElementChild
-      node ? node.cloneNode(true) : nil
+      node ? node.cloneNode(true) : @element.ownerDocument.createElement("div")
     end
 
     # Appends +element+ to this view's element.
@@ -177,7 +198,7 @@ module Swill
     sig { void }
     def clear_text_selection
       selection = @element.ownerDocument.getSelection
-      selection.removeAllRanges if selection
+      selection&.removeAllRanges
     end
 
     # An event listener on this view's element; the returned callable
@@ -185,7 +206,7 @@ module Swill
     sig { params(type: String, handler: T.untyped, capture: T::Boolean).returns(T.proc.void) }
     def listen(type, handler, capture: false)
       @element.addEventListener(type, handler, capture)
-      ->() { @element.removeEventListener(type, handler, capture) }
+      -> { @element.removeEventListener(type, handler, capture) }
     end
 
     # ---- focus ----
@@ -206,14 +227,14 @@ module Swill
     sig { void }
     def focus_element
       target = first_focusable_element
-      target.focus({preventScroll: true}) if target
+      target&.focus({ preventScroll: true })
     end
 
     # Blurs the first focusable element, if there is one.
     sig { void }
     def blur_element
       target = first_focusable_element
-      target.blur if target
+      target&.blur
     end
 
     # A view wraps a focusable element, so it accepts by default; becoming

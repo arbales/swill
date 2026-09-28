@@ -5,6 +5,9 @@ import {loadBundles} from "./load_bundles.mjs";
 
 const swill = loadBundles();
 const {Runtime, context} = swill;
+context.HTMLTemplateElement = class {
+  static [Symbol.hasInstance](value) { return value?.tagName === "TEMPLATE"; }
+};
 
 const SwillObject = Runtime.resolve("Swill::Object");
 const Person = Runtime.resolve("Demo::Person");
@@ -2740,4 +2743,287 @@ test("compiled filtering works directly on lists or on an including view control
   owner.selectObject(grace);
   assert.equal(owner.selectedObject, grace);
   owner.dealloc();
+});
+
+test("failed remote edits reopen beside the record's current row", async () => {
+  const f = peoplePage();
+  const [ada, grace] = f.parent.people;
+  let reject;
+  ada.applyDraft = () => new Promise((_resolve, fail) => { reject = fail; });
+  f.controller.editingDidFailSave = () => {};
+  const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
+  f.controller.sort("name", "descending");
+  reject(new Error("save failed"));
+  await pending;
+  assert.equal(f.controller.isEditing(), true);
+  const index = Array.from(f.controller.arrangedObjects()).indexOf(ada);
+  const row = f.controller.rowElements()[index];
+  assert.ok(f.rows.children.indexOf(editorOf(f).row) === f.rows.children.indexOf(row) + 1, "editor follows the current row");
+  assert.equal(f.controller.editedObject.name, "Ada");
+});
+
+test("a failed remote edit cannot replace a newer editor", async () => {
+  const f = peoplePage();
+  const [ada, grace] = f.parent.people;
+  let reject;
+  ada.applyDraft = () => new Promise((_resolve, fail) => { reject = fail; });
+  f.controller.editingDidFailSave = () => {};
+  const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
+  f.controller.beginEditing(1);
+  const draft = f.controller.editedObject;
+  reject(new Error("save failed"));
+  await pending;
+  assert.ok(f.controller.editedObject === draft, "the newer draft stays active");
+  assert.equal(draft.name, grace.name);
+});
+
+test("remote save completion leaves a replacement query alone", async () => {
+  const f = peoplePage();
+  const [ada, grace] = f.parent.people;
+  let resolve;
+  ada.applyDraft = () => new Promise(done => { resolve = done; });
+  const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
+  f.parent.people = [grace];
+  f.controller.selectObject(grace);
+  f.application.makeFirstResponder(f.parent.nameField);
+  resolve(ada);
+  await pending;
+  assert.ok(f.controller.selectedObject === grace, "replacement query selection stays intact");
+  assert.ok(f.application.firstResponder() === f.parent.nameField, "completion does not steal focus");
+});
+
+test("a failed remote edit does not reopen after the list unloads", async () => {
+  const f = peoplePage();
+  const ada = f.parent.people[0];
+  let reject;
+  ada.applyDraft = () => new Promise((_resolve, fail) => { reject = fail; });
+  const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
+  f.controller.unload();
+  reject(new Error("save failed"));
+  await pending;
+  assert.equal(f.controller.isEditing(), false);
+});
+
+test("focused buttons retain native activation inside editable lists", () => {
+  const f = peoplePage();
+  const elementNode = element("button", {klass: "Swill::Control::Button", "data-action": "activate_selection"});
+  f.list.append(elementNode);
+  Awakening.instantiate(elementNode);
+  const button = elementNode.__swill_view__;
+  f.controller.selectIndexes([0]);
+  f.application.makeFirstResponder(button);
+  const enter = keyEvent("keydown", "Enter");
+  elementNode.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, false, "the browser can activate the button");
+  assert.equal(f.controller.isEditing(), false, "Enter did not reach the list's editing handler");
+});
+
+
+test("application outlets connect before controller callbacks and respect ownership", () => {
+  class App extends Application {}
+  let seen;
+  class Root extends SwillController {
+    awakeFromDOM() { seen = this.application().main; }
+  }
+  Runtime.install({classes: {
+    "Test::OutletApp": {constructor: App, properties: {
+      main: outletDescriptor("T.nilable(Test::OutletRoot)"),
+      optional: outletDescriptor("T.nilable(Swill::View)", true)
+    }},
+    "Test::OutletRoot": {constructor: Root, properties: {field: outletDescriptor("T.nilable(Swill::View)")}}
+  }});
+  const field = element("input", {outlet: "field"});
+  const main = element("main", {controller: "Test::OutletRoot", outlet: "main"}, [field]);
+  const app = new App();
+  app.launch(element("body", {}, [main]));
+  assert.equal(app.main, main.__swill_view__.controllerValue());
+  assert.equal(seen, app.main);
+  assert.equal(app.main.field.element, field);
+  assert.equal(app.optional, null);
+});
+
+test("application outlets validate missing, duplicate, undeclared and mistyped connections", () => {
+  class App extends Application {}
+  Runtime.install({classes: {"Test::InvalidOutletApp": {constructor: App, properties: {
+    main: outletDescriptor("T.nilable(Swill::Controller)")
+  }}}});
+  const launch = children => {
+    if (Application.isRunning()) Application.shared().terminate();
+    return new App().launch(element("body", {}, children));
+  };
+  const main = () => element("main", {controller: installHost({}), outlet: "main"});
+  assert.throws(() => launch([]), /Unresolved outlet: main/);
+  assert.throws(() => launch([main(), main()]), /Duplicate outlet: main/);
+  assert.throws(() => launch([main(), element("div", {outlet: "other"})]), /Undeclared outlet: other/);
+  assert.throws(() => launch([element("div", {outlet: "main"})]), /Outlet main expects/);
+});
+
+
+test("segmented binds one selection, roves focus, emits user changes and releases connections", () => {
+  const Host = class extends SwillController {};
+  Runtime.install({classes: {"Test::SegmentHost": {constructor: Host, properties: {
+    choice: {defaultValue() { return "b"; }},
+    picker: outletDescriptor("Swill::Control::Segmented")
+  }}}});
+  const root = element("div", {klass: "Swill::Control::Segmented", bind: "choice", outlet: "picker"});
+  const [host] = launched(element("body", {}, [element("main", {controller: "Test::SegmentHost"}, [root])]));
+  const control = host.picker;
+  control.options = [{value: "a", label: "Alpha"}, {value: "b", label: "Beta"}];
+  const buttons = () => root.querySelectorAll("[role='radio']");
+  assert.deepEqual(buttons().map(b => b.getAttribute("tabindex")), ["-1", "0"]);
+  const changes = [];
+  root.addEventListener("change", () => changes.push(control.value));
+  Application.shared().makeFirstResponder(control);
+  assert.equal(root.ownerDocument.activeElement, buttons()[1]);
+  buttons()[1].dispatchEvent(keyEvent("keydown", "ArrowRight"));
+  assert.equal(host.choice, "a");
+  assert.equal(root.ownerDocument.activeElement, buttons()[0]);
+  assert.deepEqual(changes, ["a"]);
+  host.choice = "b";
+  assert.deepEqual(changes, ["a"], "assignments are silent");
+  control.disabled = true;
+  buttons()[0].click();
+  assert.equal(host.choice, "b");
+  assert.ok(buttons().every(button => button.disabled));
+  control.disabled = false;
+  buttons()[0].click();
+  assert.equal(host.choice, "a");
+  const oldButton = buttons()[1];
+  host.unload();
+  oldButton.click();
+  assert.equal(control.value, "a", "unload removes control listeners");
+  assert.equal(root.__swill_view__, null);
+});
+
+test("shared templates clone independently and controls own their internal connections", () => {
+  const templates = swill.Swill__Templates;
+  const document = element("body");
+  const first = templates.named("custom_select", document);
+  assert.equal(templates.named("custom_select", document), first, "parsed prototype is reused");
+  assert.notEqual(templates.named("custom_select", element("body")), first, "documents keep separate prototypes");
+  assert.throws(() => templates.named("missing", document), /Unknown control template: missing/);
+
+  const Control = Runtime.resolve("Swill::Control");
+  class OwnedControl extends Control {
+    constructor(element) { super(element); this.loadTemplate("owned"); }
+    increment() { this.value += "!"; }
+  }
+  Runtime.install({classes: {"Test::OwnedControl": {constructor: OwnedControl,
+    properties: {value: {defaultValue() { return "local"; }}, label: outletDescriptor("Swill::View")},
+    methods: {increment: {js: "increment", arity: 0}}
+  }}});
+  const local = element("template", {name: "owned"}, [
+    element("span", {outlet: "label", bind: "value"}),
+    element("button", {"data-action": "increment"})
+  ]);
+  const hostName = installHost({picker: false});
+  const picker = element("div", {klass: "Test::OwnedControl", outlet: "picker"});
+  const body = element("body", {}, [element("main", {controller: hostName}, [picker])]);
+  body.__swill_templates__ = element("template", {}, [local]);
+  const [host] = launched(body);
+  const control = host.picker;
+  assert.equal(control.label.element.textContent, "local");
+  picker.querySelector("button").click();
+  assert.equal(control.label.element.textContent, "local!");
+  assert.equal(local.content.children[0].textContent, "", "prototype was not mutated");
+  const label = control.label.element;
+  host.unload();
+  control.value = "after";
+  assert.equal(label.textContent, "local!", "unload releases internal bindings");
+});
+
+
+test("native controls can awaken again without stale listeners or duplicated options", () => {
+  const name = installHost({field: false, picker: false});
+  const input = element("input", {klass: "Swill::Control::TextField", outlet: "field"});
+  const select = element("select", {klass: "Swill::Control::Select", outlet: "picker"}, [element("option", {value: ""})]);
+  const root = element("main", {controller: name}, [input, select]);
+  const body = element("body", {}, [root]);
+  let [host] = launched(body);
+  const oldField = host.field;
+  host.picker.options = ["a", "b"];
+  assert.equal(select.children.length, 3);
+  host.unload();
+  [host] = swill.Swill__Awakening.instantiate(root);
+  host.picker.options = ["a", "b"];
+  assert.equal(select.children.length, 3);
+  input.value = "new";
+  input.dispatchEvent(new Event("input", {bubbles: true}));
+  assert.equal(host.field.value, "new");
+  assert.equal(oldField.value, "");
+});
+
+
+test("Swell chains DOM edits without changing managed ownership", () => {
+  const node = element("input");
+  const view = new View(node);
+  const Swell = Runtime.resolve("Swill::Swell");
+  const dom = Swell.$index(node);
+  assert.equal(dom.addClass("active").attr("tabindex", 0).aria("expanded", false), dom);
+  assert.equal(node.__swill_view__, view);
+  assert.equal(dom.element, node);
+  assert.equal(dom.hasClass("active"), true);
+  dom.toggleClass("active");
+  assert.equal(dom.hasClass("active"), false);
+  dom.toggleClass("active", true).removeClass("active");
+  assert.equal(dom.hasClass("active"), false);
+  assert.equal(dom.attribute("tabindex"), "0");
+  assert.equal(dom.attribute("aria-expanded"), "false");
+  assert.equal(dom.ariaValue("expanded"), "false");
+  assert.equal(dom.dataValue("missing"), null);
+  dom.attr("disabled", true);
+  assert.equal(dom.attribute("disabled"), "");
+  dom.attr("disabled", false);
+  assert.equal(dom.hasAttribute("disabled"), false);
+  dom.data("ready", false).aria("expanded", null);
+  assert.equal(dom.attribute("data-ready"), "false");
+  assert.equal(dom.attribute("aria-expanded"), null);
+  assert.equal(dom.dataValue("ready"), "false");
+  assert.equal(dom.ariaValue("expanded"), null);
+  dom.removeAttr("data-ready").prop("checked", false).prop("value", "edited");
+  assert.equal(node.checked, false);
+  assert.equal(node.value, "edited");
+  assert.equal(dom.propertyValue("checked"), false);
+  assert.equal(dom.propertyValue("value"), "edited");
+  dom.hide(); assert.equal(node.hidden, true);
+  dom.show(); assert.equal(node.hidden, false);
+});
+
+test("Swell finds children, writes literal text and exposes listener disposal", () => {
+  const root = element("div");
+  const child = element("span", {class: "label"});
+  const dom = Runtime.resolve("Swill::Swell").$index(root);
+  assert.equal(dom.append(child), dom);
+  const label = dom.findBang(".label");
+  label.text("<em>literal</em>");
+  assert.equal(child.textContent, "<em>literal</em>");
+  assert.equal(label.textContent(), "<em>literal</em>");
+  assert.equal(child.children.length, 0);
+  assert.equal(dom.find(".missing"), null);
+  assert.throws(() => dom.findBang(".missing"), /No element matching .missing/);
+  let clicks = 0;
+  const stop = dom.listen("click", () => clicks++);
+  root.click(); stop(); stop(); root.click();
+  assert.equal(clicks, 1);
+  label.remove(); assert.equal(root.children.length, 0);
+  dom.append(child).empty(); assert.equal(root.children.length, 0);
+});
+
+test("View clones template roots and supplies fresh divs for empty templates", () => {
+  const view = new View(element("section"));
+  const template = element("template");
+  const blank = view.cloneTemplate(template);
+  assert.equal(blank.tagName, "DIV");
+  assert.equal(blank.children.length, 0);
+  assert.notEqual(view.cloneTemplate(template), blank);
+  assert.equal(template.content.children.length, 0);
+
+  const root = element("article", {}, [element("span", {class: "label"})]);
+  template.content.appendChild(root);
+  const clone = view.cloneTemplate(template);
+  assert.equal(clone.tagName, "ARTICLE");
+  assert.notEqual(clone, root);
+  assert.equal(clone.children.length, 1);
+  assert.notEqual(clone.children[0], root.children[0]);
+  assert.equal(clone.children[0].getAttribute("class"), "label");
 });

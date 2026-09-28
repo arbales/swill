@@ -11,5 +11,12 @@ module Swill
       super
       ensure_focusable
     end
+
+    # Native buttons activate themselves; Enter must not commit an ancestor editor.
+    sig { override.params(event: KeyboardEvent).void }
+    def key_down(event)
+      return if event.key == "Enter" || event.key == " "
+      super
+    end
   end
 end

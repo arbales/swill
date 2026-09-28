@@ -6,6 +6,7 @@
   var Swill__Observable = framework.Swill__Observable;
   var Swill__Object = framework.Swill__Object;
   var Swill__DOM = framework.Swill__DOM;
+  var Swill__Swell = framework.Swill__Swell;
   var Swill__Notification = framework.Swill__Notification;
   var Swill__NotificationCenter = framework.Swill__NotificationCenter;
   var Swill__Wire = framework.Swill__Wire;
@@ -24,12 +25,16 @@
   var Swill__CollectionArrangement = framework.Swill__CollectionArrangement;
   var Swill__ArrayController = framework.Swill__ArrayController;
   var Swill__Responder = framework.Swill__Responder;
+  var Swill__OutletOwner = framework.Swill__OutletOwner;
+  var Swill__OutletOwner_ClassMethods = framework.Swill__OutletOwner_ClassMethods;
+  var Swill__Templates = framework.Swill__Templates;
   var Swill__View = framework.Swill__View;
   var Swill__Control = framework.Swill__Control;
   var Swill__Control__Button = framework.Swill__Control__Button;
   var Swill__Control__TextField = framework.Swill__Control__TextField;
   var Swill__Control__Select = framework.Swill__Control__Select;
   var Swill__Control__CustomSelect = framework.Swill__Control__CustomSelect;
+  var Swill__Control__Segmented = framework.Swill__Control__Segmented;
   var Swill__Controller = framework.Swill__Controller;
   var Swill__Connections__Bindings = framework.Swill__Connections__Bindings;
   var Swill__Connections__Actions = framework.Swill__Connections__Actions;
@@ -468,6 +473,11 @@
       let select = Runtime.must(this.standaloneSelect);
       select.options = ["Ada", "Grace", "Katherine"];
       select.value = "Grace";
+      Runtime.must(this.segmented).options = [
+        { value: "ada", label: "Ada" },
+        { value: "grace", label: "Grace" },
+        { value: "katherine", label: "Katherine" }
+      ];
       return Runtime.must(this.customSelect).options = [
         { value: "ada", label: "Ada Lovelace", description: "Mathematician" },
         {
@@ -1629,6 +1639,15 @@
           "custom_select": {
             js: "customSelect",
             type: "T.nilable(Swill::Control::CustomSelect)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "segmented": {
+            type: "T.nilable(Swill::Control::Segmented)",
             attribute: false,
             outlet: true,
             optional: false,

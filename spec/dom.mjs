@@ -1,6 +1,6 @@
 // A small element tree for the JavaScript tests: enough DOM for ownership walks,
 // attribute scans, simple selectors, bubbling events, and focus. No layout,
-// no parsing.
+// a small parser for static test templates.
 export class Element {
   constructor(tagName, attributes = {}, children = []) {
     this.tagName = tagName.toUpperCase();
@@ -20,7 +20,8 @@ export class Element {
     this.open = false;
     // A template's children live in an inert content fragment, as in the DOM.
     if (this.tagName === "TEMPLATE") {
-      this.content = {firstElementChild: children[0] ?? null, children};
+      this.content = new Element("#fragment", {}, children);
+      this.content.nodeType = 11;
     } else {
       for (const child of children) this.append(child);
     }
@@ -31,6 +32,7 @@ export class Element {
   cloneNode(deep) {
     const template = this.tagName === "TEMPLATE" ? this.content.children : this.children;
     const copy = new Element(this.tagName, this.attributes, deep ? template.map(child => child.cloneNode(true)) : []);
+    copy.nodeType = this.nodeType;
     copy._value = this._value;
     copy._text = this._text;
     return copy;
@@ -51,6 +53,10 @@ export class Element {
   set textContent(v) { this._text = v == null ? "" : String(v); }
 
   append(child) {
+    if (child.nodeType === 11) {
+      for (const nested of [...child.children]) this.append(nested);
+      return child;
+    }
     child.remove();
     child.parentElement = this;
     this.children.push(child);
@@ -80,6 +86,29 @@ export class Element {
     let node = this;
     while (node.parentElement) node = node.parentElement;
     return node;
+  }
+
+  // Only the static tag/quoted-attribute subset used by controls.html.
+  set innerHTML(html) {
+    const root = this.content ?? this;
+    root.replaceChildren();
+    const stack = [root];
+    for (const token of html.match(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g) ?? []) {
+      if (token.startsWith("<!--")) continue;
+      if (token.startsWith("</")) { stack.pop(); continue; }
+      if (!token.startsWith("<")) { if (token.trim()) stack.at(-1).textContent += token; continue; }
+      const tag = /^<([\w-]+)/.exec(token)[1];
+      const attributes = {};
+      for (const match of token.matchAll(/([\w-]+)="([^"]*)"/g)) attributes[match[1]] = match[2];
+      const node = new Element(tag, attributes);
+      stack.at(-1).append(node);
+      if (!["input", "img", "br"].includes(tag)) stack.push(node.content ?? node);
+    }
+  }
+
+  closest(selector) {
+    for (let node = this; node; node = node.parentElement) if (node.matches(selector)) return node;
+    return null;
   }
 
   createElement(tagName) { return new Element(tagName); }
@@ -113,6 +142,7 @@ export class Element {
   // tag, [attr], [attr=value], and combinations such as template[name].
   matches(selector) {
     return selector.split(",").map(part => part.trim()).some(simple => {
+      if (/^\.[\w-]+$/.test(simple)) return this.classList.contains(simple.slice(1));
       const parsed = simple.match(/^([\w-]*)((?:\[[^\]]+\])*)$/);
       if (!parsed) return false;
       const [, tag, attributes] = parsed;

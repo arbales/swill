@@ -138,6 +138,7 @@ module Swill
     # A new collection ends an edit without committing: its row is gone.
     sig { override.params(previous: T.untyped, objects: T.untyped).void }
     def represented_object_did_change(previous, objects)
+      @edit_generation = (@edit_generation || 0) + 1
       end_editing(false) if editing?
       super
     end
@@ -160,15 +161,22 @@ module Swill
       finish_edit(index, apply_edit(copy, original, index))
     end
 
-    sig { params(copy: T.untyped, original: Model::DistantObject, index: Integer).void }
-    async def commit_distant_edit(copy, original, index)
+    sig { params(copy: T.untyped, original: Model::DistantObject, _index: Integer).void }
+    async def commit_distant_edit(copy, original, _index)
+      generation = @edit_generation
       begin
         await original.apply_draft(copy)
-        finish_edit(index, original)
       rescue => error
+        return unless @awakened && generation == @edit_generation
         editing_did_fail_save(error)
-        open_editor(index, original, copy)
+        index = arranged_objects.index(original)
+        open_editor(index, original, copy) if index
+        return
       end
+      # A save may finish after rows move, another edit starts, or the view closes.
+      return unless @awakened && generation == @edit_generation
+      index = arranged_objects.index(original)
+      finish_edit(index, original) if index
     end
 
     # A model takes its draft back and stays the row's object; a plain object
@@ -239,6 +247,7 @@ module Swill
     def open_editor(index, original, copy)
       row = row_elements[index]
       return false unless row
+      @edit_generation = (@edit_generation || 0) + 1
       node = instantiate_editor
       self.edited_object = copy
       container_view.mark(row, "being-edited", true)
@@ -259,9 +268,7 @@ module Swill
     def instantiate_editor
       template = editor_template
       raise 'EditableList has no <template for="editor">' unless template
-      node = container_view.clone_template(template)
-      raise 'The editor template is empty' unless node
-      node
+      container_view.clone_template(template)
     end
 
     # The inline editor rooted at a mounted node; anything else is torn back

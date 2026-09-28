@@ -181,6 +181,8 @@ module Swill
         bundle = Build.framework_bundle
         raise CompileError, "framework bundle not built: #{bundle}" unless File.file?(bundle)
         FileUtils.cp(bundle, File.join(File.dirname(output), "swill.js"))
+        css = File.join(File.dirname(bundle), "swill.css")
+        FileUtils.cp(css, File.join(File.dirname(output), "swill.css")) if File.file?(css)
         map = "#{bundle}.map"
         FileUtils.cp(map, File.join(File.dirname(output), "swill.js.map")) if File.file?(map)
       end

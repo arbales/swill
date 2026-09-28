@@ -18,7 +18,9 @@ module Swill
       initial = input.value
       initial = input.getAttribute("value").to_s if initial.empty? && input.hasAttribute("value")
       self.value = initial
-      input.addEventListener("input", ->(event) { input_did_change(event) })
+      handler = ->(event) { input_did_change(event) }
+      input.addEventListener("input", handler)
+      retain(->() { input.removeEventListener("input", handler) })
     end
 
     sig { params(_previous: T.untyped, value: String).void }

@@ -60,6 +60,7 @@ def write_browser_entry(directory, runtime_directory, runtime)
     import {browserAPI} from "#{runtime_directory}/browser_api.mjs";
     if (globalThis.Swill) throw new Error("Framework already loaded");
     globalThis.Swill = browserAPI(definitions, Runtime, #{javascript_names.to_json}, #{Swill::Ruby2JS::JAVASCRIPT_ROOTS.to_json});
+    definitions.Swill__Templates.install(#{File.read(File.join(ROOT, "rb/framework/resources/controls.html")).to_json});
     if (typeof document !== "undefined") new definitions.Swill__Launcher().install(document);
   JAVASCRIPT
   File.write("#{directory}/browser.mjs", Swill::Ruby2JS::Compiler.format_javascript(browser))
@@ -80,6 +81,7 @@ def compile_ui
 end
 
 def bundle_spike(minify: false)
+  FileUtils.cp("rb/framework/resources/controls.css", "rb/dist/swill.css")
   {"browser" => "swill", "application" => "app", "ui/browser" => "swill-ui"}.each do |source, target|
     output = "rb/dist/#{target}#{minify ? '.min' : ''}.js"
     sh "esbuild", "build/#{source}.mjs", "--bundle", "--format=iife", "--target=es2022",

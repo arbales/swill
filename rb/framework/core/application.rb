@@ -10,6 +10,7 @@ module Swill
   # See the Lifecycle guide for launch, restoration and teardown.
   class Application < Responder
     extend T::Sig
+    include OutletOwner
 
     # NSApp: the application running on this page. Asking for it when none
     # is running is a mistake, not a nil.
@@ -68,7 +69,10 @@ module Swill
       @fragments = URLFragment.new(root.ownerDocument.defaultView)
       scan_templates
       prepare_window_containers
-      @controllers = Awakening.awaken(root)
+      @controllers = Awakening.prepare(root)
+      # Application connections are available in every controller load hook.
+      Connections::Outlets.establish(self, root)
+      @controllers.reverse.each { |controller| Awakening.load(controller) }
       register_window_containers
       restore_launched_windows
       Awakening.finish(@controllers)
@@ -104,6 +108,7 @@ module Swill
       @windows.each { |window| release_window(window) }
       @windows = []
       @controllers.each { |controller| controller.unload }
+      Awakening.detach(@root)
       @controllers = []
       @root.removeEventListener("focusin", @on_focus)
       @root.removeEventListener("focusout", @on_focus_out)

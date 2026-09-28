@@ -275,6 +275,47 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes own, 'this.warn("mine")', "an entry's own warn is a method call"
   end
 
+  def test_class_indexing_calls_the_declared_method_and_preserves_native_indexing
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      class Lookup < TestObject
+        extend T::Sig
+        sig { params(value: Integer).returns(Integer) }
+        def self.[](value); value * 2; end
+        sig { returns(T::Array[Integer]) }
+        def self.example
+          values = [4, 5]
+          [Lookup[3], values[1]]
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_includes js, 'Lookup.$index(3)'
+    assert_equal [6, 5], execute(js + 'console.log(JSON.stringify(Runtime.resolve("Lookup").example()));')
+  end
+
+  def test_namespaced_class_indexing_preserves_blocks
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module Tools
+        class Wrapper < TestObject
+          extend T::Sig
+          sig { params(value: Integer, block: T.nilable(T.proc.params(value: Integer).void)).returns(Integer) }
+          def self.[](value, &block)
+            block.call(value) if block
+            value
+          end
+          sig { returns(Integer) }
+          def self.example
+            result = 0
+            Wrapper[3] { |value| result = value * 2 }
+            result
+          end
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    assert_equal 6, execute(js + 'console.log(JSON.stringify(Runtime.resolve("Tools::Wrapper").example()));')
+  end
+
   def test_class_methods_compile_to_statics_where_new_is_the_class
     compiler = compiler_with_test_object.add(<<~RUBY)
       class Registry < TestObject
@@ -1550,6 +1591,26 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     refute_includes framework.javascript(runtime: "./runtime.mjs"), "included("
   end
 
+  def test_mixin_class_methods_can_contain_only_declaration_macros
+    compiler = compiler_with_test_object.add(<<~RUBY)
+      module NamedConnections
+        def self.included(base); base.extend(ClassMethods); end
+        module ClassMethods
+          extend Swill::Declarations
+          macro def connection(name)
+            property name, type: String, default: ""
+          end
+        end
+      end
+      class Example < TestObject
+        include NamedConnections
+        connection :title
+      end
+    RUBY
+    assert_includes compiler.rbi, "def title"
+    refute_includes compiler.javascript(runtime: "./runtime.mjs"), "connection("
+  end
+
   def test_class_methods_emit_a_separate_factory_and_typed_configuration
     compiler = compiler_with_test_object.add(<<~RUBY)
       module Feature
@@ -1935,6 +1996,32 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     JS
   end
 
+  def test_symbol_blocks_resolve_collected_methods_and_properties
+    compiler = compiler_with_test_object.add(<<~'RUBY')
+      class Item < TestObject
+        property :name, type: String, default: "ready"
+        def unload
+          self.name = "unloaded"
+        end
+      end
+      class Group < TestObject
+        extend T::Sig
+        sig { params(items: T::Array[Item]).returns(T::Array[String]) }
+        def unload(items)
+          items.dup.each(&:unload)
+          items.map(&:name)
+        end
+      end
+    RUBY
+    js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
+    refute_includes js, 'Runtime.send(__swill_item, "unload")'
+    assert_equal ["unloaded", "unloaded"], execute(js + <<~JS)
+      const ItemClass = Runtime.resolve("Item");
+      const group = new (Runtime.resolve("Group"))();
+      console.log(JSON.stringify(group.unload([new ItemClass(), new ItemClass()])));
+    JS
+  end
+
   # One fixture over the core type tables, run on MRI and as compiled
   # JavaScript; the two results must be the same JSON.
   CORE_TYPES = <<~'RUBY'
@@ -1971,7 +2058,8 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
          items.any? { |n| n > 5 }, items.all? { |n| n > 0 }, items.none? { |n| n > 5 }, items.count { |n| n.odd? },
          items.sort_by { |n| -n }, items.flat_map { |n| [n, n * 10] }, items.min_by { |n| -n },
          items.max_by { |n| -n }, words.select { |word| word.length }, indexed(words),
-         words.map { |word| word.upcase }]
+         words.map { |word| word.upcase }, words.map(&:upcase), items.reject(&:odd?),
+         words.select(&:length)]
       end
 
       sig { params(words: T::Array[String]).returns(T::Array[String]) }

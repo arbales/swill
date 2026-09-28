@@ -15,12 +15,21 @@ module Swill
     property :options, type: T::Array[T::Hash[String, T.untyped]], default: []
     property :value, type: String, default: ""
 
+    outlet :button, type: View
+    outlet :icon, type: View
+    outlet :label, type: View
+    outlet :popup, type: View
+    outlet :option_template, type: HTMLTemplateElement
+
     sig { params(element: Element).void }
     def initialize(element)
       super
       @open = T.let(false, T::Boolean)
       @document_pointer_down = ->(event) { document_pointer_down(event) }
       install_chrome
+      choices = T.must(popup).element
+      handler = ->(event) { option_clicked(event) }
+      retain(Swell[choices].listen("click", handler))
       render_options
       apply_open(false)
     end
@@ -68,27 +77,19 @@ module Swill
     sig { void }
     def install_chrome
       root = @element
-      root.classList.add("custom-select")
-      root.setAttribute("tabindex", "0")
-      root.setAttribute("role", "combobox")
-      root.setAttribute("aria-haspopup", "listbox")
-      root.replaceChildren
-      @icon = create_element("span", {"class" => "custom-select-trigger-icon", "aria-hidden" => "true"})
-      @label = create_element("span", {"class" => "custom-select-label"})
-      button = create_element("button", {"type" => "button", "class" => "custom-select-button", "tabindex" => "-1"})
-      button.appendChild(@icon)
-      button.appendChild(@label)
-      button.addEventListener("click", ->(event) { button_clicked(event) })
-      @button = button
-      @popup = create_element("div", {"class" => "custom-select-popup", "role" => "listbox"})
-      root.appendChild(button)
-      root.appendChild(@popup)
-      root.addEventListener("focusout", ->(event) { focus_out(event) })
+      Swell[@element].add_class('custom-select')
+                     .attr('tabindex', '0')
+                     .attr('role', 'combobox')
+                     .aria('haspopup', 'listbox')
+      load_template("custom_select")
+      focus_handler = ->(event) { focus_out(event) }
+      retain(Swell[root].listen("focusout", focus_handler))
+      retain(-> { root.ownerDocument.removeEventListener("pointerdown", @document_pointer_down) })
     end
 
     # Called when a user clicks on the button to open or close the control.
-    sig { params(event: MouseEvent).void }
-    def button_clicked(event)
+    sig { params(_sender: T.untyped, event: MouseEvent).void }
+    def button_clicked(_sender, event)
       toggle unless event.detail == 0
     end
 
@@ -105,31 +106,28 @@ module Swill
 
     sig { void }
     def render_options
-      @popup.replaceChildren
+      container = T.must(popup).element
+      container.replaceChildren
       options.each do |option|
-        row = create_element("button", {"type" => "button", "class" => "custom-select-option", "role" => "option", "tabindex" => "-1"})
-        row.setAttribute("data-value", option_value(option))
-        icon = option["icon"]
-        if icon
-          row.classList.add("has-icon")
-          row.appendChild(create_element("span", {"class" => "custom-select-icon icon-#{icon}", "aria-hidden" => "true"}))
-        end
-        text = create_element("span", {"class" => "custom-select-option-text"})
-        label = create_element("span", {"class" => "custom-select-option-label"})
-        label.textContent = option["label"].to_s
-        text.appendChild(label)
-        description = option["description"]
-        if description
-          detail = create_element("span", {"class" => "custom-select-option-description"})
-          detail.textContent = description.to_s
-          text.appendChild(detail)
-        end
-        row.appendChild(text)
-        row.addEventListener("click", ->(_event) { choose(option_value(option)) })
-        @popup.appendChild(row)
+        row = clone_template(T.must(option_template))
+        Swell[row].data("value", option_value(option)).toggle_class("has-icon", option["icon"] != nil)
+        icon_name = option["icon"]
+        icon_element = T.must(row.querySelector(".custom-select-icon"))
+        icon_element.hidden = icon_name == nil
+        icon_element.classList.add("icon-#{icon_name}") if icon_name
+        Swell[row].find!(".custom-select-option-label").text(option["label"])
+        Swell[row].find!(".custom-select-option-description")
+                  .text(option["description"]).prop("hidden", option["description"] == nil)
+        container.appendChild(row)
       end
       sync_button
       sync_selected_option
+    end
+
+    sig { params(event: Event).void }
+    def option_clicked(event)
+      row = event.target.closest("[role='option']")
+      choose(T.must(Swell[row].data_value("value"))) if row && T.must(popup).element.contains(row)
     end
 
     # Returns the currently selected option or nil if nothing is selected.
@@ -141,17 +139,19 @@ module Swill
     sig { void }
     def sync_button
       option = selected_option
-      icon = option ? option["icon"] : nil
-      @icon.setAttribute("class", icon ? "custom-select-trigger-icon icon-#{icon}" : "custom-select-trigger-icon")
-      @icon.hidden = icon == nil
-      @label.textContent = option ? option["label"].to_s : ""
+      icon_name = option ? option["icon"] : nil
+      T.must(self.icon).element.setAttribute("class", icon_name ? "custom-select-trigger-icon icon-#{icon_name}" : "custom-select-trigger-icon")
+      T.must(self.icon).element.hidden = icon_name == nil
+      T.must(button).element.classList.toggle("has-icon", icon_name != nil)
+      T.must(label).element.textContent = option ? option["label"].to_s : ""
     end
 
     sig { void }
     def sync_selected_option
-      @popup.querySelectorAll("[role='option']").forEach do |row|
-        row.setAttribute("aria-selected", row.getAttribute("data-value") == value ? "true" : "false")
-      end
+      T.must(popup).element.querySelectorAll("[role='option']").forEach(->(row) do
+        dom = Swell[row]
+        dom.aria("selected", dom.data_value("value") == value)
+      end)
     end
 
     # ---- open and closed ----
@@ -174,10 +174,9 @@ module Swill
     sig { params(open: T::Boolean).void }
     def apply_open(open)
       @open = open
-      @element.classList.toggle("open", open)
-      @element.setAttribute("aria-expanded", open ? "true" : "false")
-      @button.setAttribute("aria-expanded", open ? "true" : "false")
-      @popup.hidden = !open
+      Swell[@element].toggle_class("open", open).aria("expanded", open)
+      Swell[T.must(button).element].aria("expanded", open)
+      Swell[T.must(popup).element].prop("hidden", !open)
       document = @element.ownerDocument
       if open
         document.addEventListener("pointerdown", @document_pointer_down)
@@ -203,13 +202,6 @@ module Swill
       self.value = next_value
       @element.dispatchEvent(Event.new("input", {bubbles: true}))
       @element.dispatchEvent(Event.new("change", {bubbles: true}))
-    end
-
-    sig { params(tag: String, attributes: T::Hash[String, String]).returns(Element) }
-    def create_element(tag, attributes)
-      node = @element.ownerDocument.createElement(tag)
-      attributes.each { |name, attribute| node.setAttribute(name, attribute) }
-      node
     end
 
     sig { params(option: T::Hash[String, T.untyped]).returns(String) }
