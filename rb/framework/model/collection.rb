@@ -3,7 +3,7 @@
 
 module Swill
   module Model
-    # Stable membership for a query result or to-many relationship.
+    # Stable membership for a query result or to-many association.
     class Collection < Swill::Object
       extend T::Sig
       extend T::Generic
@@ -61,7 +61,7 @@ module Swill
     end
 
     # Read-only membership; only authoritative hydration replaces its snapshot.
-    class RelationshipCollection < Collection
+    class AssociationCollection < Collection
       extend T::Generic
 
       Element = type_member
@@ -75,36 +75,36 @@ module Swill
       end
 
       sig { params(owner: DistantObject, name: String).void }
-      def attach_relationship(owner, name)
-        @relationship_owner = owner
-        @relationship_name = name
+      def attach_association(owner, name)
+        @association_owner = owner
+        @association_name = name
       end
 
       sig { params(name: String).void }
       def property_will_access(name)
         super
-        owner = @relationship_owner
-        owner.property_will_access(@relationship_name) if owner && name == "records"
+        owner = @association_owner
+        owner.property_will_access(@association_name) if owner && name == "records"
       end
 
       sig { void }
       def initialize
         super
         @applying_membership = T.let(false, T::Boolean)
-        @relationship_owner = T.let(nil, T.nilable(DistantObject))
-        @relationship_name = T.let("", String)
+        @association_owner = T.let(nil, T.nilable(DistantObject))
+        @association_name = T.let("", String)
         records.freeze
       end
 
       sig { override.params(_records: T::Array[T.untyped]).returns(T.self_type) }
       def replace(_records)
-        raise "Relationship membership is read-only; use a server operation"
+        raise "Association membership is read-only; use a server operation"
       end
 
       sig { params(name: String, value: T.untyped, previous: T.untyped).returns(T.untyped) }
       def coerce_property_value(name, value, previous)
         if name == "records" && !@applying_membership
-          raise "Relationship membership is read-only; use a server operation"
+          raise "Association membership is read-only; use a server operation"
         end
 
         super

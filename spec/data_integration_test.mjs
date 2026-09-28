@@ -100,7 +100,7 @@ test("generated clients cross the real WebSocket boundary", {timeout: 20_000}, a
     assert.equal(lookup.post, post);
     assert.equal(lookup.status, "found");
     const shared = current.postsController();
-    assert.equal(shared, current.postsController(), "the relationship controller is cached per owner");
+    assert.equal(shared, current.postsController(), "the association controller is cached per owner");
     assert.equal(current.isFieldLoaded("posts"), false, "constructing a controller does not fetch membership");
     const oldPosts = await current.loadField("posts");
     assert.equal(shared.content, oldPosts);

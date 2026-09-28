@@ -71,14 +71,14 @@ module Swill
       rb/framework/model/drafts.rb
       rb/framework/model/base.rb
       rb/framework/model/editable.rb
-      rb/framework/model/relationships.rb
+      rb/framework/model/associations.rb
       rb/framework/model/store.rb
       rb/framework/model/identity.rb
       rb/framework/model/collection.rb
       rb/framework/model/distant_client.rb
       rb/framework/model/distant_data.rb
       rb/framework/model/distant_object.rb
-      rb/framework/model/relationship.rb
+      rb/framework/model/association.rb
       rb/framework/model/codec.rb
       rb/framework/model/dataset.rb
       rb/framework/model/resource.rb
@@ -133,7 +133,7 @@ module Swill
           return error unless match
 
           destination = %w[has_many has_one].include?(match[1]) ?
-            "Swill::Model::Resource for endpoint relationships or Swill::Model::DistantObject for generated relationships" :
+            "Swill::Model::Resource for endpoint associations or Swill::Model::DistantObject for generated associations" :
             "Swill::Model::Resource"
           CompileError.new("#{error.message}; models using #{match[1]} must inherit #{destination}")
         end
@@ -287,7 +287,7 @@ module Swill
             end
             check_overrides!(entry, parent_name)
             resolve_outlet_types(entry)
-            resolve_relationship_types(entry)
+            resolve_association_types(entry)
             canonicalize_signatures(entry)
             members = javascript_members(entry)
             members.group_by(&:first).each_value do |same|
@@ -452,22 +452,22 @@ module Swill
         end
 
         # A declared class name is checked here, where the whole graph is
-        # known: a relationship may name a class defined later, or in a cycle,
+        # known: an association may name a class defined later, or in a cycle,
         # so its descriptor carries the name rather than the class.
-        def resolve_relationship_types(entry)
-          relationships = entry["registry_values"]["model_relationships"]
-          return unless relationships
-          relationships.each_value do |relationship|
-            resolved = knowledge.resolve(relationship["type"], entry["name"].split("::"))
+        def resolve_association_types(entry)
+          associations = entry["registry_values"]["model_associations"]
+          return unless associations
+          associations.each_value do |association|
+            resolved = knowledge.resolve(association["type"], entry["name"].split("::"))
             target = knowledge.entries.find { |candidate| candidate["name"] == resolved }
             unless target && target["kind"] == "class"
-              raise CompileError, "relationship #{relationship['name']}: #{relationship['type']} is not a class"
+              raise CompileError, "association #{association['name']}: #{association['type']} is not a class"
             end
-            %W[#{relationship['name']} #{relationship['name']}_loading].each do |name|
+            %W[#{association['name']} #{association['name']}_loading].each do |name|
               property = entry["properties"].find { |candidate| candidate["name"] == name }
-              property["type"] = property["type"].sub(relationship["type"], resolved)
+              property["type"] = property["type"].sub(association["type"], resolved)
             end
-            relationship["type"] = resolved
+            association["type"] = resolved
           end
         end
 

@@ -548,17 +548,17 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
   end
 
   # A class body sets what an included ClassMethods declares as a
-  # class_setting, and declares has_many/has_one relationships; both are
+  # class_setting, and declares has_many/has_one associations; both are
   # metadata the runtime installs, never evaluated Ruby.
-  def test_class_bodies_configure_settings_and_declare_relationships
-    # A relationship is ordinary Ruby: two properties, a registry entry, and
+  def test_class_bodies_configure_settings_and_declare_associations
+    # An association is ordinary Ruby: two properties, a registry entry, and
     # two forwarded methods. A plugin's macro is written exactly this way.
     feature = <<~RUBY
       module Feature
         def self.included(base); base.extend(ClassMethods); end
         module ClassMethods
           extend Swill::Declarations
-          inheritable_registry :model_relationships
+          inheritable_registry :model_associations
           class_setting :endpoint
           class_setting :codec
 
@@ -576,11 +576,11 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
             value_type = many ? "T::Array[\#{target}]" : "T.nilable(\#{target})"
             property name, type: value_type, default: (many ? [] : nil), will_access: true
             property :"\#{name}_loading", type: T::Boolean, default: false
-            model_relationships[name.to_s] = {"name" => name.to_s, "key" => key.to_s,
+            model_associations[name.to_s] = {"name" => name.to_s, "key" => key.to_s,
                                               "kind" => kind, "type" => target, "url" => url}
-            forward :"load_\#{name}", to: :load_relationship, with: [name.to_s],
+            forward :"load_\#{name}", to: :load_association, with: [name.to_s],
                     returns: value_type, async: true
-            forward :"reload_\#{name}", to: :reload_relationship, with: [name.to_s],
+            forward :"reload_\#{name}", to: :reload_association, with: [name.to_s],
                     returns: value_type, async: true
           end
         end
@@ -602,10 +602,10 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     RUBY
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
     assert_includes js, 'settings: [{ name: "endpoint", js: "endpoint", value: "/api/books" }, { name: "codec", js: "codec", value: Codec }]'
-    assert_includes js, 'modelRelationships: { "chapters": { "name": "chapters", "key": "chapters", "kind": "many", "type": "Chapter", "url": "/api/books/:id/chapters" } }'
-    assert_includes js, 'modelRelationships: { "book": { "name": "book", "key": "book", "kind": "one", "type": "Book", "url": null } }'
+    assert_includes js, 'modelAssociations: { "chapters": { "name": "chapters", "key": "chapters", "kind": "many", "type": "Chapter", "url": "/api/books/:id/chapters" } }'
+    assert_includes js, 'modelAssociations: { "book": { "name": "book", "key": "book", "kind": "one", "type": "Book", "url": null } }'
     # The macro declares callable members, not just properties.
-    assert_includes js, "async loadChapters() {\n    return await this.loadRelationship(\"chapters\");"
+    assert_includes js, "async loadChapters() {\n    return await this.loadAssociation(\"chapters\");"
     rbi = compiler.rbi
     assert_includes rbi, "sig { returns(T::Array[Chapter]) }\n  def chapters; end"
     assert_includes rbi, "sig { returns(T.nilable(Book)) }\n  def book; end"
@@ -613,7 +613,7 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes rbi, "sig { returns(T::Array[Chapter]) }\n  def load_chapters; end"
     assert_equal ["/api/books", "Codec", ["chapters"], "many", "Chapter", [], false, "/api/chapters", "Book"], execute(js + <<~JS)
       const book = new Book();
-      const chapters = Book.modelRelationships();
+      const chapters = Book.modelAssociations();
       console.log(JSON.stringify([Book.endpoint(), Book.codec().name, Object.keys(chapters),
         chapters.chapters.kind, chapters.chapters.type,
         book.chapters, book.chaptersLoading, Chapter.endpoint(), Runtime.classWithSetting("endpoint", "/api/books").name]));

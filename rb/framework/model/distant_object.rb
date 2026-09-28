@@ -13,31 +13,31 @@ module Swill
         deleted
       end
 
-      # Gives each to-many relationship its stable collection.
+      # Gives each to-many association its stable collection.
       sig { void }
       def initialize
         super
         @data_field_states = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
         @data_draft_source = T.let(nil, T.nilable(DistantObject))
-        @applying_relationship = T.let(false, T::Boolean)
+        @applying_association = T.let(false, T::Boolean)
         @data_controllers = T.let({}, T::Hash[String, ArrayController])
-        @data_collections = T.let({}, T::Hash[String, RelationshipCollection[T.untyped]])
+        @data_collections = T.let({}, T::Hash[String, AssociationCollection[T.untyped]])
         self.class.data_fields.each do |name, descriptor|
           next unless descriptor["kind"] == "many"
-          collection = Swill::Model::RelationshipCollection.new
-          collection.attach_relationship(self, name)
+          collection = Swill::Model::AssociationCollection.new
+          collection.attach_association(self, name)
           @data_collections[name] = collection
-          write_data_relationship(name, collection)
+          write_data_association(name, collection)
         end
       end
 
       # Shared presentation is opt-in; constructing the controller does not load.
       sig { params(name: String).returns(ArrayController) }
-      def relationship_controller(name)
+      def association_controller(name)
         existing = @data_controllers[name]
         return existing if existing
         collection = @data_collections[name]
-        raise "Unknown to-many relationship #{name}" unless collection
+        raise "Unknown to-many association #{name}" unless collection
         controller = ArrayController.new
         controller.content = collection
         @data_controllers[name] = controller
@@ -45,7 +45,7 @@ module Swill
       end
 
       sig { void }
-      def release_relationship_controllers
+      def release_association_controllers
         @data_controllers.each do |_name, controller|
           controller.content = nil
           controller.dealloc
@@ -55,15 +55,15 @@ module Swill
 
       sig { override.void }
       def disconnect
-        release_relationship_controllers
+        release_association_controllers
         super
       end
 
       sig { params(name: String, value: T.untyped, previous: T.untyped).returns(T.untyped) }
       def coerce_property_value(name, value, previous)
         descriptor = self.class.data_fields[name]
-        if descriptor && descriptor["kind"] != "field" && !@applying_relationship
-          raise "Relationship #{name} is read-only; use a server operation"
+        if descriptor && descriptor["kind"] != "field" && !@applying_association
+          raise "Association #{name} is read-only; use a server operation"
         end
 
         super
@@ -71,12 +71,12 @@ module Swill
 
       # Internal writes still use the ordinary observation machinery.
       sig { params(name: String, value: T.untyped).void }
-      def write_data_relationship(name, value)
-        @applying_relationship = true
+      def write_data_association(name, value)
+        @applying_association = true
         begin
           Swill::Runtime.write(self, name, value)
         ensure
-          @applying_relationship = false
+          @applying_association = false
         end
       end
 
@@ -289,14 +289,14 @@ module Swill
         elsif (descriptor && descriptor["kind"] == "field") || name == "id"
           apply_attributes({name => value})
         else
-          write_data_relationship(name, value)
+          write_data_association(name, value)
         end
         sync_data_collection(name)
       end
 
       sig { void }
       def reset_data_fields
-        release_relationship_controllers
+        release_association_controllers
         @data_field_states = {}
         self.class.data_fields.each do |name, descriptor|
           sync_data_collection(name) if descriptor["kind"] == "many"

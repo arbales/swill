@@ -161,7 +161,7 @@ export function include(klass, mixins, incoming = new Map()) {
  * its parent's, so that adding to it leaves the parent's unchanged.
  *
  * @param {Function} klass
- * @param {string} name The registry, such as `relationships`.
+ * @param {string} name The registry, such as `associations`.
  * @param {"hash" | "array"} [initial] The empty value when nothing is
  *   inherited.
  * @returns {object | Array} The class's registry, which may be changed.

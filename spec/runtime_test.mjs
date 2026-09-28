@@ -2385,21 +2385,21 @@ const authorsDocument = {
   ]
 };
 
-test("JSON:API documents pool records by type and hydrate relationships from included resources", async () => {
+test("JSON:API documents pool records by type and hydrate associations from included resources", async () => {
   const requests = fakeServer({"GET /api/authors": authorsDocument});
   const authors = await Author.findAll();
   assert.deepEqual(plain(authors.map(author => [author.id, author.name, author.born])), [["1", "Ada", 1815], ["2", "Grace", null]]);
   const [ada, grace] = authors;
   assert.deepEqual(plain(ada.books.map(book => book.title)), ["Notes", "Engines"]);
   assert.ok(ada.books[0].author === ada, "has_one resolves to the pooled owner");
-  assert.deepEqual(plain([ada.isRelationshipLoaded("books"), ada.books[0].isRelationshipLoaded("author"), grace.books]), [true, true, []]);
+  assert.deepEqual(plain([ada.isAssociationLoaded("books"), ada.books[0].isAssociationLoaded("author"), grace.books]), [true, true, []]);
   assert.ok((await Author.find("1")) === ada, "find answers the pooled instance without a request");
   assert.equal(requests.length, 1);
   assert.ok(Book.get("10") === ada.books[0]);
   assert.ok(Author.store() !== Book.store(), "each class has its own store");
   assert.ok(ModelResource.classForType("books") === Book && ModelResource.classForType("pages") === null);
   assert.deepEqual(plain([ada.isDirty, Author.isPooled("2"), Author.values().length]), [false, true, 2], "applied attributes are clean");
-  assert.deepEqual(plain(ada.relationships().map(relationship => [relationship.name, relationship.key, relationship.isMany()])), [["books", "books", true]]);
+  assert.deepEqual(plain(ada.associations().map(association => [association.name, association.key, association.isMany()])), [["books", "books", true]]);
 });
 
 test("save posts a new record, patches only dirty attributes, and delete leaves the pool", async () => {
@@ -2431,7 +2431,7 @@ test("save posts a new record, patches only dirty attributes, and delete leaves 
   assert.equal(requests.length, 3, "a record without an id has nothing to delete");
 });
 
-test("relationships load from their URL with a loading flag, and reload refreshes a pooled record", async () => {
+test("associations load from their URL with a loading flag, and reload refreshes a pooled record", async () => {
   const requests = fakeServer({
     "GET /api/authors/1": {data: {id: "1", type: "authors", attributes: {name: "Ada", born: 1816}}},
     "GET /api/authors/1/books": {data: [{id: "10", type: "books", attributes: {title: "Notes"}}]},
@@ -2440,37 +2440,37 @@ test("relationships load from their URL with a loading flag, and reload refreshe
   const ada = await Author.find("1");
   const flags = [];
   ada.observe("books_loading", value => flags.push(value));
-  // Reading a relationship nobody prefetched starts its request: the value
+  // Reading an association nobody prefetched starts its request: the value
   // answers what it has, and fills in when the request lands.
-  assert.deepEqual(plain([ada.name, ada.born, ada.isRelationshipLoaded("books"), ada.books]), ["Ada", 1816, false, []]);
+  assert.deepEqual(plain([ada.name, ada.born, ada.isAssociationLoaded("books"), ada.books]), ["Ada", 1816, false, []]);
   assert.equal(ada.booksLoading, true, "the read started the request");
-  const sameLoad = ada.loadRelationship("books");
+  const sameLoad = ada.loadAssociation("books");
   await sameLoad;
   const books = ada.books;
-  assert.deepEqual(plain([books.map(book => book.title), ada.isRelationshipLoaded("books"), flags]),
+  assert.deepEqual(plain([books.map(book => book.title), ada.isAssociationLoaded("books"), flags]),
     [["Notes"], true, [true, false]]);
-  assert.equal(requests.length, 2, "one request for the record, one for the relationship");
+  assert.equal(requests.length, 2, "one request for the record, one for the association");
   ada.books;
-  assert.equal(requests.length, 2, "a loaded relationship is not requested again on a second read");
-  assert.ok((await ada.loadRelationship("books")) === books, "a loaded relationship is not requested again");
+  assert.equal(requests.length, 2, "a loaded association is not requested again on a second read");
+  assert.ok((await ada.loadAssociation("books")) === books, "a loaded association is not requested again");
   assert.equal(requests.length, 2);
   const firstReload = ada.reloadBooks();
   const secondReload = ada.reloadBooks();
   const [firstReloaded, secondReloaded] = await Promise.all([firstReload, secondReload]);
-  assert.ok(firstReloaded === secondReloaded, "both callers receive the installed relationship value");
+  assert.ok(firstReloaded === secondReloaded, "both callers receive the installed association value");
   assert.equal(requests.length, 3, "concurrent reloads share one request");
   const book = books[0];
-  assert.equal(book.relationship("author").urlFor(book), "/api/books/10/author", "without a pattern, the owner's URL is followed by the key");
-  assert.equal(ada.relationship("books").urlFor(ada), "/api/authors/1/books", ":id in a pattern is the owner's id");
-  assert.ok((await book.loadRelationship("author")) === ada);
+  assert.equal(book.association("author").urlFor(book), "/api/books/10/author", "without a pattern, the owner's URL is followed by the key");
+  assert.equal(ada.association("books").urlFor(ada), "/api/authors/1/books", ":id in a pattern is the owner's id");
+  assert.ok((await book.loadAssociation("author")) === ada);
   ada.name = "Changed";
   await ada.reload();
   assert.deepEqual(plain([ada.name, ada.isDirty]), ["Ada", false]);
-  assert.throws(() => ada.relationship("title"), /title is not a relationship/);
+  assert.throws(() => ada.association("title"), /title is not an association/);
   await assert.rejects(new Author().reload(), /reload requires an id/);
 });
 
-test("a relationship that cannot load says so on a property, and is not asked again", async () => {
+test("an association that cannot load says so on a property, and is not asked again", async () => {
   const requests = fakeServer({
     "GET /api/authors/2": {data: {id: "2", type: "authors", attributes: {name: "Grace"}}}
   });
@@ -2483,7 +2483,7 @@ test("a relationship that cannot load says so on a property, and is not asked ag
   // can show, not in a rescue a controller has to write.
   assert.deepEqual(plain([grace.books, grace.booksLoading, grace.booksError]), [[], true, null]);
   await settle();
-  assert.deepEqual(plain([grace.booksLoading, grace.isRelationshipLoaded("books"), grace.books]), [false, false, []]);
+  assert.deepEqual(plain([grace.booksLoading, grace.isAssociationLoaded("books"), grace.books]), [false, false, []]);
   assert.match(grace.booksError, /\/api\/authors\/2\/books/);
   assert.deepEqual(states.map(([name]) => name), ["loading", "error", "loading"]);
 
@@ -2491,7 +2491,7 @@ test("a relationship that cannot load says so on a property, and is not asked ag
   grace.books;
   grace.books;
   await settle();
-  assert.equal(requests.length, 2, "one request for the record, one for the relationship");
+  assert.equal(requests.length, 2, "one request for the record, one for the association");
 
   // An explicit reload always asks again, and clears the failure first.
   requests.length = 0;
@@ -2556,7 +2556,7 @@ test("codecs agree with MRI", async () => {
   result.authors = authors.map(author => [author.id, author.name, author.born]);
   result.books = ada.books.map(book => book.title);
   result.linked = ada.books[0].author === ada;
-  result.loaded = [ada.isRelationshipLoaded("books"), ada.books[0].isRelationshipLoaded("author")];
+  result.loaded = [ada.isAssociationLoaded("books"), ada.books[0].isAssociationLoaded("author")];
   result.pooled = Author.get("1") === ada && Book.get("10") === ada.books[0];
   result.clean = ada.isDirty;
   ada.name = "Ada Lovelace";

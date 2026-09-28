@@ -7,7 +7,7 @@ require_relative "../rb/framework/model/dirty_tracking"
 require_relative "../rb/framework/model/drafts"
 require_relative "../rb/framework/model/base"
 require_relative "../rb/framework/model/editable"
-require_relative "../rb/framework/model/relationships"
+require_relative "../rb/framework/model/associations"
 require_relative "../rb/framework/model/store"
 require_relative "../rb/framework/model/identity"
 require_relative "../rb/framework/core/object_bindings"
@@ -16,7 +16,7 @@ require_relative "../rb/framework/model/collection"
 require_relative "../rb/framework/model/distant_client"
 require_relative "../rb/framework/model/distant_data"
 require_relative "../rb/framework/model/distant_object"
-require_relative "../rb/framework/model/relationship"
+require_relative "../rb/framework/model/association"
 require_relative "../rb/framework/model/codec"
 require_relative "../rb/framework/model/dataset"
 require_relative "../rb/framework/model/resource"
@@ -41,7 +41,7 @@ class SharedTest < Minitest::Test
     one_to_many :children, class: "SharedTest::RelatedRecord"
   end
 
-  def test_distant_relationships_are_read_only_and_observable_on_mri
+  def test_distant_associations_are_read_only_and_observable_on_mri
     record = RelatedRecord.new
     children = record.children
     assert children.records.frozen?
@@ -77,7 +77,7 @@ class SharedTest < Minitest::Test
     refute Swill::Runtime.observed(source, "count")
   end
 
-  def test_invalidated_relationships_keep_loaded_contents_on_mri
+  def test_invalidated_associations_keep_loaded_contents_on_mri
     record = RelatedRecord.new
     record.apply_data_field("children", [record], 1, false)
     children = record.children
@@ -125,7 +125,7 @@ class SharedTest < Minitest::Test
     controller.dealloc
   end
 
-  def test_relationship_controller_is_lazy_shared_and_released_on_mri
+  def test_association_controller_is_lazy_shared_and_released_on_mri
     record = RelatedRecord.new
     controller = record.children_controller
     assert_same controller, record.children_controller
@@ -342,7 +342,7 @@ class SharedModelTest < Minitest::Test
     result["authors"] = authors.map { |author| [author.id, author.name, author.born] }
     result["books"] = ada.books.map(&:title)
     result["linked"] = ada.books.first.author.equal?(ada)
-    result["loaded"] = [ada.relationship_loaded?("books"), ada.books.first.relationship_loaded?("author")]
+    result["loaded"] = [ada.association_loaded?("books"), ada.books.first.association_loaded?("author")]
     result["pooled"] = Demo::Author.get("1").equal?(ada) && Demo::Book.get("10").equal?(ada.books.first)
     result["clean"] = ada.dirty?
     ada.name = "Ada Lovelace"

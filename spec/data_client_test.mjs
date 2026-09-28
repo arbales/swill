@@ -247,7 +247,7 @@ test("dirty fields survive background patches and actor changes replace identity
 });
 
 
-test("relationship membership is read-only while query results remain editable", () => {
+test("association membership is read-only while query results remain editable", () => {
   const post = new Post();
   const comments = post.comments;
   const author = new Post();
@@ -267,7 +267,7 @@ test("relationship membership is read-only while query results remain editable",
   assert.equal(new ResultSet().replace([post]).first(), post);
 });
 
-test("relationship loading, errors, retry, and reset follow owner state", () => {
+test("association loading, errors, retry, and reset follow owner state", () => {
   const post = new Post();
   const comments = post.comments;
   assert.equal(comments.isLoaded(), false);
@@ -403,7 +403,7 @@ test("older hydration and failures cannot clear newer invalidation or refresh st
 });
 
 
-test("only live computed observers keep relationship demand active", async () => {
+test("only live computed observers keep association demand active", async () => {
   const {client, post, comments, transport} = await effectsFixture();
   assert.equal(post.comment_count, 1);
   assert.equal(Runtime.observed(comments, "records"), false, "a cached computation is not a subscription");

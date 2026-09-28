@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Swill
-  module Data
+  module Distant
     # One immutable protocol type. The schema uses this representation instead
     # of leaking Sorbet or a particular Ruby type system onto the wire.
     class Type
@@ -52,7 +52,7 @@ module Swill
 
         name = value.respond_to?(:name) ? value.name : value.to_s
         return Type.new("primitive", name: name) if PRIMITIVES.include?(name)
-        if defined?(Swill::Data::Value) && value.is_a?(Class) && value <= Swill::Data::Value
+        if defined?(Swill::Distant::Value) && value.is_a?(Class) && value <= Swill::Distant::Value
           return Type.new("value", name: name)
         end
         return Type.new("model", name: name) if value.is_a?(Class) || value.is_a?(Module)

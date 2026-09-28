@@ -71,10 +71,11 @@ module Swill
     end
 
     # JSON:API: {"data": resource | [resource] | null, "included": [resource]}
-    # where a resource is {"id", "type", "attributes", "relationships"}.
-    # Every resource in a document is pooled first and relationships are
-    # hydrated from the pool afterwards, so included records resolve
-    # whatever their order. A resource's class is the one declaring its
+    # where a resource is {"id", "type", "attributes", "relationships"};
+    # "relationships" is JSON:API's key for what the model calls
+    # associations. Every resource in a document is pooled first and
+    # associations are hydrated from the pool afterwards, so included records
+    # resolve whatever their order. A resource's class is the one declaring its
     # type as resource_type.
     class JSONAPI < Codec
       sig { params(model_class: T.class_of(Resource), payload: T.untyped).returns(T.nilable(Resource)) }
@@ -150,28 +151,28 @@ module Swill
         model_class.get("#{id}")
       end
 
-      # Relationship linkage ({"data": {id, type}} or a list of them) is
+      # Association linkage ({"data": {id, type}} or a list of them) is
       # resolved from the pool; a record the document did not carry leaves
-      # the relationship unloaded.
+      # the association unloaded.
       sig { params(resource: T::Hash[String, T.untyped]).void }
       def self.hydrate(resource)
         instance = pooled(resource)
         linkages = resource["relationships"]
         return unless instance && linkages
-        instance.relationships.each do |relationship|
-          linkage = linkages[relationship.key] || linkages[relationship.name]
+        instance.associations.each do |association|
+          linkage = linkages[association.key] || linkages[association.name]
           next unless linkage
           data = linkage["data"]
-          if relationship.many?
+          if association.many?
             next unless data.is_a?(Array)
             related = resources_in(data).map { |item| pooled(item) }
             next if related.include?(nil)
-            instance.assign_relationship(relationship.name, related)
+            instance.assign_association(association.name, related)
           elsif data == nil
-            instance.assign_relationship(relationship.name, nil)
+            instance.assign_association(association.name, nil)
           elsif !data.is_a?(Array)
             related_one = pooled(T.cast(data, T::Hash[String, T.untyped]))
-            instance.assign_relationship(relationship.name, related_one) if related_one
+            instance.assign_association(association.name, related_one) if related_one
           end
         end
       end

@@ -5,7 +5,7 @@ module Swill
   module Model
     # A has_many or has_one as installed: its name, wire key, kind, model
     # class, and URL pattern, where :id stands for the owner's id.
-    class Relationship < Swill::Object
+    class Association < Swill::Object
       extend T::Sig
 
       sig { params(descriptor: T::Hash[String, T.untyped]).void }
@@ -29,7 +29,7 @@ module Swill
         @kind == "many"
       end
 
-      # The declared class, by its installed name: a relationship may name a
+      # The declared class, by its installed name: an association may name a
       # class defined later, so the descriptor carries the name.
       sig { returns(T.class_of(Resource)) }
       def model_class

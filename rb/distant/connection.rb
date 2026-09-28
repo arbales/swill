@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 module Swill
-  module Data
-    # Rack endpoint adapting binary WebSocket frames to one Dispatcher.
-    class WebSocket
+  module Distant
+    # The Rack application that opens one WebSocket connection per client and
+    # feeds its binary frames to one Dispatcher.
+    class Connection
       def initialize(schema:, authenticate:)
         @schema = schema
         @authenticate = authenticate

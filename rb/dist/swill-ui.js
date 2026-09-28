@@ -1366,21 +1366,30 @@
       if (block) block(dom);
       return dom;
     }
+    // Creates a wrapper for `element`, preserving its existing view and owner.
     constructor(element) {
       super();
       this._element = element;
     }
+    // The element this wrapper reads and changes.
     get element() {
       return this._element;
     }
+    // :section: Managing Classes
+    // Reading and changing the element's CSS classes.
+    // Adds the class `name` and returns the wrapper. See `#remove_class`.
     addClass(name) {
       this._element.classList.add(name);
       return this;
     }
+    // Removes the class `name` and returns the wrapper. See `#add_class`.
     removeClass(name) {
       this._element.classList.remove(name);
       return this;
     }
+    // Adds the class `name` when `on` is true, removes it when false, and
+    // returns the wrapper. When `on` is omitted or nil, reverses the class's
+    // presence. See `#has_class?`.
     toggleClassWithOn(name, on) {
       if (on == null) {
         this._element.classList.toggle(name);
@@ -1390,10 +1399,16 @@
       ;
       return this;
     }
+    // Returns whether the element has the class `name`. See `#toggle_class`.
     hasClass(name) {
       return this._element.classList.contains(name);
     }
-    // HTML booleans are presence/absence; nil also removes the attribute.
+    // :section: Managing Attributes
+    // Reading and changing HTML, ARIA, and data attributes.
+    // Sets the attribute `name` from `value` and returns the wrapper.
+    // A nil or false value removes the attribute; true sets an empty string.
+    // Other values are converted to strings. See `#attribute`, `#aria`, and
+    // `#data` for reading attributes and writing prefixed values.
     attr(name, value) {
       if (value == null || value === false) {
         this._element.removeAttribute(name);
@@ -1406,81 +1421,132 @@
       ;
       return this;
     }
+    // Returns the attribute `name` as a string, or nil when absent.
+    // See `#attr` and `#has_attribute?`.
     attribute(name) {
       return this._element.getAttribute(name);
     }
+    // Returns whether the element has the attribute `name`, including an
+    // attribute whose value is an empty string. See `#attribute`.
     hasAttribute(name) {
       return this._element.hasAttribute(name);
     }
+    // Removes the attribute `name` and returns the wrapper.
+    // See `#attr` and `#has_attribute?`.
     removeAttr(name) {
       this._element.removeAttribute(name);
       return this;
     }
-    // ARIA and data values are strings: false means "false", not absence.
+    // Sets `aria-name` to the string form of `value` and returns the wrapper.
+    // A nil value removes the attribute; false is written as "false".
+    // Supply the suffix, such as "expanded", as `name`. See `#aria_value`.
     aria(name, value) {
       return this.attr(
         `aria-${name}`,
         value == null ? null : Runtime.send(value, "to_s")
       );
     }
+    // Sets `data-name` to the string form of `value` and returns the wrapper.
+    // A nil value removes the attribute; false is written as "false".
+    // Supply the suffix, such as "value", as `name`. See `#data_value`.
     data(name, value) {
       return this.attr(
         `data-${name}`,
         value == null ? null : Runtime.send(value, "to_s")
       );
     }
+    // Returns the value of `aria-name`, or nil when absent. `name` is the
+    // suffix without "aria-". See `#aria`.
     ariaValue(name) {
       return this.attribute(`aria-${name}`);
     }
+    // Returns the value of `data-name`, or nil when absent. `name` is the
+    // suffix without "data-". See `#data`.
     dataValue(name) {
       return this.attribute(`data-${name}`);
     }
-    // Properties retain their values and types, unlike serialized attributes.
+    // :section: Managing Properties
+    // Reading and assigning the element's DOM properties.
+    // Assigns `value` to the DOM property `name` and returns the wrapper.
+    // Uses the property's JavaScript name, such as "readOnly". The DOM
+    // property's setter determines how the value is stored.
+    // See `#property_value`.
     prop(name, value) {
       this._element[name] = value;
       return this;
     }
+    // Returns the DOM property `name` using its JavaScript spelling.
+    // An absent property returns JavaScript's undefined value. See `#prop`.
     propertyValue(name) {
       return this._element[name];
     }
-    // Text is always literal. Markup belongs in templates.
+    // :section: Managing Content and Visibility
+    // Updating text, child nodes, and the element's hidden state.
+    // Replaces the element's contents with the string form of `value` and
+    // returns the wrapper. Text is displayed literally; nil clears the
+    // contents. See `#text_content` and `#empty`.
     text(value) {
       this._element.textContent = Runtime.send(value, "to_s");
       return this;
     }
+    // Returns the element's text content, or an empty string when it has
+    // none. See `#text`.
     textContent() {
       return this._element.textContent;
     }
+    // Sets the element's hidden property to true and returns the wrapper.
+    // See `#show`.
     hide() {
       this._element.hidden = true;
       return this;
     }
+    // Sets the element's hidden property to false and returns the wrapper.
+    // See `#hide`.
     show() {
       this._element.hidden = false;
       return this;
     }
+    // Removes all child nodes and returns the wrapper. See `#append`.
     empty() {
       this._element.replaceChildren();
       return this;
     }
+    // Appends `node` as the last child and returns the wrapper. An existing
+    // node moves from its current parent. See `#empty`.
     append(node) {
       this._element.appendChild(node);
       return this;
     }
+    // Removes the element from its parent and returns the wrapper.
+    // An element with no parent remains unchanged.
     remove() {
       this._element.remove();
       return this;
     }
+    // :section: Finding Elements
+    // Looking up descendants by CSS selector.
+    // Returns a new wrapper for the first descendant matching `selector`,
+    // or nil when none matches. See `#find!`.
     find(selector) {
       let found = this._element.querySelector(selector);
       return found ? _Swill__Swell.$index(found) : null;
     }
+    // Returns a new wrapper for the first descendant matching `selector`.
+    // Raises "No element matching ..." when none matches; use `#find` when
+    // the descendant may be absent.
     findBang(selector) {
       let found = this.find(selector);
       if (!found) throw new Error(`No element matching ${selector}`);
       return found;
     }
-    // Retain the returned disposer on the object that owns the listener.
+    // :section: Listening for Events
+    // Registering event handlers and releasing them with their owner.
+    // Registers `handler` for events of `type` and returns a callable that
+    // removes the listener. The handler receives the DOM event. `capture`
+    // selects the capture phase; the default is false.
+    //
+    // Retain the returned callable on the controller or view that owns the
+    // listener so it is removed when that owner unloads.
     listen(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [

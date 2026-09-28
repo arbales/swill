@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Swill
-  module Data
+  module Distant
     # Authenticated state available to resolver implementations while an
     # operation is dispatched.
     class Context
@@ -42,14 +42,14 @@ module Swill
         Thread.current[EFFECTS_KEY]
       end
 
-      # Send authoritative fields or relationship membership with this response.
+      # Send authoritative fields or association membership with this response.
       def refresh(record, *fields)
         record_effect(:refresh, record, fields)
       end
 
-      # Keep cached membership until an observed/accessed relationship refreshes.
-      def invalidate(record, *relationships)
-        record_effect(:invalidate, record, relationships)
+      # Keep cached membership until an observed/accessed association refreshes.
+      def invalidate(record, *associations)
+        record_effect(:invalidate, record, associations)
       end
 
       private

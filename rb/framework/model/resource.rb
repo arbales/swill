@@ -13,10 +13,10 @@ module Swill
     #   the same object;
     # - persistence: `save`, `delete` and `reload` against the class's
     #   `endpoint`;
-    # - relationships declared with `has_many` and `has_one`, loaded from their
+    # - associations declared with `has_many` and `has_one`, loaded from their
     #   own URLs on first access.
     #
-    # A menu declares its endpoint and a relationship:
+    # A menu declares its endpoint and an association:
     #
     #     class Menu < Swill::Model::Resource
     #       endpoint "/api/menus"
@@ -28,15 +28,15 @@ module Swill
     # See [Models](rdoc-ref:doc/models.md).
     class Resource < Editable
       extend T::Sig
-      include Relationships
+      include Associations
       include Identity
 
-      # Creates an empty, unsaved resource with no relationship requests in
+      # Creates an empty, unsaved resource with no association requests in
       # flight.
       sig { void }
       def initialize
         super
-        @relationship_requests = T.let({}, T::Hash[String, T.untyped])
+        @association_requests = T.let({}, T::Hash[String, T.untyped])
       end
 
       # Returns the resource subclass whose `resource_type` is `type`, or nil
@@ -207,88 +207,88 @@ module Swill
         self
       end
 
-      # :section: Loading Relationships
-      # Relationships declared with `has_many` and `has_one`. Each is a value
+      # :section: Loading Associations
+      # Associations declared with `has_many` and `has_one`. Each is a value
       # property with `_loading`, `_loaded` and `_error` properties beside it;
       # reading the value of a saved resource starts its request.
 
-      # Returns a `Relationship` for each relationship this class declares,
+      # Returns an `Association` for each association this class declares,
       # in declaration order.
-      sig { returns(T::Array[Relationship]) }
-      def relationships
-        descriptors = T.let(self.class.model_relationships.values, T::Array[T::Hash[String, T.untyped]])
-        descriptors.map { |descriptor| Relationship.new(descriptor) }
+      sig { returns(T::Array[Association]) }
+      def associations
+        descriptors = T.let(self.class.model_associations.values, T::Array[T::Hash[String, T.untyped]])
+        descriptors.map { |descriptor| Association.new(descriptor) }
       end
 
-      # Returns the `Relationship` declared as `name`. Raises when the class
-      # declares no such relationship.
-      sig { params(name: String).returns(Relationship) }
-      def relationship(name)
-        descriptor = self.class.model_relationships[name]
-        raise "#{name} is not a relationship" unless descriptor
-        Relationship.new(T.cast(descriptor, T::Hash[String, T.untyped]))
+      # Returns the `Association` declared as `name`. Raises when the class
+      # declares no such association.
+      sig { params(name: String).returns(Association) }
+      def association(name)
+        descriptor = self.class.model_associations[name]
+        raise "#{name} is not an association" unless descriptor
+        Association.new(T.cast(descriptor, T::Hash[String, T.untyped]))
       end
 
-      # Returns whether the relationship `name` holds a loaded value.
+      # Returns whether the association `name` holds a loaded value.
       sig { params(name: String).returns(T::Boolean) }
-      def relationship_loaded?(name)
+      def association_loaded?(name)
         Swill::Runtime.read(self, "#{name}_loaded") == true
       end
 
-      # Sets the relationship `name` to `value` as though it had loaded:
+      # Sets the association `name` to `value` as though it had loaded:
       # marks it loaded and clears its error. No request is sent.
       sig { params(name: String, value: T.untyped).void }
-      def assign_relationship(name, value)
+      def assign_association(name, value)
         Swill::Runtime.write(self, name, value)
         Swill::Runtime.write(self, "#{name}_error", nil)
         Swill::Runtime.write(self, "#{name}_loaded", true)
       end
 
-      # Returns the value of the relationship `name`, requesting it from its
+      # Returns the value of the association `name`, requesting it from its
       # URL when it has not loaded. A request already in flight is awaited
       # rather than repeated. Raises when the request fails.
       sig { params(name: String).returns(T.untyped) }
-      async def load_relationship(name)
-        return Swill::Runtime.read(self, name) if relationship_loaded?(name)
-        pending = @relationship_requests[name]
+      async def load_association(name)
+        return Swill::Runtime.read(self, name) if association_loaded?(name)
+        pending = @association_requests[name]
         if pending
           await pending
           return Swill::Runtime.read(self, name)
         end
-        await reload_relationship(name)
+        await reload_association(name)
       end
 
       sig { params(name: String).void }
       def property_will_access(name) # :nodoc:
         super
         return if id == nil
-        return unless self.class.model_relationships[name]
-        return if relationship_loaded?(name)
+        return unless self.class.model_associations[name]
+        return if association_loaded?(name)
         return if Swill::Runtime.read(self, "#{name}_loading") == true
         return if Swill::Runtime.read(self, "#{name}_error") != nil
-        load_relationship_in_background(name)
+        load_association_in_background(name)
       end
 
-      # Loads the relationship `name` without awaiting it. A failure is
-      # recorded in the relationship's `_error` property and logged as a
-      # warning rather than raised. Reading an unloaded relationship of a
+      # Loads the association `name` without awaiting it. A failure is
+      # recorded in the association's `_error` property and logged as a
+      # warning rather than raised. Reading an unloaded association of a
       # saved resource calls this.
       sig { params(name: String).void }
-      async def load_relationship_in_background(name)
+      async def load_association_in_background(name)
         begin
-          await load_relationship(name)
+          await load_association(name)
         rescue => failure
           Swill::Runtime.warn("#{name} did not load: #{failure.message}")
         end
       end
 
-      # Requests the relationship `name` from its URL whether or not it has
+      # Requests the association `name` from its URL whether or not it has
       # loaded, and returns the value. `_loading` is true for the duration.
       # On failure the value is unchanged, `_error` holds the message, and
       # the error is raised. A request already in flight is awaited instead.
       sig { params(name: String).returns(T.untyped) }
-      async def reload_relationship(name)
-        pending = @relationship_requests[name]
+      async def reload_association(name)
+        pending = @association_requests[name]
         if pending
           await pending
           return Swill::Runtime.read(self, name)
@@ -298,18 +298,18 @@ module Swill
         Swill::Runtime.write(self, "#{name}_error", nil)
         request = T.let(nil, T.untyped)
         begin
-          descriptor = relationship(name)
+          descriptor = association(name)
           model_class = descriptor.model_class
           request = Wire.default.get_json(descriptor.url_for(self))
-          @relationship_requests[name] = request
+          @association_requests[name] = request
           payload = await request
           value = descriptor.many? ? model_class.parse_many(payload) : model_class.parse_one(payload)
-          assign_relationship(name, value)
+          assign_association(name, value)
         rescue => failure
           Swill::Runtime.write(self, "#{name}_error", failure.message)
           raise "#{failure.message}"
         ensure
-          @relationship_requests.delete(name) if @relationship_requests[name] == request
+          @association_requests.delete(name) if @association_requests[name] == request
           Swill::Runtime.write(self, "#{name}_loading", false)
         end
         Swill::Runtime.read(self, name)

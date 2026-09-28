@@ -5,8 +5,6 @@ require "sequel-privacy"
 require_relative "../../../rb/swill/server"
 
 module DataFixture
-  Swill::Data.install(Sequel::Model)
-
   DB = Sequel.sqlite
   DB.create_table(:users) do
     primary_key :id
@@ -52,5 +50,7 @@ end
 require_relative "server/models/user"
 require_relative "server/models/post"
 require_relative "server/models/comment"
-require_relative "server/operations/user"
-require_relative "server/operations/post"
+require_relative "server/models/post_lookup"
+require_relative "server/interfaces/user"
+require_relative "server/interfaces/post"
+require_relative "server/interfaces/comment"

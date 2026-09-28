@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Swill
-  module Data
+  module Distant
     # Runtime checks at the untrusted protocol boundary.
     module Validator
       module_function

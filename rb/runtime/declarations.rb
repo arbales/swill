@@ -83,7 +83,7 @@ module Swill
 
     # A real, typed method that hands its arguments to another: what gives a
     # macro a callable member. `load_ingredients` is nothing but
-    # `load_relationship("ingredients")`, so the macro declares it rather than
+    # `load_association("ingredients")`, so the macro declares it rather than
     # every application writing the wrapper and casting the untyped result.
     def forward(name, to:, with: [], parameters: {}, returns: nil, async: false)
       swill_forwards << {

@@ -4,7 +4,7 @@ require "digest"
 require "json"
 
 module Swill
-  module Data
+  module Distant
     # Deterministic protocol schema reflected from loaded Sequel models.
     class Schema
       SEQUEL_TYPES = {
@@ -15,18 +15,21 @@ module Swill
 
       attr_reader :models, :values
 
+      # Each loaded model that has a distant interface.
       def self.discover
-        candidates = ObjectSpace.each_object(Class).select do |klass|
-          klass.name&.match?(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/) &&
-            defined?(Sequel::Model) && klass < Sequel::Model &&
-            klass.respond_to?(:swill_client_model) && klass.swill_client_model
-        end
-        new(candidates.sort_by(&:name))
+        candidates = defined?(Sequel::Model) ? descendants(Sequel::Model) : []
+        new(candidates.select { |klass| klass.name && Interface.of(klass) }.sort_by(&:name))
       end
 
-      def initialize(model_classes)
-        @classes = model_classes.to_h { |klass| [klass.name, klass] }
-        @models = model_classes.to_h { |klass| [klass.name, model_schema(klass)] }.freeze
+      def self.descendants(klass)
+        klass.subclasses.flat_map { |subclass| [subclass, *descendants(subclass)] }
+      end
+
+      # +items+ are models, their interfaces, or a mix of both.
+      def initialize(items)
+        pairs = items.map { |item| Interface.pair(item) }
+        @classes = pairs.to_h { |klass, _| [klass.name, klass] }
+        @models = pairs.to_h { |klass, interface| [klass.name, model_schema(klass, interface)] }.freeze
         @values = discover_values.freeze
         validate_schema!
       end
@@ -53,19 +56,19 @@ module Swill
 
       private
 
-      def model_schema(klass)
+      def model_schema(klass, interface)
         if Array(klass.primary_key).length != 1
           raise ArgumentError, "#{klass.name} must have one primary key in protocol v1"
         end
 
-        declaration = klass.swill_client_model
+        declaration = interface.declaration
         {
           "name" => klass.name,
           "primary_key" => Array(klass.primary_key).map(&:to_s),
           "fields" => fields(klass, declaration),
-          "relationships" => relationships(klass, declaration),
+          "associations" => associations(klass, declaration),
           "writable_fields" => declaration.fetch("writable").sort,
-          "operations" => operations(klass)
+          "remote_methods" => remote_methods(klass, interface)
         }
       end
 
@@ -82,30 +85,30 @@ module Swill
         end
       end
 
-      def relationships(klass, declaration)
-        declaration.fetch("relationships").sort.to_h do |relationship|
-          name = relationship.to_sym
+      def associations(klass, declaration)
+        declaration.fetch("associations").sort.to_h do |association|
+          name = association.to_sym
           reflection = klass.association_reflections[name]
-          raise ArgumentError, "unknown client relationship #{klass.name}.#{relationship}" unless reflection
+          raise ArgumentError, "unknown client association #{klass.name}.#{association}" unless reflection
 
           target = reflection.associated_class.name
-          association = reflection[:type].to_s
-          unless %w[many_to_one one_to_one one_to_many many_to_many one_through_one].include?(association)
-            raise ArgumentError, "unsupported client association #{klass.name}.#{relationship}: #{association}"
+          type = reflection[:type].to_s
+          unless %w[many_to_one one_to_one one_to_many many_to_many one_through_one].include?(type)
+            raise ArgumentError, "unsupported client association #{klass.name}.#{association}: #{type}"
           end
 
           many = reflection.returns_array?
-          [relationship, {
-            "name" => relationship,
+          [association, {
+            "name" => association,
             "kind" => many ? "many" : "one",
-            "association" => association,
+            "association" => type,
             "model" => target
           }]
         end
       end
 
-      def operations(klass)
-        klass.swill_data_operations.sort.to_h do |name, declaration|
+      def remote_methods(klass, interface)
+        interface.remote_methods.sort.to_h do |name, declaration|
           callable = operation_callable(klass, declaration)
           signature = signature_for(klass, callable, declaration)
           return_type = declaration["returns"] || signature&.fetch(:returns, nil)
@@ -199,17 +202,17 @@ module Swill
             end
           end
 
-          client_names = model.fetch("fields").keys + model.fetch("relationships").keys + model.fetch("operations").keys
-          model.fetch("relationships").each_value do |relationship|
-            helper = "#{relationship['name']}_controller"
-            if relationship["kind"] == "many" && client_names.include?(helper)
-              raise ArgumentError, "relationship controller conflicts with client member #{model['name']}.#{helper}"
+          client_names = model.fetch("fields").keys + model.fetch("associations").keys + model.fetch("remote_methods").keys
+          model.fetch("associations").each_value do |association|
+            helper = "#{association['name']}_controller"
+            if association["kind"] == "many" && client_names.include?(helper)
+              raise ArgumentError, "association controller conflicts with client member #{model['name']}.#{helper}"
             end
-            unless models.key?(relationship.fetch("model"))
-              raise ArgumentError, "unknown related model #{relationship['model']}"
+            unless models.key?(association.fetch("model"))
+              raise ArgumentError, "unknown related model #{association['model']}"
             end
           end
-          model.fetch("operations").each_value do |operation|
+          model.fetch("remote_methods").each_value do |operation|
             unsupported = operation.fetch("parameters").reject do |parameter|
               %w[req opt rest keyreq key keyrest].include?(parameter["kind"])
             end
@@ -228,7 +231,7 @@ module Swill
       def discover_values
         found = {}
         pending = models.values.flat_map do |model|
-          model.fetch("operations").values.map { |operation| operation.fetch("returns") }
+          model.fetch("remote_methods").values.map { |operation| operation.fetch("returns") }
         end
         until pending.empty?
           type = pending.pop
@@ -260,12 +263,12 @@ module Swill
         projection.each do |item|
           if item.is_a?(Hash)
             item.each do |name, nested|
-              relationship = model.fetch("relationships")[name.to_s]
-              raise ArgumentError, "unknown projection #{model['name']}.#{name}" unless relationship
+              association = model.fetch("associations")[name.to_s]
+              raise ArgumentError, "unknown projection #{model['name']}.#{name}" unless association
 
-              validate_projection!(models.fetch(relationship.fetch("model")), nested)
+              validate_projection!(models.fetch(association.fetch("model")), nested)
             end
-          elsif !model.fetch("fields").key?(item.to_s) && !model.fetch("relationships").key?(item.to_s)
+          elsif !model.fetch("fields").key?(item.to_s) && !model.fetch("associations").key?(item.to_s)
             raise ArgumentError, "unknown projection #{model['name']}.#{item}"
           end
         end

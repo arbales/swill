@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Swill
-  module Data
+  module Distant
     # A typed, immutable operation result that is not a persistent model.
     class Value
       class << self

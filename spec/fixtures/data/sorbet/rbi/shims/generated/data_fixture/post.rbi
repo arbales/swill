@@ -16,7 +16,7 @@ module DataFixture
     def title; end
     sig { returns(T.nilable(DataFixture::User)) }
     def author; end
-    sig { returns(Swill::Model::RelationshipCollection[DataFixture::Comment]) }
+    sig { returns(Swill::Model::AssociationCollection[DataFixture::Comment]) }
     def comments; end
     sig { returns(Swill::ArrayController) }
     def comments_controller; end

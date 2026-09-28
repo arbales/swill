@@ -103,7 +103,7 @@ try {
   const javascriptRows = await rows("class-index");
   assert.equal(javascriptRows.at(-1), "Implementation", "the implementation follows the rest, closed");
   assert.ok(javascriptRows.includes("Swill.Object"));
-  assert.ok(!javascriptRows.includes("Swill::Launcher") && !javascriptRows.includes("Swill::Data::Schema"));
+  assert.ok(!javascriptRows.includes("Swill::Launcher") && !javascriptRows.includes("Swill::Distant::Schema"));
   await evaluate(`document.querySelector(".class-index .disclosure:not([hidden])").click()`);
   assert.ok((await rows("class-index")).includes("Swill::Launcher"), "the row opens");
   assert.equal(await evaluate(`document.querySelector(".class-index .disclosure:not([hidden])").getAttribute("aria-expanded")`), "true");

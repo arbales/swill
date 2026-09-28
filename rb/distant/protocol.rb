@@ -5,7 +5,7 @@ require "date"
 require "time"
 
 module Swill
-  module Data
+  module Distant
     # Binary envelope codec. References are tagged explicitly so ordinary
     # application hashes can contain any keys without becoming protocol data.
     module Protocol

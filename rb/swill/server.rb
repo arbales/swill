@@ -5,4 +5,4 @@ module Swill
 end
 
 require_relative "../compiler/version"
-require_relative "../data"
+require_relative "../distant"

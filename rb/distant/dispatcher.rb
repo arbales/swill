@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Swill
-  module Data
+  module Distant
     # Executes schema-declared messages under one authenticated connection.
     class Dispatcher
       class RemoteError < StandardError
@@ -120,7 +120,7 @@ module Swill
         model_schema = schema.models.fetch(model_name) do
           raise RemoteError.new("unknown_model", "unknown model #{model_name}")
         end
-        declaration = model_schema.fetch("operations").fetch(name) do
+        declaration = model_schema.fetch("remote_methods").fetch(name) do
           raise RemoteError.new("unknown_operation", "unknown operation #{model_name}.#{name}")
         end
         expected = { "QUERY" => "query", "RESOLVE" => "resolver", "COMMAND" => "command" }.fetch(type)
@@ -175,7 +175,7 @@ module Swill
         patches = message.fetch("demands").flat_map do |demand|
           klass = schema.model_class(demand.fetch("model"))
           model_schema = schema.models.fetch(klass.name)
-          allowed = model_schema.fetch("fields").keys + model_schema.fetch("relationships").keys
+          allowed = model_schema.fetch("fields").keys + model_schema.fetch("associations").keys
           fields = demand.fetch("fields").map(&:to_s)
           unknown = fields - allowed
           raise RemoteError.new("unknown_field", "unknown field #{unknown.first}") unless unknown.empty?
@@ -206,9 +206,9 @@ module Swill
         context.effects.group_by { |effect| [effect[:model], effect[:id]] }.each do |(model, id), effects|
           definition = schema.models.fetch(model)
           fields = definition.fetch("fields").keys
-          relationships = definition.fetch("relationships").keys
+          associations = definition.fetch("associations").keys
           effects.each do |effect|
-            allowed = effect[:kind] == :invalidate ? relationships : fields + relationships
+            allowed = effect[:kind] == :invalidate ? associations : fields + associations
             unknown = effect[:fields] - allowed
             unless unknown.empty?
               raise RemoteError.new("unknown_field", "unknown effect field #{model}.#{unknown.first}")
@@ -251,15 +251,15 @@ module Swill
       def patch(record, projection, generation, patches)
         fields = Array(projection).each_with_object({}) do |item, result|
           if item.is_a?(Hash)
-            item.each do |relationship, nested|
-              value = record.public_send(relationship)
-              result[relationship.to_s] = encode_value(value, nested, generation, patches)
+            item.each do |association, nested|
+              value = record.public_send(association)
+              result[association.to_s] = encode_value(value, nested, generation, patches)
             end
           else
             name = item.to_s
             value = record.public_send(item)
-            relationship = schema.models.dig(record.class.name, "relationships", name)
-            result[name] = relationship ? encode_value(value, [], generation, patches) : value
+            association = schema.models.dig(record.class.name, "associations", name)
+            result[name] = association ? encode_value(value, [], generation, patches) : value
           end
         end
         {

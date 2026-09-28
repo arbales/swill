@@ -8,15 +8,15 @@ module DataFixture
     def email; end
     sig { returns(String) }
     def name; end
-    sig { returns(Swill::Model::RelationshipCollection[DataFixture::Comment]) }
+    sig { returns(Swill::Model::AssociationCollection[DataFixture::Comment]) }
     def comments; end
     sig { returns(Swill::ArrayController) }
     def comments_controller; end
-    sig { returns(Swill::Model::RelationshipCollection[DataFixture::Post]) }
+    sig { returns(Swill::Model::AssociationCollection[DataFixture::Post]) }
     def posts; end
     sig { returns(Swill::ArrayController) }
     def posts_controller; end
-    sig { returns(Swill::Model::RelationshipCollection[DataFixture::Post]) }
+    sig { returns(Swill::Model::AssociationCollection[DataFixture::Post]) }
     def published_posts; end
     sig { returns(Swill::ArrayController) }
     def published_posts_controller; end

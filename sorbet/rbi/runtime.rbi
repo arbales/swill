@@ -212,12 +212,12 @@ class Swill::Object
   def self.await(value); end
 end
 
-module Swill::Model::Relationships
+module Swill::Model::Associations
   extend T::Helpers
   mixes_in_class_methods(ClassMethods)
 end
 
-module Swill::Model::Relationships::ClassMethods
+module Swill::Model::Associations::ClassMethods
   extend T::Sig
   extend T::Helpers
   extend T::Generic

@@ -1610,6 +1610,10 @@
     Swill__ElementPropertyBindingDestination: () => Swill__ElementPropertyBindingDestination,
     Swill__FieldBindingDestination: () => Swill__FieldBindingDestination,
     Swill__Launcher: () => Swill__Launcher,
+    Swill__Model__Association: () => Swill__Model__Association,
+    Swill__Model__AssociationCollection: () => Swill__Model__AssociationCollection,
+    Swill__Model__Associations: () => Swill__Model__Associations,
+    Swill__Model__Associations_ClassMethods: () => Swill__Model__Associations_ClassMethods,
     Swill__Model__Attributes: () => Swill__Model__Attributes,
     Swill__Model__Attributes_ClassMethods: () => Swill__Model__Attributes_ClassMethods,
     Swill__Model__Base: () => Swill__Model__Base,
@@ -1627,10 +1631,6 @@
     Swill__Model__Identity_ClassMethods: () => Swill__Model__Identity_ClassMethods,
     Swill__Model__JSONAPI: () => Swill__Model__JSONAPI,
     Swill__Model__PlainJSON: () => Swill__Model__PlainJSON,
-    Swill__Model__Relationship: () => Swill__Model__Relationship,
-    Swill__Model__RelationshipCollection: () => Swill__Model__RelationshipCollection,
-    Swill__Model__Relationships: () => Swill__Model__Relationships,
-    Swill__Model__Relationships_ClassMethods: () => Swill__Model__Relationships_ClassMethods,
     Swill__Model__Resource: () => Swill__Model__Resource,
     Swill__Model__ResultSet: () => Swill__Model__ResultSet,
     Swill__Model__Store: () => Swill__Model__Store,
@@ -1774,21 +1774,30 @@
       if (block) block(dom);
       return dom;
     }
+    // Creates a wrapper for `element`, preserving its existing view and owner.
     constructor(element) {
       super();
       this._element = element;
     }
+    // The element this wrapper reads and changes.
     get element() {
       return this._element;
     }
+    // :section: Managing Classes
+    // Reading and changing the element's CSS classes.
+    // Adds the class `name` and returns the wrapper. See `#remove_class`.
     addClass(name) {
       this._element.classList.add(name);
       return this;
     }
+    // Removes the class `name` and returns the wrapper. See `#add_class`.
     removeClass(name) {
       this._element.classList.remove(name);
       return this;
     }
+    // Adds the class `name` when `on` is true, removes it when false, and
+    // returns the wrapper. When `on` is omitted or nil, reverses the class's
+    // presence. See `#has_class?`.
     toggleClassWithOn(name, on) {
       if (on == null) {
         this._element.classList.toggle(name);
@@ -1798,10 +1807,16 @@
       ;
       return this;
     }
+    // Returns whether the element has the class `name`. See `#toggle_class`.
     hasClass(name) {
       return this._element.classList.contains(name);
     }
-    // HTML booleans are presence/absence; nil also removes the attribute.
+    // :section: Managing Attributes
+    // Reading and changing HTML, ARIA, and data attributes.
+    // Sets the attribute `name` from `value` and returns the wrapper.
+    // A nil or false value removes the attribute; true sets an empty string.
+    // Other values are converted to strings. See `#attribute`, `#aria`, and
+    // `#data` for reading attributes and writing prefixed values.
     attr(name, value) {
       if (value == null || value === false) {
         this._element.removeAttribute(name);
@@ -1814,81 +1829,132 @@
       ;
       return this;
     }
+    // Returns the attribute `name` as a string, or nil when absent.
+    // See `#attr` and `#has_attribute?`.
     attribute(name) {
       return this._element.getAttribute(name);
     }
+    // Returns whether the element has the attribute `name`, including an
+    // attribute whose value is an empty string. See `#attribute`.
     hasAttribute(name) {
       return this._element.hasAttribute(name);
     }
+    // Removes the attribute `name` and returns the wrapper.
+    // See `#attr` and `#has_attribute?`.
     removeAttr(name) {
       this._element.removeAttribute(name);
       return this;
     }
-    // ARIA and data values are strings: false means "false", not absence.
+    // Sets `aria-name` to the string form of `value` and returns the wrapper.
+    // A nil value removes the attribute; false is written as "false".
+    // Supply the suffix, such as "expanded", as `name`. See `#aria_value`.
     aria(name, value) {
       return this.attr(
         `aria-${name}`,
         value == null ? null : Runtime2.send(value, "to_s")
       );
     }
+    // Sets `data-name` to the string form of `value` and returns the wrapper.
+    // A nil value removes the attribute; false is written as "false".
+    // Supply the suffix, such as "value", as `name`. See `#data_value`.
     data(name, value) {
       return this.attr(
         `data-${name}`,
         value == null ? null : Runtime2.send(value, "to_s")
       );
     }
+    // Returns the value of `aria-name`, or nil when absent. `name` is the
+    // suffix without "aria-". See `#aria`.
     ariaValue(name) {
       return this.attribute(`aria-${name}`);
     }
+    // Returns the value of `data-name`, or nil when absent. `name` is the
+    // suffix without "data-". See `#data`.
     dataValue(name) {
       return this.attribute(`data-${name}`);
     }
-    // Properties retain their values and types, unlike serialized attributes.
+    // :section: Managing Properties
+    // Reading and assigning the element's DOM properties.
+    // Assigns `value` to the DOM property `name` and returns the wrapper.
+    // Uses the property's JavaScript name, such as "readOnly". The DOM
+    // property's setter determines how the value is stored.
+    // See `#property_value`.
     prop(name, value) {
       this._element[name] = value;
       return this;
     }
+    // Returns the DOM property `name` using its JavaScript spelling.
+    // An absent property returns JavaScript's undefined value. See `#prop`.
     propertyValue(name) {
       return this._element[name];
     }
-    // Text is always literal. Markup belongs in templates.
+    // :section: Managing Content and Visibility
+    // Updating text, child nodes, and the element's hidden state.
+    // Replaces the element's contents with the string form of `value` and
+    // returns the wrapper. Text is displayed literally; nil clears the
+    // contents. See `#text_content` and `#empty`.
     text(value) {
       this._element.textContent = Runtime2.send(value, "to_s");
       return this;
     }
+    // Returns the element's text content, or an empty string when it has
+    // none. See `#text`.
     textContent() {
       return this._element.textContent;
     }
+    // Sets the element's hidden property to true and returns the wrapper.
+    // See `#show`.
     hide() {
       this._element.hidden = true;
       return this;
     }
+    // Sets the element's hidden property to false and returns the wrapper.
+    // See `#hide`.
     show() {
       this._element.hidden = false;
       return this;
     }
+    // Removes all child nodes and returns the wrapper. See `#append`.
     empty() {
       this._element.replaceChildren();
       return this;
     }
+    // Appends `node` as the last child and returns the wrapper. An existing
+    // node moves from its current parent. See `#empty`.
     append(node) {
       this._element.appendChild(node);
       return this;
     }
+    // Removes the element from its parent and returns the wrapper.
+    // An element with no parent remains unchanged.
     remove() {
       this._element.remove();
       return this;
     }
+    // :section: Finding Elements
+    // Looking up descendants by CSS selector.
+    // Returns a new wrapper for the first descendant matching `selector`,
+    // or nil when none matches. See `#find!`.
     find(selector) {
       let found = this._element.querySelector(selector);
       return found ? _Swill__Swell.$index(found) : null;
     }
+    // Returns a new wrapper for the first descendant matching `selector`.
+    // Raises "No element matching ..." when none matches; use `#find` when
+    // the descendant may be absent.
     findBang(selector) {
       let found = this.find(selector);
       if (!found) throw new Error(`No element matching ${selector}`);
       return found;
     }
-    // Retain the returned disposer on the object that owns the listener.
+    // :section: Listening for Events
+    // Registering event handlers and releasing them with their owner.
+    // Registers `handler` for events of `type` and returns a callable that
+    // removes the listener. The handler receives the DOM event. `capture`
+    // selects the capture phase; the default is false.
+    //
+    // Retain the returned callable on the controller or view that owns the
+    // listener so it is removed when that owner unloads.
     listen(...__swill_arguments) {
       let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
         positional: [
@@ -5783,19 +5849,19 @@
   };
   var Swill__Model__Editable = class extends Swill__Model__Base {
   };
-  function Swill__Model__Relationships(Superclass) {
-    class Swill__Model__Relationships_Layer extends Superclass {
+  function Swill__Model__Associations(Superclass) {
+    class Swill__Model__Associations_Layer extends Superclass {
     }
-    return Swill__Model__Relationships_Layer;
+    return Swill__Model__Associations_Layer;
   }
-  function Swill__Model__Relationships_ClassMethods(Superclass) {
-    class Swill__Model__Relationships_ClassMethods_Layer extends Object {
-      modelRelationships() {
-        return Runtime2.inheritableRegistry(this, "modelRelationships", "hash");
+  function Swill__Model__Associations_ClassMethods(Superclass) {
+    class Swill__Model__Associations_ClassMethods_Layer extends Object {
+      modelAssociations() {
+        return Runtime2.inheritableRegistry(this, "modelAssociations", "hash");
       }
     }
-    Object.setPrototypeOf(Swill__Model__Relationships_ClassMethods_Layer.prototype, Superclass);
-    return Swill__Model__Relationships_ClassMethods_Layer.prototype;
+    Object.setPrototypeOf(Swill__Model__Associations_ClassMethods_Layer.prototype, Superclass);
+    return Swill__Model__Associations_ClassMethods_Layer.prototype;
   }
   var Swill__Model__Store = class extends Swill__Object {
     constructor() {
@@ -5902,40 +5968,40 @@
       return this.records[index];
     }
   };
-  var Swill__Model__RelationshipCollection = class extends Swill__Model__Collection {
+  var Swill__Model__AssociationCollection = class extends Swill__Model__Collection {
     isStale() {
       return this.stale;
     }
-    attachRelationship(owner, name) {
-      this._relationship_owner = owner;
-      this._relationship_name = name;
-      return this._relationship_name;
+    attachAssociation(owner, name) {
+      this._association_owner = owner;
+      this._association_name = name;
+      return this._association_name;
     }
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
-      let owner = this._relationship_owner;
+      let owner = this._association_owner;
       if (Runtime2.isTruthy(owner && name === "records")) {
-        return owner.propertyWillAccess(this._relationship_name);
+        return owner.propertyWillAccess(this._association_name);
       }
     }
     constructor() {
       super();
       this._applying_membership = Runtime2.cast(false, "T::Boolean");
-      this._relationship_owner = Runtime2.cast(
+      this._association_owner = Runtime2.cast(
         null,
         "T.nilable(Swill::Model::DistantObject)"
       );
-      this._relationship_name = Runtime2.cast("", "String");
+      this._association_name = Runtime2.cast("", "String");
       Object.freeze(this.records);
     }
     replace(_records) {
       return (() => {
-        throw new Error("Relationship membership is read-only; use a server operation");
+        throw new Error("Association membership is read-only; use a server operation");
       })();
     }
     coercePropertyValue(name, value, previous) {
       if (Runtime2.isTruthy(name === "records" && !this._applying_membership)) {
-        throw new Error("Relationship membership is read-only; use a server operation");
+        throw new Error("Association membership is read-only; use a server operation");
       }
       ;
       return super.coercePropertyValue(name, value, previous);
@@ -6520,7 +6586,7 @@
       isFieldLoaded(name) {
         return this.dataFieldLoaded(name);
       }
-      // Cached data remains readable while an invalidated relationship refreshes.
+      // Cached data remains readable while an invalidated association refreshes.
       isFieldStale(name) {
         return this.dataFieldStale(name);
       }
@@ -6548,7 +6614,7 @@
     return Swill__Model__DistantData_ClassMethods_Layer.prototype;
   }
   var Swill__Model__DistantObject = class _Swill__Model__DistantObject extends Swill__Model__Editable {
-    // Gives each to-many relationship its stable collection.
+    // Gives each to-many association its stable collection.
     constructor() {
       super();
       this._data_field_states = Runtime2.cast(
@@ -6559,35 +6625,35 @@
         null,
         "T.nilable(Swill::Model::DistantObject)"
       );
-      this._applying_relationship = Runtime2.cast(false, "T::Boolean");
+      this._applying_association = Runtime2.cast(false, "T::Boolean");
       this._data_controllers = Runtime2.cast(
         {},
         "T::Hash[String, ArrayController]"
       );
       this._data_collections = Runtime2.cast(
         {},
-        "T::Hash[String, RelationshipCollection[T.untyped]]"
+        "T::Hash[String, AssociationCollection[T.untyped]]"
       );
       Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
         if (descriptor.kind !== "many") return;
-        let collection = new Swill__Model__RelationshipCollection();
-        collection.attachRelationship(this, name);
+        let collection = new Swill__Model__AssociationCollection();
+        collection.attachAssociation(this, name);
         this._data_collections[name] = collection;
-        return this.writeDataRelationship(name, collection);
+        return this.writeDataAssociation(name, collection);
       });
     }
     // Shared presentation is opt-in; constructing the controller does not load.
-    relationshipController(name) {
+    associationController(name) {
       let existing = this._data_controllers[name];
       if (existing) return existing;
       let collection = this._data_collections[name];
-      if (!collection) throw new Error(`Unknown to-many relationship ${name}`);
+      if (!collection) throw new Error(`Unknown to-many association ${name}`);
       let controller = new Swill__ArrayController();
       controller.content = collection;
       this._data_controllers[name] = controller;
       return controller;
     }
-    releaseRelationshipControllers() {
+    releaseAssociationControllers() {
       Object.entries(this._data_controllers).forEach(([_name, controller]) => {
         Runtime2.write(controller, "content", null);
         return Runtime2.send(controller, "dealloc");
@@ -6596,27 +6662,27 @@
       return this._data_controllers;
     }
     disconnect() {
-      this.releaseRelationshipControllers();
+      this.releaseAssociationControllers();
       return super.disconnect();
     }
     coercePropertyValue(name, value, previous) {
       let descriptor = this.constructor.dataFields()[name];
       if (Runtime2.isTruthy(Runtime2.logicalAnd(
         Runtime2.logicalAnd(descriptor, () => descriptor.kind !== "field"),
-        () => !this._applying_relationship
+        () => !this._applying_association
       ))) {
-        throw new Error(`Relationship ${name} is read-only; use a server operation`);
+        throw new Error(`Association ${name} is read-only; use a server operation`);
       }
       ;
       return super.coercePropertyValue(name, value, previous);
     }
     // Internal writes still use the ordinary observation machinery.
-    writeDataRelationship(name, value) {
-      this._applying_relationship = true;
+    writeDataAssociation(name, value) {
+      this._applying_association = true;
       try {
         return Runtime2.write(this, name, value);
       } finally {
-        this._applying_relationship = false;
+        this._applying_association = false;
       }
     }
     // Schedules hydration when a declared member is unknown.
@@ -6843,13 +6909,13 @@
       ))) {
         this.applyAttributes({ [name]: value });
       } else {
-        this.writeDataRelationship(name, value);
+        this.writeDataAssociation(name, value);
       }
       ;
       return this.syncDataCollection(name);
     }
     resetDataFields() {
-      this.releaseRelationshipControllers();
+      this.releaseAssociationControllers();
       this._data_field_states = {};
       return Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
         if (descriptor.kind === "many") this.syncDataCollection(name);
@@ -6896,7 +6962,7 @@
       );
     }
   };
-  var Swill__Model__Relationship = class extends Swill__Object {
+  var Swill__Model__Association = class extends Swill__Object {
     constructor(descriptor) {
       super();
       this._name = Runtime2.cast(descriptor.name, "String");
@@ -6914,7 +6980,7 @@
     isMany() {
       return this._kind === "many";
     }
-    // The declared class, by its installed name: a relationship may name a
+    // The declared class, by its installed name: an association may name a
     // class defined later, so the descriptor carries the name.
     modelClass() {
       return Runtime2.resolve(this._type);
@@ -7054,28 +7120,28 @@
       let instance = this.pooled(resource);
       let linkages = resource.relationships;
       if (!Runtime2.isTruthy(instance && linkages)) return;
-      return instance.relationships().forEach((relationship) => {
+      return instance.associations().forEach((association) => {
         let related, related_one;
         let linkage = Runtime2.logicalOr(
-          linkages[relationship.key],
-          () => linkages[relationship.name]
+          linkages[association.key],
+          () => linkages[association.name]
         );
         if (!Runtime2.isTruthy(linkage)) return;
         let data = linkage.data;
-        if (relationship.isMany()) {
+        if (association.isMany()) {
           if (!Array.isArray(data)) return;
           related = this.resourcesIn(data).map((item) => this.pooled(item));
           if (related.includes(null)) return;
-          return instance.assignRelationship(relationship.name, related);
+          return instance.assignAssociation(association.name, related);
         } else if (data == null) {
-          return instance.assignRelationship(relationship.name, null);
+          return instance.assignAssociation(association.name, null);
         } else if (!Array.isArray(data)) {
           related_one = this.pooled(Runtime2.cast(
             data,
             "T::Hash[String, T.untyped]"
           ));
           if (related_one) {
-            return instance.assignRelationship(relationship.name, related_one);
+            return instance.assignAssociation(association.name, related_one);
           }
         }
       });
@@ -7112,11 +7178,11 @@
     }
   };
   var Swill__Model__Resource = class extends Swill__Model__Editable {
-    // Creates an empty, unsaved resource with no relationship requests in
+    // Creates an empty, unsaved resource with no association requests in
     // flight.
     constructor() {
       super();
-      this._relationship_requests = Runtime2.cast(
+      this._association_requests = Runtime2.cast(
         {},
         "T::Hash[String, T.untyped]"
       );
@@ -7221,71 +7287,71 @@
       this.markCleanBang();
       return this;
     }
-    // :section: Loading Relationships
-    // Relationships declared with `has_many` and `has_one`. Each is a value
+    // :section: Loading Associations
+    // Associations declared with `has_many` and `has_one`. Each is a value
     // property with `_loading`, `_loaded` and `_error` properties beside it;
     // reading the value of a saved resource starts its request.
-    // Returns a `Relationship` for each relationship this class declares,
+    // Returns an `Association` for each association this class declares,
     // in declaration order.
-    relationships() {
+    associations() {
       let descriptors = Runtime2.cast(
-        Object.values(this.constructor.modelRelationships()),
+        Object.values(this.constructor.modelAssociations()),
         "T::Array[T::Hash[String, T.untyped]]"
       );
-      return descriptors.map((descriptor) => new Swill__Model__Relationship(descriptor));
+      return descriptors.map((descriptor) => new Swill__Model__Association(descriptor));
     }
-    // Returns the `Relationship` declared as `name`. Raises when the class
-    // declares no such relationship.
-    relationship(name) {
-      let descriptor = this.constructor.modelRelationships()[name];
+    // Returns the `Association` declared as `name`. Raises when the class
+    // declares no such association.
+    association(name) {
+      let descriptor = this.constructor.modelAssociations()[name];
       if (!Runtime2.isTruthy(descriptor)) {
-        throw new Error(`${name} is not a relationship`);
+        throw new Error(`${name} is not an association`);
       }
       ;
-      return new Swill__Model__Relationship(Runtime2.cast(
+      return new Swill__Model__Association(Runtime2.cast(
         descriptor,
         "T::Hash[String, T.untyped]"
       ));
     }
-    // Returns whether the relationship `name` holds a loaded value.
-    isRelationshipLoaded(name) {
+    // Returns whether the association `name` holds a loaded value.
+    isAssociationLoaded(name) {
       return Runtime2.read(this, `${name}_loaded`) === true;
     }
-    // Sets the relationship `name` to `value` as though it had loaded:
+    // Sets the association `name` to `value` as though it had loaded:
     // marks it loaded and clears its error. No request is sent.
-    assignRelationship(name, value) {
+    assignAssociation(name, value) {
       Runtime2.write(this, name, value);
       Runtime2.write(this, `${name}_error`, null);
       return Runtime2.write(this, `${name}_loaded`, true);
     }
-    async loadRelationship(name) {
-      if (this.isRelationshipLoaded(name)) return Runtime2.read(this, name);
-      let pending2 = this._relationship_requests[name];
+    async loadAssociation(name) {
+      if (this.isAssociationLoaded(name)) return Runtime2.read(this, name);
+      let pending2 = this._association_requests[name];
       if (Runtime2.isTruthy(pending2)) {
         await pending2;
         return Runtime2.read(this, name);
       }
       ;
-      return await this.reloadRelationship(name);
+      return await this.reloadAssociation(name);
     }
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
       if (this.id == null) return;
-      if (!Runtime2.isTruthy(this.constructor.modelRelationships()[name])) return;
-      if (this.isRelationshipLoaded(name)) return;
+      if (!Runtime2.isTruthy(this.constructor.modelAssociations()[name])) return;
+      if (this.isAssociationLoaded(name)) return;
       if (Runtime2.read(this, `${name}_loading`) === true) return;
       if (Runtime2.read(this, `${name}_error`) != null) return;
-      return this.loadRelationshipInBackground(name);
+      return this.loadAssociationInBackground(name);
     }
-    async loadRelationshipInBackground(name) {
+    async loadAssociationInBackground(name) {
       try {
-        return await this.loadRelationship(name);
+        return await this.loadAssociation(name);
       } catch (failure) {
         return Runtime2.warn(`${name} did not load: ${failure.message}`);
       }
     }
-    async reloadRelationship(name) {
-      let pending2 = this._relationship_requests[name];
+    async reloadAssociation(name) {
+      let pending2 = this._association_requests[name];
       if (Runtime2.isTruthy(pending2)) {
         await pending2;
         return Runtime2.read(this, name);
@@ -7295,19 +7361,19 @@
       Runtime2.write(this, `${name}_error`, null);
       let request = null;
       try {
-        let descriptor = this.relationship(name);
+        let descriptor = this.association(name);
         let model_class = descriptor.modelClass();
         request = Swill__Wire.default().getJSON(descriptor.urlFor(this));
-        this._relationship_requests[name] = request;
+        this._association_requests[name] = request;
         let payload = await request;
         let value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
-        this.assignRelationship(name, value);
+        this.assignAssociation(name, value);
       } catch (failure) {
         Runtime2.write(this, `${name}_error`, failure.message);
         throw new Error(`${failure.message}`);
       } finally {
-        if (Runtime2.isEqual(this._relationship_requests[name], request)) {
-          Runtime2.deleteKey(this._relationship_requests, name);
+        if (Runtime2.isEqual(this._association_requests[name], request)) {
+          Runtime2.deleteKey(this._association_requests, name);
         }
         ;
         Runtime2.write(this, `${name}_loading`, false);
@@ -7590,9 +7656,9 @@
           }
         }
       },
-      "Swill::Model::Relationships": {
-        factory: Swill__Model__Relationships,
-        classFactory: Swill__Model__Relationships_ClassMethods,
+      "Swill::Model::Associations": {
+        factory: Swill__Model__Associations,
+        classFactory: Swill__Model__Associations_ClassMethods,
         methods: {}
       },
       "Swill::Model::Identity": {
@@ -9680,8 +9746,8 @@
           }
         }
       },
-      "Swill::Model::RelationshipCollection": {
-        constructor: Swill__Model__RelationshipCollection,
+      "Swill::Model::AssociationCollection": {
+        constructor: Swill__Model__AssociationCollection,
         properties: {
           "records": {
             type: "T::Array[T.untyped]",
@@ -9704,9 +9770,9 @@
             "arity": 0,
             "js": "isStale"
           },
-          "attach_relationship": {
+          "attach_association": {
             "arity": 2,
-            "js": "attachRelationship"
+            "js": "attachAssociation"
           },
           "property_will_access": {
             "arity": 1,
@@ -9889,13 +9955,13 @@
           "initialize": {
             "arity": 0
           },
-          "relationship_controller": {
+          "association_controller": {
             "arity": 1,
-            "js": "relationshipController"
+            "js": "associationController"
           },
-          "release_relationship_controllers": {
+          "release_association_controllers": {
             "arity": 0,
-            "js": "releaseRelationshipControllers"
+            "js": "releaseAssociationControllers"
           },
           "disconnect": {
             "arity": 0
@@ -9904,9 +9970,9 @@
             "arity": 3,
             "js": "coercePropertyValue"
           },
-          "write_data_relationship": {
+          "write_data_association": {
             "arity": 2,
-            "js": "writeDataRelationship"
+            "js": "writeDataAssociation"
           },
           "property_will_access": {
             "arity": 1,
@@ -10008,8 +10074,8 @@
           }
         }
       },
-      "Swill::Model::Relationship": {
-        constructor: Swill__Model__Relationship,
+      "Swill::Model::Association": {
+        constructor: Swill__Model__Association,
         properties: {},
         methods: {
           "initialize": {
@@ -10096,7 +10162,7 @@
       },
       "Swill::Model::Resource": {
         constructor: Swill__Model__Resource,
-        mixins: [Swill__Model__Relationships, Swill__Model__Identity],
+        mixins: [Swill__Model__Associations, Swill__Model__Identity],
         properties: {},
         methods: {
           "initialize": {
@@ -10117,35 +10183,35 @@
           "reload": {
             "arity": 0
           },
-          "relationships": {
+          "associations": {
             "arity": 0
           },
-          "relationship": {
+          "association": {
             "arity": 1
           },
-          "relationship_loaded?": {
+          "association_loaded?": {
             "arity": 1,
-            "js": "isRelationshipLoaded"
+            "js": "isAssociationLoaded"
           },
-          "assign_relationship": {
+          "assign_association": {
             "arity": 2,
-            "js": "assignRelationship"
+            "js": "assignAssociation"
           },
-          "load_relationship": {
+          "load_association": {
             "arity": 1,
-            "js": "loadRelationship"
+            "js": "loadAssociation"
           },
           "property_will_access": {
             "arity": 1,
             "js": "propertyWillAccess"
           },
-          "load_relationship_in_background": {
+          "load_association_in_background": {
             "arity": 1,
-            "js": "loadRelationshipInBackground"
+            "js": "loadAssociationInBackground"
           },
-          "reload_relationship": {
+          "reload_association": {
             "arity": 1,
-            "js": "reloadRelationship"
+            "js": "reloadAssociation"
           }
         }
       }
