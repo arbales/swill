@@ -141,12 +141,18 @@ module Swill
         # how a reflected declaration finds the source to compile.
         def index_blocks(node, file)
           return unless node.respond_to?(:type)
-          if node.type == :block
-            source = block_body_source(node)
-            @blocks[[file, node.loc.expression.line]] = source
-            @blocks[[file, node.loc.begin.line]] = source if node.loc.respond_to?(:begin) && node.loc.begin
-          end
+          # Inner blocks first, so a line they begin on stays theirs.
           node.children.each { |child| index_blocks(child, file) }
+          return unless node.type == :block
+          source = block_body_source(node)
+          # Proc#source_location reports the line of `do`, which for a call
+          # wrapped over several lines is not the line the call begins on,
+          # so every line of the block is keyed to it unless an inner block
+          # already claimed the line.
+          range = node.loc.expression
+          first = range.line
+          last = range.source_buffer.line_for_position(range.end_pos)
+          (first..last).each { |line| @blocks[[file, line]] ||= source }
         end
 
         def namespace_declaration?(node)
