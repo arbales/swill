@@ -49,7 +49,7 @@ module Swill
         return
       end
       Application.shared.release_first_responder(@element) if Application.running?
-      @subviews.dup.each(&:unload)
+      @subviews.dup.each(&:unload) # FIXME: Why do we need to dup this?
       dealloc
       remove_from_superview
       @element.__swill_view__ = nil
@@ -194,19 +194,17 @@ module Swill
       element.classList.toggle(name, on)
     end
 
-    # Marks `element` selected or not, as the `selected` class and the
-    # `aria-selected` attribute.
+    # Marks `element` selected or not, as the `selected` class.
     sig { params(element: Element, on: T::Boolean).void }
     def mark_selected(element, on)
       mark(element, "selected", on)
-      element.setAttribute("aria-selected", on ? "true" : "false")
     end
 
     # Scrolls the nearest scrolling ancestor just far enough to bring
     # `element` into view.
     sig { params(element: Element).void }
     def reveal(element)
-      element.scrollIntoView({block: "nearest"})
+      element.scrollIntoView({ block: "nearest" })
     end
 
     # Clears the browser's text selection, as before a shift-click extends
@@ -245,11 +243,14 @@ module Swill
     end
 
     # Returns this view's element when it matches `focusable_selector`, else
-    # its first descendant that does, or nil when nothing within it is
-    # focusable.
+    # its default button, the descendant marked with the `default` class, as
+    # a window's default button takes the keyboard first, else its first
+    # focusable descendant. Returns nil when nothing within it is focusable.
     sig { returns(T.nilable(Element)) }
     def first_focusable_element
-      @element.matches(focusable_selector) ? @element : @element.querySelector(focusable_selector)
+      return @element if @element.matches(focusable_selector)
+
+      @element.querySelector(".default") || @element.querySelector(focusable_selector)
     end
 
     # Focuses `first_focusable_element` without scrolling, if there is one.
@@ -281,9 +282,30 @@ module Swill
 
     # Focuses `first_focusable_element` and returns true.
     sig { override.returns(T::Boolean) }
-    def become_first_responder
+    def become_first_responder # rubocop:disable Naming/PredicateMethod
       focus_element
       true
+    end
+
+    # :section: Accessibility
+    # What assistive technology is told about the view, as NSAccessibility
+    # tells it about an NSView.
+
+    # Writes the view's ARIA roles, states and labels onto its element and
+    # the parts it draws. This is the one place Swill writes them, and it
+    # never reads them back: behavior and styles follow the view's own state
+    # and classes, so ARIA is decoration for screen readers alone.
+    #
+    # The default labels a window by its title bar. A subclass overrides it,
+    # calling `super`, and calls it again whenever what it describes changes;
+    # a window's view is updated as the window opens.
+    sig { void }
+    def update_accessibility
+      header = @element.firstElementChild
+      return unless header && header.classList.contains("window-title")
+
+      identifier = header.firstElementChild&.getAttribute("id")
+      @element.setAttribute("aria-labelledby", identifier) if identifier
     end
   end
 end

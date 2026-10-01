@@ -6,8 +6,7 @@ module Swill
   # supplies a value and label. Clicking a button or selecting with the keyboard
   # updates `value` and dispatches input and change events.
   #
-  #     <div klass="Swill::Control::Segmented" bind="selected_person"
-  #          aria-label="Person"></div>
+  #     <div klass="Swill::Control::Segmented" bind="selected_person"></div>
   #
   # See [Controls](rdoc-ref:doc/controls.md) for options, bindings, and keyboard
   # behavior.
@@ -37,11 +36,11 @@ module Swill
     outlet :segment_template, type: HTMLTemplateElement
 
     # Creates the control, loads the segmented template, and listens for clicks.
-    # Sets the root's class to include "segmented" and its role to "radiogroup".
+    # Sets the root's class to include "segmented".
     sig { params(element: Element).void }
     def initialize(element)
       super
-      Swell[element].add_class("segmented").attr("role", "radiogroup")
+      Swell[element].add_class("segmented")
       load_template("segmented")
       handler = ->(event) { segment_clicked(event) }
       retain(Swell[element].listen("click", handler))
@@ -89,9 +88,9 @@ module Swill
       focus_selection if focused
     end
 
-    # Updates each button's checked state, disabled state, and tabindex.
-    # The selected button, or the first when no option matches, gets tabindex
-    # zero when enabled. Updates aria-disabled on the root.
+    # Updates each button's checked state, as the `checked` class, its
+    # disabled state, and its tabindex. The selected button, or the first when
+    # no option matches, gets tabindex zero when enabled.
     sig { void }
     def sync_selection
       buttons = T.must(segments).element.children
@@ -101,12 +100,26 @@ module Swill
         button = T.must(buttons[index])
         dom = Swell[button]
         checked = dom.data_value("value") == value
-        dom.aria("checked", checked)
+        dom.toggle_class("checked", checked)
         button.setAttribute("tabindex", !disabled && (checked || (!selected && index == 0)) ? "0" : "-1")
         button.disabled = disabled
         index += 1
       end
-      Swell[@element].aria("disabled", disabled)
+      update_accessibility
+    end
+
+    # A radio group of radio buttons, each checked or not.
+    sig { override.void }
+    def update_accessibility
+      super
+      Swell[@element].attr("role", "radiogroup").aria("disabled", disabled)
+      buttons = T.must(segments).element.children
+      index = 0
+      while index < buttons.length
+        button = T.must(buttons[index])
+        Swell[button].attr("role", "radio").aria("checked", button.classList.contains("checked"))
+        index += 1
+      end
     end
 
     # :section: Choosing and Focusing
@@ -116,64 +129,69 @@ module Swill
     # Clicks outside a radio button leave the value unchanged. See `#choose`.
     sig { params(event: Event).void }
     def segment_clicked(event)
-      button = event.target.closest("[role='radio']")
+      button = event.target.closest(".segmented-option")
       choose(T.must(Swell[button].data_value("value"))) if button && @element.contains(button)
     end
 
-    # Left and Up choose the previous option, Right and Down the next,
-    # wrapping at either end. Each moves focus to the chosen button. A
-    # disabled control ignores them. Enter and Space stay with the focused
-    # native button.
+    # Left and Right move focus to the previous and next segment, wrapping at
+    # either end, without choosing it; Space and Enter press the focused
+    # native button, which chooses. Up and Down are not the control's, and
+    # go up the responder chain. A disabled control ignores them.
     sig { override.params(event: KeyboardEvent).void }
     def move_left(event)
-      choose_adjacent(event, -1)
+      focus_adjacent(event, -1)
     end
 
-    # Up chooses the previous option, as Left does.
-    sig { override.params(event: KeyboardEvent).void }
-    def move_up(event)
-      choose_adjacent(event, -1)
-    end
-
-    # Right chooses the next option.
+    # Right moves focus to the next segment.
     sig { override.params(event: KeyboardEvent).void }
     def move_right(event)
-      choose_adjacent(event, 1)
+      focus_adjacent(event, 1)
     end
 
-    # Down chooses the next option, as Right does.
-    sig { override.params(event: KeyboardEvent).void }
-    def move_down(event)
-      choose_adjacent(event, 1)
-    end
-
-    # Home chooses the first option.
+    # Home moves focus to the first segment.
     sig { override.params(event: KeyboardEvent).void }
     def move_to_beginning_of_document(event)
-      choose_option_at(event, 0)
+      focus_segment_at(event, 0)
     end
 
-    # End chooses the last option.
+    # End moves focus to the last segment.
     sig { override.params(event: KeyboardEvent).void }
     def move_to_end_of_document(event)
-      choose_option_at(event, options.length - 1)
+      focus_segment_at(event, T.must(segments).element.children.length - 1)
     end
 
-    # Chooses the option +delta+ places from the current one, wrapping.
+    # Moves focus +delta+ segments from the focused one, or from the
+    # chosen one when focus is elsewhere, wrapping.
     sig { params(event: KeyboardEvent, delta: Integer).void }
-    def choose_adjacent(event, delta) # :nodoc:
-      return if disabled || options.empty?
+    def focus_adjacent(event, delta) # :nodoc:
+      buttons = T.must(segments).element.children
+      return if disabled || buttons.length == 0
+      active = @element.ownerDocument.activeElement
+      current = T.let(-1, Integer)
+      chosen = T.let(0, Integer)
       index = 0
-      options.each_with_index { |option, position| index = position if option["value"].to_s == value }
-      choose_option_at(event, (index + delta) % options.length)
+      while index < buttons.length
+        button = T.must(buttons[index])
+        current = index if button == active
+        chosen = index if button.classList.contains("checked")
+        index += 1
+      end
+      focus_segment_at(event, ((current < 0 ? chosen : current) + delta) % buttons.length)
     end
 
+    # Focuses the segment at +index+ and gives it the control's tab stop,
+    # leaving the choice alone.
     sig { params(event: KeyboardEvent, index: Integer).void }
-    def choose_option_at(event, index) # :nodoc:
-      return if disabled || options.empty?
+    def focus_segment_at(event, index) # :nodoc:
+      buttons = T.must(segments).element.children
+      return if disabled || buttons.length == 0
       event.preventDefault
-      choose(T.must(options[index])["value"].to_s)
-      focus_selection
+      position = 0
+      while position < buttons.length
+        T.must(buttons[position]).setAttribute("tabindex", position == index ? "0" : "-1")
+        position += 1
+      end
+      T.must(buttons[index]).focus({preventScroll: true})
     end
 
     # Returns the button with tabindex zero, or nil when no button has a tab

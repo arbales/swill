@@ -57,6 +57,11 @@ module Swill
     # default is the controller itself.
     property :represented_object, type: T.untyped, default: nil
 
+    # The title of the window this controller is the content of, shown in its
+    # title bar where the theme draws one. Nil leaves the title bar empty. A
+    # subclass sets it, binds it, or declares it computed.
+    property :title, type: T.nilable(String), default: nil
+
     # Returns the property under which `bind` paths in this region resolve,
     # or nil to resolve them against the controller itself. A path beginning
     # with `@` in markup ignores the root. The default is nil; override it to
@@ -133,8 +138,9 @@ module Swill
     # Returns false, focusing nothing, when the current first responder
     # refuses to resign.
     sig { override.returns(T::Boolean) }
-    def become_first_responder
+    def become_first_responder # rubocop:disable Naming/PredicateMethod
       return false unless super
+
       @view.focus_element
       true
     end
@@ -143,8 +149,9 @@ module Swill
     # false, which refuses the change and keeps this controller first
     # responder.
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
-    def resign_first_responder(next_responder)
+    def resign_first_responder(next_responder) # rubocop:disable Naming/PredicateMethod
       return false unless super
+
       @view.blur_element
       true
     end
@@ -162,20 +169,23 @@ module Swill
     sig { void }
     def unload
       return if @view.controller_value != self
+
       view_will_disappear
       application.release_first_responder(@view.element)
       unbind_all
       dealloc
-      child_controllers.each { |child| child.unload }
+      child_controllers.each(&:unload)
       # Plain outlet views are released too; re-awakening adopts them again.
-      @view.subviews.dup.each { |subview| subview.unload }
+      @view.subviews.dup.each(&:unload) # FIXME: Explain why this is duped or remove.
       @view.remove_from_superview
       @view.controller = nil
       view_did_disappear
     end
 
     # Invoked after the region's outlets are connected and before any binding
-    # is established. State set here is what bindings push first.
+    # is established. State set here is what bindings push first. Elements
+    # added here awaken as the region's markup did, so a `klass` or
+    # `controller` among them is live before bindings and actions connect.
     sig { void }
     def view_did_load; end
 

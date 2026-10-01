@@ -39,12 +39,20 @@ export class Element {
   }
 
   appendChild(child) { return this.append(child); }
+  insertBefore(child, reference) {
+    if (reference == null) return this.append(child);
+    child.remove();
+    child.parentElement = this;
+    this.children.splice(this.children.indexOf(reference), 0, child);
+    return child;
+  }
   replaceChildren(...nodes) {
     for (const child of [...this.children]) child.remove();
     for (const node of nodes) this.append(node);
   }
   show() { this.open = true; }
-  close() { this.open = false; }
+  showModal() { this.open = true; this.modal = true; }
+  close() { this.open = false; this.modal = false; }
 
   // Like the DOM, string properties coerce what they are assigned.
   get value() { return this._value; }
@@ -137,6 +145,7 @@ export class Element {
   }
 
   scrollIntoView() { this.ownerDocument.scrolledTo = this; }
+  getBoundingClientRect() { return {x: 0, y: 0, width: 0, height: 0}; }
   getSelection() { return null; }
 
   // tag, [attr], [attr=value], and combinations such as template[name].
@@ -242,7 +251,7 @@ export class Element {
 
 export const element = (tagName, attributes, children) => new Element(tagName, attributes, children);
 
-export const keyEvent = (type, key) => Object.assign(new Event(type, {bubbles: true}), {key});
+export const keyEvent = (type, key, modifiers = {}) => Object.assign(new Event(type, {bubbles: true}), {key, ...modifiers});
 
 // A browser window for tests: location and history keep a hash and a stack
 // of entries; back() pops one and fires popstate as a browser would.

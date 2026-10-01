@@ -3,8 +3,8 @@
 
 module Swill
   # An alert asks the user one question, and builds its own window rather
-  # than coming from markup. `run` presents it and yields the
-  # title of the button chosen:
+  # than coming from markup. `run` presents it modally, as NSAlert's
+  # runModal does, and yields the title of the button chosen:
   #
   #     alert = Swill::Alert.new
   #     alert.message_text = "Delete “Dark City”?"
@@ -53,9 +53,12 @@ module Swill
     # when Escape dismisses an alert without a Cancel button.
     sig { returns(T.nilable(String)) }
     async def run
-      template = Templates.named("alert", application.root.ownerDocument)
-      attach(T.must(template.content.firstElementChild).cloneNode(true))
-      window = application.present_window(self, "alert")
+      document = application.root.ownerDocument
+      template = Templates.named("alert", document)
+      dialog = T.must(template.content.firstElementChild).cloneNode(true)
+      attach(dialog)
+      self.title = document.title if title.nil?
+      window = application.present_window(self, "alert", modal: true)
       await window.closed
       @choice
     end
@@ -85,8 +88,11 @@ module Swill
     sig { override.void }
     def view_did_load
       actions = Swell[view.element].find!(".actions")
-      (@button_titles.empty? ? ["OK"] : @button_titles).each do |title|
-        actions.append(Swell[view.clone_template(T.must(button_template))].text(title).element)
+      (@button_titles.empty? ? ["OK"] : @button_titles).each_with_index do |label, index|
+        button = Swell[view.clone_template(T.must(button_template))].text(label)
+        # The first button is the default, which takes the keyboard first.
+        button.add_class("default") if index.zero?
+        actions.append(button.element)
       end
     end
   end

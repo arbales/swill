@@ -40,6 +40,19 @@ module Swill
           s(:send, s(:begin, process(receiver)), :new, *process_all(args))
         end
 
+        # A constructor taking keywords, rest, or a block binds its
+        # arguments through the runtime, so new marks them as a call to any
+        # such method does; any other new is the converter's.
+        def lower_complex_new(receiver, owner, args)
+          entry = begin
+            @knowledge.method_entry(owner, :initialize)
+          rescue CompileError
+            nil
+          end
+          return nil unless entry && entry["complex"]
+          s(:send, process(receiver), :new, *complex_call_arguments(entry, args))
+        end
+
         def constructed_from_call?(receiver, method)
           method == :new && receiver && %i[send call].include?(receiver.type)
         end
@@ -124,6 +137,16 @@ module Swill
         def lower_warn(args)
           raise CompileError, "warn takes one message" unless args.length == 1
           s(:call, s(:const, nil, :Runtime), :warn, process(args.first))
+        end
+
+        # Kernel#puts, unless the entry defines its own: a line in the console.
+        def puts_call?(receiver, method)
+          receiver.nil? && method == :puts && !@knowledge.method_defined?(@entry["name"], :puts)
+        end
+
+        def lower_puts(args)
+          raise CompileError, "puts takes one message" unless args.length == 1
+          s(:call, s(:lvar, :console), :log, process(args.first))
         end
 
     end

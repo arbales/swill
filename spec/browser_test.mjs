@@ -425,16 +425,17 @@ try {
     const result = [getComputedStyle(root.querySelector('.segmented-options')).display,
       buttons.filter(b => b.tabIndex === 0).length, document.activeElement === buttons[0]];
     key("ArrowRight");
-    result.push(control.value, document.activeElement === buttons[1],
-      document.querySelector("[outlet=custom_select] .custom-select-label").textContent);
-    key("End"); result.push(control.value);
-    key("Home"); result.push(control.value);
+    result.push(control.value, document.activeElement === buttons[1]);
+    document.activeElement.click();
+    result.push(control.value, document.querySelector("[outlet=custom_select] .custom-select-label").textContent);
+    key("End"); result.push(control.value, document.activeElement === buttons[2]);
+    key("Home"); result.push(control.value, document.activeElement === buttons[0]);
     buttons[2].click(); result.push(control.value);
     control.disabled = true;
     buttons[0].click(); result.push(control.value, buttons.every(b => b.disabled));
     result.push(changes.length);
     return result;
-  })()`), ["inline-flex", 1, true, "grace", true, "Grace Hopper", "katherine", "ada", "katherine", "katherine", true, 4]);
+  })()`), ["inline-flex", 1, true, "ada", true, "grace", "Grace Hopper", "grace", true, "grace", true, "katherine", "katherine", true, 2]);
 
   // A second page uses the same framework bundle directly from plain
   // JavaScript: registration is metadata-backed and startup is explicit.

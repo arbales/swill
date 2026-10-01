@@ -138,6 +138,10 @@ module Swill
           # yet and later passes insist on every assignment.
           inferred = {}
           strict = false
+          # A local assigned from a block parameter (index = position) needs
+          # that parameter's type, which conversion only sets on reaching the
+          # block; inference types the parameters of core blocks itself.
+          parameters = type_core_block_parameters(node)
           loop do
             types = assignments.filter_map do |name, values|
               kinds = values.map { |assignment| static_type(assignment.children.last) }
@@ -151,7 +155,39 @@ module Swill
             @local_types.merge!(inferred)
             strict = true
           end
+          parameters.each { |name| @local_types.delete(name) unless inferred.key?(name) }
           inferred
+        end
+
+        # Types the parameters of each block on a typed array or hash under
+        # +node+, as converting the block will, and answers the names it
+        # typed. Names already typed are left alone.
+        def type_core_block_parameters(node)
+          typed = []
+          each_block(node) do |block|
+            call, args, = block.children
+            next unless call.type == :send && call.children[0]
+            type = static_type(call.children[0])
+            kind = core_kind(type)
+            next unless kind
+            before = @local_types.keys
+            scratch = @local_types
+            @local_types = scratch.dup
+            type_block_parameters(kind, type, call.children[1], args)
+            added = @local_types.reject { |name, _| before.include?(name) }
+            @local_types = scratch
+            added.each do |name, kind_type|
+              @local_types[name] = kind_type
+              typed << name
+            end
+          end
+          typed
+        end
+
+        def each_block(node, &visit)
+          return unless node.respond_to?(:type) && node.respond_to?(:children)
+          visit.call(node) if node.type == :block
+          node.children.each { |child| each_block(child, &visit) }
         end
 
         # Local types for a method or static method body: its signature's

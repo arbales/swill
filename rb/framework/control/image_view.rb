@@ -23,6 +23,7 @@ module Swill
     sig { params(element: Element).void }
     def initialize(element)
       super
+      update_accessibility
       name = element.getAttribute("image")
       return unless name
       found = Image.named(name)
@@ -56,6 +57,13 @@ module Swill
       created.setAttribute("alt", "")
       @element.appendChild(created)
       created
+    end
+
+    # An image with empty alt text is decoration, hidden from screen readers.
+    sig { override.void }
+    def update_accessibility
+      super
+      image_element.setAttribute("aria-hidden", "true") if image_element.getAttribute("alt") == ""
     end
   end
 end

@@ -273,6 +273,35 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes shared, 'Runtime.warn("shared")'
     own = javascript("def warn(message); message; end\ndef go; warn(\"mine\"); end")
     assert_includes own, 'this.warn("mine")', "an entry's own warn is a method call"
+    assert_includes javascript("def go; puts(\"line\"); end"), 'console.log("line")'
+    assert_includes javascript("def go(stop); stop&.(); end"), "stop?.call(null)", "a proc called through &. is an optional call"
+  end
+
+  def test_a_constructor_with_keywords_returns_nothing
+    js = javascript(<<~RUBY)
+      def initialize(name, modal: false)
+        super()
+        @closed = [name, modal]
+      end
+    RUBY
+    refute_match(/return this\._closed/, js, "an object a constructor returned would replace the instance")
+    built = javascript("def self.build; new(\"a\", modal: true); end\ndef self.other; Example.new(\"b\", modal: true); end\n" \
+                       "def initialize(name, modal: false); super(); @name = name; end")
+    assert_includes built, 'new this("a", Runtime.keywordArguments({ modal: true }))', "new marks keywords for the constructor's binding"
+    assert_includes built, 'new Example("b", Runtime.keywordArguments({ modal: true }))'
+  end
+
+  def test_a_local_assigned_from_a_block_parameter_keeps_its_type
+    js = javascript(<<~RUBY)
+      extend T::Sig
+      sig { params(items: T::Array[String], delta: Integer).returns(Integer) }
+      def wrapped(items, delta)
+        index = 0
+        items.each_with_index { |item, position| index = position if item == "x" }
+        (index + delta) % items.length
+      end
+    RUBY
+    assert_includes js, "Runtime.modulo(index + delta, items.length)", "Ruby's modulo, so -1 wraps to the end"
   end
 
   def test_class_indexing_calls_the_declared_method_and_preserves_native_indexing

@@ -21,6 +21,7 @@ namely controllers and views.
 | `template for="editor"` | The editor a list awakens for a row being edited in place | [Collections](collections.md#editing-in-place) |
 | `data-column` | The sort key a header sends with `sort_by` | [Collections](collections.md#sorting) |
 | `image` | The bundle image a `Control::ImageView` shows | [Resources](resources.md#images) |
+| `data-swill-theme` | On a `<link>`: the framework theme `Application#theme` reads and switches | [Resources](resources.md#themes) |
 
 An element carrying only `bind`, `bind-*` or `data-action` stays a plain
 element.

@@ -51,7 +51,15 @@ module Swill
       @unrestored = T.let([], T::Array[String])
       @unrestorable_paths = T.let([], T::Array[String])
       @problems = T.let(nil, T.nilable(ProblemReporter))
+      @window_titles = T.let(0, Integer)
     end
+
+    # The theme the page is drawn in: the name of one of the framework's
+    # stylesheets, such as linear or bioplastic. The page links its theme as
+    # `<link rel="stylesheet" data-swill-theme href=".../linear.css">`; at
+    # launch this reads that link, and setting it points the link at another
+    # theme. Raises for a theme the framework does not have.
+    property :theme, type: T.nilable(String), default: nil
 
     # Whether the application is in development, which shows its problems as
     # alerts as well as in the console. Opt in with a `development` attribute
@@ -67,6 +75,7 @@ module Swill
       raise "An application is already running" if Application.running?
       Application.launched(self)
       @root = root
+      adopt_theme(root.ownerDocument)
       self.development = true if root.hasAttribute("development")
       if development
         problems = ProblemReporter.new(root.ownerDocument.defaultView)
@@ -195,29 +204,46 @@ module Swill
         node.remove
         raise "Window root has no controller: #{name}"
       end
-      open_window(name, node, controller, controllers)
+      open_window(name, node, controller, controllers, false)
     end
 
     # Present a controller built in code as a window named +name+, its view
     # appended to the root, as a template's would be. The controller has
     # attached its root element; anything managed inside it awakens first,
-    # then the controller loads. A <dialog> root is shown.
-    sig { params(controller: Controller, name: String, into: Element).returns(Window) }
-    def present_window(controller, name, into: @root)
+    # then the controller loads. A <dialog> root is shown, and when +modal+
+    # it is shown modally: the rest of the page is inert until it is
+    # dismissed, and the keyboard stays inside it.
+    sig { params(controller: Controller, name: String, into: Element, modal: T::Boolean).returns(Window) }
+    def present_window(controller, name, into: @root, modal: false)
       node = controller.view.element
       raise "Window is already presented: #{name}" if node.isConnected
       into.appendChild(node)
       controllers = Awakening.awaken(node)
       Awakening.load(controller)
-      open_window(name, node, controller, [controller] + controllers)
+      open_window(name, node, controller, [controller] + controllers, modal)
     end
 
     sig do
-      params(name: String, node: Element, controller: Controller, controllers: T::Array[Controller]).returns(Window)
+      params(name: String, node: Element, controller: Controller, controllers: T::Array[Controller],
+             modal: T::Boolean).returns(Window)
     end
-    def open_window(name, node, controller, controllers) # :nodoc:
-      node.show if node.tagName == "DIALOG"
-      window = Window.new(name, node)
+    def open_window(name, node, controller, controllers, modal) # :nodoc:
+      show_title(node, controller) if node.tagName == "DIALOG" && node.classList.contains("window")
+      controller.view.update_accessibility
+      if node.tagName == "DIALOG"
+        if modal
+          node.showModal
+          # Escape is the responder chain's, as cancel_operation; the
+          # browser's own cancel would close the dialog behind its back.
+          node.addEventListener("cancel", ->(event) { event.preventDefault })
+        else
+          node.show
+        end
+        # Safari ignores focus in a dialog it has not laid out since it
+        # opened, so the window lays out before its first responder focuses.
+        node.getBoundingClientRect
+      end
+      window = Window.new(name, node, modal: modal)
       window.assign_content(name, controller)
       window.save_first_responder(first_responder)
       @windows << window
@@ -226,6 +252,55 @@ module Swill
       Awakening.finish(controllers)
       make_first_responder(controller) unless responder_within?(first_responder, node)
       window
+    end
+
+    # The page's theme link, or nil when the page links none.
+    sig { params(document: Document).returns(T.nilable(Element)) }
+    def theme_link(document) # :nodoc:
+      document.querySelector("link[data-swill-theme]")
+    end
+
+    sig { params(document: Document).void }
+    def adopt_theme(document) # :nodoc:
+      link = theme_link(document)
+      return unless link
+      file = T.must(T.must(link.getAttribute("href")).split("?").first).split("/").last.to_s
+      self.theme = file.split(".").first
+    end
+
+    sig { params(_previous: T.nilable(String), theme: T.nilable(String)).void }
+    def theme_did_change(_previous, theme) # :nodoc:
+      root = @root
+      return unless theme && root
+      link = theme_link(root.ownerDocument)
+      return unless link
+      framework = Bundle.framework
+      url = framework ? framework.url_for_resource(theme, "css") : nil
+      raise "Unknown theme: #{theme}" unless url
+      # The same stylesheet, however the page spelled its address, is left
+      # alone rather than loaded again.
+      current = link.getAttribute("href").to_s
+      return if current.end_with?("/#{theme}.css") || current == "#{theme}.css"
+      link.setAttribute("href", url)
+    end
+
+    # FIXME: This contains a lot of manual DOM stuff that should likely happen with Swell, and also likely does not belong here in Application.
+    # A presented <dialog class="window"> gets a title bar showing its
+    # content controller's #title, kept current as the title changes; the
+    # theme decides whether it is drawn.
+    sig { params(node: Element, controller: Controller).void }
+    def show_title(node, controller) # :nodoc:
+      document = node.ownerDocument
+      header = document.createElement("header")
+      header.setAttribute("class", "window-title")
+      text = document.createElement("span")
+      @window_titles += 1
+      identifier = "swill-window-title-#{@window_titles}"
+      text.setAttribute("id", identifier)
+      header.appendChild(text)
+      node.insertBefore(header, node.firstElementChild)
+      text.textContent = controller.title.to_s
+      controller.observe(controller, :title, ->(title) { text.textContent = title.to_s })
     end
 
     # Only a window's content controller is restored, so restorable paths
@@ -317,12 +392,79 @@ module Swill
     def post_first_responder_change
       return if @first_responder == @posted_first_responder
       @posted_first_responder = @first_responder
+      puts "[Swill] first responder: #{describe_responder(first_responder)}" if development
       NotificationCenter.default.post("first_responder_did_change", self, @first_responder)
+    end
+
+    # A responder's class, and for a view or controller the element it is
+    # rooted at, as the first responder log names it.
+    sig { params(responder: Responder).returns(String) }
+    def describe_responder(responder) # :nodoc:
+      name = T.let(Runtime.nameOf(responder), T.nilable(String)) || "a responder"
+      element = responder_element(responder)
+      return name unless element
+      tag = element.tagName.downcase
+      %w[outlet controller klass data-action class].each do |attribute|
+        value = element.getAttribute(attribute)
+        tag = "#{tag} #{attribute}=\"#{value}\"" if value
+      end
+      "#{name} <#{tag}>"
     end
 
     sig { params(event: Event).void }
     def focus_in(event) # :nodoc:
+      window = modal_window
+      if window && event.target == window.root
+        # A modal dialog itself takes focus when its background is clicked,
+        # and Safari tabs to it; its default button takes the keyboard back.
+        target = View.of(window.root)&.first_focusable_element
+        return target.focus if target && target != window.root
+      end
       sync_first_responder(event.target, event.relatedTarget)
+    end
+
+    # Tab in a modal window moves through its key view loop: the window's
+    # focusable controls in document order, wrapping at either end, as an
+    # NSWindow's does. Elsewhere the browser moves focus on.
+    sig { override.params(event: KeyboardEvent).void }
+    def insert_tab(event)
+      super unless select_key_view(event, 1)
+    end
+
+    # Shift-Tab, the key view loop backward.
+    sig { override.params(event: KeyboardEvent).void }
+    def insert_backtab(event)
+      super unless select_key_view(event, -1)
+    end
+
+    # The topmost modal window, or nil when none is open.
+    sig { returns(T.nilable(Window)) }
+    def modal_window
+      @windows.reverse.find(&:modal?)
+    end
+
+    sig { params(event: KeyboardEvent, delta: Integer).returns(T::Boolean) }
+    def select_key_view(event, delta) # :nodoc:
+      window = modal_window
+      return false unless window
+      views = key_views(window.root)
+      return false if views.empty?
+      current = views.index(event.target)
+      index = current.nil? ? (delta.positive? ? 0 : views.length - 1) : (T.must(current) + delta) % views.length
+      event.preventDefault
+      T.must(views[index]).focus
+      true
+    end
+
+    # The elements Tab stops at within +root+, in document order.
+    sig { params(root: Element).returns(T::Array[Element]) }
+    def key_views(root) # :nodoc:
+      views = T.let([], T::Array[Element])
+      root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach(->(element) do
+        skipped = element.disabled || element.getAttribute("tabindex") == "-1" || element.closest("[hidden]")
+        views << element unless skipped
+      end)
+      views
     end
 
     sig { params(event: Event).void }

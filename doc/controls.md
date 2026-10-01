@@ -121,11 +121,11 @@ T.must(segmented).options = [
 ]
 ```
 
-Its markup binds the selected value and supplies an accessible name:
+Its markup binds the selected value:
 
 ```html
 <div klass="Swill::Control::Segmented" outlet="segmented"
-     bind="selected_person" aria-label="Person"></div>
+     bind="selected_person"></div>
 ```
 
 CustomSelect uses the same option fields and value binding. An icon name adds
@@ -139,10 +139,11 @@ empty. The initial options array is empty, and the initial value is `""`.
 ## Keyboard and Focus
 
 Segmented presents its buttons as a radio group. The chosen button has a tab
-stop; when no option matches, the first button has the tab stop. Arrow keys
-choose and focus an adjacent option, wrapping at either end. Home and End
-choose the first and last options. Enter and Space activate the focused native
-button.
+stop; when no option matches, the first button has the tab stop. Left and
+Right move focus to the adjacent segment, wrapping at either end, and Home and
+End to the first and last, without changing the choice. Enter and Space press
+the focused native button, which chooses it. Up and Down are not the
+control's, so they go up the responder chain.
 
 Setting Segmented's `disabled` property to true disables its buttons, removes
 their tab stops, and prevents choices through clicks or keys. The default is
@@ -168,14 +169,35 @@ no delegate, or no such method, the control follows its superclass behavior.
 The default delegate is nil. See [Responders](responders.md) for focus changes
 through the application.
 
+## Accessibility
+
+Markup carries no ARIA. A view describes itself to screen readers in
+`View#update_accessibility`, as an NSView does through NSAccessibility, and
+that is the one place Swill writes roles, states and labels. Nothing reads
+them back: a control's state is in its classes, such as a segment's `checked`
+and an option's `selected`, and behavior and themes follow those.
+
+The framework describes only a minimum. Segmented is a radio group,
+CustomSelect a combobox with a list box of options, an image view with empty
+`alt` text is hidden, and a titled window is labelled by its title bar. A
+control subclass overrides the method, calls `super`, and calls it again
+whenever what it describes changes:
+
+```ruby
+def update_accessibility
+  super
+  Swell[element].aria("pressed", pressed)
+end
+```
+
 ## Templates and Lifetime
 
 Segmented and CustomSelect load the framework's `segmented` and `custom_select`
 templates during construction. These templates replace the root's contents
 and supply the controls' internal outlets. The distribution includes the
-templates in the framework bundle's `controls.html`, and their styles in its
-`controls.css`, served from `resources/swill/` beside `swill.js`. Link that
-stylesheet alongside the application's styles.
+templates in the framework bundle's `controls.html`, served from
+`resources/swill/` beside `swill.js`, and each theme styles them. See
+[Themes](resources.md#themes).
 
 A control subclass can call `Control#load_template` with the name of a template
 in a bundle's HTML catalog, the application's before the framework's, so an

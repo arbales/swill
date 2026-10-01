@@ -24,7 +24,7 @@ assets/
   swill.js
   app.js
   resources/
-    swill/Warning.svg  controls.html  controls.css
+    swill/Warning.svg  controls.html  linear.css  bioplastic.css  fonts/
     app/Poster.png  icons/Star.svg  rows.html
 ```
 
@@ -117,11 +117,8 @@ shown through an `<img>` is sized by CSS, and its colors are its own.
 
 ## Stylesheets
 
-A page links the stylesheets it uses, the framework's among them:
-
-```html
-<link rel="stylesheet" href="/assets/resources/swill/controls.css">
-```
+A page links the stylesheets it uses, the framework's theme among them (see
+[Themes](#themes)).
 
 `Bundle#add_stylesheet` links one while the application runs, once per
 document, and answers a promise that settles when it loads:
@@ -129,6 +126,45 @@ document, and answers a promise that settles when it loads:
 ```ruby
 await Swill::Bundle.main.add_stylesheet("themes/dark", application.root.ownerDocument)
 ```
+
+## Themes
+
+A theme is one of the framework's stylesheets, styling the page, its native
+controls and everything the framework draws: windows, alerts, lists and the
+controls' templates. The framework has two:
+
+- **Linear**, `linear.css`: dark and flat.
+- **Bioplastic**, `bioplastic.css`: light and bevelled, with pinstriped window
+  title bars, set in Atkinson Hyperlegible Next. The font is among the
+  framework's resources, under `fonts/`, with its licence.
+
+A page links its theme first, marked `data-swill-theme`, so an application's
+own stylesheets can override it and the first paint is already right:
+
+```html
+<link rel="stylesheet" data-swill-theme href="/assets/resources/swill/linear.css">
+<link rel="stylesheet" href="/assets/app.css">
+```
+
+`Application#theme` answers the linked theme's name, read at launch from the
+link's file name. Assigning another name points the link at that theme, and a
+name the framework has no stylesheet for raises:
+
+```ruby
+application.theme = "bioplastic"
+```
+
+Both themes define the same variables, so an application styled with them
+reads correctly in either: `--bg`, `--fg`, `--dim`, `--bright`, `--accent`,
+`--selected` and `--rule`, and the semantic `--positive`, `--caution` and
+`--negative`. A list's columns are `--list-columns`.
+
+A window presented with `Application#show_window` or `present_window` gets a
+title bar showing its content controller's `title`, kept in step as the title
+changes. Linear hides it; Bioplastic shows it. A window's default button,
+marked with the `default` class, takes focus first, so Enter chooses it; an
+alert's first button is its default. Bioplastic draws a focused button in a
+ring, and the default button wears it however focus came.
 
 ## On the Server
 
@@ -145,7 +181,7 @@ app = Swill::Bundles::Bundle.new(name: "app", directory: "public/assets", url: "
 bundles = Swill::Bundles::Catalog.new(app, framework)
 
 bundles.script_tags                     # swill.js, then app.js
-bundles.stylesheet_tag("controls")
+bundles.stylesheet_tag("linear")
 bundles.image_tag("Poster", alt: "Poster")
 bundles.image_tag("Poster", view: true) # awakens as a Control::ImageView
 bundles.template("card")                # a template's HTML, to render in place

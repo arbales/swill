@@ -1,12 +1,12 @@
 <template name="custom_select">
   <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">
-    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>
+    <span class="custom-select-trigger-icon" outlet="icon"></span>
     <span class="custom-select-label" outlet="label"></span>
   </button>
-  <div class="custom-select-popup" role="listbox" outlet="popup"></div>
+  <div class="custom-select-popup" outlet="popup"></div>
   <template outlet="option_template">
-    <button type="button" class="custom-select-option" role="option" tabindex="-1">
-      <span class="custom-select-icon" aria-hidden="true"></span>
+    <button type="button" class="custom-select-option" tabindex="-1">
+      <span class="custom-select-icon"></span>
       <span class="custom-select-option-text">
         <span class="custom-select-option-label"></span>
         <span class="custom-select-option-description"></span>
@@ -18,20 +18,20 @@
 <template name="segmented">
   <div class="segmented-options" outlet="segments"></div>
   <template outlet="segment_template">
-    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>
+    <button type="button" class="segmented-option" tabindex="-1"></button>
   </template>
 </template>
 
 <template name="alert">
-  <dialog class="window alert" role="alertdialog">
-    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="" aria-hidden="true">
+  <dialog class="window alert">
+    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="">
     <div class="alert-text">
       <h2 bind="message_text"></h2>
       <p bind="informative_text" bind-hidden="informative_text.empty?"></p>
     </div>
     <div class="actions"></div>
     <template outlet="button_template">
-      <button type="button" data-action="choose"></button>
+      <button type="button" klass="Swill::Control::Button" data-action="choose"></button>
     </template>
   </dialog>
 </template>

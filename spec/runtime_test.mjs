@@ -1734,6 +1734,8 @@ test("images are found in the application's bundle, then the framework's, and im
 
   const img = element("img", {klass: "Swill::Control::ImageView", image: "Poster", alt: ""});
   const view = new ImageView(img);
+  assert.equal(img.getAttribute("aria-hidden"), "true", "an image with empty alt text is decoration");
+  assert.equal(new ImageView(element("img", {alt: "Poster"})).element.getAttribute("aria-hidden"), null);
   assert.equal(img.getAttribute("src"), "/assets/resources/images-app/Poster.webp");
   view.value = "Warning";
   assert.equal(img.getAttribute("src"), "/assets/resources/images-app/Warning.png", "a string names an image");
@@ -1784,12 +1786,14 @@ test("in development, problems are shown as alerts one at a time", async () => {
     const alerts = () => Array.from(f.body.children).filter(child => child.tagName === "DIALOG");
     const shown = () => {
       const dialog = alerts()[0];
-      const [icon, text] = dialog.children;
+      const icon = dialog.querySelector(".alert-icon");
+      const text = dialog.querySelector(".alert-text");
       return [icon.getAttribute("src"), text.children[0].textContent, text.children[1].hidden ? "" : text.children[1].textContent];
     };
     const dismiss = async () => { alerts()[0].querySelector("button").click(); await new Promise(resolve => setTimeout(resolve, 0)); };
 
     assert.match(shown()[1], /^Demo::Badge declares restorable count/, "a warning raised while launching is shown once it has launched");
+    assert.equal(alerts()[0].querySelector(".window-title").children[0].textContent, "Warning");
     await dismiss();
     assert.equal(alerts().length, 0);
 
@@ -1844,8 +1848,11 @@ test("an alert builds its own window and yields the button chosen", async () => 
   const dialog = alert.view.element;
   assert.equal(dialog.parentElement, f.body);
   assert.equal(dialog.open, true);
-  assert.equal(dialog.getAttribute("role"), "alertdialog");
-  const [icon, text] = dialog.children;
+  assert.equal(dialog.modal, true, "an alert is modal");
+  const [titleBar, icon, text] = dialog.children;
+  assert.deepEqual([titleBar.tagName, titleBar.getAttribute("class")], ["HEADER", "window-title"], "a window's title bar comes first");
+  const titleText = titleBar.children[0];
+  assert.equal(dialog.getAttribute("aria-labelledby"), titleText.getAttribute("id"), "the dialog is labelled by its title");
   assert.equal(icon.tagName, "IMG");
   assert.deepEqual([icon.getAttribute("class"), icon.getAttribute("alt"), icon.getAttribute("aria-hidden")], ["alert-icon", "", "true"]);
   assert.equal(icon.getAttribute("src"), "resources/swill/Warning.png", "the framework's Warning image, beside swill.js");
@@ -1853,8 +1860,24 @@ test("an alert builds its own window and yields the button chosen", async () => 
   assert.deepEqual([text.children[0].textContent, text.children[1].textContent], ["Delete “Ada”?", "This cannot be undone."]);
   const buttons = Array.from(dialog.querySelector(".actions").children);
   assert.deepEqual(buttons.map(button => button.textContent), ["Cancel", "Delete"]);
-  assert.equal(f.application.firstResponder(), alert);
+  assert.deepEqual(buttons.map(button => button.classList.contains("default")), [true, false], "the first button is the default");
+  assert.deepEqual(buttons.map(button => button.getAttribute("tabindex")), ["0", "0"], "alert buttons are Control::Buttons, so Tab reaches them");
+  assert.equal(titleText.textContent, "", "an untitled document leaves the title empty");
+  alert.title = "Movies";
+  assert.equal(titleText.textContent, "Movies", "the title bar follows the controller's title");
+  assert.equal(f.application.firstResponder(), buttons[0].__swill_view__, "the default button is first responder");
+  assert.equal(f.application.firstResponder().nextResponder().nextResponder(), alert, "and the alert follows its dialog in the chain");
   assert.equal(f.document.activeElement, buttons[0], "the first button takes the keyboard");
+  buttons[0].dispatchEvent(keyEvent("keydown", "Tab"));
+  assert.equal(f.document.activeElement, buttons[1], "Tab moves through the modal window's key view loop");
+  buttons[1].dispatchEvent(keyEvent("keydown", "Tab"));
+  assert.equal(f.document.activeElement, buttons[0], "and wraps rather than leaving the window");
+  buttons[0].dispatchEvent(keyEvent("keydown", "Tab", {shiftKey: true}));
+  assert.equal(f.document.activeElement, buttons[1], "Shift-Tab wraps backward");
+  buttons[1].dispatchEvent(keyEvent("keydown", "Tab", {shiftKey: true}));
+  assert.equal(f.document.activeElement, buttons[0], "and steps back");
+  dialog.focus();
+  assert.equal(f.document.activeElement, buttons[0], "the dialog itself hands focus to its default button");
   buttons[1].click();
   assert.equal(await answer, "Delete");
   assert.equal(dialog.parentElement, null, "choosing dismisses the alert");
@@ -1871,6 +1894,39 @@ test("an alert builds its own window and yields the button chosen", async () => 
   assert.equal(detail.hidden, true, "the template's binding hides empty informative text");
   plain.view.element.querySelector("button").dispatchEvent(keyEvent("keydown", "Escape"));
   assert.equal(await plainAnswer, null, "Escape without a Cancel button yields nil");
+});
+
+test("a window shows its content controller's title, and the page's theme can be switched", () => {
+  const titled = element("template", {for: "window", name: "titled"}, [
+    element("dialog", {controller: "Demo::Badge", class: "window"}, [element("p", {bind: "title"})])
+  ]);
+  const theme = element("link", {rel: "stylesheet", "data-swill-theme": "", href: "/assets/resources/swill/linear.css"});
+  const main = element("main", {controller: installHost({})}, [element("section", {window: "main", name: "welcome"})]);
+  const welcome = element("template", {for: "window", name: "welcome"}, [element("article", {controller: "Demo::Badge"})]);
+  const body = element("body", {application: "Demo::Application"}, [theme, main, welcome, titled]);
+  const document = element("#document", {}, [body]);
+  document.readyState = "complete";
+  document.defaultView = new Browser();
+  const application = new Launcher().launch(document);
+
+  assert.equal(application.theme, "linear", "read from the page's theme link");
+  application.theme = "bioplastic";
+  assert.equal(theme.getAttribute("href"), "resources/swill/bioplastic.css", "the link now names the other theme");
+  application.theme = "linear";
+  assert.equal(theme.getAttribute("href"), "resources/swill/linear.css");
+  assert.throws(() => { application.theme = "chrome"; }, /Unknown theme: chrome/);
+
+  assert.equal(document.querySelector(".window-title"), null, "content windows have no title bar");
+  const window = application.showWindow("titled");
+  const dialog = window.root;
+  const header = dialog.children[0];
+  assert.deepEqual([header.tagName, header.getAttribute("class")], ["HEADER", "window-title"]);
+  const title = header.children[0];
+  assert.equal(title.textContent, "Badge 0", "the content controller's title");
+  assert.equal(dialog.getAttribute("aria-labelledby"), title.getAttribute("id"));
+  window.controller.count = 4;
+  assert.equal(title.textContent, "Badge 4", "and it follows the title");
+  application.terminate();
 });
 
 test("show_window presents a dialog whose dismissal restores the first responder", async () => {
@@ -2141,8 +2197,8 @@ test("clicks select by identity, shift-click extends, and the selection shows on
   assert.deepEqual(Array.from(f.controller.selectedIndexes), [1]);
   assert.equal(f.controller.selectedObject, grace);
   assert.equal(f.controller.selectedObjectId, "2", "the selection names its object by id");
-  assert.deepEqual(f.rowsOf().map(row => [row.classList.contains("selected"), row.getAttribute("aria-selected")]),
-    [[false, "false"], [true, "true"], [false, "false"]]);
+  assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, true, false]);
+  assert.deepEqual(f.rowsOf().map(row => row.getAttribute("aria-selected")), [null, null, null], "rows have no role to be selected in");
   assert.equal(f.document.scrolledTo, f.rowsOf()[1], "the leading selected row is scrolled into view");
   assert.equal(f.selected.textContent, "Grace", "@ paths read through the computed selected_object");
   assert.equal(f.edit.disabled, false, "bind-* observes the computed indexes");
@@ -2625,6 +2681,7 @@ test("a custom select builds its chrome, follows the keyboard and pointer, and r
   assert.equal(button().children[1].textContent, "", "no value, no label");
   control.value = "b";
   assert.deepEqual([button().children[1].textContent, rows().map(row => row.getAttribute("aria-selected"))], ["Beta", ["false", "true"]]);
+  assert.deepEqual(rows().map(row => [row.classList.contains("selected"), row.getAttribute("role")]), [[false, "option"], [true, "option"]], "the selected class carries the state; the role is decoration");
   assert.equal(button().children[0].hidden, true, "Beta has no icon");
   Application.shared().makeFirstResponder(control);
   const key = name => picker.dispatchEvent(keyEvent("keydown", name));
@@ -3298,13 +3355,24 @@ test("segmented binds one selection, roves focus, emits user changes and release
   control.options = [{value: "a", label: "Alpha"}, {value: "b", label: "Beta"}];
   const buttons = () => root.querySelectorAll("[role='radio']");
   assert.deepEqual(buttons().map(b => b.getAttribute("tabindex")), ["-1", "0"]);
+  assert.deepEqual(buttons().map(b => [b.classList.contains("checked"), b.getAttribute("aria-checked")]), [[false, "false"], [true, "true"]],
+    "the checked class carries the state, and update_accessibility describes it");
+  assert.equal(root.getAttribute("role"), "radiogroup");
   const changes = [];
   root.addEventListener("change", () => changes.push(control.value));
   Application.shared().makeFirstResponder(control);
   assert.equal(root.ownerDocument.activeElement, buttons()[1]);
   buttons()[1].dispatchEvent(keyEvent("keydown", "ArrowRight"));
-  assert.equal(host.choice, "a");
-  assert.equal(root.ownerDocument.activeElement, buttons()[0]);
+  assert.equal(root.ownerDocument.activeElement, buttons()[0], "Right wraps to the first segment");
+  assert.equal(host.choice, "b", "arrows move focus without choosing");
+  assert.deepEqual(buttons().map(b => b.getAttribute("tabindex")), ["0", "-1"], "the tab stop follows focus");
+  buttons()[0].dispatchEvent(keyEvent("keydown", "ArrowLeft"));
+  buttons()[1].dispatchEvent(keyEvent("keydown", "ArrowLeft"));
+  assert.equal(root.ownerDocument.activeElement, buttons()[0], "Left steps back, wrapping");
+  buttons()[0].dispatchEvent(keyEvent("keydown", "ArrowUp"));
+  assert.equal(host.choice, "b", "Up is not the control's");
+  buttons()[0].click();
+  assert.equal(host.choice, "a", "pressing the focused segment chooses it");
   assert.deepEqual(changes, ["a"]);
   host.choice = "b";
   assert.deepEqual(changes, ["a"], "assignments are silent");

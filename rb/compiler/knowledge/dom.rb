@@ -63,6 +63,7 @@ module Swill
           "focus" => [:method, "void", "options?: T.untyped"],
           "blur" => [:method, "void", ""],
           "scrollIntoView" => [:method, "void", "options?: T.untyped"],
+          "getBoundingClientRect" => [:method, "T.untyped", ""],
           # Form and dialog members live on Element here rather than on each
           # HTML interface, since framework code reaches them through a
           # generic element.
@@ -76,6 +77,7 @@ module Swill
           "disabled" => [:accessor, "T::Boolean"],
           "hidden" => [:accessor, "T::Boolean"],
           "readOnly" => [:accessor, "T::Boolean"],
+          "href" => [:accessor, "String"],
           "isContentEditable" => [:attr, "T::Boolean"],
           "open" => [:accessor, "T::Boolean"],
           "show" => [:method, "void", ""],
@@ -103,6 +105,7 @@ module Swill
           "activeElement" => [:attr, "T.nilable(Element)"],
           "defaultView" => [:attr, "T.nilable(DOMWindow)"],
           "readyState" => [:attr, "String"],
+          "title" => [:accessor, "String"],
           "querySelector" => [:method, "T.nilable(Element)", "selector: String"],
           "querySelectorAll" => [:method, "NodeList", "selector: String"],
           "createElement" => [:method, "Element", "tag: String"],

@@ -58,10 +58,17 @@ module Swill
       controllers.reverse.each { |controller| controller.view_did_appear }
     end
 
+    # Whatever view_did_load adds awakens as markup does, before the
+    # region's bindings and actions connect to it.
     sig { params(controller: Controller).void }
     def self.load(controller)
-      Connections::Outlets.establish(controller, controller.view.element)
+      root = controller.view.element
+      Connections::Outlets.establish(controller, root)
       controller.view_did_load
+      added = T.let([], T::Array[Controller])
+      DOM.each_child(root, ->(child) { walk(child, controller.view, added) })
+      added.reverse.each { |child| load(child) }
+      finish(added)
       Connections::Bindings.establish(controller)
       Connections::Actions.establish(controller)
       controller.awake_from_dom

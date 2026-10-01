@@ -46,7 +46,7 @@ module Swill
         window.removeEventListener("unhandledrejection", @on_rejection)
       end
       stop_warnings = @stop_warnings
-      stop_warnings.() if stop_warnings
+      stop_warnings&.()
       @stop_warnings = nil
       @pending = []
     end
@@ -71,7 +71,8 @@ module Swill
     sig { params(icon: String, message: String, detail: String).void }
     def report(icon, message, detail)
       return if @current == message || @pending.any? { |problem| problem["message"] == message }
-      @pending << {"icon" => icon, "message" => message, "detail" => detail}
+
+      @pending << { "icon" => icon, "message" => message, "detail" => detail }
       show_next if @current.nil?
     end
 
@@ -79,15 +80,17 @@ module Swill
     async def show_next # :nodoc:
       problem = @pending.shift
       return unless problem
+
       @current = problem["message"]
       begin
         alert = Alert.new
         alert.icon = T.must(problem["icon"])
+        alert.title = problem["icon"] == "Stop" ? "Error" : "Warning"
         alert.message_text = T.must(problem["message"])
         alert.informative_text = T.must(problem["detail"])
         alert.add_button("OK")
         await alert.run
-      rescue => _error
+      rescue => _e
         # The console already has the problem; an alert that cannot show is
         # not reported again, which could only repeat.
         @pending = []
@@ -101,7 +104,8 @@ module Swill
     sig { params(value: T.untyped).returns(String) }
     def self.message_of(value)
       return T.cast(value, Error).message if value.is_a?(Error)
-      "#{value}"
+
+      value.to_s
     end
 
     # Where an error was raised: the first frame of an Error's stack, or
@@ -112,13 +116,17 @@ module Swill
     sig { params(value: T.untyped).returns(String) }
     def self.origin_of(value)
       return "" unless value.is_a?(Error)
+
       stack = T.cast(value, Error).stack || ""
       found = stack.split("\n").find { |line| line.strip =~ /:\d+:\d+\)?$/ }
       return "" unless found
+
       frame = T.let(found.strip, String)
       return frame if frame.start_with?("at ")
+
       parts = T.let(frame.split("@"), T::Array[String])
       return "at #{frame}" if parts.length < 2
+
       function = T.must(parts.first)
       location = parts.drop(1).join("@")
       function.empty? ? "at #{location}" : "at #{function} (#{location})"

@@ -9,11 +9,12 @@ module Swill
   class Window < Swill::Object
     extend T::Sig
 
-    sig { params(name: String, root: Element).void }
-    def initialize(name, root)
+    sig { params(name: String, root: Element, modal: T::Boolean).void }
+    def initialize(name, root, modal: false)
       super()
       @name = name
       @root = root
+      @modal = modal
       @controller = T.let(nil, T.nilable(Controller))
       @content_name = T.let(nil, T.nilable(String))
       @saved_first_responder = T.let(nil, T.nilable(Responder))
@@ -59,6 +60,12 @@ module Swill
 
     sig { returns(T.nilable(Controller)) }
     attr_reader :controller
+
+    # Whether the window was shown modally, keeping the keyboard inside it.
+    sig { returns(T::Boolean) }
+    def modal?
+      @modal
+    end
 
     sig { returns(T.nilable(String)) }
     attr_reader :content_name

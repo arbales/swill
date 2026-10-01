@@ -331,7 +331,11 @@ module Swill
             call = node.updated(nil, [receiver, method, *args[0...-1]])
             return on_block(node.updated(:block, [call, s(:args, *parameters.map { |parameter| s(:arg, parameter) }), body]))
           end
-          return s(:send, s(:self), :new, *process_all(args)) if bare_new?(receiver, method)
+          if bare_new?(receiver, method)
+            entry = @knowledge.method_entry(@entry["name"], :initialize)
+            return s(:send, s(:self), :new, *complex_call_arguments(entry, args)) if entry && entry["complex"]
+            return s(:send, s(:self), :new, *process_all(args))
+          end
           # The lowerings below would keep the call and drop the nil guard, and
           # JavaScript's ?. yields undefined where Ruby yields nil.
           # Safe navigation reaches a member the compiler resolves statically:
@@ -339,6 +343,11 @@ module Swill
           # framework class. A core value type lowers through a helper taking
           # the receiver as an argument, and an untyped receiver through
           # Runtime.read; neither is something ?. can guard.
+          # A proc called through safe navigation (stop&.()) is JavaScript's
+          # optional call, which skips nil as Ruby does.
+          if node.type == :csend && method == :call && proc_type?(static_type(receiver))
+            return s(:csend, process(receiver), :call, s(:nil), *process_all(args))
+          end
           if node.type == :csend && !safe_navigable?(receiver)
             raise CompileError, "safe navigation (&.) is not lowered on #{describe_receiver(receiver)}; " \
               "guard #{receiver.loc.expression.source} with a local"
@@ -355,6 +364,7 @@ module Swill
           return lower_raise(args) if receiver.nil? && method == :raise
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
           return lower_warn(args) if warn_call?(receiver, method)
+          return lower_puts(args) if puts_call?(receiver, method)
           return lower_respond_to(receiver, args) if method == :respond_to?
           if receiver.nil? && method == :block_given? && args.empty? && @current_method
             block = @current_method.fetch("formals", []).find { |formal| formal["kind"] == "block" }
@@ -503,8 +513,10 @@ module Swill
           # The synthetic binding statements hide the original method body
           # from Ruby2JS's normal implicit-return pass. Mark the combined body
           # explicitly so a final local, await, yield, conditional, or rescue
-          # keeps Ruby's return value.
-          [s(:args, s(:restarg, supplied)), s(:begin, *statements, s(:autoreturn, body))]
+          # keeps Ruby's return value. A constructor returns nothing: in
+          # JavaScript an object it returned would replace the instance.
+          tail = method["name"] == "initialize" ? body : s(:autoreturn, body)
+          [s(:args, s(:restarg, supplied)), s(:begin, *statements, tail)]
         end
 
         def call_signature(method)
@@ -547,6 +559,11 @@ module Swill
         end
 
         # ?. guards a member the compiler resolves statically.
+        # A proc, or a value with no static type, which .() calls directly.
+        def proc_type?(type)
+          type.nil? || type == "T.untyped" || type.sub(/\AT\.nilable\((.*)\)\z/m, '\1').start_with?("T.proc")
+        end
+
         def safe_navigable?(receiver)
           type = static_type(receiver)
           native_type?(type) || !swill_class(type).nil?
@@ -570,6 +587,11 @@ module Swill
           setter = name.match?(/\A[a-z_]\w*=\z/) && args.length == 1
           base = name.delete_suffix("=")
           type = static_type(receiver)
+          if method == :new && receiver.type == :const
+            owner = swill_class(@knowledge.constant(receiver))
+            constructed = owner && lower_complex_new(receiver, owner, args)
+            return constructed if constructed
+          end
           # nil? is defined for every value, including nil itself.
           return s(:send, process(receiver), :==, s(:nil)) if method == :nil? && args.empty?
           # An Array from another realm (a page's JSON) is still an Array.
@@ -648,7 +670,7 @@ module Swill
           if (kind = core_kind(type))
             return lower_core(node, kind, type, receiver, method, args)
           end
-          if method == :call && (type.nil? || type == "T.untyped" || type.sub(/\AT\.nilable\((.*)\)\z/m, '\1').start_with?("T.proc"))
+          if method == :call && proc_type?(type)
             return lower_call(receiver, args)
           end
           return nil unless dynamic_receiver?(receiver)

@@ -52,7 +52,7 @@ class BundlesTest < Minitest::Test
     assert_equal '<img klass="Swill::Control::ImageView" image="Poster" src="/assets/resources/app/Poster.png" alt="Poster">',
                  catalog.image_tag("Poster", alt: "Poster", view: true)
     assert_equal '<link rel="stylesheet" href="/assets/resources/app/theme.css">', catalog.stylesheet_tag("theme")
-    assert_equal '<link rel="stylesheet" href="/assets/resources/swill/controls.css">', catalog.stylesheet_tag("controls")
+    assert_equal '<link rel="stylesheet" href="/assets/resources/swill/linear.css">', catalog.stylesheet_tag("linear")
     assert_equal %(<script src="/assets/swill.js"></script>\n<script src="/assets/app.js"></script>), catalog.script_tags
     assert_equal '<div class="card"><template outlet="line"><p></p></template><h2></h2></div>', catalog.template("card"),
                  "a nested template stays inside the one that holds it"

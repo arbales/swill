@@ -6,8 +6,7 @@ module Swill
   # of options. An option has a value and label, and can include a description
   # and icon. The control builds its contents from the custom select template.
   #
-  #     <div klass="Swill::Control::CustomSelect" bind="selected_person"
-  #          aria-label="Person"></div>
+  #     <div klass="Swill::Control::CustomSelect" bind="selected_person"></div>
   #
   # See [Controls](rdoc-ref:doc/controls.md) for options, value bindings, and
   # keyboard behavior.
@@ -116,16 +115,13 @@ module Swill
       toggle
     end
 
-    # Loads the custom select template and configures the root as a focusable
-    # combobox. Installs handlers for closing the popup when focus or a pointer
+    # Loads the custom select template and makes the root focusable.
+    # Installs handlers for closing the popup when focus or a pointer
     # press moves outside the control. Called during construction.
     sig { void }
     def install_chrome
       root = @element
-      Swell[@element].add_class('custom-select')
-                     .attr('tabindex', '0')
-                     .attr('role', 'combobox')
-                     .aria('haspopup', 'listbox')
+      Swell[@element].add_class('custom-select').attr('tabindex', '0')
       load_template("custom_select")
       focus_handler = ->(event) { focus_out(event) }
       retain(Swell[root].listen("focusout", focus_handler))
@@ -182,7 +178,7 @@ module Swill
     # Clicks outside an option leave the value unchanged. See `#choose`.
     sig { params(event: Event).void }
     def option_clicked(event)
-      row = event.target.closest("[role='option']")
+      row = event.target.closest(".custom-select-option")
       choose(T.must(Swell[row].data_value("value"))) if row && T.must(popup).element.contains(row)
     end
 
@@ -205,12 +201,30 @@ module Swill
       T.must(label).element.textContent = option ? option["label"].to_s : ""
     end
 
-    # Updates aria-selected on each option row according to `value`.
+    # Marks the option row matching `value` with the `selected` class.
     sig { void }
     def sync_selected_option
-      T.must(popup).element.querySelectorAll("[role='option']").forEach(->(row) do
+      T.must(popup).element.querySelectorAll(".custom-select-option").forEach(->(row) do
         dom = Swell[row]
-        dom.aria("selected", dom.data_value("value") == value)
+        dom.toggle_class("selected", dom.data_value("value") == value)
+      end)
+      update_accessibility
+    end
+
+    # A combobox whose popup is a list box of options, one of them selected.
+    # The icons are decoration.
+    sig { override.void }
+    def update_accessibility
+      super
+      Swell[@element].attr("role", "combobox").aria("haspopup", "listbox").aria("expanded", @open)
+      Swell[T.must(button).element].aria("expanded", @open)
+      Swell[T.must(icon).element].aria("hidden", true)
+      list = T.must(popup).element
+      list.setAttribute("role", "listbox")
+      list.querySelectorAll(".custom-select-option").forEach(->(row) do
+        dom = Swell[row]
+        dom.attr("role", "option").aria("selected", row.classList.contains("selected"))
+        dom.find!(".custom-select-icon").aria("hidden", true)
       end)
     end
 
@@ -237,14 +251,13 @@ module Swill
       apply_open(false) if @open
     end
 
-    # Sets popup visibility, the root's open class, and expanded attributes
-    # from `open`. Updates the document listener for outside pointer presses.
+    # Sets popup visibility and the root's open class from `open`. Updates the document listener for outside pointer presses.
     sig { params(open: T::Boolean).void }
     def apply_open(open)
       @open = open
-      Swell[@element].toggle_class("open", open).aria("expanded", open)
-      Swell[T.must(button).element].aria("expanded", open)
+      Swell[@element].toggle_class("open", open)
       Swell[T.must(popup).element].prop("hidden", !open)
+      update_accessibility
       document = @element.ownerDocument
       if open
         document.addEventListener("pointerdown", @document_pointer_down)

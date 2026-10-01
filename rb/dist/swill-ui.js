@@ -1248,6 +1248,7 @@
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
     Swill__Connections__Outlets: () => Swill__Connections__Outlets,
     Swill__Control: () => Swill__Control,
+    Swill__Control__Button: () => Swill__Control__Button,
     Swill__Control__ImageView: () => Swill__Control__ImageView,
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__List: () => Swill__Controller__List,
@@ -2900,11 +2901,9 @@
     mark(element, name, on) {
       return element.classList.toggle(name, on);
     }
-    // Marks `element` selected or not, as the `selected` class and the
-    // `aria-selected` attribute.
+    // Marks `element` selected or not, as the `selected` class.
     markSelected(element, on) {
-      this.mark(element, "selected", on);
-      return element.setAttribute("aria-selected", on ? "true" : "false");
+      return this.mark(element, "selected", on);
     }
     // Scrolls the nearest scrolling ancestor just far enough to bring
     // `element` into view.
@@ -2953,10 +2952,12 @@
       }
     }
     // Returns this view's element when it matches `focusable_selector`, else
-    // its first descendant that does, or nil when nothing within it is
-    // focusable.
+    // its default button, the descendant marked with the `default` class, as
+    // a window's default button takes the keyboard first, else its first
+    // focusable descendant. Returns nil when nothing within it is focusable.
     firstFocusableElement() {
-      return this._element.matches(this.focusableSelector()) ? this._element : this._element.querySelector(this.focusableSelector());
+      if (this._element.matches(this.focusableSelector())) return this._element;
+      return this._element.querySelector(".default") || this._element.querySelector(this.focusableSelector());
     }
     // Focuses `first_focusable_element` without scrolling, if there is one.
     focusElement() {
@@ -2981,6 +2982,28 @@
     becomeFirstResponder() {
       this.focusElement();
       return true;
+    }
+    // :section: Accessibility
+    // What assistive technology is told about the view, as NSAccessibility
+    // tells it about an NSView.
+    // Writes the view's ARIA roles, states and labels onto its element and
+    // the parts it draws. This is the one place Swill writes them, and it
+    // never reads them back: behavior and styles follow the view's own state
+    // and classes, so ARIA is decoration for screen readers alone.
+    //
+    // The default labels a window by its title bar. A subclass overrides it,
+    // calling `super`, and calls it again whenever what it describes changes;
+    // a window's view is updated as the window opens.
+    updateAccessibility() {
+      let header = this._element.firstElementChild;
+      if (!Runtime.isTruthy(header && header.classList.contains("window-title"))) {
+        return;
+      }
+      ;
+      let identifier = header.firstElementChild?.getAttribute("id");
+      if (identifier != null) {
+        return this._element.setAttribute("aria-labelledby", identifier);
+      }
     }
   };
   var Swill__Control = class extends Swill__View {
@@ -3024,6 +3047,14 @@
       return super.resignFirstResponder(next_responder);
     }
   };
+  var Swill__Control__Button = class extends Swill__Control {
+    // Creates a control for `element` and adds `tabindex="0"` when no tabindex
+    // is present. An existing tabindex is preserved.
+    constructor(element) {
+      super(element);
+      this.ensureFocusable();
+    }
+  };
   var Swill__Control__ImageView = class extends Swill__Control {
     // The image shown, or nil for none. A string is looked up with
     // Image.named, and taken as a URL when no bundle has that name.
@@ -3031,6 +3062,7 @@
     // image a bundle has; raises "Unknown image: ..." otherwise.
     constructor(element) {
       super(element);
+      this.updateAccessibility();
       let name = element.getAttribute("image");
       if (name == null) return;
       let found = Swill__Image.named(name);
@@ -3058,6 +3090,13 @@
       this._element.appendChild(created);
       return created;
     }
+    // An image with empty alt text is decoration, hidden from screen readers.
+    updateAccessibility() {
+      super.updateAccessibility();
+      if (this.imageElement().getAttribute("alt") === "") {
+        return this.imageElement().setAttribute("aria-hidden", "true");
+      }
+    }
   };
   var Swill__Controller = class extends Swill__Responder {
     // :section: Declaring Outlets and Restorable Paths
@@ -3073,6 +3112,9 @@
     // through `bind="path"` on this controller's root element; nil until then.
     // Bindings within the region resolve under `binding_root`, which by
     // default is the controller itself.
+    // The title of the window this controller is the content of, shown in its
+    // title bar where the theme draws one. Nil leaves the title bar empty. A
+    // subclass sets it, binds it, or declares it computed.
     // Returns the property under which `bind` paths in this region resolve,
     // or nil to resolve them against the controller itself. A path beginning
     // with `@` in markup ignores the root. The default is nil; override it to
@@ -3134,7 +3176,10 @@
     // Returns false, focusing nothing, when the current first responder
     // refuses to resign.
     becomeFirstResponder() {
-      if (!super.becomeFirstResponder()) return false;
+      if (!super.becomeFirstResponder()) {
+        return false;
+      }
+      ;
       this._view.focusElement();
       return true;
     }
@@ -3161,14 +3206,16 @@
       this.application().releaseFirstResponder(this._view.element);
       this.unbindAll();
       this.dealloc();
-      this.childControllers().forEach((child) => child.unload());
-      this._view.subviews.slice().forEach((subview) => subview.unload());
+      this.childControllers().forEach((__swill_item) => __swill_item.unload());
+      this._view.subviews.slice().forEach((__swill_item) => __swill_item.unload());
       this._view.removeFromSuperview();
       this._view.controller = null;
       return this.viewDidDisappear();
     }
     // Invoked after the region's outlets are connected and before any binding
-    // is established. State set here is what bindings push first.
+    // is established. State set here is what bindings push first. Elements
+    // added here awaken as the region's markup did, so a `klass` or
+    // `controller` among them is live before bindings and actions connect.
     viewDidLoad() {
       return null;
     }
@@ -3677,11 +3724,16 @@
       return Runtime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
     }
     static load(controller) {
-      Swill__Connections__Outlets.establish(
-        controller,
-        controller.view.element
-      );
+      let root = controller.view.element;
+      Swill__Connections__Outlets.establish(controller, root);
       controller.viewDidLoad();
+      let added = Runtime.cast([], "T::Array[Controller]");
+      Swill__DOM.eachChild(
+        root,
+        (child) => this.walk(child, controller.view, added)
+      );
+      Runtime.reverse(added).forEach((child) => this.load(child));
+      this.finish(added);
       Swill__Connections__Bindings.establish(controller);
       Swill__Connections__Actions.establish(controller);
       return controller.awakeFromDOM();
@@ -3871,10 +3923,24 @@
     }
   };
   var Swill__Window = class extends Swill__Object {
-    constructor(name, root) {
+    constructor(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "name", kind: "req" },
+          { name: "root", kind: "req" }
+        ],
+        keywords: [{ name: "modal", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let name = Runtime.argument(__swill_bound, "name");
+      let root = Runtime.argument(__swill_bound, "root");
+      let modal = Runtime.argument(__swill_bound, "modal");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(modal))) modal = false;
       super();
       this._name = name;
       this._root = root;
+      this._modal = modal;
       this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
       this._content_name = Runtime.cast(null, "T.nilable(String)");
       this._saved_first_responder = Runtime.cast(
@@ -3921,6 +3987,10 @@
     }
     get controller() {
       return this._controller;
+    }
+    // Whether the window was shown modally, keeping the keyboard inside it.
+    isModal() {
+      return this._modal;
     }
     get contentName() {
       return this._content_name;
@@ -4001,7 +4071,13 @@
         null,
         "T.nilable(Swill::ProblemReporter)"
       );
+      this._window_titles = Runtime.cast(0, "Integer");
     }
+    // The theme the page is drawn in: the name of one of the framework's
+    // stylesheets, such as linear or bioplastic. The page links its theme as
+    // `<link rel="stylesheet" data-swill-theme href=".../linear.css">`; at
+    // launch this reads that link, and setting it points the link at another
+    // theme. Raises for a theme the framework does not have.
     // Whether the application is in development, which shows its problems as
     // alerts as well as in the console. Opt in with a `development` attribute
     // on the application's element, `Swill.start({development: true})`, or by
@@ -4016,6 +4092,7 @@
       ;
       _Swill__Application.launched(this);
       this._root = root;
+      this.adoptTheme(root.ownerDocument);
       if (root.hasAttribute("development")) this.development = true;
       if (this.development) {
         let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
@@ -4171,19 +4248,21 @@
         throw new Error(`Window root has no controller: ${name}`);
       }
       ;
-      return this.openWindow(name, node, controller, controllers);
+      return this.openWindow(name, node, controller, controllers, false);
     }
     // Present a controller built in code as a window named +name+, its view
     // appended to the root, as a template's would be. The controller has
     // attached its root element; anything managed inside it awakens first,
-    // then the controller loads. A <dialog> root is shown.
+    // then the controller loads. A <dialog> root is shown, and when +modal+
+    // it is shown modally: the rest of the page is inert until it is
+    // dismissed, and the keyboard stays inside it.
     presentWindow(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "controller", kind: "req" },
           { name: "name", kind: "req" }
         ],
-        keywords: [{ name: "into", kind: "key" }],
+        keywords: [{ name: "into", kind: "key" }, { name: "modal", kind: "key" }],
         keywordRest: null,
         block: "__swill_block"
       });
@@ -4191,6 +4270,8 @@
       let name = Runtime.argument(__swill_bound, "name");
       let into = Runtime.argument(__swill_bound, "into");
       if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
+      let modal = Runtime.argument(__swill_bound, "modal");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(modal))) modal = false;
       let node = controller.view.element;
       if (node.isConnected) throw new Error(`Window is already presented: ${name}`);
       into.appendChild(node);
@@ -4200,12 +4281,28 @@
         name,
         node,
         controller,
-        [controller].concat(controllers)
+        [controller].concat(controllers),
+        modal
       );
     }
-    openWindow(name, node, controller, controllers) {
-      if (node.tagName === "DIALOG") node.show();
-      let window = new Swill__Window(name, node);
+    openWindow(name, node, controller, controllers, modal) {
+      if (Runtime.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
+        this.showTitle(node, controller);
+      }
+      ;
+      controller.view.updateAccessibility();
+      if (node.tagName === "DIALOG") {
+        if (modal) {
+          node.showModal();
+          node.addEventListener("cancel", (event) => event.preventDefault());
+        } else {
+          node.show();
+        }
+        ;
+        node.getBoundingClientRect();
+      }
+      ;
+      let window = new Swill__Window(name, node, Runtime.keywordArguments({ modal }));
       window.assignContent(name, controller);
       window.saveFirstResponder(this.firstResponder());
       Runtime.append(this._windows, window);
@@ -4220,6 +4317,58 @@
       }
       ;
       return window;
+    }
+    // The page's theme link, or nil when the page links none.
+    themeLink(document2) {
+      return document2.querySelector("link[data-swill-theme]");
+    }
+    adoptTheme(document2) {
+      let link = this.themeLink(document2);
+      if (!link) return;
+      let file = Runtime.stringify(Runtime.split(
+        Runtime.must(Runtime.split(
+          Runtime.must(link.getAttribute("href")),
+          "?"
+        )[0]),
+        "/"
+      ).at(-1));
+      return this.theme = Runtime.split(file, ".")[0];
+    }
+    themeDidChange(_previous, theme) {
+      let root = this._root;
+      if (!Runtime.isTruthy(theme != null ? root : theme)) return;
+      let link = this.themeLink(root.ownerDocument);
+      if (!link) return;
+      let framework2 = Swill__Bundle.framework();
+      let url = framework2 ? framework2.urlForResourceWithExtension(
+        theme,
+        "css"
+      ) : null;
+      if (url == null) throw new Error(`Unknown theme: ${theme}`);
+      let current = Runtime.stringify(link.getAttribute("href"));
+      if (current.endsWith(`/${theme}.css`) || current === `${theme}.css`) return;
+      return link.setAttribute("href", url);
+    }
+    // FIXME: This contains a lot of manual DOM stuff that should likely happen with Swell, and also likely does not belong here in Application.
+    // A presented <dialog class="window"> gets a title bar showing its
+    // content controller's #title, kept current as the title changes; the
+    // theme decides whether it is drawn.
+    showTitle(node, controller) {
+      let document2 = node.ownerDocument;
+      let header = document2.createElement("header");
+      header.setAttribute("class", "window-title");
+      let text = document2.createElement("span");
+      this._window_titles++;
+      let identifier = `swill-window-title-${this._window_titles}`;
+      text.setAttribute("id", identifier);
+      header.appendChild(text);
+      node.insertBefore(header, node.firstElementChild);
+      text.textContent = Runtime.stringify(controller.title);
+      return controller.observeWithObject(
+        controller,
+        "title",
+        (title) => text.textContent = Runtime.send(title, "to_s")
+      );
     }
     // Only a window's content controller is restored, so restorable paths
     // declared on any other controller would be silently ignored. Warns once
@@ -4302,14 +4451,79 @@
     postFirstResponderChange() {
       if (this._first_responder === this._posted_first_responder) return;
       this._posted_first_responder = this._first_responder;
+      if (this.development) {
+        console.log(`[Swill] first responder: ${this.describeResponder(this.firstResponder())}`);
+      }
+      ;
       return Swill__NotificationCenter.default().post(
         "first_responder_did_change",
         this,
         this._first_responder
       );
     }
+    // A responder's class, and for a view or controller the element it is
+    // rooted at, as the first responder log names it.
+    describeResponder(responder) {
+      let name = Runtime.logicalOr(
+        Runtime.cast(Runtime.nameOf(responder), "T.nilable(String)"),
+        () => "a responder"
+      );
+      let element = this.responderElement(responder);
+      if (!element) return name;
+      let tag = Runtime.downcase(element.tagName);
+      ["outlet", "controller", "klass", "data-action", "class"].forEach((attribute) => {
+        let value = element.getAttribute(attribute);
+        if (value != null) {
+          tag = `${tag} ${attribute}="${value}"`;
+          return tag;
+        }
+      });
+      return `${name} <${tag}>`;
+    }
     focusIn(event) {
+      let window = this.modalWindow();
+      if (Runtime.isTruthy(window && event.target === window.root)) {
+        let target = Runtime.nilable(Swill__View.of(window.root)?.firstFocusableElement());
+        if (Runtime.isTruthy(target && target !== window.root)) return target.focus();
+      }
+      ;
       return this.syncFirstResponder(event.target, event.relatedTarget);
+    }
+    // Tab in a modal window moves through its key view loop: the window's
+    // focusable controls in document order, wrapping at either end, as an
+    // NSWindow's does. Elsewhere the browser moves focus on.
+    insertTab(event) {
+      if (!this.selectKeyView(event, 1)) return super.insertTab(event);
+    }
+    // Shift-Tab, the key view loop backward.
+    insertBacktab(event) {
+      if (!this.selectKeyView(event, -1)) return super.insertBacktab(event);
+    }
+    // The topmost modal window, or nil when none is open.
+    modalWindow() {
+      return Runtime.reverse(this._windows).find((__swill_item) => __swill_item.isModal());
+    }
+    selectKeyView(event, delta) {
+      let window = this.modalWindow();
+      if (!window) return false;
+      let views = this.keyViews(window.root);
+      if (Runtime.isEmpty(views)) return false;
+      let current = Runtime.indexOf(views, event.target);
+      let index = current == null ? (() => {
+        return delta > 0 ? 0 : views.length - 1;
+      })() : Runtime.modulo(Runtime.must(current) + delta, views.length);
+      event.preventDefault();
+      Runtime.must(views[index]).focus();
+      return true;
+    }
+    // The elements Tab stops at within +root+, in document order.
+    keyViews(root) {
+      let views = Runtime.cast([], "T::Array[Element]");
+      root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach((element) => {
+        let skipped = element.disabled || element.getAttribute("tabindex") === "-1" || element.closest("[hidden]");
+        if (!Runtime.isTruthy(skipped)) return Runtime.append(views, element);
+      });
+      return views;
     }
     focusOut(event) {
       return this.focusLeft(event.relatedTarget);
@@ -5088,12 +5302,16 @@
       return Runtime.append(this._button_titles, title);
     }
     async run() {
-      let template = Swill__Templates.named(
+      let document2 = this.application().root.ownerDocument;
+      let template = Swill__Templates.named("alert", document2);
+      let dialog = Runtime.must(template.content.firstElementChild).cloneNode(true);
+      this.attach(dialog);
+      if (this.title == null) this.title = document2.title;
+      let window = this.application().presentWindow(
+        this,
         "alert",
-        this.application().root.ownerDocument
+        Runtime.keywordArguments({ modal: true })
       );
-      this.attach(Runtime.must(template.content.firstElementChild).cloneNode(true));
-      let window = this.application().presentWindow(this, "alert");
       await window.closed;
       return this._choice;
     }
@@ -5115,7 +5333,11 @@
     // each sends choose.
     viewDidLoad() {
       let actions = Swill__Swell.$index(this.view.element).findBang(".actions");
-      return (Runtime.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((title) => actions.append(Swill__Swell.$index(this.view.cloneTemplate(Runtime.must(this.buttonTemplate))).text(title).element));
+      return (Runtime.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((label, index) => {
+        let button = Swill__Swell.$index(this.view.cloneTemplate(Runtime.must(this.buttonTemplate))).text(label);
+        if (index === 0) button.addClass("default");
+        return actions.append(button.element);
+      });
     }
   };
   var Swill__ProblemReporter = class _Swill__ProblemReporter extends Swill__Object {
@@ -5150,7 +5372,7 @@
       }
       ;
       let stop_warnings = this._stop_warnings;
-      if (Runtime.isTruthy(stop_warnings)) stop_warnings();
+      stop_warnings?.call(null);
       this._stop_warnings = null;
       this._pending = [];
       return this._pending;
@@ -5189,11 +5411,12 @@
       try {
         let alert = new Swill__Alert();
         alert.icon = Runtime.must(problem.icon);
+        alert.title = problem.icon === "Stop" ? "Error" : "Warning";
         alert.messageText = Runtime.must(problem.message);
         alert.informativeText = Runtime.must(problem.detail);
         alert.addButton("OK");
         await alert.run();
-      } catch (_error) {
+      } catch (_e) {
         this._pending = [];
       } finally {
         this._current = null;
@@ -5203,7 +5426,7 @@
     }
     static messageOf(value) {
       if (value instanceof Error) return value.message;
-      return `${value}`;
+      return Runtime.send(value, "to_s");
     }
     static originOf(value) {
       if (!(value instanceof Error)) return "";
@@ -6173,6 +6396,10 @@
           "become_first_responder": {
             "arity": 0,
             "js": "becomeFirstResponder"
+          },
+          "update_accessibility": {
+            "arity": 0,
+            "js": "updateAccessibility"
           }
         }
       },
@@ -6196,6 +6423,15 @@
           "resign_first_responder": {
             "arity": 1,
             "js": "resignFirstResponder"
+          }
+        }
+      },
+      "Swill::Control::Button": {
+        constructor: Swill__Control__Button,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
           }
         }
       },
@@ -6225,6 +6461,10 @@
           "image_element": {
             "arity": 0,
             "js": "imageElement"
+          },
+          "update_accessibility": {
+            "arity": 0,
+            "js": "updateAccessibility"
           }
         }
       },
@@ -6235,6 +6475,13 @@
           "represented_object": {
             js: "representedObject",
             type: "T.untyped",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
+          "title": {
+            type: "T.nilable(String)",
             attribute: false,
             defaultValue() {
               return null;
@@ -6363,7 +6610,9 @@
         properties: {},
         methods: {
           "initialize": {
-            "arity": 2
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2
           },
           "scoped_key": {
             "arity": 1,
@@ -6388,6 +6637,10 @@
           "controller": {
             "arity": 0,
             "accessor": true
+          },
+          "modal?": {
+            "arity": 0,
+            "js": "isModal"
           },
           "content_name": {
             "arity": 0,
@@ -6428,6 +6681,13 @@
         constructor: Swill__Application,
         mixins: [Swill__OutletOwner],
         properties: {
+          "theme": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
           "development": {
             type: "T::Boolean",
             attribute: false,
@@ -6484,8 +6744,24 @@
             "js": "presentWindow"
           },
           "open_window": {
-            "arity": 4,
+            "arity": 5,
             "js": "openWindow"
+          },
+          "theme_link": {
+            "arity": 1,
+            "js": "themeLink"
+          },
+          "adopt_theme": {
+            "arity": 1,
+            "js": "adoptTheme"
+          },
+          "theme_did_change": {
+            "arity": 2,
+            "js": "themeDidChange"
+          },
+          "show_title": {
+            "arity": 2,
+            "js": "showTitle"
           },
           "warn_unrestored": {
             "arity": 1,
@@ -6518,9 +6794,33 @@
             "arity": 0,
             "js": "postFirstResponderChange"
           },
+          "describe_responder": {
+            "arity": 1,
+            "js": "describeResponder"
+          },
           "focus_in": {
             "arity": 1,
             "js": "focusIn"
+          },
+          "insert_tab": {
+            "arity": 1,
+            "js": "insertTab"
+          },
+          "insert_backtab": {
+            "arity": 1,
+            "js": "insertBacktab"
+          },
+          "modal_window": {
+            "arity": 0,
+            "js": "modalWindow"
+          },
+          "select_key_view": {
+            "arity": 2,
+            "js": "selectKeyView"
+          },
+          "key_views": {
+            "arity": 1,
+            "js": "keyViews"
           },
           "focus_out": {
             "arity": 1,
@@ -7213,7 +7513,7 @@
   {
     const script = typeof document === "undefined" ? null : document.currentScript;
     const base = script && script.src ? new URL(".", script.src).href : "";
-    Swill__Bundle.register("swill", base, ["Info.png", "Note.png", "Stop.png", "Warning.png", "controls.css", "controls.html"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" role="listbox" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" role="option" tabindex="-1">\n      <span class="custom-select-icon" aria-hidden="true"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert" role="alertdialog">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="" aria-hidden="true">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
+    Swill__Bundle.register("swill", base, ["Info.png", "Note.png", "Stop.png", "Warning.png", "bioplastic.css", "controls.html", "fonts/AtkinsonHyperlegibleNext-Italic.woff2", "fonts/AtkinsonHyperlegibleNext.woff2", "fonts/OFL.txt", "linear.css"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" tabindex="-1">\n      <span class="custom-select-icon"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" klass="Swill::Control::Button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
   }
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();

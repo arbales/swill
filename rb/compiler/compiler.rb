@@ -90,10 +90,11 @@ module Swill
 
     # The UI framework alone, in the same order: views, controllers, bindings,
     # the responder chain, and List, without models, remote data, the concrete
-    # controls, or the list controllers built on List.
+    # controls other than the button and image view an alert is built from,
+    # or the list controllers built on List.
     UI_FRAMEWORK_SOURCES = FRAMEWORK_SOURCES.reject do |path|
       path.start_with?("rb/framework/model/", "rb/framework/distant/") ||
-        (path.start_with?("rb/framework/control/") && !path.end_with?("/base.rb", "/image_view.rb")) ||
+        (path.start_with?("rb/framework/control/") && !path.end_with?("/base.rb", "/button.rb", "/image_view.rb")) ||
         %w[core/wire.rb controller/sortable_list.rb controller/editor.rb
            controller/inline_editor.rb controller/editable_list.rb].any? { |name| path.end_with?(name) }
     end.freeze

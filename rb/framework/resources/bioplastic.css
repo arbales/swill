@@ -1,0 +1,736 @@
+/* Bioplastic: Swill's light theme, after the grey, bevelled windows and
+   buttons of classic desktops. It began as a copy of Linear; the two keep the
+   same rules in the same order, with their own values. Link it as the page's
+   first stylesheet with data-swill-theme; Application#theme switches it.
+
+   The framework's own controls come first, then the page, form controls,
+   windows and lists an application builds from. */
+
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("fonts/AtkinsonHyperlegibleNext.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("fonts/AtkinsonHyperlegibleNext-Italic.woff2") format("woff2");
+}
+
+.custom-select {
+  position: relative;
+  outline: none;
+}
+
+.custom-select:focus .custom-select-button {
+  border-color: var(--accent);
+}
+
+.custom-select-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 27px;
+  padding-right: 24px;
+  text-align: left;
+  position: relative;
+}
+
+.custom-select-button.has-icon {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.custom-select-button::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--bright);
+}
+
+.custom-select-trigger-icon {
+  color: var(--accent);
+}
+
+.custom-select-label {
+  color: var(--bright);
+}
+
+.custom-select-popup {
+  position: absolute;
+  z-index: 10;
+  inset-inline: 0;
+  top: calc(100% + 4px);
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  background: var(--panel);
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.custom-select-popup[hidden] {
+  display: none;
+}
+
+.custom-select-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 4px 8px;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-weight: 400;
+  text-shadow: none;
+}
+
+.custom-select-option.has-icon {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.custom-select-option.selected {
+  background: var(--selected);
+}
+
+.custom-select-icon {
+  color: var(--accent);
+}
+
+.custom-select-option-text {
+  display: grid;
+}
+
+.custom-select-option-description {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.segmented-options { display: inline-flex; max-width: 100%; }
+.segmented-option {
+  min-width: 0;
+  height: 27px;
+  padding: 0 12px;
+}
+.segmented-option + .segmented-option { margin-left: -1px; }
+.segmented-option { border-radius: 0; }
+.segmented-option:first-child { border-radius: 2px 0 0 2px; }
+.segmented-option:last-child { border-radius: 0 2px 2px 0; }
+.segmented-option:only-child { border-radius: 2px; }
+.segmented-option.checked {
+  background: var(--pressed);
+  box-shadow: var(--pressed-bevel);
+}
+.segmented-option:focus-visible {
+  position: relative;
+  outline: 2px solid var(--accent, #6cf);
+  outline-offset: -2px;
+}
+.segmented-option:disabled { opacity: 0.5; cursor: default; }
+
+/* Framework windows and the object browser share the application theme. */
+dialog.window {
+  position: fixed;
+  top: 10vh;
+  /* Safari keeps the dialog's bottom inset, stretching it from top to the
+     bottom of the viewport; the content decides its height instead. */
+  bottom: auto;
+  max-width: calc(100vw - 32px);
+  max-height: 80vh;
+  overflow: auto;
+  z-index: 100;
+  color: var(--fg);
+  border: 0;
+  border-radius: 4px;
+  /* The panel sits 4px inside the frame, below the 25px title bar; its
+     content another 16px in. */
+  padding: 0 20px 20px;
+  background:
+    linear-gradient(var(--panel), var(--panel)) no-repeat 4px 25px / calc(100% - 8px) calc(100% - 29px),
+    var(--frame);
+  min-width: min(320px, calc(100vw - 32px));
+  box-shadow: var(--frame-bevel), 2px 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+dialog.window .actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 12px;
+}
+
+dialog.window .actions button {
+  min-width: 98px;
+}
+
+dialog.window.alert {
+  width: min(420px, calc(100vw - 32px));
+}
+
+/* On [open] only: a display on the bare selector would show a closed dialog. */
+dialog.window.alert[open] {
+  display: grid;
+  /* minmax(0, …): a bare 1fr grows to its longest word, a URL or a class
+     path, and pushes the icon out of the dialog. */
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-content: start;
+  column-gap: 16px;
+  align-items: start;
+}
+
+dialog.window.alert > .window-title {
+  grid-column: 1 / -1;
+}
+
+dialog.window.alert .alert-icon {
+  width: 48px;
+  height: 48px;
+}
+
+dialog.window.alert .alert-text {
+  overflow-wrap: anywhere;
+}
+
+dialog.window.alert .actions {
+  grid-column: 1 / -1;
+}
+
+dialog.window.alert h2 {
+  margin: 0 0 4px;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+dialog.window.alert p {
+  margin: 0;
+  color: var(--dim);
+}
+
+.object-browser-window {
+  inset: 64px 48px auto 48px;
+  width: min(1180px, calc(100vw - 96px));
+  min-height: 620px;
+  z-index: 10;
+}
+
+.object-browser-window > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.object-browser-window > header .actions {
+  margin-top: 0;
+}
+
+.object-path {
+  min-height: 1.5em;
+  color: var(--dim);
+  border-bottom: 1px solid var(--rule);
+  margin: 0 -16px 12px;
+  padding: 0 16px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.object-browser {
+  display: block;
+  min-height: 520px;
+}
+
+.object-columns {
+  display: flex;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  min-width: 0;
+  min-height: 520px;
+}
+
+.object-column {
+  flex: 0 0 260px;
+  border-right: 1px solid var(--rule);
+  overflow-y: auto;
+  max-height: 520px;
+}
+
+.object-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px auto;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 5px 8px;
+  height: auto;
+  min-width: 0;
+  background: none;
+  box-shadow: none;
+  font-weight: 400;
+  text-shadow: none;
+  text-align: left;
+}
+
+.object-row[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.object-name {
+  color: var(--bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-arrow {
+  color: var(--dim);
+}
+
+.object-value {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-empty {
+  color: var(--dim);
+  padding: 8px;
+}
+
+.object-preview-column {
+  padding: 8px;
+}
+
+.object-preview-heading {
+  color: var(--bright);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.object-preview-column pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- The page and its controls ---- */
+
+
+:root {
+  color-scheme: light;
+  --bg: #fff;
+  --fg: #000;
+  --dim: rgba(0, 0, 0, 0.66);
+  --bright: #000;
+  --accent: #2a62c9;
+  --selected: #d7e3f6;
+  --rule: rgba(0, 0, 0, 0.14);
+  /* Accents an application can use for good, middling and bad. */
+  --positive: #1d7a33;
+  --caution: #946200;
+  --negative: #b3261e;
+  /* Windows, and the bevelled surface buttons and fields share. */
+  --frame: #e5e5e5;
+  --panel: #f7f7f7;
+  --frame-line: rgba(0, 0, 0, 0.66);
+  --frame-bevel: inset -1px -1px 1px rgba(0, 0, 0, 0.33), inset 1px 1px 2px #fff;
+  --surface: linear-gradient(#f5f5f5, #d9d9d9);
+  --surface-bevel: inset -1px -1px 1px rgba(0, 0, 0, 0.25), inset 2px 2px 0 #fff;
+  --pressed: linear-gradient(#ccc, #d9d9d9);
+  --pressed-bevel: inset 1px 1px 1px rgba(0, 0, 0, 0.25);
+  --pressed-highlight: 1px 1px 1px #fff;
+  --focus-ring: #7e7ee4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+:where(body, main) > [window] {
+  max-width: var(--window-max-width, 1400px);
+  margin: 0 auto;
+  padding-inline: 16px;
+}
+
+:where(body, main) > [window="main"] {
+  padding-bottom: 24px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.toolbar h2 {
+  margin: 0;
+}
+
+input,
+select,
+textarea,
+option {
+  color: var(--bright);
+}
+
+select,
+::picker(select) {
+  appearance: base-select;
+}
+
+input:where([type="text"], [type="email"], [type="number"], [type="date"], [type="search"], [type="tel"], [type="url"]),
+textarea {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 74px;
+  background: #fff;
+  border: 1px solid #000;
+  border-radius: 0;
+  /* Figma's shadow starts at the border's outer edge, so inside it the
+     shadow is 1px along. */
+  box-shadow: inset 1px 1px 1px rgba(0, 0, 0, 0.25);
+  padding: 4px 8px;
+  font: inherit;
+  outline: none;
+  width: 100%;
+}
+
+input:where([type="text"], [type="email"], [type="number"], [type="date"], [type="search"], [type="tel"], [type="url"]) {
+  height: 27px;
+}
+
+/* A dropdown is a button that holds its choice. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  min-height: 27px;
+  padding: 0 24px 0 8px;
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0h9L4.5 6z'/%3E%3C/svg%3E") no-repeat right 8px center, var(--surface);
+  box-shadow: var(--surface-bevel);
+  font: inherit;
+  font-weight: 600;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.5);
+  outline: none;
+}
+
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  min-width: 74px;
+  height: 27px;
+  padding: 0 8px;
+  background: var(--surface);
+  color: var(--bright);
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  box-shadow: var(--surface-bevel);
+  font: inherit;
+  font-weight: 600;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+}
+
+/* Pressed, the button sinks: a darker face, a shadow along its top and
+   left, and a highlight outside its bottom and right. */
+button:active:not(:disabled) {
+  background: var(--pressed);
+  box-shadow: var(--pressed-bevel), var(--pressed-highlight);
+}
+
+/* A focused button, which Enter and Space press, sits in a heavy ring: its
+   own border in black, a grey band, and another black stroke. A window's
+   default button is focused first, and wears the ring however focus came. */
+button:focus-visible,
+button.default:focus {
+  outline: none;
+  border-color: #000;
+  box-shadow: var(--surface-bevel), 0 0 0 2px #ccc, 0 0 0 3px #000;
+}
+
+button:focus-visible:active:not(:disabled),
+button.default:focus:active:not(:disabled) {
+  box-shadow: var(--pressed-bevel), 0 0 0 2px #ccc, 0 0 0 3px #000;
+}
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  vertical-align: -3px;
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  background: var(--surface);
+  box-shadow: var(--surface-bevel);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "✓";
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  color: #000;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A focused field keeps its border and takes a 2px ring outside it,
+   rounded at the corners, and a deeper shadow along its top and left. */
+input:where([type="text"], [type="email"], [type="number"], [type="date"], [type="search"], [type="tel"], [type="url"]):focus,
+textarea:focus {
+  border-radius: 1px;
+  box-shadow: inset 1px 1px 2px -1px #000;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+button:disabled {
+  color: rgba(0, 0, 0, 0.35);
+  text-shadow: none;
+  cursor: default;
+}
+
+input:disabled,
+input:read-only {
+  color: var(--dim);
+}
+
+label {
+  display: block;
+  margin: 6px 0;
+}
+
+label
+  > :where(
+    input[type="text"],
+    input[type="email"],
+    input[type="number"],
+    input[type="date"],
+    input[type="search"],
+    input[type="tel"],
+    input[type="url"],
+    select,
+    textarea
+  ) {
+  display: block;
+  margin: 4px 0 0;
+}
+
+label > input:where([type="checkbox"], [type="radio"]) {
+  width: auto;
+  margin: 0 6px 0 0;
+}
+
+h2,
+h3 {
+  font-size: 1em;
+  color: var(--bright);
+  margin: 0 0 12px;
+}
+
+h3 {
+  margin-top: 16px;
+  margin-bottom: 6px;
+}
+
+.control-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 0;
+  border: 0;
+}
+
+.control-group > legend {
+  margin: 0 0 6px;
+  padding: 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.control-group > :where(label, p) {
+  margin-block: 0;
+}
+
+.control-group--framed {
+  padding: 8px 10px 10px;
+  border: 1px solid var(--rule);
+}
+
+.control-group--framed > legend {
+  margin-left: -4px;
+  padding: 0 4px;
+}
+
+/* Lists. A list's element carries `list`, its header `header` and its rows
+   `row`; the application names the columns with --list-columns. List marks a
+   selected row `selected`, and EditableList hides the row being edited and
+   shows its editor, marked `editing`, in its place. */
+.list {
+  margin-top: 12px;
+  outline: none;
+}
+
+.list:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.row.selected {
+  background: var(--selected);
+}
+
+.row,
+.header {
+  display: grid;
+  grid-template-columns: var(--list-columns, 1fr);
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.header {
+  color: var(--dim);
+}
+
+.header [data-column] {
+  cursor: pointer;
+  user-select: none;
+}
+
+.header [data-column]:hover {
+  color: var(--bright);
+}
+
+.header [data-column][data-sort-state="asc"]::after {
+  content: " ▲";
+}
+
+.header [data-column][data-sort-state="desc"]::after {
+  content: " ▼";
+}
+
+.row.being-edited {
+  display: none;
+}
+
+.row.editing {
+  background: var(--selected);
+  outline: 1px solid var(--accent);
+}
+
+.row.editing input,
+.row.editing select {
+  padding: 2px 6px;
+}
+
+/* A status line under a toolbar. */
+.status {
+  color: var(--dim);
+  min-height: 1.5em;
+  margin-bottom: 8px;
+}
+
+/* A button's keyboard shortcut, shown after its label. */
+button kbd {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 3px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 0.8em;
+  font-weight: 400;
+}
+
+/* A window's title bar: its title between pinstripes, across the top of
+   the frame. */
+dialog.window > .window-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 25px;
+  margin: 0 -16px 16px;
+  padding: 4px;
+}
+
+dialog.window > .window-title::before,
+dialog.window > .window-title::after {
+  content: "";
+  flex: 1 0 72px;
+  height: 13px;
+  background: repeating-linear-gradient(#fff 0 1px, rgba(0, 0, 0, 0.33) 1px 2px) 0 0 / 100% 12px no-repeat;
+}
+
+dialog.window > .window-title > span {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 17px;
+  color: #000;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.25);
+  white-space: nowrap;
+}
+
+dialog.window > .window-title > span:empty {
+  display: none;
+}

@@ -135,7 +135,7 @@ end
     <label>Title <input bind="title" bind-disabled="@saving"></label>
     <button type="button" klass="Swill::Control::Button"
             data-action="save" bind-disabled="@saving">Save</button>
-    <p role="status" bind="@message"></p>
+    <p bind="@message"></p>
   </section>
 </body>
 </html>
