@@ -99,6 +99,17 @@ module Swill
       candidate == @controller || @root.contains(candidate.view.element)
     end
 
+    # Adds the title bar for a presented dialog and follows its controller's title.
+    sig { params(identifier: String, controller: Controller).void }
+    def show_title(identifier, controller) # :nodoc:
+      document = @root.ownerDocument
+      title = Swell[document.createElement("span")].attr("id", identifier)
+      header = Swell[document.createElement("header")].add_class("window-title").append(title.element)
+      Swell[@root].prepend(header.element)
+      title.text(controller.title)
+      controller.observe(controller, :title, ->(value) { title.text(value) })
+    end
+
     # Tear down the subtree, close a dialog, remove the root, and resolve.
     sig { void }
     def dismiss

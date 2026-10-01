@@ -51,6 +51,10 @@ module Swill
       @unrestored = T.let([], T::Array[String])
       @unrestorable_paths = T.let([], T::Array[String])
       @problems = T.let(nil, T.nilable(ProblemReporter))
+      @development_monitor = T.let(nil, T.nilable(DevelopmentMonitor))
+      @connection_state = T.let("idle", String)
+      @reconnect = T.let(nil, T.nilable(T.proc.void))
+      @on_online = ->(_event) { @reconnect&.() if @connection_state == "disconnected" }
       @window_titles = T.let(0, Integer)
     end
 
@@ -75,13 +79,12 @@ module Swill
       raise "An application is already running" if Application.running?
       Application.launched(self)
       @root = root
+      root.ownerDocument.defaultView&.addEventListener("online", @on_online)
       adopt_theme(root.ownerDocument)
       self.development = true if root.hasAttribute("development")
-      if development
-        problems = ProblemReporter.new(root.ownerDocument.defaultView)
-        problems.start
-        @problems = problems
-      end
+      problems = ProblemReporter.new(root.ownerDocument.defaultView)
+      problems.start if development
+      @problems = problems
       @on_focus = ->(event) { focus_in(event) }
       @on_focus_out = ->(event) { focus_out(event) }
       @on_key_down = ->(event) { first_responder.key_down(event) }
@@ -104,7 +107,26 @@ module Swill
       @fragments.start_observing(->() { apply_fragment })
       watch(root)
       application_did_launch
+      NotificationCenter.default.post("application_did_launch", self, nil)
+      monitor = DevelopmentMonitor.new(root.ownerDocument, problems)
+      monitor.start
+      @development_monitor = monitor
       self
+    end
+
+    # Presents connection notices without coupling UI-only applications to a
+    # particular data transport. The transport supplies its recovery action.
+    sig { params(state: String, detail: String, retry_action: T.proc.void).void }
+    def connection_changed(state, detail, retry_action)
+      @connection_state = state
+      @reconnect = retry_action
+      @problems&.connection_changed(state, detail, retry_action)
+    end
+
+    # Reports a recoverable operation problem, including in production.
+    sig { params(message: String, detail: String).void }
+    def report_problem(message, detail)
+      @problems&.report("Warning", message, detail)
     end
 
     # The browser window the application runs in, for what only it offers:
@@ -127,6 +149,13 @@ module Swill
     def terminate
       return unless Application.running? && Application.shared == self
       application_will_terminate
+      root.ownerDocument.defaultView&.removeEventListener("online", @on_online)
+      @reconnect = nil
+      @development_monitor&.stop
+      @development_monitor = nil
+      @problems&.stop
+      @problems = nil
+      NotificationCenter.default.post("application_will_terminate", self, nil)
       @fragments.stop_observing
       observer = @observer
       observer.disconnect if observer
@@ -140,9 +169,6 @@ module Swill
       @root.removeEventListener("keydown", @on_key_down)
       @root.removeEventListener("keyup", @on_key_up)
       assign_first_responder(nil)
-      problems = @problems
-      problems.stop if problems
-      @problems = nil
       Application.terminated(self)
     end
 
@@ -228,7 +254,11 @@ module Swill
              modal: T::Boolean).returns(Window)
     end
     def open_window(name, node, controller, controllers, modal) # :nodoc:
-      show_title(node, controller) if node.tagName == "DIALOG" && node.classList.contains("window")
+      window = Window.new(name, node, modal: modal)
+      if node.tagName == "DIALOG" && node.classList.contains("window")
+        @window_titles += 1
+        window.show_title("swill-window-title-#{@window_titles}", controller)
+      end
       controller.view.update_accessibility
       if node.tagName == "DIALOG"
         if modal
@@ -243,7 +273,6 @@ module Swill
         # opened, so the window lays out before its first responder focuses.
         node.getBoundingClientRect
       end
-      window = Window.new(name, node, modal: modal)
       window.assign_content(name, controller)
       window.save_first_responder(first_responder)
       @windows << window
@@ -282,25 +311,6 @@ module Swill
       current = link.getAttribute("href").to_s
       return if current.end_with?("/#{theme}.css") || current == "#{theme}.css"
       link.setAttribute("href", url)
-    end
-
-    # FIXME: This contains a lot of manual DOM stuff that should likely happen with Swell, and also likely does not belong here in Application.
-    # A presented <dialog class="window"> gets a title bar showing its
-    # content controller's #title, kept current as the title changes; the
-    # theme decides whether it is drawn.
-    sig { params(node: Element, controller: Controller).void }
-    def show_title(node, controller) # :nodoc:
-      document = node.ownerDocument
-      header = document.createElement("header")
-      header.setAttribute("class", "window-title")
-      text = document.createElement("span")
-      @window_titles += 1
-      identifier = "swill-window-title-#{@window_titles}"
-      text.setAttribute("id", identifier)
-      header.appendChild(text)
-      node.insertBefore(header, node.firstElementChild)
-      text.textContent = controller.title.to_s
-      controller.observe(controller, :title, ->(title) { text.textContent = title.to_s })
     end
 
     # Only a window's content controller is restored, so restorable paths

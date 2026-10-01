@@ -22,6 +22,11 @@ module Swill
     class Client < Swill::Object
       extend T::Sig
 
+      # Milliseconds between failed attempts, capped during prolonged outages.
+      RETRY_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000].freeze
+      # Spread simultaneous reconnects by ten percent in either direction.
+      RETRY_JITTER = 0.1
+
       # Returns the client the application shares: every distant object's
       # queries, writes and field loads go through it.
       sig { returns(T.attached_class) }
@@ -36,11 +41,12 @@ module Swill
       # not the server's.
       sig { params(url: String, schema_hash: String).void }
       def self.configure(url:, schema_hash:)
+        default
         Runtime.configure_data(url, schema_hash)
       end
 
-      # Creates a client with no objects, and registers with the runtime to be
-      # reset when the connection is lost and to send queued demands when it opens.
+      # Creates the identity store and observes the transport. Transient loss
+      # leaves local objects intact; only an intentional reset forgets them.
       sig { void }
       def initialize
         super
@@ -51,7 +57,62 @@ module Swill
         @actor_scope = T.let(nil, T.nilable(String))
         @generation = T.let(0, Integer)
         @active_generations = T.let([], T::Array[Integer])
-        Runtime.register_data_lifecycle(-> { reset }, -> { connection_opened })
+        @retry_timer = T.let(nil, T.nilable(Integer))
+        @retry_attempt = T.let(0, Integer)
+        @connection_detail = T.let("", String)
+        NotificationCenter.default.add_observer("application_did_launch", ->(_note) { present_connection })
+        NotificationCenter.default.add_observer("application_will_terminate", ->(_note) { Runtime.close_data })
+        Runtime.register_data_lifecycle(-> { reset }, -> { connection_opened },
+                                        ->(state, detail) { connection_changed(state, detail) })
+      end
+
+      # The handshake, rather than the socket alone, determines readiness.
+      # idle, connecting, connected, disconnected, or reload_required.
+      property :connection_state, type: String, default: "idle"
+
+      # Tries immediately, sharing an attempt already in progress. Failed
+      # operations are never replayed; a successful handshake resumes field loads.
+      sig { returns(T::Boolean) }
+      async def reconnect
+        return false if connection_state == "reload_required"
+        cancel_retry
+        begin
+          await Runtime.connect_data
+          true
+        rescue => _error
+          false
+        end
+      end
+
+      sig { params(state: String, detail: String).void }
+      def connection_changed(state, detail) # :nodoc:
+        cancel_retry
+        self.connection_state = state
+        @connection_detail = detail
+        @retry_attempt = 0 if state == "connected" || state == "idle"
+        if state == "disconnected"
+          delays = T.let(RETRY_DELAYS, T::Array[Integer])
+          delay = T.must(delays[[@retry_attempt, delays.length - 1].min])
+          @retry_attempt += 1
+          jittered = T.let(delay * (1 - RETRY_JITTER + Math.random() * RETRY_JITTER * 2), Float)
+          @retry_timer = setTimeout(-> { reconnect }, jittered.round)
+        end
+        present_connection
+      end
+
+      sig { void }
+      def present_connection # :nodoc:
+        return unless Application.running?
+
+        app = Application.shared
+        app.connection_changed(connection_state, @connection_detail, -> { reconnect })
+      end
+
+      sig { void }
+      def cancel_retry # :nodoc:
+        timer = @retry_timer
+        clearTimeout(timer) if timer
+        @retry_timer = nil
       end
 
       # :section: Called by Generated Models
@@ -204,9 +265,8 @@ module Swill
       # Forgets every object the client holds: each has its fields reset to
       # unloaded and deallocs, which releases its association controllers, and
       # queued demands and tombstones are dropped. The runtime calls this when
-      # the connection is lost, and the client calls it when a response arrives
-      # under a different actor scope than the one before: another actor's
-      # records are another identity.
+      # the connection is intentionally closed or the handshake changes actor
+      # scope: another actor's records are another identity.
       sig { void }
       def reset
         @stores.each do |_model, store|
@@ -447,8 +507,7 @@ module Swill
         # value with that generation. Every message carries a generation, and
         # every patch and invalidation in the response carries it back, which
         # is how an object tells an older response from a newer one. A
-        # response under a different actor scope than the last resets the
-        # client first. For a `GET`, each demanded field is told the request
+        # handshake checks the actor scope before requests are sent. For a `GET`, each demanded field is told the request
         # started, and told of the failure if the request raises; the error is
         # raised on to the caller. The generation is active until the response
         # is applied, which is what keeps a tombstone alive.
@@ -466,11 +525,13 @@ module Swill
             raw = await Runtime.data_request(type, payload)
             received = T.cast(raw, T::Hash[String, T.untyped])
             scope = received["actor_scope"].to_s
-            reset if @actor_scope && @actor_scope != scope
             @actor_scope = scope
             message = T.cast(received["message"], T::Hash[String, T.untyped])
             [apply_envelope(message, operation_generation, preferred, overwrite_dirty), operation_generation]
-          rescue => error
+          rescue Error => error
+            if error.code == "outcome_unknown" && Application.running?
+              Application.shared.report_problem("Operation outcome unknown", error.message)
+            end
             update_demand_state(contents, operation_generation, error.message) if type == "GET"
             raise error
           ensure
@@ -564,7 +625,7 @@ module Swill
           begin
             await request("GET", {"demands" => demands}, nil, false)
           rescue => error
-            unless Runtime.data_connected
+            if connection_state == "disconnected" || connection_state == "connecting"
               batch.each do |item|
                 object = T.cast(item["object"], Object)
                 fields = T.cast(item["fields"], T::Array[String])
@@ -574,7 +635,7 @@ module Swill
                 fields.each { |name| target << name unless target.include?(name) }
               end
             end
-            Runtime.warn("data did not load: #{error.message}")
+            Runtime.warn("data did not load: #{error.message}") if connection_state == "connected"
           end
         end
     end

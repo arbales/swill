@@ -433,7 +433,7 @@
     if (slot.running) {
       throw new Error(`Computed cycle: ${descriptor.name}`);
     }
-    slot.disposers.splice(0).forEach((dispose) => dispose());
+    slot.disposers.splice(0).forEach((dispose2) => dispose2());
     const frame = /* @__PURE__ */ new Map();
     slot.running = true;
     captures.push(frame);
@@ -464,7 +464,7 @@
     if (!slot?.valid) return;
     const previous = slot.value;
     slot.valid = false;
-    slot.disposers.splice(0).forEach((dispose) => dispose());
+    slot.disposers.splice(0).forEach((dispose2) => dispose2());
     for (const callback of [
       ...listeners(object, descriptor.name, "dependents")
     ]) callback();
@@ -517,7 +517,7 @@
     if (!current) return;
     const dependents = [...current.dependents.values()].flatMap((callbacks) => [...callbacks]);
     for (const slot of current.computed.values()) {
-      slot.disposers.splice(0).forEach((dispose) => dispose());
+      slot.disposers.splice(0).forEach((dispose2) => dispose2());
     }
     current.computed.clear();
     current.observers.clear();
@@ -558,11 +558,11 @@
         }
       }
     }
-    const pending2 = new Map(entries.map(([name, descriptor]) => [
+    const pending = new Map(entries.map(([name, descriptor]) => [
       descriptor.constructor,
       { name, descriptor }
     ]));
-    if (pending2.size !== entries.length) {
+    if (pending.size !== entries.length) {
       throw new Error("Duplicate constructor in meta");
     }
     const methods = (descriptors) => Object.entries(descriptors ?? {}).map(([name, descriptor]) => ({ name, js: name, ...descriptor }));
@@ -576,10 +576,10 @@
       mixinMetadata.set(mixin.factory, methods(mixin.methods));
       if (mixin.classFactory) mixinClassFactories.set(mixin.factory, mixin.classFactory);
     }
-    while (pending2.size) {
+    while (pending.size) {
       let progress = false;
-      for (const [klass, { name, descriptor }] of pending2) {
-        if (pending2.has(Object.getPrototypeOf(klass))) continue;
+      for (const [klass, { name, descriptor }] of pending) {
+        if (pending.has(Object.getPrototypeOf(klass))) continue;
         if (descriptor.mixins?.length) include(klass, descriptor.mixins, incoming);
         const properties = Object.entries(descriptor.properties ?? {}).map(([name2, property]) => ({
           name: name2,
@@ -596,7 +596,7 @@
           descriptor.restorations ?? [],
           descriptor.settings ?? []
         );
-        pending2.delete(klass);
+        pending.delete(klass);
         progress = true;
       }
       if (!progress) {
@@ -955,12 +955,12 @@
         return () => {
         };
       }
-      const dispose = subscribe(object, name, () => {
+      const dispose2 = subscribe(object, name, () => {
         if (active) callback(read(object, name));
       }, "observers");
       return () => {
         active = false;
-        dispose();
+        dispose2();
       };
     }
     const owners = [object];
@@ -986,7 +986,7 @@
     hook(0);
     return () => {
       active = false;
-      for (const dispose of disposers) dispose?.();
+      for (const dispose2 of disposers) dispose2?.();
       disposers.length = 0;
     };
   }
@@ -1457,25 +1457,27 @@
   }
 
   // rb/runtime/data_client.mjs
+  var HANDSHAKE_TIMEOUT = 1e4;
   var configuration2 = null;
-  var socket = null;
-  var connecting = null;
+  var connection = null;
   var actorScope = null;
+  var terminalError = null;
   var sequence = 0;
-  var pending = /* @__PURE__ */ new Map();
   var resetCoordinator = () => {
   };
   var connectionOpened = () => {
   };
-  function registerDataLifecycle(reset, opened) {
+  var connectionChanged = () => {
+  };
+  function registerDataLifecycle(reset, opened, changed = () => {
+  }) {
     resetCoordinator = reset;
     connectionOpened = opened;
+    connectionChanged = changed;
   }
   function configureData(url, schemaHash, webSocketFactory = (value) => new WebSocket(value)) {
     url = websocketURL(url);
-    if (configuration2 && (configuration2.url !== url || configuration2.schemaHash !== schemaHash)) {
-      closeData();
-    }
+    if (configuration2 && (configuration2.url !== url || configuration2.schemaHash !== schemaHash)) closeData();
     configuration2 = { url, schemaHash, webSocketFactory };
   }
   function websocketURL(value) {
@@ -1488,84 +1490,120 @@
     return url.href;
   }
   function closeData() {
-    const current = socket;
-    socket = null;
-    connecting = null;
+    const previous = connection;
+    connection = null;
+    if (previous) dispose(previous, transportError("Swill data connection closed"));
     actorScope = null;
-    for (const waiter of pending.values()) {
-      waiter.reject(new Error("Swill data connection closed"));
-    }
-    pending.clear();
+    terminalError = null;
     resetCoordinator();
-    current?.close();
+    connectionChanged("idle", "");
   }
   function dataConnected() {
-    return socket?.readyState === WebSocket.OPEN;
+    return connection?.ready === true;
   }
-  async function dataRequest(type, contents) {
-    await openSocket();
-    const request_id = ++sequence;
-    const message = await sendRaw({ type, request_id, ...contents });
-    return { message, actor_scope: actorScope };
-  }
-  function openSocket() {
+  function connectData() {
+    if (terminalError) return Promise.reject(terminalError);
     if (!configuration2) return Promise.reject(new Error("Swill data transport is not configured"));
-    if (socket?.readyState === WebSocket.OPEN) return Promise.resolve(socket);
-    if (connecting) return connecting;
-    connecting = new Promise((resolveConnection, rejectConnection) => {
+    if (connection) return connection.promise;
+    const attempt = { socket: null, ready: false, pending: /* @__PURE__ */ new Map(), timer: null };
+    attempt.promise = new Promise((resolve2, reject) => {
+      attempt.resolve = resolve2;
+      attempt.reject = reject;
+    });
+    connection = attempt;
+    connectionChanged("connecting", "");
+    attempt.timer = setTimeout(() => fail(attempt, transportError("Swill data connection timed out")), HANDSHAKE_TIMEOUT);
+    try {
       const next = configuration2.webSocketFactory(configuration2.url);
+      attempt.socket = next;
       next.binaryType = "arraybuffer";
       next.addEventListener("open", () => {
-        socket = next;
-        sendRaw({ type: "HELLO", protocol_version: 2, schema_hash: configuration2.schemaHash }).then((message) => {
+        if (connection !== attempt) return;
+        sendRaw(attempt, { type: "HELLO", protocol_version: 2, schema_hash: configuration2.schemaHash }).then((message) => {
+          if (connection !== attempt) return;
+          if (message.type !== "WELCOME" || message.protocol_version !== 2 || message.schema_hash !== configuration2.schemaHash) {
+            throw remoteError({ code: "schema_mismatch", message: "The application has changed. Reload to continue." });
+          }
+          if (actorScope !== null && actorScope !== message.actor_scope) {
+            resetCoordinator();
+            throw remoteError({ code: "actor_scope_changed", message: "Your session has changed. Reload to continue." });
+          }
           actorScope = message.actor_scope;
-          resolveConnection(next);
+          clearTimeout(attempt.timer);
+          attempt.ready = true;
+          connectionChanged("connected", "");
           connectionOpened();
-        }, rejectConnection).finally(() => {
-          connecting = null;
-        });
+          attempt.resolve(attempt);
+        }).catch((error) => fail(attempt, error));
       });
       next.addEventListener("message", async (event) => {
-        const bytes = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : new Uint8Array(event.data);
-        const message = unpack(bytes);
-        const waiter = pending.get(message.request_id ?? "HELLO");
-        if (!waiter) return;
-        pending.delete(message.request_id ?? "HELLO");
-        if (message.type === "ERROR") waiter.reject(remoteError(message.error));
-        else waiter.resolve(message);
-      });
-      next.addEventListener("close", () => {
-        if (socket === next) socket = null;
-        for (const waiter of pending.values()) {
-          waiter.reject(new Error("Swill data connection closed"));
+        try {
+          const bytes = event.data instanceof Blob ? new Uint8Array(await event.data.arrayBuffer()) : new Uint8Array(event.data);
+          if (connection !== attempt) return;
+          const message = unpack(bytes);
+          const key = message.request_id ?? "HELLO";
+          const waiter = attempt.pending.get(key);
+          if (!waiter) return;
+          attempt.pending.delete(key);
+          if (message.type === "ERROR") waiter.reject(remoteError(message.error));
+          else waiter.resolve(message);
+        } catch (error) {
+          fail(attempt, transportError("Invalid data response", error));
         }
-        pending.clear();
       });
-      next.addEventListener("error", () => {
-        if (socket === next) socket = null;
-        connecting = null;
-        const waiter = pending.get("HELLO");
-        if (waiter) {
-          pending.delete("HELLO");
-          waiter.reject(new Error("Swill data connection failed"));
-        }
-        rejectConnection(new Error("Swill data connection failed"));
-      });
-    });
-    return connecting;
+      next.addEventListener("close", () => fail(attempt, transportError("Swill data connection closed")));
+      next.addEventListener("error", () => fail(attempt, transportError("Swill data connection failed")));
+    } catch (error) {
+      fail(attempt, transportError("Swill data connection failed", error));
+    }
+    return attempt.promise;
   }
-  function sendRaw(message) {
+  async function dataRequest(type, contents) {
+    const attempt = await connectData();
+    if (connection !== attempt || !attempt.ready) throw terminalError ?? transportError("Swill data connection closed");
+    const message = await sendRaw(attempt, { ...contents, type, request_id: ++sequence });
+    return { message, actor_scope: actorScope };
+  }
+  function fail(attempt, error) {
+    if (connection !== attempt) return;
+    connection = null;
+    const reload = ["schema_mismatch", "actor_scope_changed"].includes(error.code);
+    if (reload) terminalError = error;
+    dispose(attempt, error);
+    connectionChanged(reload ? "reload_required" : "disconnected", error.message);
+  }
+  function dispose(attempt, error) {
+    clearTimeout(attempt.timer);
+    attempt.ready = false;
+    attempt.reject(error);
+    for (const waiter of attempt.pending.values()) {
+      waiter.reject(waiter.write && waiter.sent ? transportError("The connection was lost. The operation may have completed; check its result before trying again.", error, "outcome_unknown") : error);
+    }
+    attempt.pending.clear();
+    attempt.socket?.close();
+  }
+  function sendRaw(attempt, message) {
+    const bytes = pack(message);
     const key = message.type === "HELLO" ? "HELLO" : message.request_id;
-    return new Promise((resolveMessage, rejectMessage) => {
-      pending.set(key, { resolve: resolveMessage, reject: rejectMessage });
-      socket.send(pack(message));
+    return new Promise((resolve2, reject) => {
+      const waiter = { resolve: resolve2, reject, sent: false, write: !["HELLO", "QUERY", "GET"].includes(message.type) };
+      attempt.pending.set(key, waiter);
+      try {
+        attempt.socket.send(bytes);
+        waiter.sent = true;
+      } catch (error) {
+        fail(attempt, transportError("Swill data connection failed", error));
+      }
     });
+  }
+  function transportError(message, cause, code = "connection_lost") {
+    return Object.assign(new Error(message, { cause }), { code });
   }
   function remoteError(error) {
-    const result = new Error(error?.message ?? "Remote operation failed");
-    result.code = error?.code;
-    result.details = error?.details;
-    return result;
+    return Object.assign(new Error(error?.message ?? "Remote operation failed"), {
+      code: error?.code,
+      details: error?.details
+    });
   }
   function dataTime(value) {
     return value instanceof Date;
@@ -1591,6 +1629,7 @@
     configureData,
     closeData,
     registerDataLifecycle,
+    connectData,
     dataConnected,
     dataRequest,
     dataTime,
@@ -1634,6 +1673,7 @@
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__Controller__SortableList: () => Swill__Controller__SortableList,
     Swill__DOM: () => Swill__DOM,
+    Swill__DevelopmentMonitor: () => Swill__DevelopmentMonitor,
     Swill__Distant__Client: () => Swill__Distant__Client,
     Swill__Distant__Fields: () => Swill__Distant__Fields,
     Swill__Distant__Fields_ClassMethods: () => Swill__Distant__Fields_ClassMethods,
@@ -1672,6 +1712,7 @@
     Swill__Responder: () => Swill__Responder,
     Swill__RowEdit: () => Swill__RowEdit,
     Swill__Swell: () => Swill__Swell,
+    Swill__SystemAlert: () => Swill__SystemAlert,
     Swill__Templates: () => Swill__Templates,
     Swill__URLFragment: () => Swill__URLFragment,
     Swill__ValueTransformer: () => Swill__ValueTransformer,
@@ -1992,6 +2033,11 @@
     // node moves from its current parent. See `#empty`.
     append(node) {
       this._element.appendChild(node);
+      return this;
+    }
+    // Inserts `node` before the element's current children and returns the wrapper.
+    prepend(node) {
+      this._element.insertBefore(node, this._element.firstElementChild);
       return this;
     }
     // Removes the element from its parent and returns the wrapper.
@@ -2545,16 +2591,16 @@
       // Releases the binding named `binding`, if there is one, and returns the
       // object.
       unbind(binding) {
-        let dispose = this.objectBindings()[binding];
-        if (!Runtime2.isTruthy(dispose)) return this;
-        dispose();
+        let dispose2 = this.objectBindings()[binding];
+        if (!Runtime2.isTruthy(dispose2)) return this;
+        dispose2();
         Runtime2.deleteKey(this.objectBindings(), binding);
         return this;
       }
       // Releases every binding on the object and returns it. A controller
       // calls this as it unloads.
       unbindAll() {
-        Object.entries(this.objectBindings()).forEach(([_binding, dispose]) => dispose());
+        Object.entries(this.objectBindings()).forEach(([_binding, dispose2]) => dispose2());
         this._object_bindings = {};
         return this;
       }
@@ -4442,7 +4488,7 @@
       });
     }
     static releasing(disposers) {
-      return () => disposers.forEach((dispose) => dispose());
+      return () => disposers.forEach((dispose2) => dispose2());
     }
     static resolvePath(prefix, path) {
       if (path[0] === "@") {
@@ -4575,7 +4621,7 @@
         target,
         controller
       ));
-      return () => disposers.forEach((dispose) => dispose());
+      return () => disposers.forEach((dispose2) => dispose2());
     }
     static connect(element, controller) {
       let event_name, action_name;
@@ -5097,7 +5143,7 @@
       let keys = this._restoration_keys;
       this._restoration_disposers = [];
       this._restoration_keys = [];
-      disposers.forEach((dispose) => dispose());
+      disposers.forEach((dispose2) => dispose2());
       return keys;
     }
     get name() {
@@ -5138,6 +5184,22 @@
     }
     containsController(candidate) {
       return candidate === this._controller || this._root.contains(candidate.view.element);
+    }
+    // Adds the title bar for a presented dialog and follows its controller's title.
+    showTitle(identifier, controller) {
+      let document2 = this._root.ownerDocument;
+      let title = Swill__Swell.$index(document2.createElement("span")).attr(
+        "id",
+        identifier
+      );
+      let header = Swill__Swell.$index(document2.createElement("header")).addClass("window-title").append(title.element);
+      Swill__Swell.$index(this._root).prepend(header.element);
+      title.text(controller.title);
+      return controller.observeWithObject(
+        controller,
+        "title",
+        (value) => title.text(value)
+      );
     }
     // Tear down the subtree, close a dialog, remove the root, and resolve.
     dismiss() {
@@ -5192,6 +5254,17 @@
         null,
         "T.nilable(Swill::ProblemReporter)"
       );
+      this._development_monitor = Runtime2.cast(
+        null,
+        "T.nilable(Swill::DevelopmentMonitor)"
+      );
+      this._connection_state = Runtime2.cast("idle", "String");
+      this._reconnect = Runtime2.cast(null, "T.nilable(T.proc.void)");
+      this._on_online = (_event) => {
+        if (this._connection_state === "disconnected") {
+          return this._reconnect?.call(null);
+        }
+      };
       this._window_titles = Runtime2.cast(0, "Integer");
     }
     // The theme the page is drawn in: the name of one of the framework's
@@ -5213,14 +5286,12 @@
       ;
       _Swill__Application.launched(this);
       this._root = root;
+      root.ownerDocument.defaultView?.addEventListener("online", this._on_online);
       this.adoptTheme(root.ownerDocument);
       if (root.hasAttribute("development")) this.development = true;
-      if (this.development) {
-        let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
-        problems.start();
-        this._problems = problems;
-      }
-      ;
+      let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
+      if (this.development) problems.start();
+      this._problems = problems;
       this._on_focus = (event) => this.focusIn(event);
       this._on_focus_out = (event) => this.focusOut(event);
       this._on_key_down = (event) => this.firstResponder().keyDown(event);
@@ -5242,7 +5313,26 @@
       this._fragments.startObserving(() => this.applyFragment());
       this.watch(root);
       this.applicationDidLaunch();
+      Swill__NotificationCenter.default().post(
+        "application_did_launch",
+        this,
+        null
+      );
+      let monitor = new Swill__DevelopmentMonitor(root.ownerDocument, problems);
+      monitor.start();
+      this._development_monitor = monitor;
       return this;
+    }
+    // Presents connection notices without coupling UI-only applications to a
+    // particular data transport. The transport supplies its recovery action.
+    connectionChanged(state2, detail, retry_action) {
+      this._connection_state = state2;
+      this._reconnect = retry_action;
+      return Runtime2.nilable(this._problems?.connectionChanged(state2, detail, retry_action));
+    }
+    // Reports a recoverable operation problem, including in production.
+    reportProblem(message, detail) {
+      return Runtime2.nilable(this._problems?.report("Warning", message, detail));
     }
     // The browser window the application runs in, for what only it offers:
     // a prompt, printing.
@@ -5264,6 +5354,17 @@
       }
       ;
       this.applicationWillTerminate();
+      this.root.ownerDocument.defaultView?.removeEventListener("online", this._on_online);
+      this._reconnect = null;
+      Runtime2.nilable(this._development_monitor?.stop());
+      this._development_monitor = null;
+      Runtime2.nilable(this._problems?.stop());
+      this._problems = null;
+      Swill__NotificationCenter.default().post(
+        "application_will_terminate",
+        this,
+        null
+      );
       this._fragments.stopObserving();
       let observer = this._observer;
       if (observer) observer.disconnect();
@@ -5277,9 +5378,6 @@
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
       this.assignFirstResponder(null);
-      let problems = this._problems;
-      if (problems) problems.stop();
-      this._problems = null;
       return _Swill__Application.terminated(this);
     }
     // The application is running and its markup is awake.
@@ -5407,8 +5505,13 @@
       );
     }
     openWindow(name, node, controller, controllers, modal) {
+      let window = new Swill__Window(name, node, Runtime2.keywordArguments({ modal }));
       if (Runtime2.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
-        this.showTitle(node, controller);
+        this._window_titles++;
+        window.showTitle(
+          `swill-window-title-${this._window_titles}`,
+          controller
+        );
       }
       ;
       controller.view.updateAccessibility();
@@ -5423,7 +5526,6 @@
         node.getBoundingClientRect();
       }
       ;
-      let window = new Swill__Window(name, node, Runtime2.keywordArguments({ modal }));
       window.assignContent(name, controller);
       window.saveFirstResponder(this.firstResponder());
       Runtime2.append(this._windows, window);
@@ -5469,27 +5571,6 @@
       let current = Runtime2.stringify(link.getAttribute("href"));
       if (current.endsWith(`/${theme}.css`) || current === `${theme}.css`) return;
       return link.setAttribute("href", url);
-    }
-    // FIXME: This contains a lot of manual DOM stuff that should likely happen with Swell, and also likely does not belong here in Application.
-    // A presented <dialog class="window"> gets a title bar showing its
-    // content controller's #title, kept current as the title changes; the
-    // theme decides whether it is drawn.
-    showTitle(node, controller) {
-      let document2 = node.ownerDocument;
-      let header = document2.createElement("header");
-      header.setAttribute("class", "window-title");
-      let text = document2.createElement("span");
-      this._window_titles++;
-      let identifier = `swill-window-title-${this._window_titles}`;
-      text.setAttribute("id", identifier);
-      header.appendChild(text);
-      node.insertBefore(header, node.firstElementChild);
-      text.textContent = Runtime2.stringify(controller.title);
-      return controller.observeWithObject(
-        controller,
-        "title",
-        (title) => text.textContent = Runtime2.send(title, "to_s")
-      );
     }
     // Only a window's content controller is restored, so restorable paths
     // declared on any other controller would be silently ignored. Warns once
@@ -6830,14 +6911,149 @@
       });
     }
   };
+  var Swill__SystemAlert = class _Swill__SystemAlert extends Swill__Alert {
+    static RETRY_TITLE = "Retry Now";
+    static RELOAD_TITLE = "Reload";
+    static REFRESH_TITLE = "Refresh";
+    constructor() {
+      super();
+      this._retry_action = Runtime2.cast(null, "T.nilable(T.proc.void)");
+      this._required = Runtime2.cast(false, "T::Boolean");
+    }
+    set retryAction(retry_action) {
+      this._retry_action = retry_action;
+      return this._retry_action;
+    }
+    set required(required) {
+      this._required = required;
+      return this._required;
+    }
+    choose(sender) {
+      let action = this._retry_action;
+      if (Runtime2.isTruthy(sender.textContent === _Swill__SystemAlert.RETRY_TITLE && action)) {
+        return action();
+      } else if ([
+        _Swill__SystemAlert.RELOAD_TITLE,
+        _Swill__SystemAlert.REFRESH_TITLE
+      ].includes(sender.textContent)) {
+        return this.application().browser().location.reload();
+      } else {
+        return super.choose(sender);
+      }
+    }
+    cancelOperation(event) {
+      return this._required ? event.preventDefault() : super.cancelOperation(event);
+    }
+  };
+  var Swill__DevelopmentMonitor = class extends Swill__Object {
+    constructor(document2, reporter) {
+      super();
+      this._document = document2;
+      this._reporter = reporter;
+      this._endpoint = Runtime2.cast("", "String");
+      this._loaded_revision = Runtime2.cast("", "String");
+      this._timer = Runtime2.cast(null, "T.nilable(Integer)");
+      this._request = null;
+      this._stopped = Runtime2.cast(true, "T::Boolean");
+      this._on_visibility = (_event) => {
+        if (this._document.visibilityState === "visible") return this.poll();
+      };
+    }
+    start() {
+      let metadata2 = this._document.querySelector('meta[name="swill-development"]');
+      if (!metadata2) return;
+      this._endpoint = Runtime2.stringify(metadata2.getAttribute("data-endpoint"));
+      this._loaded_revision = Runtime2.stringify(metadata2.getAttribute("content"));
+      if (Runtime2.isEmpty(this._endpoint)) return;
+      this._stopped = false;
+      this._document.addEventListener(
+        "visibilitychange",
+        this._on_visibility
+      );
+      return this.poll();
+    }
+    stop() {
+      this._stopped = true;
+      this._document.removeEventListener(
+        "visibilitychange",
+        this._on_visibility
+      );
+      let timer = this._timer;
+      if (timer != null) clearTimeout(timer);
+      this._timer = null;
+      let request = this._request;
+      if (request) return request.abort();
+    }
+    isRunning() {
+      return !this._stopped;
+    }
+    async poll() {
+      if (Runtime2.isTruthy(this._stopped || this._request)) {
+        return;
+      }
+      ;
+      let timer = this._timer;
+      if (timer != null) clearTimeout(timer);
+      this._timer = null;
+      if (this._document.visibilityState !== "visible") return;
+      let request = new AbortController();
+      this._request = request;
+      let timeout = setTimeout(() => request.abort(), 5e3);
+      try {
+        let state2, revision;
+        let response = await fetch(
+          this._endpoint,
+          { cache: "no-store", signal: request.signal }
+        );
+        if (response.ok) {
+          state2 = Runtime2.cast(
+            await response.json(),
+            "T::Hash[String, T.untyped]"
+          );
+          revision = Runtime2.send(state2.revision, "to_s");
+          if (Runtime2.isTruthy(Runtime2.logicalAnd(
+            Runtime2.logicalAnd(
+              this.isRunning() && state2.ready === true,
+              () => !Runtime2.send(revision, "empty?")
+            ),
+            () => revision !== this._loaded_revision
+          ))) return this._reporter.revisionChanged(revision);
+        }
+      } catch (_e) {
+        if (_e instanceof Error) {
+        } else {
+          throw _e;
+        }
+      } finally {
+        clearTimeout(timeout);
+        this._request = null;
+        if (!this._stopped) this._timer = setTimeout(() => this.poll(), 1e3);
+      }
+    }
+  };
   var Swill__ProblemReporter = class _Swill__ProblemReporter extends Swill__Object {
+    static CONNECTION = "connection";
+    static RELOAD = "reload";
+    static REVISION = "revision";
+    static CONNECTION_MESSAGE = "Connection lost";
+    static CONNECTION_DETAIL = "Reconnecting automatically. Your local edits are still here.";
+    static REVISION_MESSAGE = "Application updated";
+    static REVISION_DETAIL = "A new development build is ready. Refresh when you are ready to leave this page.";
     // Creates a reporter for +window+, the browser window whose uncaught
-    // errors it reports. Nothing is reported until #start.
+    // errors it reports. #start opts into development error reporting.
     constructor(window) {
       super();
       this._window = window;
-      this._pending = Runtime2.cast([], "T::Array[T::Hash[String, String]]");
+      this._pending = Runtime2.cast([], "T::Array[T::Hash[Symbol, String]]");
       this._current = Runtime2.cast(null, "T.nilable(String)");
+      this._active = Runtime2.cast(null, "T.nilable(Swill::SystemAlert)");
+      this._kind = "";
+      this._state = "idle";
+      this._stopped = false;
+      this._retry = Runtime2.cast(null, "T.nilable(T.proc.void)");
+      this._revision = "";
+      this._dismissed = false;
+      this._acknowledged_revision = "";
       this._on_error = (event) => this.reportError(event);
       this._on_rejection = (event) => this.reportRejection(event);
       this._stop_warnings = Runtime2.cast(null, "T.nilable(T.proc.void)");
@@ -6853,7 +7069,7 @@
       this._stop_warnings = Runtime2.observeWarnings((message) => this.report("Warning", message, ""));
       return this._stop_warnings;
     }
-    // Stops reporting. An alert already showing stays until it is dismissed.
+    // Stops reporting and closes any notice before application teardown.
     stop() {
       let window = this._window;
       if (window) {
@@ -6865,7 +7081,8 @@
       stop_warnings?.call(null);
       this._stop_warnings = null;
       this._pending = [];
-      return this._pending;
+      this._stopped = true;
+      return Runtime2.nilable(this._active?.finish(null));
     }
     reportError(event) {
       let error = event.error;
@@ -6879,6 +7096,15 @@
     }
     reportRejection(event) {
       let reason = event.reason;
+      if (Runtime2.isTruthy(reason instanceof Error && [
+        "connection_lost",
+        "schema_mismatch",
+        "actor_scope_changed",
+        "outcome_unknown"
+      ].includes(Runtime2.stringify(reason.code)))) {
+        return;
+      }
+      ;
       return this.report(
         "Stop",
         _Swill__ProblemReporter.messageOf(reason),
@@ -6887,32 +7113,141 @@
     }
     // Queues a problem, showing it now when no alert is showing.
     report(icon, message, detail) {
-      if (this._current === message || this._pending.some((problem) => problem.message === message)) return;
-      Runtime2.append(
-        this._pending,
-        { icon, message, detail }
+      if (this._stopped || this._current === message || this._pending.some((problem) => problem.message === message)) return;
+      Runtime2.append(this._pending, { kind: "", icon, message, detail });
+      if (this._current == null) return this.showNext();
+    }
+    // These notices are available in production, independent of error reporting.
+    connectionChanged(state2, detail, retry_action) {
+      this._state = state2;
+      this._retry = retry_action;
+      switch (state2) {
+        case "connected":
+        case "idle":
+          return this.connectionRestored();
+        case "reload_required":
+          return this.requireReload(detail);
+        case "disconnected":
+          if (!this._dismissed) return this.connectionLost();
+      }
+    }
+    // Coalesce builds while a notice is open. Later acknowledges the latest
+    // revision seen, rather than only the one which first opened the alert.
+    revisionChanged(revision) {
+      this._revision = revision;
+      if (revision === this._acknowledged_revision || this._state === "reload_required") {
+        return;
+      }
+      ;
+      return this.enqueueNotice(
+        _Swill__ProblemReporter.REVISION,
+        _Swill__ProblemReporter.REVISION_MESSAGE,
+        _Swill__ProblemReporter.REVISION_DETAIL
       );
+    }
+    enqueueNotice(kind, message, detail) {
+      if (this._stopped || this._kind === kind || this._pending.some((item) => item.kind === kind)) return;
+      let icon = kind === _Swill__ProblemReporter.CONNECTION ? "NetworkLost" : "Warning";
+      Runtime2.prepend(this._pending, { kind, icon, message, detail });
       if (this._current == null) return this.showNext();
     }
     async showNext() {
+      if (this._stopped) {
+        return;
+      }
+      ;
+      let first = this._pending[0];
+      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        first && first.kind === _Swill__ProblemReporter.REVISION,
+        () => ["disconnected", "connecting"].includes(this._state)
+      ))) return;
       let problem = this._pending.shift();
       if (!problem) return;
-      this._current = problem.message;
+      this._current = Runtime2.fetch(problem, "message");
+      this._kind = Runtime2.fetch(problem, "kind");
+      let kind = this._kind;
       try {
-        let alert = new Swill__Alert();
-        alert.icon = Runtime2.must(problem.icon);
-        alert.title = problem.icon === "Stop" ? "Error" : "Warning";
-        alert.messageText = Runtime2.must(problem.message);
-        alert.informativeText = Runtime2.must(problem.detail);
-        alert.addButton("OK");
+        let alert = new Swill__SystemAlert();
+        alert.retryAction = kind === _Swill__ProblemReporter.CONNECTION ? this._retry : null;
+        alert.required = kind === _Swill__ProblemReporter.RELOAD;
+        this._active = alert;
+        alert.icon = Runtime2.fetch(problem, "icon");
+        alert.title = Runtime2.isEmpty(kind) ? (() => {
+          return alert.icon === "Stop" ? "Error" : "Warning";
+        })() : "Application";
+        alert.messageText = Runtime2.fetch(problem, "message");
+        alert.informativeText = Runtime2.fetch(problem, "detail");
+        this.buttonTitles(kind).forEach((label) => alert.addButton(label));
         await alert.run();
+        if (Runtime2.isTruthy(kind === _Swill__ProblemReporter.CONNECTION && [
+          "disconnected",
+          "connecting"
+        ].includes(this._state))) this._dismissed = true;
+        if (Runtime2.isTruthy(kind === _Swill__ProblemReporter.REVISION && [
+          "idle",
+          "connected"
+        ].includes(this._state))) this._acknowledged_revision = this._revision;
       } catch (_e) {
         this._pending = [];
       } finally {
         this._current = null;
+        this._kind = "";
+        this._active = null;
       }
       ;
       if (!Runtime2.isEmpty(this._pending)) return this.showNext();
+    }
+    connectionRestored() {
+      this._dismissed = false;
+      this._pending = this._pending.filter((item) => ![_Swill__ProblemReporter.CONNECTION, _Swill__ProblemReporter.RELOAD].includes(item.kind));
+      if ([
+        _Swill__ProblemReporter.CONNECTION,
+        _Swill__ProblemReporter.RELOAD
+      ].includes(this._kind)) Runtime2.nilable(this._active?.finish(null));
+      if (this._current == null) return this.showNext();
+    }
+    requireReload(detail) {
+      this._pending = this._pending.filter((item) => ![
+        _Swill__ProblemReporter.CONNECTION,
+        _Swill__ProblemReporter.REVISION
+      ].includes(item.kind));
+      this.enqueueNotice(
+        _Swill__ProblemReporter.RELOAD,
+        "Reload required",
+        detail
+      );
+      if (this._kind !== _Swill__ProblemReporter.RELOAD) {
+        return Runtime2.nilable(this._active?.finish(null));
+      }
+    }
+    connectionLost() {
+      if (this._kind === _Swill__ProblemReporter.REVISION) {
+        Runtime2.append(this._pending, {
+          kind: _Swill__ProblemReporter.REVISION,
+          icon: "Warning",
+          message: _Swill__ProblemReporter.REVISION_MESSAGE,
+          detail: _Swill__ProblemReporter.REVISION_DETAIL
+        });
+        Runtime2.nilable(this._active?.finish(null));
+      }
+      ;
+      return this.enqueueNotice(
+        _Swill__ProblemReporter.CONNECTION,
+        _Swill__ProblemReporter.CONNECTION_MESSAGE,
+        _Swill__ProblemReporter.CONNECTION_DETAIL
+      );
+    }
+    buttonTitles(kind) {
+      switch (kind) {
+        case _Swill__ProblemReporter.CONNECTION:
+          return [Swill__SystemAlert.RETRY_TITLE, "Dismiss"];
+        case _Swill__ProblemReporter.RELOAD:
+          return [Swill__SystemAlert.RELOAD_TITLE];
+        case _Swill__ProblemReporter.REVISION:
+          return [Swill__SystemAlert.REFRESH_TITLE, "Later"];
+        default:
+          return ["OK"];
+      }
     }
     static messageOf(value) {
       if (value instanceof Error) return value.message;
@@ -7667,9 +8002,9 @@
     }
     async loadAssociation(name) {
       if (this.isAssociationLoaded(name)) return Runtime2.read(this, name);
-      let pending2 = this._association_requests[name];
-      if (Runtime2.isTruthy(pending2)) {
-        await pending2;
+      let pending = this._association_requests[name];
+      if (Runtime2.isTruthy(pending)) {
+        await pending;
         return Runtime2.read(this, name);
       }
       ;
@@ -7692,9 +8027,9 @@
       }
     }
     async reloadAssociation(name) {
-      let pending2 = this._association_requests[name];
-      if (Runtime2.isTruthy(pending2)) {
-        await pending2;
+      let pending = this._association_requests[name];
+      if (Runtime2.isTruthy(pending)) {
+        await pending;
         return Runtime2.read(this, name);
       }
       ;
@@ -8113,6 +8448,17 @@
     }
   };
   var Swill__Distant__Client = class _Swill__Distant__Client extends Swill__Object {
+    // Milliseconds between failed attempts, capped during prolonged outages.
+    static RETRY_DELAYS = Object.freeze([
+      1e3,
+      2e3,
+      4e3,
+      8e3,
+      15e3,
+      3e4
+    ]);
+    // Spread simultaneous reconnects by ten percent in either direction.
+    static RETRY_JITTER = 0.1;
     static default() {
       return this._default ||= new this();
     }
@@ -8128,10 +8474,11 @@
       });
       let url = Runtime2.argument(__swill_bound, "url");
       let schema_hash = Runtime2.argument(__swill_bound, "schema_hash");
+      this.default();
       return Runtime2.configureData(url, schema_hash);
     }
-    // Creates a client with no objects, and registers with the runtime to be
-    // reset when the connection is lost and to send queued demands when it opens.
+    // Creates the identity store and observes the transport. Transient loss
+    // leaves local objects intact; only an intentional reset forgets them.
     constructor() {
       super();
       this._stores = Runtime2.cast(
@@ -8147,10 +8494,80 @@
       this._actor_scope = Runtime2.cast(null, "T.nilable(String)");
       this._generation = Runtime2.cast(0, "Integer");
       this._active_generations = Runtime2.cast([], "T::Array[Integer]");
+      this._retry_timer = Runtime2.cast(null, "T.nilable(Integer)");
+      this._retry_attempt = Runtime2.cast(0, "Integer");
+      this._connection_detail = Runtime2.cast("", "String");
+      Swill__NotificationCenter.default().addObserver(
+        "application_did_launch",
+        (_note) => this.presentConnection()
+      );
+      Swill__NotificationCenter.default().addObserver(
+        "application_will_terminate",
+        (_note) => Runtime2.closeData()
+      );
       Runtime2.registerDataLifecycle(
         () => this.reset(),
-        () => this.connectionOpened()
+        () => this.connectionOpened(),
+        (state2, detail) => this.connectionChanged(state2, detail)
       );
+    }
+    async reconnect() {
+      if (this.connectionState === "reload_required") {
+        return false;
+      }
+      ;
+      this.cancelRetry();
+      try {
+        await Runtime2.connectData();
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+    connectionChanged(state2, detail) {
+      this.cancelRetry();
+      this.connectionState = state2;
+      this._connection_detail = detail;
+      if (state2 === "connected" || state2 === "idle") this._retry_attempt = 0;
+      if (state2 === "disconnected") {
+        let delays = Runtime2.cast(
+          _Swill__Distant__Client.RETRY_DELAYS,
+          "T::Array[Integer]"
+        );
+        let delay = Runtime2.must(delays[Runtime2.min([
+          this._retry_attempt,
+          delays.length - 1
+        ])]);
+        this._retry_attempt++;
+        let jittered = Runtime2.cast(
+          delay * (1 - _Swill__Distant__Client.RETRY_JITTER + Math.random() * _Swill__Distant__Client.RETRY_JITTER * 2),
+          "Float"
+        );
+        this._retry_timer = setTimeout(
+          () => this.reconnect(),
+          Math.round(jittered)
+        );
+      }
+      ;
+      return this.presentConnection();
+    }
+    presentConnection() {
+      if (!Swill__Application.isRunning()) {
+        return;
+      }
+      ;
+      let app = Swill__Application.shared();
+      return app.connectionChanged(
+        this.connectionState,
+        this._connection_detail,
+        () => this.reconnect()
+      );
+    }
+    cancelRetry() {
+      let timer = this._retry_timer;
+      if (timer != null) clearTimeout(timer);
+      this._retry_timer = null;
+      return this._retry_timer;
     }
     async query(model, name, positional, keywords, result_kind) {
       let value = await this.request(
@@ -8277,9 +8694,8 @@
     // Forgets every object the client holds: each has its fields reset to
     // unloaded and deallocs, which releases its association controllers, and
     // queued demands and tombstones are dropped. The runtime calls this when
-    // the connection is lost, and the client calls it when a response arrives
-    // under a different actor scope than the one before: another actor's
-    // records are another identity.
+    // the connection is intentionally closed or the handshake changes actor
+    // scope: another actor's records are another identity.
     reset() {
       Object.entries(this._stores).forEach(([_model, store]) => {
         let typed_store = Runtime2.cast(store, "T::Hash[String, T.untyped]");
@@ -8589,10 +9005,6 @@
         let raw = await Runtime2.dataRequest(type, payload);
         let received = Runtime2.cast(raw, "T::Hash[String, T.untyped]");
         let scope = Runtime2.send(received.actor_scope, "to_s");
-        if (Runtime2.isTruthy(Runtime2.logicalAnd(
-          this._actor_scope,
-          () => this._actor_scope !== scope
-        ))) this.reset();
         this._actor_scope = scope;
         let message = Runtime2.cast(
           received.message,
@@ -8608,13 +9020,24 @@
           operation_generation
         ];
       } catch (error) {
-        if (type === "GET") {
-          this.updateDemandState(contents, operation_generation, error.message);
-        }
-        ;
-        return (() => {
+        if (error instanceof Error) {
+          if (Runtime2.isTruthy(error.code === "outcome_unknown" && Swill__Application.isRunning())) {
+            Swill__Application.shared().reportProblem(
+              "Operation outcome unknown",
+              error.message
+            );
+          }
+          ;
+          if (type === "GET") {
+            this.updateDemandState(contents, operation_generation, error.message);
+          }
+          ;
+          return (() => {
+            throw error;
+          })();
+        } else {
           throw error;
-        })();
+        }
       } finally {
         this._active_generations = this._active_generations.filter((item) => !(item === operation_generation));
         this.pruneTombstones();
@@ -8705,7 +9128,7 @@
       try {
         return await this.request("GET", { demands }, null, false);
       } catch (error) {
-        if (!Runtime2.isTruthy(Runtime2.dataConnected())) {
+        if (this.connectionState === "disconnected" || this.connectionState === "connecting") {
           batch.forEach((item) => {
             let object = Runtime2.cast(item.object, "Swill::Distant::Object");
             let fields = Runtime2.cast(item.fields, "T::Array[String]");
@@ -8721,7 +9144,9 @@
           });
         }
         ;
-        return Runtime2.warn(`data did not load: ${error.message}`);
+        if (this.connectionState === "connected") {
+          return Runtime2.warn(`data did not load: ${error.message}`);
+        }
       }
     }
     decodeValue(value, response_generation) {
@@ -9132,6 +9557,9 @@
             "arity": 0
           },
           "append": {
+            "arity": 1
+          },
+          "prepend": {
             "arity": 1
           },
           "remove": {
@@ -10456,6 +10884,10 @@
             "arity": 1,
             "js": "containsController"
           },
+          "show_title": {
+            "arity": 2,
+            "js": "showTitle"
+          },
           "dismiss": {
             "arity": 0
           }
@@ -10486,6 +10918,14 @@
           },
           "launch": {
             "arity": 1
+          },
+          "connection_changed": {
+            "arity": 3,
+            "js": "connectionChanged"
+          },
+          "report_problem": {
+            "arity": 2,
+            "js": "reportProblem"
           },
           "browser": {
             "arity": 0
@@ -10542,10 +10982,6 @@
           "theme_did_change": {
             "arity": 2,
             "js": "themeDidChange"
-          },
-          "show_title": {
-            "arity": 2,
-            "js": "showTitle"
           },
           "warn_unrestored": {
             "arity": 1,
@@ -11334,6 +11770,51 @@
           }
         }
       },
+      "Swill::SystemAlert": {
+        constructor: Swill__SystemAlert,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "retry_action=": {
+            "arity": 1,
+            "js": "retryAction="
+          },
+          "required=": {
+            "arity": 1
+          },
+          "choose": {
+            "arity": 1
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          }
+        }
+      },
+      "Swill::DevelopmentMonitor": {
+        constructor: Swill__DevelopmentMonitor,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 2
+          },
+          "start": {
+            "arity": 0
+          },
+          "stop": {
+            "arity": 0
+          },
+          "running?": {
+            "arity": 0,
+            "js": "isRunning"
+          },
+          "poll": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::ProblemReporter": {
         constructor: Swill__ProblemReporter,
         properties: {},
@@ -11358,9 +11839,41 @@
           "report": {
             "arity": 3
           },
+          "connection_changed": {
+            "arity": 3,
+            "js": "connectionChanged"
+          },
+          "revision_changed": {
+            "arity": 1,
+            "js": "revisionChanged"
+          },
+          "enqueue_notice": {
+            "arity": 3,
+            "js": "enqueueNotice"
+          },
           "show_next": {
             "arity": 0,
             "js": "showNext"
+          },
+          "connection_restored": {
+            "arity": 0,
+            "js": "connectionRestored",
+            "visibility": "private"
+          },
+          "require_reload": {
+            "arity": 1,
+            "js": "requireReload",
+            "visibility": "private"
+          },
+          "connection_lost": {
+            "arity": 0,
+            "js": "connectionLost",
+            "visibility": "private"
+          },
+          "button_titles": {
+            "arity": 1,
+            "js": "buttonTitles",
+            "visibility": "private"
           }
         }
       },
@@ -11848,10 +12361,34 @@
       },
       "Swill::Distant::Client": {
         constructor: Swill__Distant__Client,
-        properties: {},
+        properties: {
+          "connection_state": {
+            js: "connectionState",
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "idle";
+            }
+          }
+        },
         methods: {
           "initialize": {
             "arity": 0
+          },
+          "reconnect": {
+            "arity": 0
+          },
+          "connection_changed": {
+            "arity": 2,
+            "js": "connectionChanged"
+          },
+          "present_connection": {
+            "arity": 0,
+            "js": "presentConnection"
+          },
+          "cancel_retry": {
+            "arity": 0,
+            "js": "cancelRetry"
           },
           "query": {
             "arity": 5
@@ -12159,7 +12696,7 @@
   {
     const script = typeof document === "undefined" ? null : document.currentScript;
     const base = script && script.src ? new URL(".", script.src).href : "";
-    Swill__Bundle.register("swill", base, ["Info.png", "Note.png", "Stop.png", "Warning.png", "bioplastic.css", "controls.html", "fonts/AtkinsonHyperlegibleNext-Italic.woff2", "fonts/AtkinsonHyperlegibleNext.woff2", "fonts/OFL.txt", "linear.css"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" tabindex="-1">\n      <span class="custom-select-icon"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" klass="Swill::Control::Button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
+    Swill__Bundle.register("swill", base, ["Info.png", "NetworkLost.png", "Note.png", "Stop.png", "Warning.png", "bioplastic.css", "controls.html", "fonts/AtkinsonHyperlegibleNext-Italic.woff2", "fonts/AtkinsonHyperlegibleNext.woff2", "fonts/OFL.txt", "linear.css"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" tabindex="-1">\n      <span class="custom-select-icon"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" klass="Swill::Control::Button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
   }
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();

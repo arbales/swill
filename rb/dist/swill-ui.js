@@ -1253,6 +1253,7 @@
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__DOM: () => Swill__DOM,
+    Swill__DevelopmentMonitor: () => Swill__DevelopmentMonitor,
     Swill__Image: () => Swill__Image,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Notification: () => Swill__Notification,
@@ -1266,6 +1267,7 @@
     Swill__ProblemReporter: () => Swill__ProblemReporter,
     Swill__Responder: () => Swill__Responder,
     Swill__Swell: () => Swill__Swell,
+    Swill__SystemAlert: () => Swill__SystemAlert,
     Swill__Templates: () => Swill__Templates,
     Swill__URLFragment: () => Swill__URLFragment,
     Swill__ValueTransformer: () => Swill__ValueTransformer,
@@ -1585,6 +1587,11 @@
     // node moves from its current parent. See `#empty`.
     append(node) {
       this._element.appendChild(node);
+      return this;
+    }
+    // Inserts `node` before the element's current children and returns the wrapper.
+    prepend(node) {
+      this._element.insertBefore(node, this._element.firstElementChild);
       return this;
     }
     // Removes the element from its parent and returns the wrapper.
@@ -4018,6 +4025,22 @@
     containsController(candidate) {
       return candidate === this._controller || this._root.contains(candidate.view.element);
     }
+    // Adds the title bar for a presented dialog and follows its controller's title.
+    showTitle(identifier, controller) {
+      let document2 = this._root.ownerDocument;
+      let title = Swill__Swell.$index(document2.createElement("span")).attr(
+        "id",
+        identifier
+      );
+      let header = Swill__Swell.$index(document2.createElement("header")).addClass("window-title").append(title.element);
+      Swill__Swell.$index(this._root).prepend(header.element);
+      title.text(controller.title);
+      return controller.observeWithObject(
+        controller,
+        "title",
+        (value) => title.text(value)
+      );
+    }
     // Tear down the subtree, close a dialog, remove the root, and resolve.
     dismiss() {
       this.disposeRestoration();
@@ -4071,6 +4094,17 @@
         null,
         "T.nilable(Swill::ProblemReporter)"
       );
+      this._development_monitor = Runtime.cast(
+        null,
+        "T.nilable(Swill::DevelopmentMonitor)"
+      );
+      this._connection_state = Runtime.cast("idle", "String");
+      this._reconnect = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._on_online = (_event) => {
+        if (this._connection_state === "disconnected") {
+          return this._reconnect?.call(null);
+        }
+      };
       this._window_titles = Runtime.cast(0, "Integer");
     }
     // The theme the page is drawn in: the name of one of the framework's
@@ -4092,14 +4126,12 @@
       ;
       _Swill__Application.launched(this);
       this._root = root;
+      root.ownerDocument.defaultView?.addEventListener("online", this._on_online);
       this.adoptTheme(root.ownerDocument);
       if (root.hasAttribute("development")) this.development = true;
-      if (this.development) {
-        let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
-        problems.start();
-        this._problems = problems;
-      }
-      ;
+      let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
+      if (this.development) problems.start();
+      this._problems = problems;
       this._on_focus = (event) => this.focusIn(event);
       this._on_focus_out = (event) => this.focusOut(event);
       this._on_key_down = (event) => this.firstResponder().keyDown(event);
@@ -4121,7 +4153,26 @@
       this._fragments.startObserving(() => this.applyFragment());
       this.watch(root);
       this.applicationDidLaunch();
+      Swill__NotificationCenter.default().post(
+        "application_did_launch",
+        this,
+        null
+      );
+      let monitor = new Swill__DevelopmentMonitor(root.ownerDocument, problems);
+      monitor.start();
+      this._development_monitor = monitor;
       return this;
+    }
+    // Presents connection notices without coupling UI-only applications to a
+    // particular data transport. The transport supplies its recovery action.
+    connectionChanged(state2, detail, retry_action) {
+      this._connection_state = state2;
+      this._reconnect = retry_action;
+      return Runtime.nilable(this._problems?.connectionChanged(state2, detail, retry_action));
+    }
+    // Reports a recoverable operation problem, including in production.
+    reportProblem(message, detail) {
+      return Runtime.nilable(this._problems?.report("Warning", message, detail));
     }
     // The browser window the application runs in, for what only it offers:
     // a prompt, printing.
@@ -4143,6 +4194,17 @@
       }
       ;
       this.applicationWillTerminate();
+      this.root.ownerDocument.defaultView?.removeEventListener("online", this._on_online);
+      this._reconnect = null;
+      Runtime.nilable(this._development_monitor?.stop());
+      this._development_monitor = null;
+      Runtime.nilable(this._problems?.stop());
+      this._problems = null;
+      Swill__NotificationCenter.default().post(
+        "application_will_terminate",
+        this,
+        null
+      );
       this._fragments.stopObserving();
       let observer = this._observer;
       if (observer) observer.disconnect();
@@ -4156,9 +4218,6 @@
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
       this.assignFirstResponder(null);
-      let problems = this._problems;
-      if (problems) problems.stop();
-      this._problems = null;
       return _Swill__Application.terminated(this);
     }
     // The application is running and its markup is awake.
@@ -4286,8 +4345,13 @@
       );
     }
     openWindow(name, node, controller, controllers, modal) {
+      let window = new Swill__Window(name, node, Runtime.keywordArguments({ modal }));
       if (Runtime.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
-        this.showTitle(node, controller);
+        this._window_titles++;
+        window.showTitle(
+          `swill-window-title-${this._window_titles}`,
+          controller
+        );
       }
       ;
       controller.view.updateAccessibility();
@@ -4302,7 +4366,6 @@
         node.getBoundingClientRect();
       }
       ;
-      let window = new Swill__Window(name, node, Runtime.keywordArguments({ modal }));
       window.assignContent(name, controller);
       window.saveFirstResponder(this.firstResponder());
       Runtime.append(this._windows, window);
@@ -4348,27 +4411,6 @@
       let current = Runtime.stringify(link.getAttribute("href"));
       if (current.endsWith(`/${theme}.css`) || current === `${theme}.css`) return;
       return link.setAttribute("href", url);
-    }
-    // FIXME: This contains a lot of manual DOM stuff that should likely happen with Swell, and also likely does not belong here in Application.
-    // A presented <dialog class="window"> gets a title bar showing its
-    // content controller's #title, kept current as the title changes; the
-    // theme decides whether it is drawn.
-    showTitle(node, controller) {
-      let document2 = node.ownerDocument;
-      let header = document2.createElement("header");
-      header.setAttribute("class", "window-title");
-      let text = document2.createElement("span");
-      this._window_titles++;
-      let identifier = `swill-window-title-${this._window_titles}`;
-      text.setAttribute("id", identifier);
-      header.appendChild(text);
-      node.insertBefore(header, node.firstElementChild);
-      text.textContent = Runtime.stringify(controller.title);
-      return controller.observeWithObject(
-        controller,
-        "title",
-        (title) => text.textContent = Runtime.send(title, "to_s")
-      );
     }
     // Only a window's content controller is restored, so restorable paths
     // declared on any other controller would be silently ignored. Warns once
@@ -5340,14 +5382,149 @@
       });
     }
   };
+  var Swill__SystemAlert = class _Swill__SystemAlert extends Swill__Alert {
+    static RETRY_TITLE = "Retry Now";
+    static RELOAD_TITLE = "Reload";
+    static REFRESH_TITLE = "Refresh";
+    constructor() {
+      super();
+      this._retry_action = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._required = Runtime.cast(false, "T::Boolean");
+    }
+    set retryAction(retry_action) {
+      this._retry_action = retry_action;
+      return this._retry_action;
+    }
+    set required(required) {
+      this._required = required;
+      return this._required;
+    }
+    choose(sender) {
+      let action = this._retry_action;
+      if (Runtime.isTruthy(sender.textContent === _Swill__SystemAlert.RETRY_TITLE && action)) {
+        return action();
+      } else if ([
+        _Swill__SystemAlert.RELOAD_TITLE,
+        _Swill__SystemAlert.REFRESH_TITLE
+      ].includes(sender.textContent)) {
+        return this.application().browser().location.reload();
+      } else {
+        return super.choose(sender);
+      }
+    }
+    cancelOperation(event) {
+      return this._required ? event.preventDefault() : super.cancelOperation(event);
+    }
+  };
+  var Swill__DevelopmentMonitor = class extends Swill__Object {
+    constructor(document2, reporter) {
+      super();
+      this._document = document2;
+      this._reporter = reporter;
+      this._endpoint = Runtime.cast("", "String");
+      this._loaded_revision = Runtime.cast("", "String");
+      this._timer = Runtime.cast(null, "T.nilable(Integer)");
+      this._request = null;
+      this._stopped = Runtime.cast(true, "T::Boolean");
+      this._on_visibility = (_event) => {
+        if (this._document.visibilityState === "visible") return this.poll();
+      };
+    }
+    start() {
+      let metadata2 = this._document.querySelector('meta[name="swill-development"]');
+      if (!metadata2) return;
+      this._endpoint = Runtime.stringify(metadata2.getAttribute("data-endpoint"));
+      this._loaded_revision = Runtime.stringify(metadata2.getAttribute("content"));
+      if (Runtime.isEmpty(this._endpoint)) return;
+      this._stopped = false;
+      this._document.addEventListener(
+        "visibilitychange",
+        this._on_visibility
+      );
+      return this.poll();
+    }
+    stop() {
+      this._stopped = true;
+      this._document.removeEventListener(
+        "visibilitychange",
+        this._on_visibility
+      );
+      let timer = this._timer;
+      if (timer != null) clearTimeout(timer);
+      this._timer = null;
+      let request = this._request;
+      if (request) return request.abort();
+    }
+    isRunning() {
+      return !this._stopped;
+    }
+    async poll() {
+      if (Runtime.isTruthy(this._stopped || this._request)) {
+        return;
+      }
+      ;
+      let timer = this._timer;
+      if (timer != null) clearTimeout(timer);
+      this._timer = null;
+      if (this._document.visibilityState !== "visible") return;
+      let request = new AbortController();
+      this._request = request;
+      let timeout = setTimeout(() => request.abort(), 5e3);
+      try {
+        let state2, revision;
+        let response = await fetch(
+          this._endpoint,
+          { cache: "no-store", signal: request.signal }
+        );
+        if (response.ok) {
+          state2 = Runtime.cast(
+            await response.json(),
+            "T::Hash[String, T.untyped]"
+          );
+          revision = Runtime.send(state2.revision, "to_s");
+          if (Runtime.isTruthy(Runtime.logicalAnd(
+            Runtime.logicalAnd(
+              this.isRunning() && state2.ready === true,
+              () => !Runtime.send(revision, "empty?")
+            ),
+            () => revision !== this._loaded_revision
+          ))) return this._reporter.revisionChanged(revision);
+        }
+      } catch (_e) {
+        if (_e instanceof Error) {
+        } else {
+          throw _e;
+        }
+      } finally {
+        clearTimeout(timeout);
+        this._request = null;
+        if (!this._stopped) this._timer = setTimeout(() => this.poll(), 1e3);
+      }
+    }
+  };
   var Swill__ProblemReporter = class _Swill__ProblemReporter extends Swill__Object {
+    static CONNECTION = "connection";
+    static RELOAD = "reload";
+    static REVISION = "revision";
+    static CONNECTION_MESSAGE = "Connection lost";
+    static CONNECTION_DETAIL = "Reconnecting automatically. Your local edits are still here.";
+    static REVISION_MESSAGE = "Application updated";
+    static REVISION_DETAIL = "A new development build is ready. Refresh when you are ready to leave this page.";
     // Creates a reporter for +window+, the browser window whose uncaught
-    // errors it reports. Nothing is reported until #start.
+    // errors it reports. #start opts into development error reporting.
     constructor(window) {
       super();
       this._window = window;
-      this._pending = Runtime.cast([], "T::Array[T::Hash[String, String]]");
+      this._pending = Runtime.cast([], "T::Array[T::Hash[Symbol, String]]");
       this._current = Runtime.cast(null, "T.nilable(String)");
+      this._active = Runtime.cast(null, "T.nilable(Swill::SystemAlert)");
+      this._kind = "";
+      this._state = "idle";
+      this._stopped = false;
+      this._retry = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._revision = "";
+      this._dismissed = false;
+      this._acknowledged_revision = "";
       this._on_error = (event) => this.reportError(event);
       this._on_rejection = (event) => this.reportRejection(event);
       this._stop_warnings = Runtime.cast(null, "T.nilable(T.proc.void)");
@@ -5363,7 +5540,7 @@
       this._stop_warnings = Runtime.observeWarnings((message) => this.report("Warning", message, ""));
       return this._stop_warnings;
     }
-    // Stops reporting. An alert already showing stays until it is dismissed.
+    // Stops reporting and closes any notice before application teardown.
     stop() {
       let window = this._window;
       if (window) {
@@ -5375,7 +5552,8 @@
       stop_warnings?.call(null);
       this._stop_warnings = null;
       this._pending = [];
-      return this._pending;
+      this._stopped = true;
+      return Runtime.nilable(this._active?.finish(null));
     }
     reportError(event) {
       let error = event.error;
@@ -5389,6 +5567,15 @@
     }
     reportRejection(event) {
       let reason = event.reason;
+      if (Runtime.isTruthy(reason instanceof Error && [
+        "connection_lost",
+        "schema_mismatch",
+        "actor_scope_changed",
+        "outcome_unknown"
+      ].includes(Runtime.stringify(reason.code)))) {
+        return;
+      }
+      ;
       return this.report(
         "Stop",
         _Swill__ProblemReporter.messageOf(reason),
@@ -5397,32 +5584,141 @@
     }
     // Queues a problem, showing it now when no alert is showing.
     report(icon, message, detail) {
-      if (this._current === message || this._pending.some((problem) => problem.message === message)) return;
-      Runtime.append(
-        this._pending,
-        { icon, message, detail }
+      if (this._stopped || this._current === message || this._pending.some((problem) => problem.message === message)) return;
+      Runtime.append(this._pending, { kind: "", icon, message, detail });
+      if (this._current == null) return this.showNext();
+    }
+    // These notices are available in production, independent of error reporting.
+    connectionChanged(state2, detail, retry_action) {
+      this._state = state2;
+      this._retry = retry_action;
+      switch (state2) {
+        case "connected":
+        case "idle":
+          return this.connectionRestored();
+        case "reload_required":
+          return this.requireReload(detail);
+        case "disconnected":
+          if (!this._dismissed) return this.connectionLost();
+      }
+    }
+    // Coalesce builds while a notice is open. Later acknowledges the latest
+    // revision seen, rather than only the one which first opened the alert.
+    revisionChanged(revision) {
+      this._revision = revision;
+      if (revision === this._acknowledged_revision || this._state === "reload_required") {
+        return;
+      }
+      ;
+      return this.enqueueNotice(
+        _Swill__ProblemReporter.REVISION,
+        _Swill__ProblemReporter.REVISION_MESSAGE,
+        _Swill__ProblemReporter.REVISION_DETAIL
       );
+    }
+    enqueueNotice(kind, message, detail) {
+      if (this._stopped || this._kind === kind || this._pending.some((item) => item.kind === kind)) return;
+      let icon = kind === _Swill__ProblemReporter.CONNECTION ? "NetworkLost" : "Warning";
+      Runtime.prepend(this._pending, { kind, icon, message, detail });
       if (this._current == null) return this.showNext();
     }
     async showNext() {
+      if (this._stopped) {
+        return;
+      }
+      ;
+      let first = this._pending[0];
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        first && first.kind === _Swill__ProblemReporter.REVISION,
+        () => ["disconnected", "connecting"].includes(this._state)
+      ))) return;
       let problem = this._pending.shift();
       if (!problem) return;
-      this._current = problem.message;
+      this._current = Runtime.fetch(problem, "message");
+      this._kind = Runtime.fetch(problem, "kind");
+      let kind = this._kind;
       try {
-        let alert = new Swill__Alert();
-        alert.icon = Runtime.must(problem.icon);
-        alert.title = problem.icon === "Stop" ? "Error" : "Warning";
-        alert.messageText = Runtime.must(problem.message);
-        alert.informativeText = Runtime.must(problem.detail);
-        alert.addButton("OK");
+        let alert = new Swill__SystemAlert();
+        alert.retryAction = kind === _Swill__ProblemReporter.CONNECTION ? this._retry : null;
+        alert.required = kind === _Swill__ProblemReporter.RELOAD;
+        this._active = alert;
+        alert.icon = Runtime.fetch(problem, "icon");
+        alert.title = Runtime.isEmpty(kind) ? (() => {
+          return alert.icon === "Stop" ? "Error" : "Warning";
+        })() : "Application";
+        alert.messageText = Runtime.fetch(problem, "message");
+        alert.informativeText = Runtime.fetch(problem, "detail");
+        this.buttonTitles(kind).forEach((label) => alert.addButton(label));
         await alert.run();
+        if (Runtime.isTruthy(kind === _Swill__ProblemReporter.CONNECTION && [
+          "disconnected",
+          "connecting"
+        ].includes(this._state))) this._dismissed = true;
+        if (Runtime.isTruthy(kind === _Swill__ProblemReporter.REVISION && [
+          "idle",
+          "connected"
+        ].includes(this._state))) this._acknowledged_revision = this._revision;
       } catch (_e) {
         this._pending = [];
       } finally {
         this._current = null;
+        this._kind = "";
+        this._active = null;
       }
       ;
       if (!Runtime.isEmpty(this._pending)) return this.showNext();
+    }
+    connectionRestored() {
+      this._dismissed = false;
+      this._pending = this._pending.filter((item) => ![_Swill__ProblemReporter.CONNECTION, _Swill__ProblemReporter.RELOAD].includes(item.kind));
+      if ([
+        _Swill__ProblemReporter.CONNECTION,
+        _Swill__ProblemReporter.RELOAD
+      ].includes(this._kind)) Runtime.nilable(this._active?.finish(null));
+      if (this._current == null) return this.showNext();
+    }
+    requireReload(detail) {
+      this._pending = this._pending.filter((item) => ![
+        _Swill__ProblemReporter.CONNECTION,
+        _Swill__ProblemReporter.REVISION
+      ].includes(item.kind));
+      this.enqueueNotice(
+        _Swill__ProblemReporter.RELOAD,
+        "Reload required",
+        detail
+      );
+      if (this._kind !== _Swill__ProblemReporter.RELOAD) {
+        return Runtime.nilable(this._active?.finish(null));
+      }
+    }
+    connectionLost() {
+      if (this._kind === _Swill__ProblemReporter.REVISION) {
+        Runtime.append(this._pending, {
+          kind: _Swill__ProblemReporter.REVISION,
+          icon: "Warning",
+          message: _Swill__ProblemReporter.REVISION_MESSAGE,
+          detail: _Swill__ProblemReporter.REVISION_DETAIL
+        });
+        Runtime.nilable(this._active?.finish(null));
+      }
+      ;
+      return this.enqueueNotice(
+        _Swill__ProblemReporter.CONNECTION,
+        _Swill__ProblemReporter.CONNECTION_MESSAGE,
+        _Swill__ProblemReporter.CONNECTION_DETAIL
+      );
+    }
+    buttonTitles(kind) {
+      switch (kind) {
+        case _Swill__ProblemReporter.CONNECTION:
+          return [Swill__SystemAlert.RETRY_TITLE, "Dismiss"];
+        case _Swill__ProblemReporter.RELOAD:
+          return [Swill__SystemAlert.RELOAD_TITLE];
+        case _Swill__ProblemReporter.REVISION:
+          return [Swill__SystemAlert.REFRESH_TITLE, "Later"];
+        default:
+          return ["OK"];
+      }
     }
     static messageOf(value) {
       if (value instanceof Error) return value.message;
@@ -5737,6 +6033,9 @@
             "arity": 0
           },
           "append": {
+            "arity": 1
+          },
+          "prepend": {
             "arity": 1
           },
           "remove": {
@@ -6672,6 +6971,10 @@
             "arity": 1,
             "js": "containsController"
           },
+          "show_title": {
+            "arity": 2,
+            "js": "showTitle"
+          },
           "dismiss": {
             "arity": 0
           }
@@ -6702,6 +7005,14 @@
           },
           "launch": {
             "arity": 1
+          },
+          "connection_changed": {
+            "arity": 3,
+            "js": "connectionChanged"
+          },
+          "report_problem": {
+            "arity": 2,
+            "js": "reportProblem"
           },
           "browser": {
             "arity": 0
@@ -6758,10 +7069,6 @@
           "theme_did_change": {
             "arity": 2,
             "js": "themeDidChange"
-          },
-          "show_title": {
-            "arity": 2,
-            "js": "showTitle"
           },
           "warn_unrestored": {
             "arity": 1,
@@ -7324,6 +7631,51 @@
           }
         }
       },
+      "Swill::SystemAlert": {
+        constructor: Swill__SystemAlert,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "retry_action=": {
+            "arity": 1,
+            "js": "retryAction="
+          },
+          "required=": {
+            "arity": 1
+          },
+          "choose": {
+            "arity": 1
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          }
+        }
+      },
+      "Swill::DevelopmentMonitor": {
+        constructor: Swill__DevelopmentMonitor,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 2
+          },
+          "start": {
+            "arity": 0
+          },
+          "stop": {
+            "arity": 0
+          },
+          "running?": {
+            "arity": 0,
+            "js": "isRunning"
+          },
+          "poll": {
+            "arity": 0
+          }
+        }
+      },
       "Swill::ProblemReporter": {
         constructor: Swill__ProblemReporter,
         properties: {},
@@ -7348,9 +7700,41 @@
           "report": {
             "arity": 3
           },
+          "connection_changed": {
+            "arity": 3,
+            "js": "connectionChanged"
+          },
+          "revision_changed": {
+            "arity": 1,
+            "js": "revisionChanged"
+          },
+          "enqueue_notice": {
+            "arity": 3,
+            "js": "enqueueNotice"
+          },
           "show_next": {
             "arity": 0,
             "js": "showNext"
+          },
+          "connection_restored": {
+            "arity": 0,
+            "js": "connectionRestored",
+            "visibility": "private"
+          },
+          "require_reload": {
+            "arity": 1,
+            "js": "requireReload",
+            "visibility": "private"
+          },
+          "connection_lost": {
+            "arity": 0,
+            "js": "connectionLost",
+            "visibility": "private"
+          },
+          "button_titles": {
+            "arity": 1,
+            "js": "buttonTitles",
+            "visibility": "private"
           }
         }
       }
@@ -7513,7 +7897,7 @@
   {
     const script = typeof document === "undefined" ? null : document.currentScript;
     const base = script && script.src ? new URL(".", script.src).href : "";
-    Swill__Bundle.register("swill", base, ["Info.png", "Note.png", "Stop.png", "Warning.png", "bioplastic.css", "controls.html", "fonts/AtkinsonHyperlegibleNext-Italic.woff2", "fonts/AtkinsonHyperlegibleNext.woff2", "fonts/OFL.txt", "linear.css"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" tabindex="-1">\n      <span class="custom-select-icon"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" klass="Swill::Control::Button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
+    Swill__Bundle.register("swill", base, ["Info.png", "NetworkLost.png", "Note.png", "Stop.png", "Warning.png", "bioplastic.css", "controls.html", "fonts/AtkinsonHyperlegibleNext-Italic.woff2", "fonts/AtkinsonHyperlegibleNext.woff2", "fonts/OFL.txt", "linear.css"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" tabindex="-1">\n      <span class="custom-select-icon"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" klass="Swill::Control::Button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
   }
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();

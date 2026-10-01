@@ -6,7 +6,7 @@ module Swill
     class CompileError < StandardError; end
 
     # Intrinsics introduced by built-in filters must not capture source classes.
-    JS_INTRINSICS = %w[Object Array String Number Math JSON Error Promise MutationObserver URLSearchParams].freeze
+    JS_INTRINSICS = %w[Object Array String Number Math JSON Error Promise AbortController MutationObserver URLSearchParams].freeze
 
     # The framework classes plain JavaScript reaches by a public name on the
     # Swill global, such as Swill.Controller or Swill.Model.Base. A class is

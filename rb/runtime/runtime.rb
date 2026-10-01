@@ -113,7 +113,8 @@ module Swill
       end
 
       # MRI can exercise all distant-data semantics except the browser transport.
-      def register_data_lifecycle(_reset, _opened); end
+      def register_data_lifecycle(_reset, _opened, _changed); end
+      def connect_data; end
       def data_connected = false
       def data_request(*) = raise("remote data is available only in the browser runtime")
       def data_time(value) = value.is_a?(Time)

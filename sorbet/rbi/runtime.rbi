@@ -127,8 +127,11 @@ module Swill
     sig { params(url: String, schema_hash: String).void }
     def self.configure_data(url, schema_hash); end
 
-    sig { params(reset: T.proc.void, opened: T.proc.void).void }
-    def self.register_data_lifecycle(reset, opened); end
+    sig { params(reset: T.proc.void, opened: T.proc.void, changed: T.proc.params(state: String, detail: String).void).void }
+    def self.register_data_lifecycle(reset, opened, changed); end
+
+    sig { returns(T.untyped) }
+    def self.connect_data; end
 
     sig { returns(T::Boolean) }
     def self.data_connected; end

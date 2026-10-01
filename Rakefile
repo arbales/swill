@@ -119,8 +119,10 @@ task test: :typecheck do
     sh "bundle exec ruby spec/shared_test.rb"
     sh "bundle exec ruby spec/cli_test.rb"
     sh "bundle exec ruby spec/bundles_test.rb"
+    sh "bundle exec ruby spec/development_test.rb"
     sh "bundle exec ruby spec/data_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
+    sh "deno test -A spec/data_transport_test.mjs"
     sh "deno test -A spec/data_client_test.mjs"
     build_data_fixture_client
     sh "deno test -A spec/data_integration_test.mjs"

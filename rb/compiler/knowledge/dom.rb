@@ -18,6 +18,7 @@ module Swill
       # A method's parameters are "name: Type" pairs; "name?: Type" is
       # optional. Types are Sorbet texts.
       CLASSES = {
+        "Math" => [nil, {}],
         "EventTarget" => [nil, {
           "addEventListener" => [:method, "void", "type: String, listener: T.proc.params(event: Event).void, options?: T.untyped"],
           "removeEventListener" => [:method, "void", "type: String, listener: T.proc.params(event: Event).void, options?: T.untyped"],
@@ -105,6 +106,7 @@ module Swill
           "activeElement" => [:attr, "T.nilable(Element)"],
           "defaultView" => [:attr, "T.nilable(DOMWindow)"],
           "readyState" => [:attr, "String"],
+          "visibilityState" => [:attr, "String"],
           "title" => [:accessor, "String"],
           "querySelector" => [:method, "T.nilable(Element)", "selector: String"],
           "querySelectorAll" => [:method, "NodeList", "selector: String"],
@@ -121,6 +123,7 @@ module Swill
           "print" => [:method, "void", ""]
         }],
         "Location" => [nil, {
+          "reload" => [:method, "void", ""],
           "hash" => [:accessor, "String"],
           "href" => [:accessor, "String"],
           "pathname" => [:attr, "String"],
@@ -183,6 +186,10 @@ module Swill
           "then" => [:method, "Promise", "callback: T.untyped"],
           "catch" => [:method, "Promise", "callback: T.untyped"]
         }],
+        "AbortController" => [nil, {
+          "signal" => [:attr, "T.untyped"],
+          "abort" => [:method, "void", ""]
+        }],
         "Response" => [nil, {
           "ok" => [:attr, "T::Boolean"],
           "status" => [:attr, "Integer"],
@@ -190,6 +197,7 @@ module Swill
           "text" => [:method, "Promise[String]", ""]
         }],
         "Error" => [nil, {
+          "code" => [:attr, "T.nilable(String)"],
           "message" => [:attr, "String"],
           "stack" => [:attr, "T.nilable(String)"]
         }],
@@ -215,6 +223,7 @@ module Swill
 
       # Classes constructed with new(...), and their constructor parameters.
       CONSTRUCTORS = {
+        "AbortController" => "",
         "Event" => "type: String, init?: T.untyped",
         "MutationObserver" => "callback: T.proc.params(records: T::Array[MutationRecord], observer: MutationObserver).void",
         "Promise" => "executor: T.proc.params(resolve: T.untyped, reject: T.untyped).void",
@@ -228,6 +237,7 @@ module Swill
       # [result type, parameters]. Promise's combinators are the ones
       # framework and application code reach for.
       STATICS = {
+        "Math" => {"random" => ["Float", ""]},
         "Promise" => {
           "all" => ["Promise[T::Array[T.untyped]]", "values: T::Array[T.untyped]"],
           "allSettled" => ["Promise[T::Array[T.untyped]]", "values: T::Array[T.untyped]"],
@@ -296,7 +306,11 @@ module Swill
         lines << "end"
         lines << ""
         CLASSES.each do |name, (parent, members)|
-          lines << (parent ? "class #{name} < #{parent}" : "class #{name}")
+          # Native errors are exceptions when Sorbet checks a rescue clause.
+          parent = "StandardError" if name == "Error"
+          declaration = name == "Math" ? "module Math" : "class #{name}"
+          declaration += " < #{parent}" if parent
+          lines << declaration
           lines << "  extend T::Sig"
           if (constructor = CONSTRUCTORS[name])
             lines << "  sig { #{signature(constructor, 'void')} }"

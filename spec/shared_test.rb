@@ -1,6 +1,7 @@
 require "minitest/autorun"
 require "json"
 require_relative "mri_host"
+require_relative "../rb/framework/core/notification_center"
 require_relative "../rb/framework/core/wire"
 require_relative "../rb/framework/model/attributes"
 require_relative "../rb/framework/model/dirty_tracking"

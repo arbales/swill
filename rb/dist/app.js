@@ -54,6 +54,8 @@
   var Swill__RowEdit = framework.Swill__RowEdit;
   var Swill__Controller__EditableList = framework.Swill__Controller__EditableList;
   var Swill__Alert = framework.Swill__Alert;
+  var Swill__SystemAlert = framework.Swill__SystemAlert;
+  var Swill__DevelopmentMonitor = framework.Swill__DevelopmentMonitor;
   var Swill__ProblemReporter = framework.Swill__ProblemReporter;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;

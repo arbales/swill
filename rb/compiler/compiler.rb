@@ -70,6 +70,8 @@ module Swill
       rb/framework/controller/inline_editor.rb
       rb/framework/controller/editable_list.rb
       rb/framework/controller/alert.rb
+      rb/framework/controller/system_alert.rb
+      rb/framework/core/development_monitor.rb
       rb/framework/core/problem_reporter.rb
       rb/framework/model/attributes.rb
       rb/framework/model/dirty_tracking.rb

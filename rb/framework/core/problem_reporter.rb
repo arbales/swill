@@ -2,25 +2,38 @@
 # frozen_string_literal: true
 
 module Swill
-  # In development, shows the application's problems as alerts as well as in
-  # the console: an uncaught error or a rejected promise with the Stop image,
-  # and a framework warning with the Warning image. One alert shows at a time;
-  # problems that arrive meanwhile wait behind it, and one already showing or
-  # waiting is not shown again.
-  #
-  # The application runs one when it is in development. See
-  # Application#development.
+  # Coordinates connection, reload, and development update notices. In
+  # development it also reports uncaught errors and framework warnings.
+  # One alert shows at a time; mandatory reload takes precedence.
   class ProblemReporter < Swill::Object
     extend T::Sig
 
+    CONNECTION = "connection"
+    RELOAD = "reload"
+    REVISION = "revision"
+    CONNECTION_MESSAGE = "Connection lost"
+    CONNECTION_DETAIL = "Reconnecting automatically. Your local edits are still here."
+    REVISION_MESSAGE = "Application updated"
+    REVISION_DETAIL = "A new development build is ready. Refresh when you are ready to leave this page."
+
     # Creates a reporter for +window+, the browser window whose uncaught
-    # errors it reports. Nothing is reported until #start.
+    # errors it reports. #start opts into development error reporting.
     sig { params(window: T.nilable(DOMWindow)).void }
     def initialize(window)
+      # FIXME: find a way to alias T.let and then prefer `@var = let "", String`
       super()
-      @window = window
-      @pending = T.let([], T::Array[T::Hash[String, String]])
-      @current = T.let(nil, T.nilable(String))
+      @window   = window
+      @pending  = T.let [],   T::Array[T::Hash[Symbol, String]]
+      @current  = T.let nil,  T.nilable(String)
+      @active   = T.let nil,  T.nilable(SystemAlert)
+      @kind     = ""
+      @state    = "idle"
+      @stopped  = false
+      @retry    = T.let nil, T.nilable(T.proc.void)
+      @revision = ""
+
+      @dismissed = false
+      @acknowledged_revision = ""
       @on_error = ->(event) { report_error(T.cast(event, ErrorEvent)) }
       @on_rejection = ->(event) { report_rejection(T.cast(event, PromiseRejectionEvent)) }
       @stop_warnings = T.let(nil, T.nilable(T.proc.void))
@@ -37,7 +50,7 @@ module Swill
       @stop_warnings = Runtime.observeWarnings(->(message) { report("Warning", message, "") })
     end
 
-    # Stops reporting. An alert already showing stays until it is dismissed.
+    # Stops reporting and closes any notice before application teardown.
     sig { void }
     def stop
       window = @window
@@ -49,6 +62,8 @@ module Swill
       stop_warnings&.()
       @stop_warnings = nil
       @pending = []
+      @stopped = true
+      @active&.finish(nil)
     end
 
     sig { params(event: ErrorEvent).void }
@@ -64,40 +79,125 @@ module Swill
     sig { params(event: PromiseRejectionEvent).void }
     def report_rejection(event) # :nodoc:
       reason = event.reason
+      # Connection notices explain these; uncertain writes still need their
+      # own explicit outcome warning.
+      # FIXME: We are checking the type of Error twice here. We can use case when here.
+      return if reason.is_a?(Error) && %w[connection_lost schema_mismatch actor_scope_changed outcome_unknown].include?(T.cast(reason, Error).code.to_s)
+
       report("Stop", ProblemReporter.message_of(reason), ProblemReporter.origin_of(reason))
     end
 
     # Queues a problem, showing it now when no alert is showing.
     sig { params(icon: String, message: String, detail: String).void }
     def report(icon, message, detail)
-      return if @current == message || @pending.any? { |problem| problem["message"] == message }
+      return if @stopped || @current == message || @pending.any? { |problem| problem[:message] == message }
 
-      @pending << { "icon" => icon, "message" => message, "detail" => detail }
+      @pending << { kind: "", icon: icon, message: message, detail: detail }
+      show_next if @current.nil?
+    end
+
+    # These notices are available in production, independent of error reporting.
+    sig { params(state: String, detail: String, retry_action: T.proc.void).void }
+    def connection_changed(state, detail, retry_action)
+      @state = state
+      @retry = retry_action
+      case state
+      when "connected", "idle" then connection_restored
+      when "reload_required" then require_reload(detail)
+      when "disconnected" then connection_lost unless @dismissed
+      end
+    end
+
+    # Coalesce builds while a notice is open. Later acknowledges the latest
+    # revision seen, rather than only the one which first opened the alert.
+    sig { params(revision: String).void }
+    def revision_changed(revision)
+      @revision = revision
+      return if revision == @acknowledged_revision || @state == "reload_required"
+
+      enqueue_notice(REVISION, REVISION_MESSAGE, REVISION_DETAIL)
+    end
+
+    sig { params(kind: String, message: String, detail: String).void }
+    def enqueue_notice(kind, message, detail) # :nodoc:
+      return if @stopped || @kind == kind || @pending.any? { |item| item[:kind] == kind }
+
+      icon = kind == CONNECTION ? "NetworkLost" : "Warning"
+      @pending.unshift({ kind: kind, icon: icon, message: message, detail: detail })
       show_next if @current.nil?
     end
 
     sig { void }
     async def show_next # :nodoc:
+      return if @stopped
+
+      first = @pending.first
+      return if first && first[:kind] == REVISION && %w[disconnected connecting].include?(@state)
+
       problem = @pending.shift
       return unless problem
 
-      @current = problem["message"]
+      @current = problem.fetch(:message)
+      @kind = problem.fetch(:kind)
+      kind = @kind
       begin
-        alert = Alert.new
-        alert.icon = T.must(problem["icon"])
-        alert.title = problem["icon"] == "Stop" ? "Error" : "Warning"
-        alert.message_text = T.must(problem["message"])
-        alert.informative_text = T.must(problem["detail"])
-        alert.add_button("OK")
+        alert = SystemAlert.new
+        alert.retry_action = kind == CONNECTION ? @retry : nil
+        alert.required = kind == RELOAD
+        @active = alert
+        alert.icon = problem.fetch(:icon)
+        alert.title = kind.empty? ? (alert.icon == "Stop" ? "Error" : "Warning") : "Application"
+        alert.message_text = problem.fetch(:message)
+        alert.informative_text = problem.fetch(:detail)
+        button_titles(kind).each { |label| alert.add_button(label) }
         await alert.run
+        @dismissed = true if kind == CONNECTION && %w[disconnected connecting].include?(@state)
+        @acknowledged_revision = @revision if kind == REVISION && %w[idle connected].include?(@state)
       rescue => _e
-        # The console already has the problem; an alert that cannot show is
-        # not reported again, which could only repeat.
+        # An alert that cannot show must not report itself recursively.
         @pending = []
       ensure
         @current = nil
+        @kind = ""
+        @active = nil
       end
       show_next unless @pending.empty?
+    end
+
+    private
+
+    sig { void }
+    def connection_restored
+      @dismissed = false
+      @pending = @pending.reject { |item| [CONNECTION, RELOAD].include?(item[:kind]) }
+      @active&.finish(nil) if [CONNECTION, RELOAD].include?(@kind)
+      show_next if @current.nil?
+    end
+
+    sig { params(detail: String).void }
+    def require_reload(detail)
+      @pending = @pending.reject { |item| [CONNECTION, REVISION].include?(item[:kind]) }
+      enqueue_notice(RELOAD, "Reload required", detail)
+      @active&.finish(nil) unless @kind == RELOAD
+    end
+
+    sig { void }
+    def connection_lost
+      if @kind == REVISION
+        @pending << { kind: REVISION, icon: "Warning", message: REVISION_MESSAGE, detail: REVISION_DETAIL }
+        @active&.finish(nil)
+      end
+      enqueue_notice(CONNECTION, CONNECTION_MESSAGE, CONNECTION_DETAIL)
+    end
+
+    sig { params(kind: String).returns(T::Array[String]) }
+    def button_titles(kind)
+      case kind
+      when CONNECTION then [SystemAlert::RETRY_TITLE, "Dismiss"]
+      when RELOAD then [SystemAlert::RELOAD_TITLE]
+      when REVISION then [SystemAlert::REFRESH_TITLE, "Later"]
+      else ["OK"]
+      end
     end
 
     # What an error says: an Error's message, or anything else as text.

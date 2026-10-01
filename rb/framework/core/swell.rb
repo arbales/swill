@@ -210,6 +210,13 @@ module Swill
       self
     end
 
+    # Inserts `node` before the element's current children and returns the wrapper.
+    sig { params(node: Node).returns(Swell) }
+    def prepend(node)
+      @element.insertBefore(node, @element.firstElementChild)
+      self
+    end
+
     # Removes the element from its parent and returns the wrapper.
     # An element with no parent remains unchanged.
     sig { returns(Swell) }

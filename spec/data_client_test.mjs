@@ -241,7 +241,7 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   assert.equal(transport.requests.filter(request => request.type === "DELETE").length, 1);
 });
 
-test("dirty fields survive background patches and actor changes replace identity", async () => {
+test("dirty fields survive background patches and actor changes require reload", async () => {
   globalThis.WebSocket = FakeWebSocket;
   FakeWebSocket.actorScope = "actor-1";
   let transport;
@@ -263,11 +263,9 @@ test("dirty fields survive background patches and actor changes replace identity
 
   transport.close();
   FakeWebSocket.actorScope = "actor-2";
-  const replacement = (await Client.default().query(
-    "Post", "search", [], {}, "result_set"
-  )).first();
-  assert.notEqual(replacement, first);
-  assert.equal(replacement.title, "Hello");
+  await assert.rejects(Client.default().query("Post", "search", [], {}, "result_set"), {code: "actor_scope_changed"});
+  assert.equal(Client.default().connectionState, "reload_required");
+  assert.equal(first.title_loaded, false, "the previous actor's fields are invalidated");
   FakeWebSocket.actorScope = "actor-1";
 });
 
@@ -510,4 +508,89 @@ test("a failed stale refresh preserves availability and remote error details", a
   assert.equal(await post.loadField("comments"), comments);
   assert.equal(comments.isStale(), false);
   assert.equal(comments.error, null);
+});
+
+test("automatic recovery backs off, coalesces manual retries, and connects an idle page", async () => {
+  Runtime.closeData();
+  const client = Client.default();
+  const timers = new Map(); let timerId = 0;
+  const originalSet = globalThis.setTimeout, originalClear = globalThis.clearTimeout, random = Math.random;
+  globalThis.setTimeout = (callback, delay) => { timers.set(++timerId, {callback, delay}); return timerId; };
+  globalThis.clearTimeout = id => timers.delete(id);
+  Math.random = () => 0.5;
+  let online = false, sockets = [];
+  const states = [];
+  const stop = Runtime.observe(client, "connection_state", state => states.push(state));
+  Runtime.configureData("ws://recovery-test", "schema", () => {
+    if (!online) throw new Error("offline");
+    const socket = new FakeWebSocket(); sockets.push(socket); return socket;
+  });
+  try {
+    assert.equal(client.connectionState, "idle");
+    assert.equal(timers.size, 0, "the initial connection is lazy");
+    await assert.rejects(client.query("Post", "search", [], {}, "array"), {code: "connection_lost"});
+    for (const delay of [1000, 2000, 4000, 8000, 15000, 30000, 30000]) {
+      assert.equal(timers.size, 1);
+      const [id, timer] = [...timers][0];
+      assert.equal(timer.delay, delay);
+      timers.delete(id);
+      await timer.callback();
+    }
+    online = true;
+    await Promise.all([client.reconnect(), client.reconnect()]);
+    assert.equal(sockets.length, 1, "Retry Now shares the opening attempt");
+    assert.equal(client.connectionState, "connected");
+    assert.equal(timers.size, 0);
+    assert.deepEqual(sockets[0].requests.map(r => r.type), ["HELLO"], "a failed query is not replayed");
+    sockets[0].close();
+    const [id, timer] = [...timers][0];
+    assert.equal(timer.delay, 1000, "a successful handshake resets backoff");
+    timers.delete(id);
+    await timer.callback();
+    assert.equal(client.connectionState, "connected", "an idle page reconnects without a query");
+    assert.equal(sockets.length, 2);
+    Runtime.closeData();
+    assert.equal(client.connectionState, "idle");
+    assert.equal(timers.size, 0);
+    assert.ok(states.includes("connecting") && states.includes("disconnected") && states.includes("connected"));
+  } finally {
+    Runtime.closeData(); stop();
+    globalThis.setTimeout = originalSet; globalThis.clearTimeout = originalClear; Math.random = random;
+  }
+});
+
+test("compatible reconnection preserves canonical objects, dirty fields, drafts and queued hydration", async () => {
+  Runtime.closeData();
+  const client = Client.default();
+  let current;
+  let holdReads = false;
+  class RecoveringSocket extends FakeWebSocket {
+    send(bytes) {
+      if (holdReads && unpack(bytes).type === "GET") { this.close(); return; }
+      super.send(bytes);
+    }
+  }
+  Runtime.configureData("ws://preserve-test", "schema", () => (current = new RecoveringSocket()));
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  try {
+    const first = (await client.query("Post", "search", [], {}, "array"))[0];
+    first.title = "Local edit";
+    const draft = first.draft();
+    draft.title = "Draft edit";
+    holdReads = true;
+    assert.equal(first.body, null);
+    await tick();
+    assert.equal(client.connectionState, "disconnected");
+    assert.equal(first.title, "Local edit");
+    assert.equal(draft.title, "Draft edit");
+    holdReads = false;
+    assert.equal(await client.reconnect(), true);
+    await tick();
+    assert.equal(first.body_loaded, true, "queued field reads resume after WELCOME");
+    const same = (await client.query("Post", "search", [], {}, "array"))[0];
+    assert.equal(same, first);
+    assert.equal(first.title, "Local edit");
+    assert.equal(draft.title, "Draft edit");
+    assert.equal(current.requests.filter(r => r.type === "GET").length, 1);
+  } finally { Runtime.closeData(); }
 });

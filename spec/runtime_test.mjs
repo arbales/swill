@@ -3503,6 +3503,9 @@ test("Swell finds children, writes literal text and exposes listener disposal", 
   root.click(); stop(); stop(); root.click();
   assert.equal(clicks, 1);
   label.remove(); assert.equal(root.children.length, 0);
+  const first = element("strong");
+  assert.equal(dom.prepend(first), dom);
+  assert.equal(root.children[0], first);
   dom.append(child).empty(); assert.equal(root.children.length, 0);
 });
 
@@ -3523,4 +3526,139 @@ test("View clones template roots and supplies fresh divs for empty templates", (
   assert.equal(clone.children.length, 1);
   assert.notEqual(clone.children[0], root.children[0]);
   assert.equal(clone.children[0].getAttribute("class"), "label");
+});
+
+test("production connection alerts persist through retries, recover, and require reload on incompatibility", async () => {
+  const f = windowedPage();
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const dialog = () => f.document.querySelector(".alert");
+  const buttons = () => Array.from(dialog().querySelector(".actions").children);
+  let retries = 0, reloads = 0;
+  f.document.defaultView.location.reload = () => reloads++;
+  const state = value => f.application.connectionChanged(value, "The application has changed.", () => { retries++; state("connecting"); });
+  assert.equal(f.application.development, false);
+  state("disconnected");
+  const first = dialog();
+  assert.ok(first);
+  assert.equal(first.querySelector(".alert-icon").getAttribute("src"), "resources/swill/NetworkLost.png");
+  assert.deepEqual(buttons().map(b => b.textContent), ["Retry Now", "Dismiss"]);
+  f.document.defaultView.dispatchEvent(new Event("online"));
+  assert.equal(retries, 1, "browser online expedites recovery");
+  buttons()[0].click();
+  assert.equal(retries, 2);
+  assert.equal(dialog(), first, "retry leaves the alert open");
+  state("connected");
+  await tick();
+  assert.equal(dialog(), null, "a compatible handshake closes it");
+  state("disconnected");
+  buttons()[1].click();
+  await tick();
+  state("connecting"); state("disconnected");
+  assert.equal(dialog(), null, "Dismiss silences this outage, not recovery");
+  state("connected"); state("disconnected");
+  assert.ok(dialog(), "a later outage is a new episode");
+  state("reload_required");
+  await tick();
+  assert.deepEqual(buttons().map(b => b.textContent), ["Reload"]);
+  buttons()[0].dispatchEvent(keyEvent("keydown", "Escape"));
+  await tick();
+  assert.ok(dialog(), "mandatory reload cannot be dismissed with Escape");
+  buttons()[0].click();
+  assert.equal(reloads, 1);
+  f.application.terminate();
+  await tick();
+  assert.equal(dialog(), null);
+});
+
+test("development build notices coalesce and share the connection alert queue", async () => {
+  const f = windowedPage();
+  const Reporter = Runtime.resolve("Swill::ProblemReporter");
+  const reporter = new Reporter(f.document.defaultView);
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const dialog = () => f.document.querySelector(".alert");
+  const buttons = () => Array.from(dialog().querySelector(".actions").children);
+  try {
+    reporter.revisionChanged("two");
+    const first = dialog();
+    reporter.revisionChanged("three");
+    assert.equal(dialog(), first);
+    buttons()[1].click();
+    await tick();
+    reporter.revisionChanged("three");
+    assert.equal(dialog(), null, "Later acknowledges the latest coalesced build");
+    reporter.revisionChanged("four");
+    reporter.connectionChanged("disconnected", "", () => {});
+    await tick();
+    assert.equal(buttons()[0].textContent, "Retry Now", "the outage takes priority");
+    reporter.connectionChanged("connected", "", () => {});
+    await tick();
+    assert.equal(buttons()[0].textContent, "Refresh", "the build notice resumes after recovery");
+    reporter.connectionChanged("reload_required", "Schema changed", () => {});
+    await tick();
+    assert.deepEqual(buttons().map(b => b.textContent), ["Reload"]);
+    reporter.revisionChanged("five");
+    reporter.stop();
+    await tick();
+    assert.equal(dialog(), null, "teardown cannot advance queued alerts");
+  } finally { reporter.stop(); }
+});
+
+test("development polling compares embedded revision, skips hidden pages and failures, and aborts on stop", async () => {
+  const Monitor = Runtime.resolve("Swill::DevelopmentMonitor");
+  const timers = new Map(); let timerId = 0;
+  context.setTimeout = (callback, delay) => { timers.set(++timerId, {callback, delay}); return timerId; };
+  context.clearTimeout = id => timers.delete(id);
+  context.AbortController = AbortController;
+  const f = pageFixture();
+  f.document.visibilityState = "visible";
+  const revisions = [], requests = [];
+  const reporter = {revisionChanged: revision => revisions.push(revision)};
+  let response = {revision: "second", ready: true};
+  context.fetch = async (url, options) => {
+    requests.push({url, options});
+    if (response?.message) throw response;
+    return {ok: true, json: async () => response};
+  };
+  const quiet = new Monitor(f.document, reporter);
+  quiet.start();
+  assert.equal(requests.length, 0, "production has no metadata and makes no poll");
+  const meta = element("meta", {name: "swill-development", content: "first", "data-endpoint": "/__swill/development"});
+  f.document.appendChild(meta);
+  const monitor = new Monitor(f.document, reporter);
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  try {
+    monitor.start();
+    await tick();
+    assert.deepEqual(revisions, ["second"], "an update before the first poll is still detected");
+    assert.equal(requests[0].options.cache, "no-store");
+    response = {revision: "third", ready: false};
+    await monitor.poll();
+    response = runInContext('new Error("offline")', context);
+    await monitor.poll();
+    assert.deepEqual(revisions, ["second"], "failed or unfinished builds do not notify");
+    f.document.visibilityState = "hidden";
+    const count = requests.length;
+    await monitor.poll();
+    assert.equal(requests.length, count);
+    response = {revision: "fourth", ready: true};
+    f.document.visibilityState = "visible";
+    f.document.dispatchEvent(new Event("visibilitychange"));
+    await tick();
+    assert.deepEqual(revisions, ["second", "fourth"]);
+    let activeSignal;
+    context.fetch = (_url, options) => new Promise((_resolve, reject) => {
+      activeSignal = options.signal;
+      activeSignal.addEventListener("abort", () => reject(runInContext('new Error("aborted")', context)));
+    });
+    const pending = monitor.poll();
+    await monitor.poll();
+    assert.equal(timers.size, 1, "one bounded request is in flight");
+    monitor.stop();
+    await pending;
+    assert.equal(activeSignal.aborted, true);
+    assert.equal(timers.size, 0);
+  } finally {
+    monitor.stop();
+    delete context.setTimeout; delete context.clearTimeout; delete context.AbortController; delete context.fetch;
+  }
 });
