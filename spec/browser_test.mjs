@@ -375,7 +375,12 @@ try {
       controls.querySelector("output[bind=selected_person]").textContent];
     picker.focus();
     key(picker, "Enter");
+    const popup = picker.querySelector('.custom-select-popup');
+    if (getComputedStyle(popup).position !== 'absolute' || getComputedStyle(popup).display === 'none') {
+      throw new Error('Custom select popup must overlay the page when open');
+    }
     key(picker, "ArrowDown");
+    if (getComputedStyle(popup).display !== 'none') throw new Error('Closed popup must be hidden');
     results.push(controls.querySelector("output[bind=selected_person]").textContent, location.hash.includes("main=controls"));
     document.querySelector("[data-example=data]").click();
     const data = document.querySelector("[controller='Static::DataPane']");
@@ -389,6 +394,10 @@ try {
     results.push(rows().length);
     document.querySelector("[data-action=show_palette]").click();
     const dialog = document.querySelector("dialog[controller='Static::Palette']");
+    const bounds = dialog.getBoundingClientRect();
+    if (getComputedStyle(dialog).position !== 'fixed' || bounds.top < 0 || bounds.bottom > innerHeight) {
+      throw new Error('Palette must float within the viewport, independent of its document position');
+    }
     results.push(dialog !== null && dialog.open, document.activeElement === dialog.querySelector("input"));
     dialog.querySelector("[data-action=close]").click();
     results.push(document.querySelector("dialog[controller='Static::Palette']") === null);

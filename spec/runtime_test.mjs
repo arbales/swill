@@ -1,6 +1,7 @@
 import {test, afterEach} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
+import {runInContext} from "node:vm";
 import {loadBundles} from "./load_bundles.mjs";
 
 const swill = loadBundles();
@@ -1179,10 +1180,26 @@ test("klass awakens View subclasses, alone or together with a controller", () =>
 });
 
 test("outlet mistakes fail at awakening with the outlet name", () => {
-  const awaken = children => launched(element("body", {}, [element("main", {controller: installHost({panel: false})}, children)]));
-  assert.throws(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "panel"})]), /Duplicate outlet: panel/);
-  assert.throws(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "nope"})]), /Undeclared outlet: nope/);
-  assert.throws(() => awaken([]), /Unresolved outlet: panel/);
+  const hostName = installHost({panel: false, movie_list: true});
+  const awaken = children => launched(element("body", {}, [element("main", {controller: hostName}, children)]));
+  const message = thunk => { try { thunk(); } catch (error) { return error.message; } assert.fail("expected an error"); };
+  assert.equal(message(() => awaken([element("div", {outlet: "panel", id: "a"}), element("div", {outlet: "panel", id: "b"})])),
+    `Duplicate outlet panel on ${hostName}: <div outlet="panel" id="a"> and <div outlet="panel" id="b"> both carry outlet="panel"; ` +
+    "an outlet connects one element");
+  assert.equal(message(() => awaken([element("div", {outlet: "panel"}), element("div", {outlet: "nope"})])),
+    `Undeclared outlet nope on ${hostName}: <div outlet="nope"> names an outlet ${hostName} does not declare ` +
+    "Its outlets: panel, movie_list. Declare it with `outlet :nope, type: ...`, or remove the attribute");
+  assert.match(message(() => awaken([element("div", {outlet: "panel"}), element("section", {outlet: "movieList"})])),
+    /names an outlet .* does not declare\. Did you mean movie_list\?/, "a camelCase spelling of a declared name");
+  assert.match(message(() => awaken([element("div", {outlet: "panle"})])), /Did you mean panel\?/, "a typo");
+  assert.equal(message(() => awaken([])),
+    `Unresolved outlet panel on ${hostName}: no element in its region carries outlet="panel". ` +
+    `Add the attribute to an element ${hostName} owns, or declare the outlet \`optional: true\``);
+  assert.equal(message(() => awaken([element("section", {controller: "Demo::Badge"}, [element("div", {outlet: "panel"})])])),
+    `Unresolved outlet panel on ${hostName}: no element in its region carries outlet="panel". ` +
+    `<div outlet="panel"> does, but it is inside <section controller="Demo::Badge">'s region, whose outlets are its own. ` +
+    `Add the attribute to an element ${hostName} owns, or declare the outlet \`optional: true\``,
+    "an element inside a nested controller's region is named, with the region");
   assert.throws(() => awaken([element("div", {klass: "Demo::Badge", outlet: "panel"})]), /Demo::Badge is not a Swill::View/);
   assert.throws(() => awaken([element("div", {klass: "Nope::View", outlet: "panel"})]), /Unknown class: Nope::View/);
   const broken = element("script", {type: "application/json", outlet: "panel"});
@@ -1216,7 +1233,7 @@ test("outlet mistakes fail at awakening with the outlet name", () => {
   assert.equal(typed.people, null, "an empty script is nil, which a nilable outlet accepts");
   const inner = element("div", {outlet: "panel"});
   const nested = element("section", {controller: "Demo::Badge"}, [inner]);
-  assert.throws(() => awaken([nested]), /Unresolved outlet: panel/,
+  assert.throws(() => awaken([nested]), /Unresolved outlet panel on .*inside <section controller="Demo::Badge">'s region/,
     "an outlet inside a child controller is not visible to the parent");
 });
 
@@ -1450,6 +1467,22 @@ test("the application owns the first responder and moves focus with it", () => {
   assert.equal(application.firstResponder(), parent.nameField);
 });
 
+test("focus cannot make a responder that does not accept first responder", () => {
+  const f = pageFixture({readyState: "complete"});
+  const application = new Launcher().launch(f.document);
+  const [parent, badge] = application.controllers;
+  badge.acceptsFirstResponder = () => false;
+  application.makeFirstResponder(null);
+  f.resetButton.focus();
+  assert.equal(application.firstResponder(), application, "with nothing to go back to, focus is let go");
+  assert.notEqual(f.document.activeElement, f.resetButton);
+  application.makeFirstResponder(parent.nameField);
+  f.resetButton.focus();
+  assert.equal(application.firstResponder(), parent.nameField, "a click or Tab is refused as makeFirstResponder is");
+  assert.equal(f.document.activeElement, f.nameInput, "focus went back to the first responder");
+  application.terminate();
+});
+
 test("a refusing first responder keeps focus", () => {
   const f = pageFixture({readyState: "complete"});
   const application = new Launcher().launch(f.document);
@@ -1461,6 +1494,78 @@ test("a refusing first responder keeps focus", () => {
   f.nameInput.focus();
   assert.equal(application.firstResponder(), badge, "focusin cannot take it either");
   assert.equal(f.document.activeElement, f.resetButton, "focus was restored to the refuser");
+});
+
+test("a focused element keeps the keys it handles, and the rest become commands", () => {
+  const f = pageFixture({readyState: "complete"});
+  const application = new Launcher().launch(f.document);
+  const seen = [];
+  application.keyDown = event => seen.push(`raw:${event.key}`);
+  application.moveDown = () => seen.push("down");
+  application.moveUp = () => seen.push("up");
+  application.moveLeft = () => seen.push("left");
+  application.insertNewline = () => seen.push("enter");
+  const key = (target, name, extra = {}) => target.dispatchEvent(Object.assign(keyEvent("keydown", name), extra));
+
+  const [parent] = application.controllers;
+  application.makeFirstResponder(parent.nameField);
+  for (const name of ["x", "Backspace", "ArrowLeft", "Home"]) key(f.nameInput, name);
+  assert.deepEqual(seen, [], "typing and moving within a single-line field stay with the field");
+  key(f.nameInput, "ArrowDown");
+  key(f.nameInput, "ArrowUp");
+  assert.deepEqual(seen.splice(0), ["down", "up"], "Up and Down in a single line are commands for the chain");
+
+  key(f.nameInput, "Enter", {isComposing: true});
+  assert.deepEqual(seen, [], "a key during composition belongs to the input method");
+  key(f.nameInput, "k", {ctrlKey: true});
+  key(f.nameInput, "Enter", {metaKey: true});
+  assert.deepEqual(seen.splice(0), ["raw:k", "raw:Enter"], "a modified key passes up as it is");
+
+  const notes = element("textarea");
+  f.main.appendChild(notes);
+  for (const name of ["Enter", "ArrowDown"]) key(notes, name);
+  const menu = element("select");
+  f.main.appendChild(menu);
+  key(menu, "ArrowDown");
+  key(f.resetButton, "Enter");
+  assert.deepEqual(seen, [], "a textarea, a select and a button keep their own keys");
+  key(f.resetButton, "ArrowLeft");
+  assert.deepEqual(seen.splice(0), ["left"], "a button has no use for arrows");
+
+  parent.nameField.moveDown = () => seen.push("field");
+  key(f.nameInput, "ArrowDown");
+  assert.deepEqual(seen.splice(0), ["field"], "commands start at the first responder, so a field can take one");
+  application.terminate();
+});
+
+test("restorable paths on a controller that is not window content warn once", () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = message => warnings.push(message);
+  try {
+    const f = pageFixture({readyState: "complete"});
+    const application = new Launcher().launch(f.document);
+    application.terminate();
+    new Launcher().launch(pageFixture({readyState: "complete"}).document).terminate();
+  } finally {
+    console.warn = original;
+  }
+  const expected = "[Swill] Demo::Badge declares restorable count, but only a window's content controller is restored; " +
+    "declare it there as a path through this controller";
+  assert.deepEqual(warnings.filter(message => message.includes("restorable")), [expected, expected],
+    "the nested badge is named once per application, with the fix");
+
+  warnings.length = 0;
+  console.warn = message => warnings.push(message);
+  try {
+    const f = windowedPage();
+    assert.ok(f.application.windowNamed("main").controller instanceof Badge);
+    f.application.terminate();
+  } finally {
+    console.warn = original;
+  }
+  assert.deepEqual(warnings.filter(message => message.includes("restorable")), [],
+    "a class that is a window's content as well declares for that use, so its nested instances are not warned about");
 });
 
 test("key events route from the first responder up the chain", () => {
@@ -1475,12 +1580,14 @@ test("key events route from the first responder up the chain", () => {
   assert.equal(f.parentTitle.textContent, "Hello ", "Escape reached the controller's cancel_operation through the view chain");
   const seen = [];
   application.insertNewline = event => seen.push(`enter:${event.key}`);
-  application.complete = () => seen.push("tab");
+  application.insertTab = () => seen.push("tab");
+  application.insertBacktab = () => seen.push("backtab");
   application.keyUp = event => seen.push(`up:${event.key}`);
   f.nameInput.dispatchEvent(keyEvent("keydown", "Enter"));
   f.nameInput.dispatchEvent(keyEvent("keydown", "Tab"));
+  f.nameInput.dispatchEvent(Object.assign(keyEvent("keydown", "Tab"), {shiftKey: true}));
   f.nameInput.dispatchEvent(keyEvent("keyup", "Tab"));
-  assert.deepEqual(seen, ["enter:Enter", "tab", "up:Tab"]);
+  assert.deepEqual(seen, ["enter:Enter", "tab", "backtab", "up:Tab"]);
   parent.unload();
   assert.equal(application.firstResponder(), application, "tearing down the region releases its first responder");
   application.terminate();
@@ -1563,6 +1670,207 @@ test("load_window_content replaces, tears down, awakens, and moves focus", () =>
   assert.notEqual(f.sideWindow.children[0], f.prerendered, "reloaded content is a clone");
   assert.throws(() => f.application.loadWindowContent("main", "nope"), /No window content template: nope/);
   assert.throws(() => f.application.loadWindowContent("nope", "welcome"), /No window container: nope/);
+});
+
+test("a bundle names its resources, loads their contents once, and links stylesheets", async () => {
+  const Bundle = Runtime.resolve("Swill::Bundle");
+  const bundle = Bundle.register("fixture", "https://cdn.test/app/",
+    ["Poster.png", "icons/Star.svg", "icons/Star.png", "notes.txt", "read me.md", "themes/dark.css"],
+    {"notes.txt": "embedded"}, false);
+  assert.equal(Bundle.named("fixture"), bundle);
+  assert.equal(bundle.urlForResource("Poster"), "https://cdn.test/app/resources/fixture/Poster.png");
+  assert.equal(bundle.urlForResourceWithExtension("icons/Star", "svg"), "https://cdn.test/app/resources/fixture/icons/Star.svg",
+    "a name includes its folder");
+  assert.equal(bundle.urlForResource("read me"), "https://cdn.test/app/resources/fixture/read%20me.md", "segments are encoded");
+  assert.throws(() => bundle.urlForResource("icons/Star"), /Ambiguous resource icons\/Star in bundle fixture/);
+  assert.equal(bundle.urlForResource("Missing"), null);
+  assert.equal(bundle.isResourceWithExtension("icons/Star", "png"), true);
+  assert.equal(bundle.isResourceWithExtension("icons/Star", "gif"), false);
+
+  const fetched = [];
+  context.fetch = async url => {
+    fetched.push(url);
+    return url.endsWith("gone.txt") ? {ok: false, status: 404} : {ok: true, status: 200, text: async () => `text of ${url}`};
+  };
+  try {
+    assert.equal(bundle.loadedResource("notes"), "embedded", "an embedded resource is already loaded");
+    assert.equal(await bundle.loadResource("notes", "txt"), "embedded");
+    assert.equal(bundle.loadedResource("read me"), null);
+    assert.equal(await bundle.loadResource("read me", null), "text of https://cdn.test/app/resources/fixture/read%20me.md");
+    assert.equal(await bundle.loadResource("read me", "md"), "text of https://cdn.test/app/resources/fixture/read%20me.md");
+    assert.deepEqual(fetched, ["https://cdn.test/app/resources/fixture/read%20me.md"], "fetched once, embedded never");
+    assert.equal(bundle.loadedResource("read me"), "text of https://cdn.test/app/resources/fixture/read%20me.md");
+    await assert.rejects(bundle.loadResource("Missing", null), /No resource Missing in bundle fixture/);
+    const broken = Bundle.register("broken", "/", ["gone.txt"], {}, false);
+    await assert.rejects(broken.loadResource("gone", "txt"), /Could not load gone.txt from bundle broken: 404/);
+  } finally {
+    delete context.fetch;
+  }
+
+  const head = element("head");
+  const document = element("html", {}, [head]);
+  document.head = head;
+  const linked = bundle.addStylesheet("themes/dark", document);
+  const link = head.children[0];
+  assert.deepEqual([link.tagName, link.getAttribute("rel"), link.getAttribute("href")],
+    ["LINK", "stylesheet", "https://cdn.test/app/resources/fixture/themes/dark.css"]);
+  link.dispatchEvent(new Event("load"));
+  assert.equal(await linked, link);
+  assert.equal(await bundle.addStylesheet("themes/dark", document), link, "a stylesheet is linked once");
+  assert.equal(head.children.length, 1);
+  assert.throws(() => bundle.addStylesheet("Poster", document), /No stylesheet Poster in bundle fixture/);
+});
+
+test("images are found in the application's bundle, then the framework's, and image views show them", () => {
+  const Bundle = Runtime.resolve("Swill::Bundle");
+  const Image = Runtime.resolve("Swill::Image");
+  const ImageView = Runtime.resolve("Swill::Control::ImageView");
+  assert.equal(Image.named("Warning").url, "resources/swill/Warning.png", "the framework's own");
+  Bundle.register("images-app", "/assets/", ["Warning.png", "Poster.webp"], {}, true);
+  assert.equal(Image.named("Warning").url, "/assets/resources/images-app/Warning.png", "the application's comes first");
+  assert.equal(Image.named("Poster").url, "/assets/resources/images-app/Poster.webp");
+  assert.equal(Image.named("Missing"), null);
+  assert.equal(new Image("/posters/42.jpg").url, "/posters/42.jpg");
+
+  const img = element("img", {klass: "Swill::Control::ImageView", image: "Poster", alt: ""});
+  const view = new ImageView(img);
+  assert.equal(img.getAttribute("src"), "/assets/resources/images-app/Poster.webp");
+  view.value = "Warning";
+  assert.equal(img.getAttribute("src"), "/assets/resources/images-app/Warning.png", "a string names an image");
+  view.value = "https://example.test/a.png";
+  assert.equal(img.getAttribute("src"), "https://example.test/a.png", "or is a URL when no bundle has that name");
+  view.value = new Image("/b.png");
+  assert.equal(img.getAttribute("src"), "/b.png");
+  view.value = null;
+  assert.equal(img.hasAttribute("src"), false, "nil shows nothing");
+
+  const holder = element("span", {klass: "Swill::Control::ImageView"});
+  element("body", {}, [holder]);
+  new ImageView(holder).value = "Poster";
+  assert.equal(holder.children[0].tagName, "IMG", "a view without an img gets one");
+  assert.equal(holder.children[0].getAttribute("src"), "/assets/resources/images-app/Poster.webp");
+  assert.throws(() => new ImageView(element("img", {image: "Nowhere"})), /Unknown image: Nowhere/);
+  Bundle.register("no-app", "", [], {}, true);
+});
+
+test("an error's origin reads the first frame whichever browser wrote the stack", () => {
+  const Reporter = Runtime.resolve("Swill::ProblemReporter");
+  const error = stack => { const made = runInContext('new Error("boom")', context); made.stack = stack; return made; };
+  assert.equal(Reporter.originOf(error("Error: boom\n    at Movies__Menubar.editMovie (http://localhost:9292/app.js:12:5)\n    at run (x.js:1:1)")),
+    "at Movies__Menubar.editMovie (http://localhost:9292/app.js:12:5)", "Chrome's frame, as written");
+  assert.equal(Reporter.originOf(error("editMovie@http://localhost:9292/app.js:12:5\nglobal code@http://localhost:9292/app.js:40:1")),
+    "at editMovie (http://localhost:9292/app.js:12:5)", "Safari's and Firefox's, written the same way");
+  assert.equal(Reporter.originOf(error("@http://localhost:9292/app.js:12:5")), "at http://localhost:9292/app.js:12:5", "an anonymous frame");
+  assert.equal(Reporter.originOf(error("Error: boom")), "", "no frame");
+  assert.equal(Reporter.originOf("gone away"), "", "not an Error");
+});
+
+test("in development, problems are shown as alerts one at a time", async () => {
+  const original = console.warn;
+  console.warn = () => {};
+  try {
+    const quiet = pageFixture({readyState: "complete"});
+    const plainApplication = new Launcher().launch(quiet.document);
+    assert.equal(plainApplication.development, false, "development is opted into");
+    Runtime.warn("nobody is told");
+    assert.equal(quiet.document.querySelector("dialog"), null, "outside development, problems are only logged");
+    plainApplication.terminate();
+
+    const f = pageFixture({readyState: "complete"});
+    f.body.setAttribute("development", "");
+    const application = new Launcher().launch(f.document);
+    assert.equal(application.development, true);
+    const browser = f.document.defaultView;
+    const alerts = () => Array.from(f.body.children).filter(child => child.tagName === "DIALOG");
+    const shown = () => {
+      const dialog = alerts()[0];
+      const [icon, text] = dialog.children;
+      return [icon.getAttribute("src"), text.children[0].textContent, text.children[1].hidden ? "" : text.children[1].textContent];
+    };
+    const dismiss = async () => { alerts()[0].querySelector("button").click(); await new Promise(resolve => setTimeout(resolve, 0)); };
+
+    assert.match(shown()[1], /^Demo::Badge declares restorable count/, "a warning raised while launching is shown once it has launched");
+    await dismiss();
+    assert.equal(alerts().length, 0);
+
+    // Made in the framework's realm, as a page's own errors are.
+    const boom = runInContext('new Error("boom")', context);
+    const uncaught = Object.assign(new Event("error"), {message: "Uncaught Error: boom", error: boom});
+    // A stackless error takes its location from the event, as Safari reports it.
+    const bare = runInContext('new Error("bare")', context);
+    bare.stack = "";
+    const located = Object.assign(new Event("error"), {message: "bare", error: bare, filename: "http://localhost:9292/app.js", lineno: 7, colno: 3});
+    browser.dispatchEvent(uncaught);
+    assert.equal(alerts().length, 1);
+    assert.deepEqual(shown().slice(0, 2), ["resources/swill/Stop.png", "boom"], "an uncaught error shows the Stop image");
+    assert.match(shown()[2], /^at /, "with where it was raised");
+    Runtime.warn("restorable s is left out of the URL");
+    browser.dispatchEvent(Object.assign(new Event("unhandledrejection"), {reason: "gone away"}));
+    browser.dispatchEvent(uncaught);
+    assert.equal(alerts().length, 1, "later problems wait behind the one showing, and a repeat is dropped");
+
+    await dismiss();
+    assert.deepEqual(shown(), ["resources/swill/Warning.png", "restorable s is left out of the URL", ""], "a warning shows the Warning image");
+    await dismiss();
+    assert.deepEqual(shown(), ["resources/swill/Stop.png", "gone away", ""], "a rejected promise is an error too");
+    await dismiss();
+    assert.equal(alerts().length, 0);
+
+    browser.dispatchEvent(located);
+    assert.deepEqual(shown(), ["resources/swill/Stop.png", "bare", "at http://localhost:9292/app.js:7:3"]);
+    await dismiss();
+
+    application.terminate();
+    Runtime.warn("after terminate");
+    assert.equal(alerts().length, 0, "terminating stops reporting");
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("an alert builds its own window and yields the button chosen", async () => {
+  const f = windowedPage();
+  const [parent] = f.application.controllers;
+  const Alert = Runtime.resolve("Swill::Alert");
+  const ask = buttons => {
+    const alert = new Alert();
+    alert.messageText = "Delete “Ada”?";
+    alert.informativeText = "This cannot be undone.";
+    for (const title of buttons) alert.addButton(title);
+    return [alert, alert.run()];
+  };
+
+  const [alert, answer] = ask(["Cancel", "Delete"]);
+  const dialog = alert.view.element;
+  assert.equal(dialog.parentElement, f.body);
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.getAttribute("role"), "alertdialog");
+  const [icon, text] = dialog.children;
+  assert.equal(icon.tagName, "IMG");
+  assert.deepEqual([icon.getAttribute("class"), icon.getAttribute("alt"), icon.getAttribute("aria-hidden")], ["alert-icon", "", "true"]);
+  assert.equal(icon.getAttribute("src"), "resources/swill/Warning.png", "the framework's Warning image, beside swill.js");
+  assert.equal(text.getAttribute("class"), "alert-text");
+  assert.deepEqual([text.children[0].textContent, text.children[1].textContent], ["Delete “Ada”?", "This cannot be undone."]);
+  const buttons = Array.from(dialog.querySelector(".actions").children);
+  assert.deepEqual(buttons.map(button => button.textContent), ["Cancel", "Delete"]);
+  assert.equal(f.application.firstResponder(), alert);
+  assert.equal(f.document.activeElement, buttons[0], "the first button takes the keyboard");
+  buttons[1].click();
+  assert.equal(await answer, "Delete");
+  assert.equal(dialog.parentElement, null, "choosing dismisses the alert");
+  assert.equal(f.application.firstResponder(), parent.nameField, "the saved first responder returns");
+
+  const [cancelled, cancelAnswer] = ask(["Delete", "Cancel"]);
+  cancelled.view.element.querySelector("button").dispatchEvent(keyEvent("keydown", "Escape"));
+  assert.equal(await cancelAnswer, "Cancel", "Escape chooses Cancel");
+  const [plain, plainAnswer] = ask([]);
+  assert.deepEqual(Array.from(plain.view.element.querySelector(".actions").children).map(b => b.textContent), ["OK"]);
+  const detail = plain.view.element.querySelector(".alert-text").children[1];
+  assert.equal(detail.hidden, false);
+  plain.informativeText = "";
+  assert.equal(detail.hidden, true, "the template's binding hides empty informative text");
+  plain.view.element.querySelector("button").dispatchEvent(keyEvent("keydown", "Escape"));
+  assert.equal(await plainAnswer, null, "Escape without a Cancel button yields nil");
 });
 
 test("show_window presents a dialog whose dismissal restores the first responder", async () => {
@@ -1648,6 +1956,50 @@ test("window content and restorable state round-trip through the fragment", () =
   assert.equal(f.application.windowNamed("main").controller.count, 4, "a value that is not an Integer is ignored");
   f.browser.navigate("#main=missing");
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "unknown content is reported and ignored");
+});
+
+test("a restorable value the URL cannot hold is left out of it, with one warning", () => {
+  // Installed by hand, so the compiler never saw these paths: the read-only
+  // one reaches the runtime, as a path through an untyped property would.
+  const Stubborn = class extends SwillController {};
+  Runtime.installClass(Stubborn, "Test::Stubborn", [
+    {name: "count", js: "count", type: "Integer", defaultValue() { return 0; }},
+    {name: "label", js: "label", computed: true, compute() { return "fixed"; }},
+    {name: "chosen", js: "chosen", defaultValue() { return null; }}
+  ], [], {}, [
+    {path: "count", key: "n", type: "Integer"},
+    {path: "label", key: "l", type: "String"},
+    {path: "chosen", key: "c", type: "T.untyped"}
+  ]);
+  const warnings = [];
+  const original = console.warn;
+  console.warn = message => warnings.push(message);
+  try {
+    const content = element("article", {controller: "Test::Stubborn"});
+    const body = element("body", {application: "Demo::Application"}, [
+      element("section", {window: "main", name: "stubborn"}, [content])
+    ]);
+    const document = element("#document", {}, [body]);
+    document.readyState = "complete";
+    document.defaultView = new Browser("#main=stubborn&main.n=3&main.l=other");
+    const application = new Launcher().launch(document);
+    const controller = application.windowNamed("main").controller;
+    const hash = () => document.defaultView.location.hash;
+    assert.equal(controller.count, 3, "the rest of the window's state restores");
+    assert.equal(hash(), "#main=stubborn&main.n=3", "the key that could not be restored leaves the fragment");
+    controller.chosen = "Dark City";
+    assert.equal(hash(), "#main=stubborn&main.n=3&main.c=Dark+City");
+    controller.chosen = {title: "Dark City"};
+    assert.equal(hash(), "#main=stubborn&main.n=3", "an object is left out rather than written as [object Object]");
+    controller.chosen = {title: "Solaris"};
+    application.terminate();
+  } finally {
+    console.warn = original;
+  }
+  assert.deepEqual(warnings.filter(message => message.includes("left out")), [
+    "[Swill] Test::Stubborn: restorable label is left out of the URL: Read-only binding: label",
+    "[Swill] Test::Stubborn: restorable chosen is left out of the URL: its value cannot be written to the URL; restore a string, number or boolean"
+  ], "each path warns once");
 });
 
 test("restoration state is scoped per window and pruned when content changes", () => {
@@ -2067,6 +2419,10 @@ test("Enter edits the selected row through a draft: Enter commits it into the pe
   assert.equal(editor.controller.representedObject, f.controller.editedObject);
   assert.equal(editor.inputs[0].value, "Grace");
   typeInto(editor.inputs[0], "Grace Hopper");
+  key(editor.inputs[0], "ArrowDown");
+  assert.equal(f.controller.selectedObject, grace, "Down in an editor field leaves the list's selection alone");
+  key(editor.inputs[0], "ArrowUp");
+  assert.equal(f.controller.selectedObject, grace, "and so does Up");
   assert.equal(f.controller.editedObject.name, "Grace Hopper");
   assert.equal(grace.name, "Grace", "the person is untouched until the commit");
   assert.notEqual(f.parent.person, grace, "editing did not hand the selection to the owner");
@@ -2789,6 +3145,33 @@ test("compiled filtering works directly on lists or on an including view control
   owner.dealloc();
 });
 
+for (const fails of [false, true]) test(`inline row stays visible while remote save is pending (${fails ? "failure" : "success"})`, async () => {
+  const f = peoplePage();
+  const ada = f.parent.people[0];
+  let resolve, reject, pending;
+  ada.applyDraft = () => new Promise((done, fail) => { resolve = done; reject = fail; });
+  f.controller.commitEdit = (copy, original, index) => {
+    pending = f.controller.commitDistantEdit(copy, original, index);
+  };
+  f.controller.editingDidFailSave = () => {};
+  f.controller.selectObject(ada);
+  f.controller.beginEditing(0);
+  const row = f.controller.rowElements()[0];
+  f.controller.editedObject.name = "Updated";
+  assert.equal(row.classList.contains("being-edited"), true);
+  assert.equal(f.controller.endEditing(true), true);
+  assert.equal(f.controller.isEditing(), false);
+  assert.equal(row.classList.contains("being-edited"), false, "original row reappears before the response");
+  assert.equal(f.controller.rowElements()[0], row);
+  assert.equal(f.controller.selectedObject, ada);
+  assert.equal(ada.name, "Ada", "pending draft does not change canonical data");
+  if (fails) reject(new Error("save failed")); else resolve(ada);
+  await pending;
+  assert.equal(f.controller.isEditing(), fails);
+  assert.equal(row.classList.contains("being-edited"), fails);
+  if (fails) assert.equal(f.controller.editedObject.name, "Updated", "failed save retains the draft");
+});
+
 test("failed remote edits reopen beside the record's current row", async () => {
   const f = peoplePage();
   const [ada, grace] = f.parent.people;
@@ -2896,9 +3279,9 @@ test("application outlets validate missing, duplicate, undeclared and mistyped c
     return new App().launch(element("body", {}, children));
   };
   const main = () => element("main", {controller: installHost({}), outlet: "main"});
-  assert.throws(() => launch([]), /Unresolved outlet: main/);
-  assert.throws(() => launch([main(), main()]), /Duplicate outlet: main/);
-  assert.throws(() => launch([main(), element("div", {outlet: "other"})]), /Undeclared outlet: other/);
+  assert.throws(() => launch([]), /Unresolved outlet main on Test::InvalidOutletApp/);
+  assert.throws(() => launch([main(), main()]), /Duplicate outlet main on Test::InvalidOutletApp/);
+  assert.throws(() => launch([main(), element("div", {outlet: "other"})]), /Undeclared outlet other on Test::InvalidOutletApp/);
   assert.throws(() => launch([element("div", {outlet: "main"})]), /Outlet main expects/);
 });
 
@@ -2956,24 +3339,26 @@ test("shared templates clone independently and controls own their internal conne
     properties: {value: {defaultValue() { return "local"; }}, label: outletDescriptor("Swill::View")},
     methods: {increment: {js: "increment", arity: 0}}
   }}});
-  const local = element("template", {name: "owned"}, [
-    element("span", {outlet: "label", bind: "value"}),
-    element("button", {"data-action": "increment"})
-  ]);
+  // An application bundle's catalog, embedded as the build embeds one, is
+  // searched before the framework's.
+  const Bundle = Runtime.resolve("Swill::Bundle");
+  Bundle.register("templates-app", "/app/", ["templates.html"], {
+    "templates.html": '<template name="owned"><span outlet="label" bind="value"></span><button data-action="increment"></button></template>'
+  }, true);
   const hostName = installHost({picker: false});
   const picker = element("div", {klass: "Test::OwnedControl", outlet: "picker"});
   const body = element("body", {}, [element("main", {controller: hostName}, [picker])]);
-  body.__swill_templates__ = element("template", {}, [local]);
   const [host] = launched(body);
   const control = host.picker;
   assert.equal(control.label.element.textContent, "local");
   picker.querySelector("button").click();
   assert.equal(control.label.element.textContent, "local!");
-  assert.equal(local.content.children[0].textContent, "", "prototype was not mutated");
+  assert.equal(templates.named("owned", body).content.children[0].textContent, "", "prototype was not mutated");
   const label = control.label.element;
   host.unload();
   control.value = "after";
   assert.equal(label.textContent, "local!", "unload releases internal bindings");
+  Bundle.register("no-app", "", [], {}, true);
 });
 
 

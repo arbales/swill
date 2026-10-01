@@ -543,7 +543,7 @@ For `receiver.name(args)` where the receiver is not `self`:
 | Framework class | `name = value` for a declared property | `receiver.name = value` |
 | Framework class | `attr_reader` or `attr_accessor` reader | `receiver.name` |
 | Framework class | Collected method | `receiver.name(args)` |
-| Framework class | Anything else | Pragma filter if it applies, else an explicit call |
+| Framework class | Anything else, such as a member only a subclass declares | Pragma filter if it applies, else resolved on the object at run time, as for an untyped receiver below |
 | Framework class | `class` | `receiver.constructor` |
 | A class object (`T.class_of(Class)`, `self.class`, a class constant) | A static method, or a `ClassMethods` method, registry, or setting | `receiver.name(args)`, lambdas typed by the signature |
 | A class object | `new(args)` | `new receiver(args)` |
@@ -708,7 +708,7 @@ the build. The following table groups these restrictions by construct:
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
 | Expressions | Any `T` construct in an executable body other than `T.must`, `T.cast`, `T.let`, `T.assert_type!`, `T.unsafe`, `T.absurd`, and `T.bind(self, ...)` with the right number of arguments; a type argument outside the checkable types, or naming a mixin or an unknown constant; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments; safe navigation (`&.`) on a core value type or an untyped receiver |
-| Exceptions | Any `raise` form other than a literal message or a typed rescued error |
+| Exceptions | Any `raise` form other than a message string (a literal, or an expression typed `String`) or a typed rescued error |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |
 | Members | Two members with the same encoded JavaScript name |
 | Build | Application compilation without a framework import; missing `esbuild`; unformattable output |

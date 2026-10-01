@@ -280,14 +280,14 @@ module Swill
                  declaration.fetch("projection", []), generation)
       end
 
-      # Runs a `GET`: for each demand, fetches the record under the viewer
-      # context and patches the demanded fields and associations, with the
+      # Runs a `GET`: fetches each model's records together under the viewer
+      # context, then patches the demanded fields and associations, with the
       # records an association reaches patched before their owner. Answers
       # `RETURN` with a nil value and the patches. Raises `unknown_field` for
       # a name the model's interface does not declare.
       def hydrate(message)
         generation = Integer(message.fetch("generation"))
-        patches = message.fetch("demands").flat_map do |demand|
+        demands = message.fetch("demands").map do |demand|
           klass = schema.model_class(demand.fetch("model"))
           model_schema = schema.models.fetch(klass.name)
           allowed = model_schema.fetch("fields").keys + model_schema.fetch("associations").keys
@@ -295,7 +295,18 @@ module Swill
           unknown = fields - allowed
           raise RemoteError.new("unknown_field", "unknown field #{unknown.first}") unless unknown.empty?
 
-          record = privacy_dataset(klass).with_pk!(demand.fetch("id"))
+          [klass, demand.fetch("id"), fields]
+        end
+        records = demands.group_by(&:first).to_h do |klass, group|
+          dataset = privacy_dataset(klass)
+          ids = group.map { |_, id, _| id }.uniq
+          loaded = dataset.where(klass.qualified_primary_key => ids).all
+          [klass, [dataset, loaded.to_h { |record| [record.pk.to_s, record] }]]
+        end
+        patches = demands.flat_map do |klass, id, fields|
+          dataset, indexed = records.fetch(klass)
+          # Retain Sequel's lookup semantics for missing or noncanonical ids.
+          record = indexed.fetch(id.to_s) { dataset.with_pk!(id) }
           nested = []
           parent = patch(record, fields, generation, nested)
           nested << parent

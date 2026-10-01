@@ -156,6 +156,8 @@ export function register(name, klass) {
  *
  * @param {object} [options]
  * @param {Element} [options.root] Where to launch; `document.body` by default.
+ * @param {boolean} [options.development] Show the application's problems as
+ *   alerts as well as in the console; false by default.
  * @param {Function} [options.application] A registered subclass of
  *   `Swill.Application`; `Swill.Application` by default.
  * @returns {object} The running application.
@@ -164,7 +166,7 @@ export function register(name, klass) {
 export function start(options = {}) {
   const {Application} = framework;
   if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
-  assertKeys(options, ["root", "application"], "start");
+  assertKeys(options, ["root", "application", "development"], "start");
   const root = options.root ?? globalThis.document?.body;
   const ApplicationClass = options.application ?? Application;
   if (!root) throw new Error("Swill.start requires a root element");
@@ -177,6 +179,7 @@ export function start(options = {}) {
     throw new Error("Register the application class before starting it");
   }
   const application = new ApplicationClass();
+  if (options.development) application.development = true;
   application.launch(root);
   root.ownerDocument?.defaultView?.addEventListener("pagehide", event => {
     if (!event.persisted) application.terminate();

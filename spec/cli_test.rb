@@ -25,7 +25,14 @@ class CLITest < Minitest::Test
       refute_includes js, "class Swill__Controller ", "no second copy of the framework"
       assert File.file?(File.join(dir, "assets", "app.js.map"))
       assert File.file?(File.join(dir, "assets", "swill.js")), "--with-framework copies the bundle"
-      assert File.file?(File.join(dir, "assets", "swill.css")), "--with-framework copies control styles"
+      assert File.file?(File.join(dir, "assets", "resources", "swill", "controls.css")),
+             "--with-framework copies the framework's resources"
+      assert File.file?(File.join(dir, "assets", "resources", "swill", "Warning.png"))
+      assert File.file?(File.join(dir, "assets", "resources", "app", "icons", "Note.svg")),
+             "the application's resources are copied beside app.js, folders and all"
+      assert_includes js, '"icons/Note.svg"', "the manifest is registered"
+      assert_includes js, "note_row", "HTML catalogs are embedded"
+      refute_includes js, "<rect", "other resources are loaded by URL, never embedded"
       assert_operator js.index(/Fixture__Note\b/), :<, js.index(/Fixture__Notes\b/), "dependencies come first"
     end
   end
@@ -41,6 +48,18 @@ class CLITest < Minitest::Test
       refute status.success?
       assert_includes stderr, "swill: "
       refute_includes stderr, "cli.rb:"
+      out = File.join(dir, "dist", "app.js")
+      refute File.exist?(out), "a plain build that fails writes nothing"
+
+      File.write(out.tap { |path| FileUtils.mkdir_p(File.dirname(path)) }, "// the last good build")
+      File.write("#{out}.map", "{}")
+      _stdout, stderr, status = swill("build", dir, "--show-errors")
+      refute status.success?, "the command still fails"
+      script = File.read(out)
+      assert_includes script, "reportBuildFailure", "the stale build is replaced by one that shows the error"
+      message = stderr.delete_prefix("swill: ").strip
+      assert_includes script, message.to_json
+      refute File.exist?("#{out}.map"), "the old source map goes with it"
     end
   end
 

@@ -40,7 +40,9 @@ module Swill
           if taken.zero?
             {"name" => method["name"], "js" => method["js"], "arity" => method["arity"], "taken" => 0}
           else
-            name = "#{method['name']}_with_#{optionals.first(taken).join('_and_')}"
+            # A predicate's or bang method's mark stays last: resource_with_extension?.
+            suffix = method["name"][/[?!]\z/].to_s
+            name = "#{method['name'].delete_suffix(suffix)}_with_#{optionals.first(taken).join('_and_')}#{suffix}"
             {"name" => name, "js" => member(name), "arity" => method["arity"] + taken,
              "taken" => taken, "family" => method["name"]}
           end

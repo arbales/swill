@@ -68,7 +68,10 @@ defaults to the path. The application scopes it under the window name, so
 
 Restoration applies only to the controller a window holds as its content — the
 topmost controller in the container. Nested controllers may declare
-`restorable`, but nothing restores them.
+`restorable`, but nothing restores them, and the application warns once per
+class when one awakens, unless that class is also serving as some window's
+content, which is what its declarations are for. Declare a nested controller's state on the window's
+controller as a path through it: `restorable "movie_list.selected_object_id"`.
 
 The step runs after the load phase and before `controller_did_load`:
 
@@ -83,6 +86,15 @@ The step runs after the load phase and before `controller_did_load`:
 
 Fragment writes are suspended while values are being applied, so restoring does
 not write back what it just read.
+
+A restorable path must end at a property that can be written: a stored
+property, or a computed one declared with `writer:`. The compiler rejects a
+path that ends at a read-only property, naming the `_id` property to restore
+instead when there is one, so `movie_list.selected_object` is refused in favour
+of `movie_list.selected_object_id`. The fragment holds strings, numbers and
+booleans; a path whose value is anything else, or one the compiler could not
+check that turns out to be read-only, is left out of the fragment and the rest
+of the window's state still restores. The application warns once for each.
 
 A window's restoration observations are released when its content is replaced
 or the window is dismissed. Keys the next content does not own are removed from

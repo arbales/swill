@@ -563,6 +563,8 @@ module Swill
         # through its lowering table; a receiver with no static type is dynamic
         # and reaches the runtime's metadata dispatch, the same path bindings
         # use.
+        VALUE_CLASSES = %w[String Symbol Integer Float Hash NilClass].freeze
+
         def receiver_send(node, receiver, method, args)
           name = method.to_s
           setter = name.match?(/\A[a-z_]\w*=\z/) && args.length == 1
@@ -574,6 +576,12 @@ module Swill
           if %i[is_a? kind_of? instance_of?].include?(method) && args.length == 1 &&
              args.first.type == :const && @knowledge.constant(args.first) == "Array"
             return s(:call, s(:const, nil, :Array), :isArray, process(receiver))
+          end
+          # A string or number is a JavaScript primitive, which instanceof
+          # never matches; the runtime checks value classes as T.cast does.
+          if %i[is_a? kind_of? instance_of?].include?(method) && args.length == 1 &&
+             args.first.type == :const && VALUE_CLASSES.include?(@knowledge.constant(args.first))
+            return s(:call, s(:const, nil, :Runtime), :conforms, process(receiver), s(:str, @knowledge.constant(args.first)))
           end
           return lower_native(node, receiver, method, args, type) if native_type?(type)
           # A JavaScript intrinsic or DOM class named as the receiver: its
@@ -621,7 +629,13 @@ module Swill
               end
               return s(:call, process(receiver), *dispatched(entry, args))
             end
-            return nil
+            # A member the declared class lacks may be a subclass's, as an
+            # application's outlet is on its Application subclass: Ruby finds it
+            # on the object, so it is resolved against the object at run time.
+            if node.type == :csend
+              raise CompileError, "#{klass} declares no #{name}; &. reaches only members the compiler can see"
+            end
+            return dynamic_send(node, receiver, name, setter, base, args)
           end
           if receiver.type == :const && (constant_class = swill_class(@knowledge.constant(receiver))) &&
              (entry = @knowledge.class_member_entry(constant_class, name))

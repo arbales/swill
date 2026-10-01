@@ -21,3 +21,17 @@
     <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>
   </template>
 </template>
+
+<template name="alert">
+  <dialog class="window alert" role="alertdialog">
+    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="" aria-hidden="true">
+    <div class="alert-text">
+      <h2 bind="message_text"></h2>
+      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>
+    </div>
+    <div class="actions"></div>
+    <template outlet="button_template">
+      <button type="button" data-action="choose"></button>
+    </template>
+  </dialog>
+</template>

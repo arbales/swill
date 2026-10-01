@@ -5,6 +5,7 @@ require "fileutils"
 require "tmpdir"
 require_relative "../swill"
 require_relative "compiler"
+require_relative "resources"
 
 module Swill
   module Ruby2JS
@@ -12,7 +13,10 @@ module Swill
     # the framework's interface, bundled into one script that imports the
     # installed framework from the page (window.Swill) rather than a second
     # copy of it. This is what `swill build` runs and what the Rakefile uses
-    # for the examples.
+    # for the examples. A `resources/` folder beside the entry is the
+    # application's bundle: it is copied to `resources/<name>/` beside the
+    # script, where <name> is the script's (app for app.js), and registered as
+    # the main bundle when the script loads.
     class Build
       ROOT = Swill::ROOT
 
@@ -88,10 +92,26 @@ module Swill
                            framework: "./framework.external.mjs").each do |name, source|
             File.write(File.join(dir, name), source)
           end
+          File.write(File.join(dir, "entry.mjs"), <<~JS)
+            import {Swill__Bundle} from "./framework.external.mjs";
+            import "./application.mjs";
+            #{Resources.registration('Swill__Bundle', bundle_name, resources, main: true)}
+          JS
           FileUtils.mkdir_p(File.dirname(out))
-          bundle(File.join(dir, "application.mjs"))
+          bundle(File.join(dir, "entry.mjs"))
+          Resources.copy(resources, bundle_name, out)
         end
         out
+      end
+
+      # The application's resources folder, beside its entry.
+      def resources
+        File.join(File.dirname(entry), "resources")
+      end
+
+      # The bundle's name: its script's, without `.min`.
+      def bundle_name
+        File.basename(out, ".js").delete_suffix(".min")
       end
 
       # Sorbet artifacts for the application, written beside the entry so a

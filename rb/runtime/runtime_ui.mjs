@@ -57,6 +57,46 @@ import {
  */
 export function warn(message) {
   console.warn(`[Swill] ${message}`);
+  for (const observer of [...warningObservers]) observer(message);
+}
+
+const warningObservers = new Set();
+
+let failedBuild = null;
+
+/**
+ * Records that the application's build failed, with the compiler's message.
+ * A development build that fails to compile writes a script calling this in
+ * place of the application, so the launcher shows the error rather than
+ * starting an application whose classes are missing.
+ *
+ * @param {string} message
+ * @returns {void}
+ */
+export function reportBuildFailure(message) {
+  console.error(`[Swill] The application failed to build: ${message}`);
+  failedBuild = String(message);
+}
+
+/**
+ * The message of a build failure `reportBuildFailure` recorded, or null.
+ *
+ * @returns {string | null}
+ */
+export function buildFailure() {
+  return failedBuild;
+}
+
+/**
+ * Calls `callback` with each message `warn` reports, after it is logged, until
+ * the returned function is called. A development application shows them.
+ *
+ * @param {(message: string) => void} callback
+ * @returns {() => void} Stops observing.
+ */
+export function observeWarnings(callback) {
+  warningObservers.add(callback);
+  return () => { warningObservers.delete(callback); };
 }
 
 export const Runtime = {
@@ -96,5 +136,5 @@ export const Runtime = {
   bindArguments, argument, yieldBlock,
 
   // Reporting
-  warn
+  warn, observeWarnings, reportBuildFailure, buildFailure
 };

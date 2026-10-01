@@ -36,18 +36,40 @@ attribute's syntax.
 
 ## Key Events
 
-Key events enter at the first responder and walk the same chain. `key_down`
-routes three keys to named hooks before falling through:
+Key events enter at the first responder. `key_down` translates a key into a
+command and calls it, as Cocoa's `interpretKeyEvents:` does:
 
-| Key | Hook |
+| Key | Command |
 | --- | --- |
 | Escape | `cancel_operation` |
 | Enter | `insert_newline` |
-| Tab | `complete` |
+| Tab | `insert_tab` |
+| Shift-Tab | `insert_backtab` |
+| Up, Down, Left, Right | `move_up`, `move_down`, `move_left`, `move_right` |
+| Home, End | `move_to_beginning_of_document`, `move_to_end_of_document` |
 
-Each hook passes to the next responder by default, so overriding one in a
-controller intercepts that key for its region and leaves the rest alone.
-`key_up` passes straight along.
+Each command passes to the next responder by default, so implementing one in a
+controller takes that key for its region, and calling `super` declines it.
+Commands start at the first responder, so a control can take one before its
+controller does.
+
+The focused element keeps the keys it handles itself, as Cocoa's field editor
+does, and those go nowhere:
+
+| Element | Keeps |
+| --- | --- |
+| A single-line text input | Everything but Up, Down, Enter, Escape and Tab |
+| A number or date input | Everything but Enter, Escape and Tab |
+| `textarea` and `contenteditable` | Everything but Escape and Tab |
+| `select` | Everything but Enter, Escape and Tab |
+| `button`, and button inputs | Enter and Space |
+| Checkbox and radio inputs | Space, and a radio's arrows |
+
+A key typed during an input method composition stays with the input method. A
+key held with Control, Command or Option is never a command: it passes up the
+chain as a `key_down`, where an application shortcut can find it. So does any
+other key no command names. Overriding `key_down` sees the raw key before any of
+this; call `super` for keys it leaves alone. `key_up` passes straight along.
 
 ## First Responder
 
@@ -72,8 +94,10 @@ of them; resigning blurs it.
 
 Browser focus and the first responder are kept in agreement. Focus moving within
 the application reassigns the first responder without re-running
-`become_first_responder`. The current first responder is still asked to resign,
-and one that refuses gets focus back. Focus leaving the application's root
+`become_first_responder`. A responder whose `accepts_first_responder?` is false
+is refused, as `make_first_responder` refuses it: focus goes back to the current
+first responder, or is let go when the application holds it. The current first
+responder is still asked to resign, and one that refuses gets focus back. Focus leaving the application's root
 returns the first responder to the application; focus moving into the browser's
 own chrome, or into dead space in the page, leaves it alone.
 

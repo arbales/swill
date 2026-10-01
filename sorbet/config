@@ -15,6 +15,8 @@
 --ignore=/rb/runtime/
 --ignore=/rb/compiler/
 --ignore=/rb/distant/
+--ignore=/rb/bundles/
+--ignore=/rb/bundles.rb
 --ignore=/examples/opal/
 --ignore=/rakelib/
 --silence-dev-message

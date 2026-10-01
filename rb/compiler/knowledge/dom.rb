@@ -76,6 +76,7 @@ module Swill
           "disabled" => [:accessor, "T::Boolean"],
           "hidden" => [:accessor, "T::Boolean"],
           "readOnly" => [:accessor, "T::Boolean"],
+          "isContentEditable" => [:attr, "T::Boolean"],
           "open" => [:accessor, "T::Boolean"],
           "show" => [:method, "void", ""],
           "showModal" => [:method, "void", ""],
@@ -95,8 +96,9 @@ module Swill
           "querySelectorAll" => [:method, "NodeList", "selector: String"]
         }],
         "Document" => ["Node", {
-          "__swill_templates__" => [:accessor, "T.nilable(HTMLTemplateElement)"],
+          "__swill_templates__" => [:accessor, "T.nilable(T::Hash[String, HTMLTemplateElement])"],
           "body" => [:attr, "Element"],
+          "head" => [:attr, "Element"],
           "documentElement" => [:attr, "Element"],
           "activeElement" => [:attr, "T.nilable(Element)"],
           "defaultView" => [:attr, "T.nilable(DOMWindow)"],
@@ -135,7 +137,11 @@ module Swill
         }],
         "KeyboardEvent" => ["Event", {
           "key" => [:attr, "String"],
-          "shiftKey" => [:attr, "T::Boolean"]
+          "shiftKey" => [:attr, "T::Boolean"],
+          "ctrlKey" => [:attr, "T::Boolean"],
+          "metaKey" => [:attr, "T::Boolean"],
+          "altKey" => [:attr, "T::Boolean"],
+          "isComposing" => [:attr, "T::Boolean"]
         }],
         "MouseEvent" => ["Event", {
           "shiftKey" => [:attr, "T::Boolean"],
@@ -181,7 +187,18 @@ module Swill
           "text" => [:method, "Promise[String]", ""]
         }],
         "Error" => [nil, {
-          "message" => [:attr, "String"]
+          "message" => [:attr, "String"],
+          "stack" => [:attr, "T.nilable(String)"]
+        }],
+        "ErrorEvent" => ["Event", {
+          "message" => [:attr, "String"],
+          "error" => [:attr, "T.untyped"],
+          "filename" => [:attr, "String"],
+          "lineno" => [:attr, "Integer"],
+          "colno" => [:attr, "Integer"]
+        }],
+        "PromiseRejectionEvent" => ["Event", {
+          "reason" => [:attr, "T.untyped"]
         }],
         "URLSearchParams" => [nil, {
           "forEach" => [:method, "void", "callback: T.proc.params(value: String, key: String).void"],

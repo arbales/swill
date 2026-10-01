@@ -20,9 +20,43 @@ module DataFixture
       writable :name
     end
   end
+
+  class PrivateRecord < Sequel::Model(DB[:plain_records])
+    plugin :privacy
+    privacy { can :view, Policies::AllowSelf }
+
+    module DistantInterface
+      extend Swill::Distant::Interface
+      fields :name
+    end
+  end
 end
 
 class DataTest < Minitest::Test
+  def test_enums_compose_with_real_sorbet_nilability
+    source = <<~'RUBY'
+      require "sorbet-runtime"
+      require "json"
+      require "swill/server"
+      enum = Swill::Distant::Enum["high", "low"]
+      type = T.nilable(enum)
+      descriptor = Swill::Distant::Types.dump(type)
+      puts JSON.generate([
+        descriptor,
+        [nil, "high", "low", "", "unknown"].map { |value| type.valid?(value) },
+        Swill::Distant::Types.dump(T::Boolean)
+      ])
+    RUBY
+    output, status = Open3.capture2e("ruby", "-Irb", "-e", source)
+    assert status.success?, output
+    descriptor, accepted, boolean = JSON.parse(output)
+    assert_equal "optional", descriptor.fetch("kind")
+    assert_equal "enum", descriptor.dig("members", 0, "kind")
+    assert_equal %w[high low], descriptor.dig("members", 0, "members").map { |member| member.fetch("name") }
+    assert_equal [true, true, true, false, false], accepted
+    assert_equal({"kind" => "primitive", "name" => "Boolean"}, boolean)
+  end
+
   def test_server_entrypoint_supplies_sorbet_syntax_without_loading_sorbet
     source = <<~'RUBY'
       require "json"
@@ -270,6 +304,68 @@ class DataTest < Minitest::Test
     comments = post.dig("fields", "comments")
     assert_equal [Swill::Distant::Protocol::Reference.new("DataFixture::Comment", "1")], comments
     assert Swill::Distant::Protocol.pack(response), "the response is MessagePack encodable"
+    assert_equal "DataFixture::Post", response.fetch("patches").last.fetch("model")
+  end
+
+  def test_hydration_batches_models_without_changing_order_fields_or_privacy
+    sql = []
+    logger = Object.new
+    logger.define_singleton_method(:info) { |statement| sql << statement }
+    DataFixture::DB.loggers << logger
+    response = @dispatcher.call("type" => "GET", "generation" => 8, "demands" => [
+      {"model" => "DataFixture::User", "id" => "2", "fields" => ["name", "avatar"]},
+      {"model" => "DataFixture::Post", "id" => "1", "fields" => ["title"]},
+      {"model" => "DataFixture::User", "id" => "1", "fields" => ["avatar"]},
+      {"model" => "DataFixture::User", "id" => "2", "fields" => ["email"]}
+    ])
+    assert_equal "RETURN", response["type"]
+    assert_equal 2, sql.count { |statement| statement.include?("SELECT") }, sql.inspect
+    patches = response.fetch("patches")
+    assert_equal %w[2 1 1 2], patches.map { |item| item.fetch("id") }
+    assert_equal [{"name" => "Grace", "avatar" => nil}, {"title" => "Distributed Objects"},
+                  {"avatar" => "ada.png"}, {"email" => "grace@example.test"}], patches.map { |item| item.fetch("fields") }
+    assert_equal [8], patches.map { |item| item.fetch("generation") }.uniq
+  ensure
+    DataFixture::DB.loggers.delete(logger)
+  end
+
+  def test_hydration_does_not_share_fields_between_viewer_contexts
+    anonymous = Swill::Distant::Dispatcher.new(schema: @schema, viewer_context: Sequel::Privacy::ViewerContext.anonymous,
+                                              actor: nil, scope_token: "anonymous")
+    anonymous.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => @schema.hash)
+    message = {"type" => "GET", "generation" => 1, "demands" => [
+      {"model" => "DataFixture::User", "id" => "1", "fields" => ["avatar"]}
+    ]}
+    assert_equal "ada.png", @dispatcher.call(message).fetch("patches").first.dig("fields", "avatar")
+    assert_nil anonymous.call(message).fetch("patches").first.dig("fields", "avatar")
+    assert_equal "ada.png", @dispatcher.call(message).fetch("patches").first.dig("fields", "avatar")
+  end
+
+  def test_hydration_retains_noncanonical_primary_key_lookups
+    response = @dispatcher.call("type" => "GET", "generation" => 1, "demands" => [
+      {"model" => "DataFixture::User", "id" => "01", "fields" => ["name"]}
+    ])
+    assert_equal "Ada", response.fetch("patches").first.dig("fields", "name")
+  end
+
+  def test_missing_and_denied_records_fail_the_whole_hydration
+    DataFixture::DB.transaction(rollback: :always) do
+      DataFixture::DB[:plain_records].insert(id: 1, name: "Visible")
+      DataFixture::DB[:plain_records].insert(id: 2, name: "Hidden")
+      schema = Swill::Distant::Schema.new([DataFixture::PrivateRecord])
+      dispatcher = Swill::Distant::Dispatcher.new(schema: schema, viewer_context: @dispatcher.context.viewer_context,
+                                                  actor: @dispatcher.context.actor, scope_token: "private")
+      dispatcher.call("type" => "HELLO", "protocol_version" => Swill::Distant::PROTOCOL_VERSION, "schema_hash" => schema.hash)
+      %w[2 999].each do |id|
+        response = dispatcher.call("type" => "GET", "generation" => 1, "demands" => [
+          {"model" => "DataFixture::PrivateRecord", "id" => "1", "fields" => ["name"]},
+          {"model" => "DataFixture::PrivateRecord", "id" => id, "fields" => ["name"]}
+        ])
+        assert_equal "operation_failed", response.dig("error", "code")
+        refute response.key?("patches")
+        refute_includes response.to_s, "Hidden"
+      end
+    end
   end
 
   def test_command_applies_declared_changes_after_success
@@ -419,7 +515,7 @@ class DataTest < Minitest::Test
   # so discovery finds interfaces added by reopening the class.
   def test_discovery_finds_each_model_with_an_interface
     discovered = Swill::Distant::Schema.discover
-    assert_equal %w[DataFixture::Comment DataFixture::PlainRecord DataFixture::Post DataFixture::User],
+    assert_equal %w[DataFixture::Comment DataFixture::PlainRecord DataFixture::Post DataFixture::PrivateRecord DataFixture::User],
                  discovered.models.keys
     assert_equal @schema.models.fetch("DataFixture::Post"), discovered.models.fetch("DataFixture::Post")
   end

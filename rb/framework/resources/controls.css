@@ -110,3 +110,172 @@
   outline-offset: -2px;
 }
 .segmented-option:disabled { opacity: 0.5; cursor: default; }
+
+/* Framework windows and the object browser share the application theme. */
+dialog.window {
+  position: fixed;
+  top: 10vh;
+  /* Safari keeps the dialog's bottom inset, stretching it from top to the
+     bottom of the viewport; the content decides its height instead. */
+  bottom: auto;
+  max-width: calc(100vw - 32px);
+  max-height: 80vh;
+  overflow: auto;
+  z-index: 100;
+  background: #111;
+  color: var(--fg, #c8c8c8);
+  border: 1px solid var(--rule, #333);
+  padding: 16px;
+  min-width: min(320px, calc(100vw - 32px));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+dialog.window .actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+dialog.window.alert {
+  width: min(420px, calc(100vw - 32px));
+}
+
+/* On [open] only: a display on the bare selector would show a closed dialog. */
+dialog.window.alert[open] {
+  display: grid;
+  /* minmax(0, …): a bare 1fr grows to its longest word, a URL or a class
+     path, and pushes the icon out of the dialog. */
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-content: start;
+  column-gap: 16px;
+  align-items: start;
+}
+
+dialog.window.alert .alert-icon {
+  width: 56px;
+  height: 56px;
+}
+
+dialog.window.alert .alert-text {
+  overflow-wrap: anywhere;
+}
+
+dialog.window.alert .actions {
+  grid-column: 1 / -1;
+}
+
+dialog.window.alert h2 {
+  margin: 4px 0 8px;
+  font-size: 1em;
+}
+
+dialog.window.alert p {
+  margin: 0;
+  color: var(--dim, #888);
+}
+
+.object-browser-window {
+  inset: 64px 48px auto 48px;
+  width: min(1180px, calc(100vw - 96px));
+  min-height: 620px;
+  z-index: 10;
+}
+
+.object-browser-window > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.object-browser-window > header .actions {
+  margin-top: 0;
+}
+
+.object-path {
+  min-height: 1.5em;
+  color: var(--dim);
+  border-bottom: 1px solid var(--rule);
+  margin: 0 -16px 12px;
+  padding: 0 16px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.object-browser {
+  display: block;
+  min-height: 520px;
+}
+
+.object-columns {
+  display: flex;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  min-width: 0;
+  min-height: 520px;
+}
+
+.object-column {
+  flex: 0 0 260px;
+  border-right: 1px solid var(--rule);
+  overflow-y: auto;
+  max-height: 520px;
+}
+
+.object-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px auto;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.object-row[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.object-name {
+  color: var(--bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-arrow {
+  color: var(--dim);
+}
+
+.object-value {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-empty {
+  color: var(--dim);
+  padding: 8px;
+}
+
+.object-preview-column {
+  padding: 8px;
+}
+
+.object-preview-heading {
+  color: var(--bright);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.object-preview-column pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

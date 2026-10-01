@@ -94,6 +94,33 @@ An explicit entry on the command line bypasses project discovery. With
 `--project`, put build options in the file rather than mixing them with
 command-line build flags. `--interval` controls watch polling.
 
+## Development
+
+While you build, an application can show its problems as alerts rather than
+leaving them in the console. Opt in with a `development` attribute on the
+element that names the application:
+
+```html
+<body application="Movies::Application" development>
+```
+
+A page started from plain JavaScript passes `Swill.start({development: true})`,
+and an application can set `development` itself before it launches. It is off by
+default, so remove the attribute before deploying.
+
+In development, an uncaught error or a rejected promise is shown in an alert
+with the framework's Stop image, and the framework's own warnings, such as a
+restorable path it cannot restore, with the Warning image. Each problem is
+still logged. One alert shows at a time: problems that arrive while it is open
+wait behind it, and one already showing or waiting is not shown twice.
+
+A build that fails to compile is shown the same way. `swill watch`, and
+`swill build --show-errors`, replace the application's script with one that
+reports the compiler's message, so the page shows "The application failed to
+build" with the error, rather than quietly running the last build that
+worked. The command still fails, and no application launches until the source
+compiles.
+
 ## Installing as a Gem
 
 For a complete server-backed example, follow [a bound data form](data_form.md).

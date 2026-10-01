@@ -86,25 +86,34 @@ module Swill
       close
     end
 
-    # Invoked for a key event. Enter and Space toggle the popup. Up and Down
-    # choose the adjacent option while the popup is open; choosing closes it.
-    # Other keys pass to `super`. An override should pass unhandled keys to
-    # `super`.
+    # Enter toggles the popup.
+    sig { override.params(event: KeyboardEvent).void }
+    def insert_newline(event)
+      event.preventDefault
+      toggle
+    end
+
+    # Down chooses the next option while the popup is open; choosing closes
+    # it.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_down(event)
+      event.preventDefault
+      move_selection(1) if @open
+    end
+
+    # Up chooses the previous option while the popup is open.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_up(event)
+      event.preventDefault
+      move_selection(-1) if @open
+    end
+
+    # Space toggles the popup, as Enter does. Other keys pass to `super`.
     sig { override.params(event: KeyboardEvent).void }
     def key_down(event)
-      case event.key
-      when "ArrowDown"
-        event.preventDefault
-        move_selection(1) if @open
-      when "ArrowUp"
-        event.preventDefault
-        move_selection(-1) if @open
-      when "Enter", " "
-        event.preventDefault
-        toggle
-      else
-        super
-      end
+      return super unless event.key == " "
+      event.preventDefault
+      toggle
     end
 
     # Loads the custom select template and configures the root as a focusable
@@ -124,7 +133,7 @@ module Swill
     end
 
     # Toggles the popup for a pointer click. Ignores clicks with event detail
-    # zero; keyboard activation is handled by `#key_down`.
+    # zero; keyboard activation is handled by `#insert_newline` and `#key_down`.
     sig { params(_sender: T.untyped, event: MouseEvent).void }
     def button_clicked(_sender, event)
       toggle unless event.detail == 0

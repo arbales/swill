@@ -4,6 +4,7 @@ require_relative "rb/compiler/build"
 
 ROOT = __dir__
 DIST = File.join(ROOT, "rb", "dist")
+FRAMEWORK_RESOURCES = File.join(ROOT, "rb", "framework", "resources")
 
 def compile_spike
   framework = Swill::Ruby2JS::Compiler.new(loader: Swill::Ruby2JS::Loader.framework)
@@ -60,7 +61,7 @@ def write_browser_entry(directory, runtime_directory, runtime)
     import {browserAPI} from "#{runtime_directory}/browser_api.mjs";
     if (globalThis.Swill) throw new Error("Framework already loaded");
     globalThis.Swill = browserAPI(definitions, Runtime, #{javascript_names.to_json}, #{Swill::Ruby2JS::JAVASCRIPT_ROOTS.to_json});
-    definitions.Swill__Templates.install(#{File.read(File.join(ROOT, "rb/framework/resources/controls.html")).to_json});
+    #{Swill::Ruby2JS::Resources.registration("definitions.Swill__Bundle", "swill", FRAMEWORK_RESOURCES, main: false)}
     if (typeof document !== "undefined") new definitions.Swill__Launcher().install(document);
   JAVASCRIPT
   File.write("#{directory}/browser.mjs", Swill::Ruby2JS::Compiler.format_javascript(browser))
@@ -81,7 +82,8 @@ def compile_ui
 end
 
 def bundle_spike(minify: false)
-  FileUtils.cp("rb/framework/resources/controls.css", "rb/dist/swill.css")
+  # The framework bundle's resources, beside swill.js as resources/swill/.
+  Swill::Ruby2JS::Resources.copy(FRAMEWORK_RESOURCES, "swill", "rb/dist/swill.js")
   {"browser" => "swill", "application" => "app", "ui/browser" => "swill-ui"}.each do |source, target|
     output = "rb/dist/#{target}#{minify ? '.min' : ''}.js"
     sh "esbuild", "build/#{source}.mjs", "--bundle", "--format=iife", "--target=es2022",
@@ -116,6 +118,7 @@ task test: :typecheck do
     sh "bundle exec ruby spec/compiler_test.rb"
     sh "bundle exec ruby spec/shared_test.rb"
     sh "bundle exec ruby spec/cli_test.rb"
+    sh "bundle exec ruby spec/bundles_test.rb"
     sh "bundle exec ruby spec/data_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
     sh "deno test -A spec/data_client_test.mjs"
@@ -166,7 +169,7 @@ RDOC_OPTS = [
 # gets documented. Internals drop out of the count as they are marked :nodoc:.
 # Declared properties and outlets count as they do on the class page, and
 # protected methods count with public ones; private methods do not appear.
-DOC_COVERAGE_BASELINE = 173
+DOC_COVERAGE_BASELINE = 171
 
 desc "Report undocumented public framework API (fails if it grew)"
 task :doc_coverage do

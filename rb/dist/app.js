@@ -27,11 +27,14 @@
   var Swill__Responder = framework.Swill__Responder;
   var Swill__OutletOwner = framework.Swill__OutletOwner;
   var Swill__OutletOwner_ClassMethods = framework.Swill__OutletOwner_ClassMethods;
+  var Swill__Bundle = framework.Swill__Bundle;
   var Swill__Templates = framework.Swill__Templates;
+  var Swill__Image = framework.Swill__Image;
   var Swill__View = framework.Swill__View;
   var Swill__Control = framework.Swill__Control;
   var Swill__Control__Button = framework.Swill__Control__Button;
   var Swill__Control__TextField = framework.Swill__Control__TextField;
+  var Swill__Control__ImageView = framework.Swill__Control__ImageView;
   var Swill__Control__Select = framework.Swill__Control__Select;
   var Swill__Control__CustomSelect = framework.Swill__Control__CustomSelect;
   var Swill__Control__Segmented = framework.Swill__Control__Segmented;
@@ -50,6 +53,8 @@
   var Swill__Controller__InlineEditor = framework.Swill__Controller__InlineEditor;
   var Swill__RowEdit = framework.Swill__RowEdit;
   var Swill__Controller__EditableList = framework.Swill__Controller__EditableList;
+  var Swill__Alert = framework.Swill__Alert;
+  var Swill__ProblemReporter = framework.Swill__ProblemReporter;
   var Swill__Model__Attributes = framework.Swill__Model__Attributes;
   var Swill__Model__Attributes_ClassMethods = framework.Swill__Model__Attributes_ClassMethods;
   var Swill__Model__DirtyTracking = framework.Swill__Model__DirtyTracking;

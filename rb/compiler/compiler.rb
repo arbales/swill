@@ -45,11 +45,14 @@ module Swill
       rb/framework/core/collection_arrangement.rb
       rb/framework/core/responder.rb
       rb/framework/core/outlet_owner.rb
+      rb/framework/core/bundle.rb
       rb/framework/core/templates.rb
+      rb/framework/core/image.rb
       rb/framework/core/view.rb
       rb/framework/control/base.rb
       rb/framework/control/button.rb
       rb/framework/control/text_field.rb
+      rb/framework/control/image_view.rb
       rb/framework/control/select.rb
       rb/framework/control/custom_select.rb
       rb/framework/control/segmented.rb
@@ -66,6 +69,8 @@ module Swill
       rb/framework/controller/editor.rb
       rb/framework/controller/inline_editor.rb
       rb/framework/controller/editable_list.rb
+      rb/framework/controller/alert.rb
+      rb/framework/core/problem_reporter.rb
       rb/framework/model/attributes.rb
       rb/framework/model/dirty_tracking.rb
       rb/framework/model/drafts.rb
@@ -88,7 +93,7 @@ module Swill
     # controls, or the list controllers built on List.
     UI_FRAMEWORK_SOURCES = FRAMEWORK_SOURCES.reject do |path|
       path.start_with?("rb/framework/model/", "rb/framework/distant/") ||
-        (path.start_with?("rb/framework/control/") && !path.end_with?("/base.rb")) ||
+        (path.start_with?("rb/framework/control/") && !path.end_with?("/base.rb", "/image_view.rb")) ||
         %w[core/wire.rb controller/sortable_list.rb controller/editor.rb
            controller/inline_editor.rb controller/editable_list.rb].any? { |name| path.end_with?(name) }
     end.freeze
@@ -473,12 +478,25 @@ module Swill
         # The declared type at the end of a restorable path, followed through
         # declared property types; nil when a segment is not statically typed.
         # The runtime checks at installation that the path starts at a property.
+        # A path that ends at a computed property without a writer can never be
+        # restored, so it is rejected here, naming the `_id` property to restore
+        # instead when the owner declares one.
         def restoration_type(entry, segments)
           owner = entry["name"]
           type = nil
-          segments.each do |segment|
+          segments.each_with_index do |segment, index|
             property = owner && knowledge.property_entry(owner, segment)
             return nil unless property
+            if index == segments.length - 1 && property["computed"] && !property["writer"]
+              path = segments.join(".")
+              identifier = "#{segment}_id"
+              hint = if knowledge.property_entry(owner, identifier)
+                "; restore #{[*segments[0...-1], identifier].join('.')}"
+              else
+                "; restore a stored property, or one declared with writer:"
+              end
+              raise CompileError, "#{entry['name']}: restorable #{path} is read-only#{hint}"
+            end
             type = property["type"]
             inner = type[/\AT\.nilable\((.+)\)\z/, 1] || type
             owner = begin

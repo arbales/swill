@@ -15,8 +15,9 @@ module Swill
           if args.length == 1 && static_type(args.first) == "Error"
             return s(:send, nil, :raise, process(args.first))
           end
-          unless args.length == 1 && %i[str dstr].include?(args.first.type)
-            raise CompileError, "raise supports only a literal message string"
+          # A message is a string literal, or any expression typed String.
+          unless args.length == 1 && (%i[str dstr].include?(args.first.type) || static_type(args.first) == "String")
+            raise CompileError, "raise supports only a message string"
           end
           s(:send, nil, :raise, s(:const, nil, :Error), process(args.first))
         end

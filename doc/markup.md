@@ -7,6 +7,7 @@ namely controllers and views.
 | Attribute | Declares | Mechanism |
 | --- | --- | --- |
 | `application` | The application's root element, and its `Application` subclass | [Getting started](getting_started.md) |
+| `development` | On the application's element: show problems as alerts as well as in the console | [Getting started](getting_started.md#development) |
 | `controller` | Instantiates a `Controller` whose root element or `View` is this tag | [Awakening](awakening.md) |
 | `klass` | Awaken this element as a `View` subclass | [Awakening](awakening.md) |
 | `outlet` | Connect this element to a named property on its owner | [Awakening](awakening.md) |
@@ -19,6 +20,7 @@ namely controllers and views.
 | `template for="row"` | The row a list awakens for each arranged object | [Collections](collections.md#lists) |
 | `template for="editor"` | The editor a list awakens for a row being edited in place | [Collections](collections.md#editing-in-place) |
 | `data-column` | The sort key a header sends with `sort_by` | [Collections](collections.md#sorting) |
+| `image` | The bundle image a `Control::ImageView` shows | [Resources](resources.md#images) |
 
 An element carrying only `bind`, `bind-*` or `data-action` stays a plain
 element.

@@ -130,6 +130,18 @@ module Swill
       end
     end
 
+    # Up and Down from a field in the editor belong to the edit, not to the
+    # selection it is editing.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_up(event)
+      super unless editing?
+    end
+
+    sig { override.params(event: KeyboardEvent).void }
+    def move_down(event)
+      super unless editing?
+    end
+
     sig { override.params(key: String).void }
     def toggle_sort(key)
       super if commit_editing_if_needed
@@ -289,17 +301,17 @@ module Swill
       @edit = nil
       self.edited_object = nil
       return unless edit
+      # Restore the row immediately; a remote commit may still be pending.
+      row = row_elements[edit.index]
+      container_view.mark(row, "being-edited", false) if row
       element = edit.editor.view.element
       Awakening.detach(element)
       container_view.remove(element)
     end
 
-    # The row is a row again, the final object is selected, and the list
-    # takes the keyboard back.
-    sig { params(index: Integer, final: T.untyped).void }
-    def finish_edit(index, final)
-      row = row_elements[index]
-      container_view.mark(row, "being-edited", false) if row
+    # Select the final object and give the list the keyboard back.
+    sig { params(_index: Integer, final: T.untyped).void }
+    def finish_edit(_index, final)
       select_object(final) if final
       application.make_first_responder(self)
     end

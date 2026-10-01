@@ -208,7 +208,7 @@
       (value) => !removed.some((other) => isEqual(other, value))
     );
   }
-  function fetch(hash, key, ...fallback) {
+  function fetch2(hash, key, ...fallback) {
     if (Object.hasOwn(hash, key)) return hash[key];
     if (fallback.length > 0) return fallback[0];
     throw new Error(`key not found: ${key}`);
@@ -1106,6 +1106,22 @@
   // rb/runtime/runtime_ui.mjs
   function warn(message) {
     console.warn(`[Swill] ${message}`);
+    for (const observer of [...warningObservers]) observer(message);
+  }
+  var warningObservers = /* @__PURE__ */ new Set();
+  var failedBuild = null;
+  function reportBuildFailure(message) {
+    console.error(`[Swill] The application failed to build: ${message}`);
+    failedBuild = String(message);
+  }
+  function buildFailure() {
+    return failedBuild;
+  }
+  function observeWarnings(callback) {
+    warningObservers.add(callback);
+    return () => {
+      warningObservers.delete(callback);
+    };
   }
   var Runtime = {
     // Classes
@@ -1158,7 +1174,7 @@
     append,
     prepend,
     difference,
-    fetch,
+    fetch: fetch2,
     deleteKey,
     intDiv,
     modulo,
@@ -1204,12 +1220,16 @@
     argument,
     yieldBlock,
     // Reporting
-    warn
+    warn,
+    observeWarnings,
+    reportBuildFailure,
+    buildFailure
   };
 
   // build/ui/framework.mjs
   var framework_exports = {};
   __export(framework_exports, {
+    Swill__Alert: () => Swill__Alert,
     Swill__Application: () => Swill__Application,
     Swill__ArrayController: () => Swill__ArrayController,
     Swill__Awakening: () => Swill__Awakening,
@@ -1222,14 +1242,17 @@
     Swill__BindingDestination__Select: () => Swill__BindingDestination__Select,
     Swill__BindingDestination__Text: () => Swill__BindingDestination__Text,
     Swill__BooleanTransformer: () => Swill__BooleanTransformer,
+    Swill__Bundle: () => Swill__Bundle,
     Swill__CollectionArrangement: () => Swill__CollectionArrangement,
     Swill__Connections__Actions: () => Swill__Connections__Actions,
     Swill__Connections__Bindings: () => Swill__Connections__Bindings,
     Swill__Connections__Outlets: () => Swill__Connections__Outlets,
     Swill__Control: () => Swill__Control,
+    Swill__Control__ImageView: () => Swill__Control__ImageView,
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__DOM: () => Swill__DOM,
+    Swill__Image: () => Swill__Image,
     Swill__Launcher: () => Swill__Launcher,
     Swill__Notification: () => Swill__Notification,
     Swill__NotificationCenter: () => Swill__NotificationCenter,
@@ -1239,6 +1262,7 @@
     Swill__Observable: () => Swill__Observable,
     Swill__OutletOwner: () => Swill__OutletOwner,
     Swill__OutletOwner_ClassMethods: () => Swill__OutletOwner_ClassMethods,
+    Swill__ProblemReporter: () => Swill__ProblemReporter,
     Swill__Responder: () => Swill__Responder,
     Swill__Swell: () => Swill__Swell,
     Swill__Templates: () => Swill__Templates,
@@ -1339,6 +1363,50 @@
         ) : Swill__DOM.eachOwned(child, true, callback);
       });
     }
+    static isHandlesKey(event) {
+      if (event.isComposing) return true;
+      let element = event.target;
+      let key = event.key;
+      let tag = element.tagName;
+      if (tag === "TEXTAREA" || element.isContentEditable) {
+        return key !== "Escape" && key !== "Tab";
+      }
+      ;
+      if (tag === "SELECT") {
+        return Runtime.logicalAnd(
+          key !== "Enter" && key !== "Escape",
+          () => key !== "Tab"
+        );
+      }
+      ;
+      if (tag === "BUTTON") return key === "Enter" || key === " ";
+      if (tag !== "INPUT") return false;
+      switch (element.type) {
+        case "button":
+        case "submit":
+        case "reset":
+          return key === "Enter" || key === " ";
+        case "checkbox":
+          return key === " ";
+        case "radio":
+          return key === " " || key.startsWith("Arrow");
+        case "range":
+          return key.startsWith("Arrow") || key === "Home" || key === "End";
+        case "":
+        case "text":
+        case "search":
+        case "email":
+        case "url":
+        case "tel":
+        case "password":
+          return !["Enter", "Escape", "Tab", "ArrowUp", "ArrowDown"].includes(key);
+        default:
+          return Runtime.logicalAnd(
+            key !== "Enter" && key !== "Escape",
+            () => key !== "Tab"
+          );
+      }
+    }
     static ownedMatching(root, selector) {
       let found = Runtime.cast([], "T::Array[Element]");
       Swill__DOM.eachOwned(root, true, (element, _controller_root) => {
@@ -1351,6 +1419,7 @@
   };
   Swill__DOM.eachChild = Swill__DOM_Functions.eachChild;
   Swill__DOM.eachOwned = Swill__DOM_Functions.eachOwned;
+  Swill__DOM.isHandlesKey = Swill__DOM_Functions.isHandlesKey;
   Swill__DOM.ownedMatching = Swill__DOM_Functions.ownedMatching;
   var Swill__Swell = class _Swill__Swell extends Swill__Object {
     static $index(...__swill_arguments) {
@@ -2314,41 +2383,98 @@
     resignFirstResponder(next_responder) {
       return true;
     }
-    // Routes Escape, Enter and Tab to their own hooks; anything else passes
-    // to the next responder.
+    // Translates a key into a command and sends it to this responder, as
+    // Cocoa's interpretKeyEvents: does. A key the focused element handles
+    // itself, such as typing in a field, stops here. A key held with Control,
+    // Command or Option, or one no command names, passes to the next
+    // responder as it is. An override sees the raw key before any of this.
     keyDown(event) {
-      let target;
-      switch (event.key) {
-        case "Escape":
-          return this.cancelOperation(event);
-        case "Enter":
-          return this.insertNewline(event);
-        case "Tab":
-          return this.complete(event);
-        default:
-          target = this.nextResponder();
-          if (target) return target.keyDown(event);
+      if (event.isComposing) return;
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (Swill__DOM.isHandlesKey(event)) return;
+        switch (event.key) {
+          case "Escape":
+            return this.cancelOperation(event);
+          case "Enter":
+            return this.insertNewline(event);
+          case "Tab":
+            return event.shiftKey ? this.insertBacktab(event) : this.insertTab(event);
+          case "ArrowUp":
+            return this.moveUp(event);
+          case "ArrowDown":
+            return this.moveDown(event);
+          case "ArrowLeft":
+            return this.moveLeft(event);
+          case "ArrowRight":
+            return this.moveRight(event);
+          case "Home":
+            return this.moveToBeginningOfDocument(event);
+          case "End":
+            return this.moveToEndOfDocument(event);
+        }
       }
+      ;
+      let target = this.nextResponder();
+      if (target) return target.keyDown(event);
     }
     // Passes to the next responder.
     keyUp(event) {
       let target = this.nextResponder();
       if (target) return target.keyUp(event);
     }
-    // Escape. Dismiss what is open, or pass it along.
+    // :section: Commands
+    // What keys mean. Each passes to the next responder, so implementing one
+    // takes that key for this responder's region, and calling super declines
+    // it.
+    // Escape. Dismiss what is open.
     cancelOperation(event) {
       let target = this.nextResponder();
       if (target) return target.cancelOperation(event);
     }
-    // Enter. Commit what is being edited, or pass it along.
+    // Enter. Commit what is being edited.
     insertNewline(event) {
       let target = this.nextResponder();
       if (target) return target.insertNewline(event);
     }
-    // Tab. Complete what is being edited, or pass it along.
-    complete(event) {
+    // Tab. Unless something prevents it, the browser then moves focus on.
+    insertTab(event) {
       let target = this.nextResponder();
-      if (target) return target.complete(event);
+      if (target) return target.insertTab(event);
+    }
+    // Shift-Tab.
+    insertBacktab(event) {
+      let target = this.nextResponder();
+      if (target) return target.insertBacktab(event);
+    }
+    // Up arrow.
+    moveUp(event) {
+      let target = this.nextResponder();
+      if (target) return target.moveUp(event);
+    }
+    // Down arrow.
+    moveDown(event) {
+      let target = this.nextResponder();
+      if (target) return target.moveDown(event);
+    }
+    // Left arrow.
+    moveLeft(event) {
+      let target = this.nextResponder();
+      if (target) return target.moveLeft(event);
+    }
+    // Right arrow.
+    moveRight(event) {
+      let target = this.nextResponder();
+      if (target) return target.moveRight(event);
+    }
+    // Home.
+    moveToBeginningOfDocument(event) {
+      let target = this.nextResponder();
+      if (target) return target.moveToBeginningOfDocument(event);
+    }
+    // End.
+    moveToEndOfDocument(event) {
+      let target = this.nextResponder();
+      if (target) return target.moveToEndOfDocument(event);
     }
   };
   function Swill__OutletOwner(Superclass) {
@@ -2371,24 +2497,238 @@
     Object.setPrototypeOf(Swill__OutletOwner_ClassMethods_Layer.prototype, Superclass);
     return Swill__OutletOwner_ClassMethods_Layer.prototype;
   }
+  var Swill__Bundle = class _Swill__Bundle extends Swill__Object {
+    static register(name, base_url, manifest, embedded, main) {
+      let bundle = new _Swill__Bundle(name, base_url, manifest, embedded);
+      let bundles = this._bundles || {};
+      this._bundles = Runtime.cast(
+        bundles,
+        "T.nilable(T::Hash[String, Bundle])"
+      );
+      bundles[name] = bundle;
+      if (main) this._main = Runtime.cast(bundle, "T.nilable(Swill::Bundle)");
+      return bundle;
+    }
+    static main() {
+      return this._main;
+    }
+    static framework() {
+      return this.named("swill");
+    }
+    static named(name) {
+      let bundles = this._bundles;
+      return bundles ? bundles[name] : null;
+    }
+    static searchOrder() {
+      return Runtime.uniq(Runtime.compact([this.main(), this.framework()]));
+    }
+    // Creates a bundle; a bundle's script calls Bundle.register instead.
+    // +embedded+ holds contents already loaded, by path.
+    constructor(name, base_url, manifest, embedded) {
+      super();
+      this._name = name;
+      this._base_url = base_url;
+      this._manifest = manifest;
+      this._contents = Runtime.cast(
+        Object.assign({}, embedded),
+        "T::Hash[String, String]"
+      );
+      this._stems = Runtime.cast({}, "T::Hash[String, T::Array[String]]");
+      manifest.forEach((path) => {
+        let stem = _Swill__Bundle.stem(path);
+        let paths = this._stems[stem];
+        return paths ? Runtime.append(paths, path) : this._stems[stem] = [path];
+      });
+    }
+    // The bundle's name, which is also its folder under `resources/`.
+    get name() {
+      return this._name;
+    }
+    // The folder the bundle's script was served from, ending in a slash.
+    // Assign it to serve the resources from somewhere else.
+    get baseURL() {
+      return this._base_url;
+    }
+    set baseURL(base_url) {
+      this._base_url = base_url;
+      return this._base_url;
+    }
+    // Every resource path, relative to the bundle's resources folder.
+    get manifest() {
+      return this._manifest;
+    }
+    // The path of the resource +name+ with +extension+, or nil when the
+    // bundle has none. Without an extension, a name that more than one file
+    // carries raises rather than choosing.
+    pathForResourceWithExtension(name, extension) {
+      if (extension != null) {
+        let path = `${name}.${extension}`;
+        return this._manifest.includes(path) ? path : null;
+      }
+      ;
+      let paths = this._stems[name] || [];
+      if (Runtime.send(paths, "length") > 1) {
+        throw new Error(`Ambiguous resource ${name} in bundle ${this._name}: ${Runtime.invoke(
+          paths,
+          "join",
+          ", "
+        )}`);
+      }
+      ;
+      return Runtime.send(paths, "first");
+    }
+    // The URL of a resource, or nil when the bundle has none. See
+    // #path_for_resource.
+    urlForResourceWithExtension(name, extension) {
+      let path = this.pathForResourceWithExtension(name, extension);
+      return path != null ? this.urlForPath(path) : null;
+    }
+    // Whether the bundle has the resource. See #path_for_resource.
+    isResourceWithExtension(name, extension) {
+      return this.pathForResourceWithExtension(name, extension) != null;
+    }
+    // The URL of the resource at +path+ in the manifest.
+    urlForPath(path) {
+      let encoded = Runtime.split(path, "/").map((segment) => encodeURIComponent(segment)).join("/");
+      return `${this._base_url}resources/${encodeURIComponent(this._name)}/${encoded}`;
+    }
+    async loadResource(name, extension) {
+      let path = this.pathForResourceWithExtension(name, extension);
+      if (path == null) {
+        throw new Error(`No resource ${name} in bundle ${this._name}`);
+      }
+      ;
+      let loaded = Runtime.fetch(this._contents, path, null);
+      if (loaded != null) return loaded;
+      let response = await fetch(this.urlForPath(path));
+      if (!response.ok) {
+        throw new Error(`Could not load ${path} from bundle ${this._name}: ${response.status}`);
+      }
+      ;
+      let text = await response.text();
+      this._contents[path] = text;
+      return text;
+    }
+    // The resource's text when it has been loaded, or embedded, and nil
+    // otherwise. See #load_resource.
+    loadedResourceWithExtension(name, extension) {
+      let path = this.pathForResourceWithExtension(name, extension);
+      return path != null ? Runtime.fetch(this._contents, path, null) : null;
+    }
+    // The loaded text of the resource at +path+, or nil.
+    loadedPath(path) {
+      return Runtime.fetch(this._contents, path, null);
+    }
+    // Links the stylesheet +name+ into +document+ once, and answers a promise
+    // that settles as it loads. Pages usually link their stylesheets
+    // themselves; this is for adding one while running.
+    addStylesheet(name, document2) {
+      let url = this.urlForResourceWithExtension(name, "css");
+      if (url == null) {
+        throw new Error(`No stylesheet ${name} in bundle ${this._name}`);
+      }
+      ;
+      let existing = document2.querySelector(`link[data-swill-stylesheet="${url}"]`);
+      if (existing) return Promise.resolve(existing);
+      let link = document2.createElement("link");
+      link.setAttribute("rel", "stylesheet");
+      link.setAttribute("href", url);
+      link.setAttribute("data-swill-stylesheet", url);
+      let loaded = new Promise((resolve2, reject) => {
+        link.addEventListener("load", (_event) => resolve2(link));
+        return link.addEventListener(
+          "error",
+          (_event) => reject(`Could not load stylesheet ${url}`)
+        );
+      });
+      document2.head.appendChild(link);
+      return loaded;
+    }
+    static stem(path) {
+      let segments2 = Runtime.split(path, "/");
+      let file = Runtime.must(segments2.pop());
+      let parts = Runtime.split(file, ".");
+      let name = Runtime.isTruthy(parts.length > 1 && !Runtime.isEmpty(Runtime.must(parts[0]))) ? parts.slice(
+        0,
+        parts.length - 1
+      ).join(".") : file;
+      return segments2.concat([name]).join("/");
+    }
+    pathForResource(name) {
+      return _Swill__Bundle.prototype.pathForResourceWithExtension.call(
+        this,
+        name,
+        null
+      );
+    }
+    urlForResource(name) {
+      return _Swill__Bundle.prototype.urlForResourceWithExtension.call(
+        this,
+        name,
+        null
+      );
+    }
+    isResource(name) {
+      return _Swill__Bundle.prototype.isResourceWithExtension.call(
+        this,
+        name,
+        null
+      );
+    }
+    loadedResource(name) {
+      return _Swill__Bundle.prototype.loadedResourceWithExtension.call(
+        this,
+        name,
+        null
+      );
+    }
+  };
   function Swill__Templates(Superclass) {
     class Swill__Templates_Layer extends Superclass {
     }
     return Swill__Templates_Layer;
   }
   var Swill__Templates_Functions = class extends Object {
-    static install(source) {
-      this._source = Runtime.cast(source, "T.nilable(String)");
-      return this._source;
-    }
     static named(name, document2) {
-      let catalog = document2.__swill_templates__;
-      if (!catalog) {
-        catalog = document2.createElement("template");
-        catalog.innerHTML = Runtime.must(this._source);
-        document2.__swill_templates__ = catalog;
+      let unloaded = Runtime.cast([], "T::Array[String]");
+      let found = null;
+      Swill__Bundle.searchOrder().forEach((bundle) => bundle.manifest.filter((path) => path.endsWith(".html")).forEach((path) => {
+        if (Runtime.isTruthy(found)) return;
+        let source = bundle.loadedPath(path);
+        if (source != null) {
+          found = Swill__Templates.find(
+            Swill__Templates.catalog(document2, bundle, path, source),
+            name
+          );
+          return found;
+        } else {
+          return Runtime.append(unloaded, `${bundle.name}/${path}`);
+        }
+      }));
+      if (found) return found;
+      let hint = Runtime.isEmpty(unloaded) ? "" : ` (not loaded yet: ${unloaded.join(", ")}; await Bundle#load_resource first)`;
+      return (() => {
+        throw new Error(`Unknown control template: ${name}${hint}`);
+      })();
+    }
+    static catalog(document2, bundle, path, source) {
+      let catalogs = document2.__swill_templates__;
+      if (!catalogs) {
+        catalogs = {};
+        document2.__swill_templates__ = catalogs;
       }
       ;
+      let key = `${bundle.name}/${path}`;
+      let catalog = catalogs[key];
+      if (!catalog) {
+        catalog = document2.createElement("template");
+        catalog.innerHTML = source;
+        catalogs[key] = catalog;
+      }
+      ;
+      return catalog;
+    }
+    static find(catalog, name) {
       let templates = catalog.content.children;
       let index = 0;
       while (index < templates.length) {
@@ -2397,13 +2737,31 @@
         index++;
       }
       ;
-      return (() => {
-        throw new Error(`Unknown control template: ${name}`);
-      })();
+      return null;
     }
   };
-  Swill__Templates.install = Swill__Templates_Functions.install;
   Swill__Templates.named = Swill__Templates_Functions.named;
+  Swill__Templates.catalog = Swill__Templates_Functions.catalog;
+  Swill__Templates.find = Swill__Templates_Functions.find;
+  var Swill__Image = class _Swill__Image extends Swill__Object {
+    static extensions() {
+      return ["svg", "png", "webp", "jpg", "jpeg", "gif"];
+    }
+    static named(name) {
+      let urls = Swill__Bundle.searchOrder().flatMap((bundle) => _Swill__Image.extensions().map((extension) => bundle.urlForResourceWithExtension(name, extension)));
+      let url = Runtime.compact(urls)[0];
+      return Runtime.isTruthy(url) ? new _Swill__Image(url) : null;
+    }
+    // An image at +url+, a path or URL as an `<img src>` would take it.
+    constructor(url) {
+      super();
+      this._url = url;
+    }
+    // Where the image is, as an `<img src>` would take it.
+    get url() {
+      return this._url;
+    }
+  };
   var Swill__View = class _Swill__View extends Swill__Responder {
     // :section: Wrapping an Element
     // A view, its element, and the controller rooted there.
@@ -2664,6 +3022,41 @@
       }
       ;
       return super.resignFirstResponder(next_responder);
+    }
+  };
+  var Swill__Control__ImageView = class extends Swill__Control {
+    // The image shown, or nil for none. A string is looked up with
+    // Image.named, and taken as a URL when no bundle has that name.
+    // Creates the control for `element`. An `image` attribute must name an
+    // image a bundle has; raises "Unknown image: ..." otherwise.
+    constructor(element) {
+      super(element);
+      let name = element.getAttribute("image");
+      if (name == null) return;
+      let found = Swill__Image.named(name);
+      if (!found) throw new Error(`Unknown image: ${name}`);
+      this.value = found;
+    }
+    coercePropertyValue(name, value, previous) {
+      if (!Runtime.isTruthy(name === "value" && Runtime.conforms(
+        value,
+        "String"
+      ))) return super.coercePropertyValue(name, value, previous);
+      return Swill__Image.named(value) || new Swill__Image(value);
+    }
+    // Invoked after `value` changes to update the element's `src`.
+    valueDidChange(_previous, image) {
+      return image ? this.imageElement().setAttribute("src", image.url) : this.imageElement().removeAttribute("src");
+    }
+    // The `<img>` the control shows its image in.
+    imageElement() {
+      if (this._element.tagName === "IMG") return this._element;
+      let found = this._element.querySelector("img");
+      if (found) return found;
+      let created = this._element.ownerDocument.createElement("img");
+      created.setAttribute("alt", "");
+      this._element.appendChild(created);
+      return created;
     }
   };
   var Swill__Controller = class extends Swill__Responder {
@@ -3057,15 +3450,24 @@
       if (Runtime.isEmpty(declared)) return controller;
       let by_name = Runtime.cast({}, "T::Hash[String, T.untyped]");
       declared.forEach((descriptor) => by_name[Runtime.send(descriptor, "name")] = descriptor);
-      let connected = Runtime.cast({}, "T::Hash[String, T::Boolean]");
+      let connected = Runtime.cast({}, "T::Hash[String, Element]");
       this.candidates(root).forEach((element) => {
         let name = Runtime.must(element.getAttribute("outlet"));
         if (!Runtime.isTruthy(by_name[name])) {
-          throw new Error(`Undeclared outlet: ${name}`);
+          throw new Error(this.undeclared(
+            controller,
+            name,
+            element,
+            Object.keys(by_name)
+          ));
         }
         ;
-        if (connected[name]) throw new Error(`Duplicate outlet: ${name}`);
-        connected[name] = true;
+        let first = connected[name];
+        if (first) {
+          throw new Error(`${`Duplicate outlet ${name} on ${this.ownerName(controller)}: ${this.describe(first)} and `}${`${this.describe(element)} both carry outlet="${name}"; an outlet connects one element`}`);
+        }
+        ;
+        connected[name] = element;
         return Runtime.write(
           controller,
           name,
@@ -3073,17 +3475,105 @@
         );
       });
       declared.forEach((descriptor) => {
+        let name = Runtime.send(descriptor, "name");
         if (Runtime.isTruthy(!Runtime.isTruthy(Runtime.send(
           descriptor,
           "optional"
-        )) && !connected[Runtime.send(descriptor, "name")])) {
-          throw new Error(`Unresolved outlet: ${Runtime.send(
-            descriptor,
-            "name"
-          )}`);
+        )) && !connected[name])) {
+          return (() => {
+            throw new Error(this.unresolved(
+              controller,
+              name,
+              root
+            ));
+          })();
         }
       });
       return controller;
+    }
+    static undeclared(controller, name, element, declared) {
+      let owner = this.ownerName(controller);
+      let message = `Undeclared outlet ${name} on ${owner}: ${this.describe(element)} names an outlet ${owner} does not declare`;
+      let similar = this.similarNames(name, declared);
+      if (!Runtime.isEmpty(similar)) {
+        message += `. Did you mean ${similar.join(" or ")}?`;
+      }
+      ;
+      let known = Runtime.isEmpty(declared) ? "none" : declared.join(", ");
+      return `${message} Its outlets: ${known}. Declare it with \`outlet :${name}, type: ...\`, or remove the attribute`;
+    }
+    static unresolved(controller, name, root) {
+      let owner = this.ownerName(controller);
+      let message = `Unresolved outlet ${name} on ${owner}: no element in its region carries outlet="${name}"`;
+      let elsewhere = root.querySelector(`[outlet="${name}"]`);
+      if (elsewhere) {
+        let region = this.regionOwner(elsewhere, root);
+        message += `. ${this.describe(elsewhere)} does, but it is inside ${region}, whose outlets are its own`;
+      }
+      ;
+      return `${message}. Add the attribute to an element ${owner} owns, or declare the outlet \`optional: true\``;
+    }
+    static ownerName(controller) {
+      return Runtime.logicalOr(
+        Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
+        () => "the application"
+      );
+    }
+    static describe(element) {
+      let attributes = ["controller", "klass", "outlet", "id"].filter((name) => element.hasAttribute(name)).map((name) => ` ${name}="${element.getAttribute(name)}"`);
+      return `<${Runtime.downcase(element.tagName)}${attributes.join("")}>`;
+    }
+    static regionOwner(element, root) {
+      let current = element.parentElement;
+      while (current && current !== root) {
+        let view = current.__swill_view__;
+        if (Runtime.isTruthy(current.hasAttribute("controller") || view && view.isOwnsContent())) {
+          return `${this.describe(current)}'s region`;
+        }
+        ;
+        current = current.parentElement;
+      }
+      ;
+      return "another region";
+    }
+    static similarNames(name, declared) {
+      let folded = Runtime.split(Runtime.downcase(name), "_").join("");
+      let limit = name.length > 3 ? 2 : 1;
+      return declared.filter((candidate) => Runtime.split(Runtime.downcase(candidate), "_").join("") === folded || this.editDistance(
+        name,
+        candidate
+      ) <= limit);
+    }
+    static editDistance(a, b) {
+      let previous = Runtime.cast([], "T::Array[Integer]");
+      let column = 0;
+      while (column <= b.length) {
+        Runtime.append(previous, column);
+        column++;
+      }
+      ;
+      let row = 1;
+      while (row <= a.length) {
+        let current = Runtime.cast([row], "T::Array[Integer]");
+        column = 1;
+        while (column <= b.length) {
+          let cost = Runtime.isEqual(a[row - 1], b[column - 1]) ? 0 : 1;
+          let deletion = Runtime.must(previous[column]) + 1;
+          let insertion = Runtime.must(current[column - 1]) + 1;
+          let substitution = Runtime.must(previous[column - 1]) + cost;
+          let nearer = deletion < insertion ? deletion : insertion;
+          Runtime.append(
+            current,
+            nearer < substitution ? nearer : substitution
+          );
+          column++;
+        }
+        ;
+        previous = current;
+        row++;
+      }
+      ;
+      return Runtime.must(previous[b.length]);
     }
     static candidates(root) {
       let found = Runtime.cast([], "T::Array[Element]");
@@ -3131,6 +3621,13 @@
     }
   };
   Swill__Connections__Outlets.establish = Swill__Connections__Outlets_Functions.establish;
+  Swill__Connections__Outlets.undeclared = Swill__Connections__Outlets_Functions.undeclared;
+  Swill__Connections__Outlets.unresolved = Swill__Connections__Outlets_Functions.unresolved;
+  Swill__Connections__Outlets.ownerName = Swill__Connections__Outlets_Functions.ownerName;
+  Swill__Connections__Outlets.describe = Swill__Connections__Outlets_Functions.describe;
+  Swill__Connections__Outlets.regionOwner = Swill__Connections__Outlets_Functions.regionOwner;
+  Swill__Connections__Outlets.similarNames = Swill__Connections__Outlets_Functions.similarNames;
+  Swill__Connections__Outlets.editDistance = Swill__Connections__Outlets_Functions.editDistance;
   Swill__Connections__Outlets.candidates = Swill__Connections__Outlets_Functions.candidates;
   Swill__Connections__Outlets.valueFor = Swill__Connections__Outlets_Functions.valueFor;
   Swill__Connections__Outlets.materialize = Swill__Connections__Outlets_Functions.materialize;
@@ -3498,7 +3995,17 @@
         "T.nilable(Swill::Responder)"
       );
       this._observer = null;
+      this._unrestored = Runtime.cast([], "T::Array[String]");
+      this._unrestorable_paths = Runtime.cast([], "T::Array[String]");
+      this._problems = Runtime.cast(
+        null,
+        "T.nilable(Swill::ProblemReporter)"
+      );
     }
+    // Whether the application is in development, which shows its problems as
+    // alerts as well as in the console. Opt in with a `development` attribute
+    // on the application's element, `Swill.start({development: true})`, or by
+    // setting this before launch. False by default. See ProblemReporter.
     // Starts the application at +root+: awakens the markup beneath it,
     // restores window content from the URL fragment, and begins watching for
     // content added later. One application runs per page.
@@ -3509,6 +4016,13 @@
       ;
       _Swill__Application.launched(this);
       this._root = root;
+      if (root.hasAttribute("development")) this.development = true;
+      if (this.development) {
+        let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
+        problems.start();
+        this._problems = problems;
+      }
+      ;
       this._on_focus = (event) => this.focusIn(event);
       this._on_focus_out = (event) => this.focusOut(event);
       this._on_key_down = (event) => this.firstResponder().keyDown(event);
@@ -3525,6 +4039,7 @@
       Runtime.reverse(this._controllers).forEach((controller) => Swill__Awakening.load(controller));
       this.registerWindowContainers();
       this.restoreLaunchedWindows();
+      this.warnUnrestored(this._controllers);
       Swill__Awakening.finish(this._controllers);
       this._fragments.startObserving(() => this.applyFragment());
       this.watch(root);
@@ -3564,6 +4079,9 @@
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
       this.assignFirstResponder(null);
+      let problems = this._problems;
+      if (problems) problems.stop();
+      this._problems = null;
       return _Swill__Application.terminated(this);
     }
     // The application is running and its markup is awake.
@@ -3617,6 +4135,7 @@
         prune_stale: history !== "none",
         write_content: history !== "none"
       }));
+      this.warnUnrestored(controllers);
       Swill__Awakening.finish(controllers);
       let controller = window.controller;
       if (controller) {
@@ -3652,6 +4171,39 @@
         throw new Error(`Window root has no controller: ${name}`);
       }
       ;
+      return this.openWindow(name, node, controller, controllers);
+    }
+    // Present a controller built in code as a window named +name+, its view
+    // appended to the root, as a template's would be. The controller has
+    // attached its root element; anything managed inside it awakens first,
+    // then the controller loads. A <dialog> root is shown.
+    presentWindow(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [
+          { name: "controller", kind: "req" },
+          { name: "name", kind: "req" }
+        ],
+        keywords: [{ name: "into", kind: "key" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let controller = Runtime.argument(__swill_bound, "controller");
+      let name = Runtime.argument(__swill_bound, "name");
+      let into = Runtime.argument(__swill_bound, "into");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
+      let node = controller.view.element;
+      if (node.isConnected) throw new Error(`Window is already presented: ${name}`);
+      into.appendChild(node);
+      let controllers = Swill__Awakening.awaken(node);
+      Swill__Awakening.load(controller);
+      return this.openWindow(
+        name,
+        node,
+        controller,
+        [controller].concat(controllers)
+      );
+    }
+    openWindow(name, node, controller, controllers) {
       if (node.tagName === "DIALOG") node.show();
       let window = new Swill__Window(name, node);
       window.assignContent(name, controller);
@@ -3661,12 +4213,36 @@
         window,
         Runtime.keywordArguments({ prune_stale: false, write_content: false })
       );
+      this.warnUnrestored(controllers);
       Swill__Awakening.finish(controllers);
       if (!this.isResponderWithin(this.firstResponder(), node)) {
         this.makeFirstResponder(controller);
       }
       ;
       return window;
+    }
+    // Only a window's content controller is restored, so restorable paths
+    // declared on any other controller would be silently ignored. Warns once
+    // per class, naming the paths. A class that is some window's content as
+    // well is declaring for that use, so it is not warned about.
+    warnUnrestored(controllers) {
+      let contents = Runtime.compact(this._windows.map((window) => Runtime.send(window, "controller"))).map((content) => Runtime.nameOf(content));
+      return controllers.forEach((controller) => {
+        if (this._windows.some((window) => Runtime.send(window, "controller") === controller)) return;
+        let declarations2 = Runtime.cast(
+          Runtime.restorations(controller),
+          "T::Array[T.untyped]"
+        );
+        if (Runtime.isEmpty(declarations2)) return;
+        let name = Runtime.logicalOr(
+          Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
+          () => "a controller"
+        );
+        if (contents.includes(name) || this._unrestored.includes(name)) return;
+        Runtime.append(this._unrestored, name);
+        let paths = declarations2.map((declaration) => Runtime.send(declaration, "path")).join(", ");
+        return Runtime.warn(`${`${name} declares restorable ${paths}, but only a window's content controller is restored; `}declare it there as a path through this controller`);
+      });
     }
     // Closes the window +controller+ belongs to, restoring the first responder
     // it displaced.
@@ -3739,11 +4315,23 @@
       return this.focusLeft(event.relatedTarget);
     }
     // The browser already moved focus; reconcile the first responder without
-    // re-running become. A resign refusal restores focus to the refuser.
+    // re-running become. A responder that does not accept is refused, as
+    // make_first_responder refuses it, and so is a change the current first
+    // responder will not resign for; either way focus goes back.
     syncFirstResponder(target, previous) {
       let responder = this.responderFor(target);
       let current = this.firstResponder();
       if (responder === current) return;
+      if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
+        if (this.responderElement(current)) {
+          this.restoreFocus(current, previous);
+        } else {
+          target.blur();
+        }
+        ;
+        return;
+      }
+      ;
       if (!current.resignFirstResponder(responder)) {
         this.restoreFocus(current, previous);
         return;
@@ -3959,21 +4547,27 @@
       if (!controller) return;
       let params = this._fragments.params();
       let applied = 0;
+      let unrestorable = Runtime.cast([], "T::Array[String]");
       this._fragments.suspended(Runtime.blockArgument(() => declarations2.forEach((declaration) => {
-        let text = params[window.scopedKey(Runtime.send(declaration, "key"))];
+        let key = window.scopedKey(Runtime.send(declaration, "key"));
+        let text = params[key];
         if (text == null) return;
         let value = this.decodeFragmentValue(
           Runtime.send(declaration, "type"),
           text
         );
         if (value == null) return;
-        Runtime.writePath(
+        return this.restorePath(
           controller,
           Runtime.send(declaration, "path"),
           value
-        );
-        return ++applied;
+        ) ? ++applied : Runtime.append(unrestorable, key);
       })));
+      unrestorable.forEach((key) => this._fragments.write(
+        key,
+        null,
+        Runtime.keywordArguments({ history: "replace" })
+      ));
       if (!Runtime.isEmpty(declarations2)) {
         controller.controllerDidRestore(applied > 0);
       }
@@ -4004,10 +4598,12 @@
         Runtime.restorations(controller),
         "T::Array[T.untyped]"
       ).forEach((declaration) => {
-        let value = this.encodeFragmentValue(Runtime.readPath(
+        let path = Runtime.send(declaration, "path");
+        let value = this.isWritablePath(controller, path) ? this.encodeFragmentValue(
           controller,
-          Runtime.send(declaration, "path")
-        ));
+          Runtime.readPath(controller, path),
+          path
+        ) : null;
         return this._fragments.write(
           window.scopedKey(Runtime.send(declaration, "key")),
           value,
@@ -4031,9 +4627,54 @@
       ;
       return text;
     }
-    encodeFragmentValue(value) {
+    // A value's text in the fragment, or nil to leave it out. Only a string,
+    // number or boolean round-trips through a URL; anything else is left out,
+    // with a warning, rather than written as text that cannot be restored.
+    encodeFragmentValue(controller, value, path) {
       if (value == null || value === "") return null;
-      return `${value}`;
+      if (Runtime.conforms(value, "String")) return value;
+      if (Runtime.conforms(value, "Integer") || Runtime.conforms(
+        value,
+        "Float"
+      ) || value === true || value === false) return `${value}`;
+      this.warnUnrestorable(
+        controller,
+        path,
+        "its value cannot be written to the URL; restore a string, number or boolean"
+      );
+      return null;
+    }
+    // Writes a restored value through +path+, answering false when the path
+    // cannot take it, so the rest of the window's state still restores.
+    restorePath(controller, path, value) {
+      try {
+        Runtime.writePath(controller, path, value);
+        return true;
+      } catch (error) {
+        this.warnUnrestorable(controller, path, error.message);
+        return false;
+      }
+    }
+    // Whether a value read through +path+ could be written back. A path
+    // through an owner that is missing for now still counts as writable.
+    isWritablePath(controller, path) {
+      try {
+        Runtime.assertWritablePath(controller, path);
+        return true;
+      } catch (error) {
+        this.warnUnrestorable(controller, path, error.message);
+        return false;
+      }
+    }
+    // Warns once per class and path.
+    warnUnrestorable(controller, path, reason) {
+      let name = Runtime.logicalOr(
+        Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
+        () => "a controller"
+      );
+      if (this._unrestorable_paths.includes(`${name} ${path}`)) return;
+      Runtime.append(this._unrestorable_paths, `${name} ${path}`);
+      return Runtime.warn(`${name}: restorable ${path} is left out of the URL: ${reason}`);
     }
     // Back/Forward: a container whose fragment names other known content loads
     // it without touching history; otherwise its state is reapplied.
@@ -4089,6 +4730,15 @@
     launch(document2) {
       let element = document2.querySelector("[application]");
       if (!element) return null;
+      let failure = Runtime.cast(
+        Runtime.buildFailure(),
+        "T.nilable(String)"
+      );
+      if (failure != null) {
+        this.showBuildFailure(element, failure);
+        return null;
+      }
+      ;
       if (Swill__Application.isRunning()) return Swill__Application.shared();
       let application = Runtime.cast(
         new (Runtime.resolve(Runtime.must(element.getAttribute("application"))))(),
@@ -4102,6 +4752,24 @@
         }
       );
       return application;
+    }
+    // A development build that failed to compile replaces the application's
+    // script with one reporting the error. No application can launch, so the
+    // error is shown as an alert is, without one, in +root+, the element that
+    // names the application.
+    showBuildFailure(root, message) {
+      let dialog = Runtime.must(Swill__Templates.named(
+        "alert",
+        root.ownerDocument
+      ).content.firstElementChild).cloneNode(true);
+      let alert = Swill__Swell.$index(dialog);
+      alert.findBang("h2").text("The application failed to build");
+      Swill__Swell.$index(Runtime.must(alert.findBang(".alert-text").element.querySelector("p"))).text(message);
+      let stop = Swill__Image.named("Stop");
+      if (stop) alert.findBang("img").attr("src", stop.url);
+      alert.findBang(".actions").remove();
+      root.appendChild(dialog);
+      return dialog.show();
     }
   };
   var Swill__Controller__List = class extends Swill__Controller {
@@ -4192,31 +4860,32 @@
       this.selectFirstIfNothingSelected();
       return true;
     }
-    // Arrow keys move a single selection; everything else continues up.
-    keyDown(event) {
-      let index;
+    // Down moves a single selection to the next row.
+    moveDown(event) {
       let total = this.arrangedObjects.length;
-      if (total === 0) return super.keyDown(event);
+      if (total === 0) return super.moveDown(event);
+      event.preventDefault();
       let indexes = this.currentIndexes();
       let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        index = current < 0 ? 0 : current + 1;
-        if (index > total - 1) index = total - 1;
-        this.selectIndexes([index]);
-        this._selection_anchor = index;
-        return this._selection_anchor;
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        if (current <= 0) {
-          return this.cancelOperation(event);
-        } else {
-          this.selectIndexes([current - 1]);
-          this._selection_anchor = current - 1;
-          return this._selection_anchor;
-        }
+      let index = current < 0 ? 0 : current + 1;
+      if (index > total - 1) index = total - 1;
+      this.selectIndexes([index]);
+      this._selection_anchor = index;
+      return this._selection_anchor;
+    }
+    // Up moves a single selection to the previous row. Up from the first row,
+    // or with nothing selected, is Escape: the list is done.
+    moveUp(event) {
+      if (this.arrangedObjects.length === 0) return super.moveUp(event);
+      event.preventDefault();
+      let indexes = this.currentIndexes();
+      let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
+      if (current <= 0) {
+        return this.cancelOperation(event);
       } else {
-        return super.keyDown(event);
+        this.selectIndexes([current - 1]);
+        this._selection_anchor = current - 1;
+        return this._selection_anchor;
       }
     }
     // Enter activates the selection when there is one.
@@ -4398,6 +5067,159 @@
       }
       ;
       return this.selectIndexes(indexes);
+    }
+  };
+  var Swill__Alert = class extends Swill__Controller {
+    // The question, shown as the alert's heading.
+    // More about the question, shown below it. Empty shows nothing.
+    // The image beside the text, by name or URL, as Control::ImageView takes
+    // it: the framework's Warning by default, or Stop for an error.
+    // The button each title is cloned from.
+    // Creates an alert with no text and no buttons. Set the text, add the
+    // buttons, then #run it.
+    constructor() {
+      super();
+      this._button_titles = Runtime.cast([], "T::Array[String]");
+      this._choice = Runtime.cast(null, "T.nilable(String)");
+    }
+    // Adds a button titled +title+ after those already added. An alert with
+    // none shows OK.
+    addButton(title) {
+      return Runtime.append(this._button_titles, title);
+    }
+    async run() {
+      let template = Swill__Templates.named(
+        "alert",
+        this.application().root.ownerDocument
+      );
+      this.attach(Runtime.must(template.content.firstElementChild).cloneNode(true));
+      let window = this.application().presentWindow(this, "alert");
+      await window.closed;
+      return this._choice;
+    }
+    // The action every button sends.
+    choose(sender) {
+      return this.finish(sender.textContent);
+    }
+    // Escape chooses the button titled Cancel, or dismisses the alert with
+    // nil when it has none.
+    cancelOperation(event) {
+      event.preventDefault();
+      return this.finish(this._button_titles.includes("Cancel") ? "Cancel" : null);
+    }
+    finish(choice) {
+      this._choice = choice;
+      return this.application().dismiss(this);
+    }
+    // Adds a button per title, before the region's actions are connected so
+    // each sends choose.
+    viewDidLoad() {
+      let actions = Swill__Swell.$index(this.view.element).findBang(".actions");
+      return (Runtime.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((title) => actions.append(Swill__Swell.$index(this.view.cloneTemplate(Runtime.must(this.buttonTemplate))).text(title).element));
+    }
+  };
+  var Swill__ProblemReporter = class _Swill__ProblemReporter extends Swill__Object {
+    // Creates a reporter for +window+, the browser window whose uncaught
+    // errors it reports. Nothing is reported until #start.
+    constructor(window) {
+      super();
+      this._window = window;
+      this._pending = Runtime.cast([], "T::Array[T::Hash[String, String]]");
+      this._current = Runtime.cast(null, "T.nilable(String)");
+      this._on_error = (event) => this.reportError(event);
+      this._on_rejection = (event) => this.reportRejection(event);
+      this._stop_warnings = Runtime.cast(null, "T.nilable(T.proc.void)");
+    }
+    // Starts reporting uncaught errors, rejected promises and warnings.
+    start() {
+      let window = this._window;
+      if (window) {
+        window.addEventListener("error", this._on_error);
+        window.addEventListener("unhandledrejection", this._on_rejection);
+      }
+      ;
+      this._stop_warnings = Runtime.observeWarnings((message) => this.report("Warning", message, ""));
+      return this._stop_warnings;
+    }
+    // Stops reporting. An alert already showing stays until it is dismissed.
+    stop() {
+      let window = this._window;
+      if (window) {
+        window.removeEventListener("error", this._on_error);
+        window.removeEventListener("unhandledrejection", this._on_rejection);
+      }
+      ;
+      let stop_warnings = this._stop_warnings;
+      if (Runtime.isTruthy(stop_warnings)) stop_warnings();
+      this._stop_warnings = null;
+      this._pending = [];
+      return this._pending;
+    }
+    reportError(event) {
+      let error = event.error;
+      let message = error == null ? event.message : _Swill__ProblemReporter.messageOf(error);
+      let origin = error == null ? "" : _Swill__ProblemReporter.originOf(error);
+      if (Runtime.isTruthy(Runtime.isEmpty(origin) && !Runtime.isEmpty(event.filename))) {
+        origin = `at ${event.filename}:${event.lineno}:${event.colno}`;
+      }
+      ;
+      return this.report("Stop", message, origin);
+    }
+    reportRejection(event) {
+      let reason = event.reason;
+      return this.report(
+        "Stop",
+        _Swill__ProblemReporter.messageOf(reason),
+        _Swill__ProblemReporter.originOf(reason)
+      );
+    }
+    // Queues a problem, showing it now when no alert is showing.
+    report(icon, message, detail) {
+      if (this._current === message || this._pending.some((problem) => problem.message === message)) return;
+      Runtime.append(
+        this._pending,
+        { icon, message, detail }
+      );
+      if (this._current == null) return this.showNext();
+    }
+    async showNext() {
+      let problem = this._pending.shift();
+      if (!problem) return;
+      this._current = problem.message;
+      try {
+        let alert = new Swill__Alert();
+        alert.icon = Runtime.must(problem.icon);
+        alert.messageText = Runtime.must(problem.message);
+        alert.informativeText = Runtime.must(problem.detail);
+        alert.addButton("OK");
+        await alert.run();
+      } catch (_error) {
+        this._pending = [];
+      } finally {
+        this._current = null;
+      }
+      ;
+      if (!Runtime.isEmpty(this._pending)) return this.showNext();
+    }
+    static messageOf(value) {
+      if (value instanceof Error) return value.message;
+      return `${value}`;
+    }
+    static originOf(value) {
+      if (!(value instanceof Error)) return "";
+      let stack = Runtime.logicalOr(value.stack, () => "");
+      let found = Runtime.split(stack, "\n").find((line) => Runtime.isTruthy(/:\d+:\d+\)?$/m.test(Runtime.strip(line))));
+      if (found == null) return "";
+      let frame = Runtime.cast(Runtime.strip(found), "String");
+      if (frame.startsWith("at ")) return frame;
+      let parts = Runtime.cast(
+        Runtime.split(frame, "@"),
+        "T::Array[String]"
+      );
+      if (parts.length < 2) return `at ${frame}`;
+      let $function = Runtime.must(parts[0]);
+      let location = parts.slice(1).join("@");
+      return Runtime.isEmpty($function) ? `at ${location}` : `at ${$function} (${location})`;
     }
   };
 
@@ -5098,8 +5920,128 @@
             "arity": 1,
             "js": "insertNewline"
           },
-          "complete": {
+          "insert_tab": {
+            "arity": 1,
+            "js": "insertTab"
+          },
+          "insert_backtab": {
+            "arity": 1,
+            "js": "insertBacktab"
+          },
+          "move_up": {
+            "arity": 1,
+            "js": "moveUp"
+          },
+          "move_down": {
+            "arity": 1,
+            "js": "moveDown"
+          },
+          "move_left": {
+            "arity": 1,
+            "js": "moveLeft"
+          },
+          "move_right": {
+            "arity": 1,
+            "js": "moveRight"
+          },
+          "move_to_beginning_of_document": {
+            "arity": 1,
+            "js": "moveToBeginningOfDocument"
+          },
+          "move_to_end_of_document": {
+            "arity": 1,
+            "js": "moveToEndOfDocument"
+          }
+        }
+      },
+      "Swill::Bundle": {
+        constructor: Swill__Bundle,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 4
+          },
+          "name": {
+            "arity": 0,
+            "accessor": true
+          },
+          "base_url": {
+            "arity": 0,
+            "js": "baseURL",
+            "accessor": true
+          },
+          "base_url=": {
+            "arity": 1,
+            "js": "baseURL="
+          },
+          "manifest": {
+            "arity": 0,
+            "accessor": true
+          },
+          "path_for_resource": {
+            "arity": 1,
+            "js": "pathForResource"
+          },
+          "path_for_resource_with_extension": {
+            "arity": 2,
+            "js": "pathForResourceWithExtension",
+            "family": "path_for_resource"
+          },
+          "url_for_resource": {
+            "arity": 1,
+            "js": "urlForResource"
+          },
+          "url_for_resource_with_extension": {
+            "arity": 2,
+            "js": "urlForResourceWithExtension",
+            "family": "url_for_resource"
+          },
+          "resource?": {
+            "arity": 1,
+            "js": "isResource"
+          },
+          "resource_with_extension?": {
+            "arity": 2,
+            "js": "isResourceWithExtension",
+            "family": "resource?"
+          },
+          "url_for_path": {
+            "arity": 1,
+            "js": "urlForPath"
+          },
+          "load_resource": {
+            "arity": 2,
+            "js": "loadResource"
+          },
+          "loaded_resource": {
+            "arity": 1,
+            "js": "loadedResource"
+          },
+          "loaded_resource_with_extension": {
+            "arity": 2,
+            "js": "loadedResourceWithExtension",
+            "family": "loaded_resource"
+          },
+          "loaded_path": {
+            "arity": 1,
+            "js": "loadedPath"
+          },
+          "add_stylesheet": {
+            "arity": 2,
+            "js": "addStylesheet"
+          }
+        }
+      },
+      "Swill::Image": {
+        constructor: Swill__Image,
+        properties: {},
+        methods: {
+          "initialize": {
             "arity": 1
+          },
+          "url": {
+            "arity": 0,
+            "accessor": true
           }
         }
       },
@@ -5254,6 +6196,35 @@
           "resign_first_responder": {
             "arity": 1,
             "js": "resignFirstResponder"
+          }
+        }
+      },
+      "Swill::Control::ImageView": {
+        constructor: Swill__Control__ImageView,
+        properties: {
+          "value": {
+            type: "T.nilable(Swill::Image)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "coerce_property_value": {
+            "arity": 3,
+            "js": "coercePropertyValue"
+          },
+          "value_did_change": {
+            "arity": 2,
+            "js": "valueDidChange"
+          },
+          "image_element": {
+            "arity": 0,
+            "js": "imageElement"
           }
         }
       },
@@ -5456,7 +6427,15 @@
       "Swill::Application": {
         constructor: Swill__Application,
         mixins: [Swill__OutletOwner],
-        properties: {},
+        properties: {
+          "development": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          }
+        },
         methods: {
           "initialize": {
             "arity": 0
@@ -5497,6 +6476,20 @@
             "minimum": 1,
             "maximum": 1,
             "js": "showWindow"
+          },
+          "present_window": {
+            "arity": 2,
+            "minimum": 2,
+            "maximum": 2,
+            "js": "presentWindow"
+          },
+          "open_window": {
+            "arity": 4,
+            "js": "openWindow"
+          },
+          "warn_unrestored": {
+            "arity": 1,
+            "js": "warnUnrestored"
           },
           "dismiss": {
             "arity": 1
@@ -5636,8 +6629,20 @@
             "js": "decodeFragmentValue"
           },
           "encode_fragment_value": {
-            "arity": 1,
+            "arity": 3,
             "js": "encodeFragmentValue"
+          },
+          "restore_path": {
+            "arity": 3,
+            "js": "restorePath"
+          },
+          "writable_path?": {
+            "arity": 2,
+            "js": "isWritablePath"
+          },
+          "warn_unrestorable": {
+            "arity": 3,
+            "js": "warnUnrestorable"
           },
           "apply_fragment": {
             "arity": 0,
@@ -5661,6 +6666,10 @@
           },
           "launch": {
             "arity": 1
+          },
+          "show_build_failure": {
+            "arity": 2,
+            "js": "showBuildFailure"
           }
         }
       },
@@ -5866,9 +6875,13 @@
             "arity": 0,
             "js": "becomeFirstResponder"
           },
-          "key_down": {
+          "move_down": {
             "arity": 1,
-            "js": "keyDown"
+            "js": "moveDown"
+          },
+          "move_up": {
+            "arity": 1,
+            "js": "moveUp"
           },
           "insert_newline": {
             "arity": 1,
@@ -5944,6 +6957,100 @@
           "select_range": {
             "arity": 2,
             "js": "selectRange"
+          }
+        }
+      },
+      "Swill::Alert": {
+        constructor: Swill__Alert,
+        properties: {
+          "message_text": {
+            js: "messageText",
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "";
+            }
+          },
+          "informative_text": {
+            js: "informativeText",
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "";
+            }
+          },
+          "icon": {
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "Warning";
+            }
+          },
+          "button_template": {
+            js: "buttonTemplate",
+            type: "T.nilable(HTMLTemplateElement)",
+            attribute: false,
+            outlet: true,
+            optional: false,
+            defaultValue() {
+              return null;
+            }
+          }
+        },
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "add_button": {
+            "arity": 1,
+            "js": "addButton"
+          },
+          "run": {
+            "arity": 0
+          },
+          "choose": {
+            "arity": 1
+          },
+          "cancel_operation": {
+            "arity": 1,
+            "js": "cancelOperation"
+          },
+          "finish": {
+            "arity": 1
+          },
+          "view_did_load": {
+            "arity": 0,
+            "js": "viewDidLoad"
+          }
+        }
+      },
+      "Swill::ProblemReporter": {
+        constructor: Swill__ProblemReporter,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "start": {
+            "arity": 0
+          },
+          "stop": {
+            "arity": 0
+          },
+          "report_error": {
+            "arity": 1,
+            "js": "reportError"
+          },
+          "report_rejection": {
+            "arity": 1,
+            "js": "reportRejection"
+          },
+          "report": {
+            "arity": 3
+          },
+          "show_next": {
+            "arity": 0,
+            "js": "showNext"
           }
         }
       }
@@ -6058,7 +7165,7 @@
   function start(options = {}) {
     const { Application } = framework;
     if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
-    assertKeys(options, ["root", "application"], "start");
+    assertKeys(options, ["root", "application", "development"], "start");
     const root = options.root ?? globalThis.document?.body;
     const ApplicationClass = options.application ?? Application;
     if (!root) throw new Error("Swill.start requires a root element");
@@ -6070,6 +7177,7 @@
       throw new Error("Register the application class before starting it");
     }
     const application = new ApplicationClass();
+    if (options.development) application.development = true;
     application.launch(root);
     root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
       if (!event.persisted) application.terminate();
@@ -6101,8 +7209,12 @@
 
   // build/ui/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
-  Swill__Templates.install('<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" role="listbox" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" role="option" tabindex="-1">\n      <span class="custom-select-icon" aria-hidden="true"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>\n  </template>\n</template>\n');
+  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
+  {
+    const script = typeof document === "undefined" ? null : document.currentScript;
+    const base = script && script.src ? new URL(".", script.src).href : "";
+    Swill__Bundle.register("swill", base, ["Info.png", "Note.png", "Stop.png", "Warning.png", "controls.css", "controls.html"], { "controls.html": '<template name="custom_select">\n  <button type="button" class="custom-select-button" tabindex="-1" outlet="button" data-action="button_clicked">\n    <span class="custom-select-trigger-icon" aria-hidden="true" outlet="icon"></span>\n    <span class="custom-select-label" outlet="label"></span>\n  </button>\n  <div class="custom-select-popup" role="listbox" outlet="popup"></div>\n  <template outlet="option_template">\n    <button type="button" class="custom-select-option" role="option" tabindex="-1">\n      <span class="custom-select-icon" aria-hidden="true"></span>\n      <span class="custom-select-option-text">\n        <span class="custom-select-option-label"></span>\n        <span class="custom-select-option-description"></span>\n      </span>\n    </button>\n  </template>\n</template>\n\n<template name="segmented">\n  <div class="segmented-options" outlet="segments"></div>\n  <template outlet="segment_template">\n    <button type="button" class="segmented-option" role="radio" tabindex="-1"></button>\n  </template>\n</template>\n\n<template name="alert">\n  <dialog class="window alert" role="alertdialog">\n    <img class="alert-icon" klass="Swill::Control::ImageView" bind="icon" alt="" aria-hidden="true">\n    <div class="alert-text">\n      <h2 bind="message_text"></h2>\n      <p bind="informative_text" bind-hidden="informative_text.empty?"></p>\n    </div>\n    <div class="actions"></div>\n    <template outlet="button_template">\n      <button type="button" data-action="choose"></button>\n    </template>\n  </dialog>\n</template>\n' }, false);
+  }
   if (typeof document !== "undefined") new Swill__Launcher().install(document);
 })();
 //# sourceMappingURL=swill-ui.js.map

@@ -484,7 +484,8 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes js, "      node.parentElement,\n      node.tally(),\n      Runtime.send(node, \"tally\"),\n",
                     "a listed DOM member reads; an unlisted one is called with parentheses, and otherwise the element says which it is"
     assert_includes js, 'return Runtime.send(element, "__widget__");', "an unlisted expando is resolved the same way"
-    assert_includes js, "other.nextWidget()", "a member the class does not declare falls back to an explicit call"
+    assert_includes js, 'Runtime.send(other, "next_widget")',
+                    "a member the class does not declare, perhaps a subclass's, is resolved on the object at run time"
     # A computed block is converted on its own, so its instance variables are
     # typed from the class it belongs to, not from the source handed over.
     assert_includes js, "computeTally() {\n            return this._widget.tally();", "an ivar is typed inside a computed block too"
@@ -937,6 +938,45 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       javascript("def go(other); T.bind(other, Example); end")
     end
     assert_includes error.message, "T.bind binds self"
+  end
+
+  def test_predicate_variants_keep_their_mark_and_value_classes_are_checked_by_value
+    js = javascript(<<~RUBY)
+      extend T::Sig
+      sig { params(name: String, extension: T.nilable(String)).returns(T::Boolean) }
+      def resource?(name, extension = nil); !extension.nil?; end
+      sig { params(value: T.untyped).returns(T::Array[T::Boolean]) }
+      def kinds(value); [value.is_a?(String), value.is_a?(Integer), value.kind_of?(Hash)]; end
+    RUBY
+    assert_includes js, "isResourceWithExtension(name, extension)", "resource_with_extension?, not resource?_with_extension"
+    assert_includes js, 'Runtime.conforms(value, "String")', "a string primitive is never an instanceof String"
+    assert_equal [[false, true], [true, false, false], [false, true, false], [false, false, true]], execute(js + <<~JS)
+      const e = new Example();
+      console.log(JSON.stringify([[e.isResource("a"), e.isResourceWithExtension("a", "png")],
+        e.kinds("s"), e.kinds(3), e.kinds({})]));
+    JS
+  end
+
+  def test_restorable_paths_must_end_at_a_writable_property
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript(<<~RUBY)
+        property :chosen_id, type: T.nilable(String), default: nil
+        property :chosen, type: T.untyped do
+          chosen_id
+        end
+        restorable :chosen, key: :c
+      RUBY
+    end
+    assert_includes error.message, "Example: restorable chosen is read-only; restore chosen_id"
+    error = assert_raises(Swill::Ruby2JS::CompileError) do
+      javascript("property :total, type: Integer do\n  1\nend\nrestorable :total")
+    end
+    assert_includes error.message, "restorable total is read-only; restore a stored property, or one declared with writer:"
+    js = javascript(<<~RUBY)
+      property :chosen_id, type: T.nilable(String), default: nil
+      restorable :chosen_id, key: :c
+    RUBY
+    assert_includes js, 'restorations: [{ path: "chosen_id", key: "c"'
   end
 
   def test_attribute_accessors_compile_to_native_accessors
@@ -2414,7 +2454,8 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     RUBY
     assert_includes js, "people.forEach((person) => {"
     assert_includes js, 'Runtime.respondsTo(person, "label")'
-    assert_includes js, "Runtime.append(seen, person.label())", "block parameters take the element type"
+    assert_includes js, 'Runtime.append(seen, Runtime.send(person, "label"))',
+                    "block parameters take the element type, whose class does not declare label, so the object resolves it"
     assert_includes js, "words.map((word) => Runtime.upcase(word))"
     assert_includes js, "words.filter((word) => Runtime.isEmpty(Runtime.strip(word)))"
     assert_includes js, 'words.includes("Ada")'
@@ -2436,6 +2477,14 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes js, 'throw new Error("nope")'
     assert_raises(Swill::Ruby2JS::CompileError) { javascript("def boom(value); raise value; end") }
     assert_raises(Swill::Ruby2JS::CompileError) { javascript("def boom; raise; end") }
+    built = javascript(<<~RUBY)
+      extend T::Sig
+      sig { params(name: String).returns(String) }
+      def message_for(name); "no #{name}"; end
+      sig { params(name: String).void }
+      def boom(name); raise message_for(name); end
+    RUBY
+    assert_includes built, "throw new Error(this.messageFor(name))", "a message built by a String-typed method"
     assert_equal ["nope", true], execute(js + <<~JS)
       const object = new (Runtime.resolve("Example"))();
       try { object.boom(); } catch (error) { console.log(JSON.stringify([error.message, error instanceof Error])); }

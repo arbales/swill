@@ -48,7 +48,16 @@ module Swill
       @first_responder = T.let(nil, T.nilable(Responder))
       @posted_first_responder = T.let(nil, T.nilable(Responder))
       @observer = T.let(nil, T.nilable(MutationObserver))
+      @unrestored = T.let([], T::Array[String])
+      @unrestorable_paths = T.let([], T::Array[String])
+      @problems = T.let(nil, T.nilable(ProblemReporter))
     end
+
+    # Whether the application is in development, which shows its problems as
+    # alerts as well as in the console. Opt in with a `development` attribute
+    # on the application's element, `Swill.start({development: true})`, or by
+    # setting this before launch. False by default. See ProblemReporter.
+    property :development, type: T::Boolean, default: false
 
     # Starts the application at +root+: awakens the markup beneath it,
     # restores window content from the URL fragment, and begins watching for
@@ -58,6 +67,12 @@ module Swill
       raise "An application is already running" if Application.running?
       Application.launched(self)
       @root = root
+      self.development = true if root.hasAttribute("development")
+      if development
+        problems = ProblemReporter.new(root.ownerDocument.defaultView)
+        problems.start
+        @problems = problems
+      end
       @on_focus = ->(event) { focus_in(event) }
       @on_focus_out = ->(event) { focus_out(event) }
       @on_key_down = ->(event) { first_responder.key_down(event) }
@@ -75,6 +90,7 @@ module Swill
       @controllers.reverse.each { |controller| Awakening.load(controller) }
       register_window_containers
       restore_launched_windows
+      warn_unrestored(@controllers)
       Awakening.finish(@controllers)
       @fragments.start_observing(->() { apply_fragment })
       watch(root)
@@ -115,6 +131,9 @@ module Swill
       @root.removeEventListener("keydown", @on_key_down)
       @root.removeEventListener("keyup", @on_key_up)
       assign_first_responder(nil)
+      problems = @problems
+      problems.stop if problems
+      @problems = nil
       Application.terminated(self)
     end
 
@@ -148,6 +167,7 @@ module Swill
       window.assign_content(content_name, top_controller_in(container))
       @fragments.write(window.name, content_name, history: history)
       restore_window_state(window, prune_stale: history != :none, write_content: history != :none)
+      warn_unrestored(controllers)
       Awakening.finish(controllers)
       controller = window.controller
       if controller
@@ -175,15 +195,57 @@ module Swill
         node.remove
         raise "Window root has no controller: #{name}"
       end
+      open_window(name, node, controller, controllers)
+    end
+
+    # Present a controller built in code as a window named +name+, its view
+    # appended to the root, as a template's would be. The controller has
+    # attached its root element; anything managed inside it awakens first,
+    # then the controller loads. A <dialog> root is shown.
+    sig { params(controller: Controller, name: String, into: Element).returns(Window) }
+    def present_window(controller, name, into: @root)
+      node = controller.view.element
+      raise "Window is already presented: #{name}" if node.isConnected
+      into.appendChild(node)
+      controllers = Awakening.awaken(node)
+      Awakening.load(controller)
+      open_window(name, node, controller, [controller] + controllers)
+    end
+
+    sig do
+      params(name: String, node: Element, controller: Controller, controllers: T::Array[Controller]).returns(Window)
+    end
+    def open_window(name, node, controller, controllers) # :nodoc:
       node.show if node.tagName == "DIALOG"
       window = Window.new(name, node)
       window.assign_content(name, controller)
       window.save_first_responder(first_responder)
       @windows << window
       restore_window_state(window, prune_stale: false, write_content: false)
+      warn_unrestored(controllers)
       Awakening.finish(controllers)
       make_first_responder(controller) unless responder_within?(first_responder, node)
       window
+    end
+
+    # Only a window's content controller is restored, so restorable paths
+    # declared on any other controller would be silently ignored. Warns once
+    # per class, naming the paths. A class that is some window's content as
+    # well is declaring for that use, so it is not warned about.
+    sig { params(controllers: T::Array[Controller]).void }
+    def warn_unrestored(controllers) # :nodoc:
+      contents = @windows.map { |window| window.controller }.compact.map { |content| Runtime.nameOf(content) }
+      controllers.each do |controller|
+        next if @windows.any? { |window| window.controller == controller }
+        declarations = T.let(Runtime.restorations(controller), T::Array[T.untyped])
+        next if declarations.empty?
+        name = T.let(Runtime.nameOf(controller), T.nilable(String)) || "a controller"
+        next if contents.include?(name) || @unrestored.include?(name)
+        @unrestored << name
+        paths = declarations.map { |declaration| declaration.path }.join(", ")
+        warn "#{name} declares restorable #{paths}, but only a window's content controller is restored; " \
+             "declare it there as a path through this controller"
+      end
     end
 
     # Closes the window +controller+ belongs to, restoring the first responder
@@ -269,12 +331,18 @@ module Swill
     end
 
     # The browser already moved focus; reconcile the first responder without
-    # re-running become. A resign refusal restores focus to the refuser.
+    # re-running become. A responder that does not accept is refused, as
+    # make_first_responder refuses it, and so is a change the current first
+    # responder will not resign for; either way focus goes back.
     sig { params(target: Element, previous: T.nilable(Element)).void }
     def sync_first_responder(target, previous)
       responder = responder_for(target)
       current = first_responder
       return if responder == current
+      if responder && !responder.accepts_first_responder?
+        responder_element(current) ? restore_focus(current, previous) : target.blur
+        return
+      end
       unless current.resign_first_responder(responder)
         restore_focus(current, previous)
         return
@@ -477,16 +545,24 @@ module Swill
       return unless controller
       params = @fragments.params
       applied = 0
+      unrestorable = T.let([], T::Array[String])
       @fragments.suspended do
         declarations.each do |declaration|
-          text = params[window.scoped_key(declaration.key)]
+          key = window.scoped_key(declaration.key)
+          text = params[key]
           next if text == nil
           value = decode_fragment_value(declaration.type, text)
           next if value == nil
-          Runtime.writePath(controller, declaration.path, value)
-          applied += 1
+          if restore_path(controller, declaration.path, value)
+            applied += 1
+          else
+            unrestorable << key
+          end
         end
       end
+      # Writes are suspended while restoring, so a key that could not be
+      # restored leaves the fragment afterwards.
+      unrestorable.each { |key| @fragments.write(key, nil, history: :replace) }
       controller.controller_did_restore(applied > 0) unless declarations.empty?
       declarations.each do |declaration|
         disposer = Runtime.observePath(controller, declaration.path, ->(_value) { write_window_state(window) })
@@ -505,7 +581,9 @@ module Swill
       controller = window.controller
       return unless controller
       T.let(Runtime.restorations(controller), T::Array[T.untyped]).each do |declaration|
-        value = encode_fragment_value(Runtime.readPath(controller, declaration.path))
+        path = declaration.path
+        # A value that could not be restored is not worth keeping in the URL.
+        value = writable_path?(controller, path) ? encode_fragment_value(controller, Runtime.readPath(controller, path), path) : nil
         @fragments.write(window.scoped_key(declaration.key), value, history: :replace)
       end
     end
@@ -526,10 +604,47 @@ module Swill
       text
     end
 
-    sig { params(value: T.untyped).returns(T.nilable(String)) }
-    def encode_fragment_value(value) # :nodoc:
+    # A value's text in the fragment, or nil to leave it out. Only a string,
+    # number or boolean round-trips through a URL; anything else is left out,
+    # with a warning, rather than written as text that cannot be restored.
+    sig { params(controller: Controller, value: T.untyped, path: String).returns(T.nilable(String)) }
+    def encode_fragment_value(controller, value, path) # :nodoc:
       return nil if value.nil? || value == ""
-      "#{value}"
+      return value if value.is_a?(String)
+      return "#{value}" if value.is_a?(Integer) || value.is_a?(Float) || value == true || value == false
+      warn_unrestorable(controller, path, "its value cannot be written to the URL; restore a string, number or boolean")
+      nil
+    end
+
+    # Writes a restored value through +path+, answering false when the path
+    # cannot take it, so the rest of the window's state still restores.
+    sig { params(controller: Controller, path: String, value: T.untyped).returns(T::Boolean) }
+    def restore_path(controller, path, value) # :nodoc:
+      Runtime.writePath(controller, path, value)
+      true
+    rescue => error
+      warn_unrestorable(controller, path, error.message)
+      false
+    end
+
+    # Whether a value read through +path+ could be written back. A path
+    # through an owner that is missing for now still counts as writable.
+    sig { params(controller: Controller, path: String).returns(T::Boolean) }
+    def writable_path?(controller, path) # :nodoc:
+      Runtime.assertWritablePath(controller, path)
+      true
+    rescue => error
+      warn_unrestorable(controller, path, error.message)
+      false
+    end
+
+    # Warns once per class and path.
+    sig { params(controller: Controller, path: String, reason: String).void }
+    def warn_unrestorable(controller, path, reason) # :nodoc:
+      name = T.let(Runtime.nameOf(controller), T.nilable(String)) || "a controller"
+      return if @unrestorable_paths.include?("#{name} #{path}")
+      @unrestorable_paths << "#{name} #{path}"
+      warn "#{name}: restorable #{path} is left out of the URL: #{reason}"
     end
 
     # Back/Forward: a container whose fragment names other known content loads
@@ -594,6 +709,11 @@ module Swill
     def launch(document)
       element = document.querySelector("[application]")
       return nil unless element
+      failure = T.let(Runtime.buildFailure, T.nilable(String))
+      if failure
+        show_build_failure(element, failure)
+        return nil
+      end
       return Application.shared if Application.running?
       application = T.cast(Runtime.resolve(T.must(element.getAttribute("application"))).new, Application)
       application.launch(element)
@@ -605,6 +725,23 @@ module Swill
         application.terminate unless T.cast(event, PageTransitionEvent).persisted
       end)
       application
+    end
+
+    # A development build that failed to compile replaces the application's
+    # script with one reporting the error. No application can launch, so the
+    # error is shown as an alert is, without one, in +root+, the element that
+    # names the application.
+    sig { params(root: Element, message: String).void }
+    def show_build_failure(root, message)
+      dialog = T.must(Templates.named("alert", root.ownerDocument).content.firstElementChild).cloneNode(true)
+      alert = Swell[dialog]
+      alert.find!("h2").text("The application failed to build")
+      Swell[T.must(alert.find!(".alert-text").element.querySelector("p"))].text(message)
+      stop = Image.named("Stop")
+      alert.find!("img").attr("src", stop.url) if stop
+      alert.find!(".actions").remove
+      root.appendChild(dialog)
+      dialog.show
     end
   end
 end

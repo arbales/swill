@@ -53,18 +53,30 @@ module Swill
       true
     end
 
-    # Routes Escape, Enter and Tab to their own hooks; anything else passes
-    # to the next responder.
+    # Translates a key into a command and sends it to this responder, as
+    # Cocoa's interpretKeyEvents: does. A key the focused element handles
+    # itself, such as typing in a field, stops here. A key held with Control,
+    # Command or Option, or one no command names, passes to the next
+    # responder as it is. An override sees the raw key before any of this.
     sig { params(event: KeyboardEvent).void }
     def key_down(event)
-      case event.key
-      when "Escape" then cancel_operation(event)
-      when "Enter" then insert_newline(event)
-      when "Tab" then complete(event)
-      else
-        target = next_responder
-        target.key_down(event) if target
+      return if event.isComposing
+      unless event.ctrlKey || event.metaKey || event.altKey
+        return if DOM.handles_key?(event)
+        case event.key
+        when "Escape" then return cancel_operation(event)
+        when "Enter" then return insert_newline(event)
+        when "Tab" then return event.shiftKey ? insert_backtab(event) : insert_tab(event)
+        when "ArrowUp" then return move_up(event)
+        when "ArrowDown" then return move_down(event)
+        when "ArrowLeft" then return move_left(event)
+        when "ArrowRight" then return move_right(event)
+        when "Home" then return move_to_beginning_of_document(event)
+        when "End" then return move_to_end_of_document(event)
+        end
       end
+      target = next_responder
+      target.key_down(event) if target
     end
 
     # Passes to the next responder.
@@ -74,25 +86,79 @@ module Swill
       target.key_up(event) if target
     end
 
-    # Escape. Dismiss what is open, or pass it along.
+    # :section: Commands
+    # What keys mean. Each passes to the next responder, so implementing one
+    # takes that key for this responder's region, and calling super declines
+    # it.
+
+    # Escape. Dismiss what is open.
     sig { params(event: KeyboardEvent).void }
     def cancel_operation(event)
       target = next_responder
       target.cancel_operation(event) if target
     end
 
-    # Enter. Commit what is being edited, or pass it along.
+    # Enter. Commit what is being edited.
     sig { params(event: KeyboardEvent).void }
     def insert_newline(event)
       target = next_responder
       target.insert_newline(event) if target
     end
 
-    # Tab. Complete what is being edited, or pass it along.
+    # Tab. Unless something prevents it, the browser then moves focus on.
     sig { params(event: KeyboardEvent).void }
-    def complete(event)
+    def insert_tab(event)
       target = next_responder
-      target.complete(event) if target
+      target.insert_tab(event) if target
+    end
+
+    # Shift-Tab.
+    sig { params(event: KeyboardEvent).void }
+    def insert_backtab(event)
+      target = next_responder
+      target.insert_backtab(event) if target
+    end
+
+    # Up arrow.
+    sig { params(event: KeyboardEvent).void }
+    def move_up(event)
+      target = next_responder
+      target.move_up(event) if target
+    end
+
+    # Down arrow.
+    sig { params(event: KeyboardEvent).void }
+    def move_down(event)
+      target = next_responder
+      target.move_down(event) if target
+    end
+
+    # Left arrow.
+    sig { params(event: KeyboardEvent).void }
+    def move_left(event)
+      target = next_responder
+      target.move_left(event) if target
+    end
+
+    # Right arrow.
+    sig { params(event: KeyboardEvent).void }
+    def move_right(event)
+      target = next_responder
+      target.move_right(event) if target
+    end
+
+    # Home.
+    sig { params(event: KeyboardEvent).void }
+    def move_to_beginning_of_document(event)
+      target = next_responder
+      target.move_to_beginning_of_document(event) if target
+    end
+
+    # End.
+    sig { params(event: KeyboardEvent).void }
+    def move_to_end_of_document(event)
+      target = next_responder
+      target.move_to_end_of_document(event) if target
     end
   end
 end

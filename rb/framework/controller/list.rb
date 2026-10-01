@@ -118,30 +118,35 @@ module Swill
       true
     end
 
-    # Arrow keys move a single selection; everything else continues up.
+    # Down moves a single selection to the next row.
     sig { override.params(event: KeyboardEvent).void }
-    def key_down(event)
+    def move_down(event)
       total = arranged_objects.length
       return super if total == 0
 
+      event.preventDefault
       indexes = current_indexes
       current = indexes.empty? ? -1 : T.must(indexes[0])
-      if event.key == "ArrowDown"
-        event.preventDefault
-        index = current < 0 ? 0 : current + 1
-        index = total - 1 if index > total - 1
-        select_indexes([index])
-        @selection_anchor = index
-      elsif event.key == "ArrowUp"
-        event.preventDefault
-        if current <= 0
-          cancel_operation(event)
-        else
-          select_indexes([current - 1])
-          @selection_anchor = current - 1
-        end
+      index = current < 0 ? 0 : current + 1
+      index = total - 1 if index > total - 1
+      select_indexes([index])
+      @selection_anchor = index
+    end
+
+    # Up moves a single selection to the previous row. Up from the first row,
+    # or with nothing selected, is Escape: the list is done.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_up(event)
+      return super if arranged_objects.length == 0
+
+      event.preventDefault
+      indexes = current_indexes
+      current = indexes.empty? ? -1 : T.must(indexes[0])
+      if current <= 0
+        cancel_operation(event)
       else
-        super
+        select_indexes([current - 1])
+        @selection_anchor = current - 1
       end
     end
 

@@ -6,3 +6,4 @@ end
 
 require_relative "../compiler/version"
 require_relative "../distant"
+require_relative "../bundles"

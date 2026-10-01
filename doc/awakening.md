@@ -134,3 +134,28 @@ the URL fragment. Loading content that no template or capture provides raises.
 
 Templates suit content that is reused or switched between; live markup suits
 content that is visible and awakened at launch.
+
+## Windows Built in Code
+
+`Application#show_window` presents a template as a window of its own, such as
+a `<dialog>`. `Application#present_window(controller, name)` presents a
+controller whose view was built in code instead. The controller attaches the
+element it built, and anything managed inside it awakens before the controller
+loads, as a template's would. Dismissing either kind restores the first
+responder it displaced.
+
+`Swill::Alert` is built this way. It asks one question, as NSAlert does, and
+`run` yields the title of the button chosen:
+
+```ruby
+alert = Swill::Alert.new
+alert.message_text = "Delete “Dark City”?"
+alert.informative_text = "This cannot be undone."
+alert.add_button("Cancel")
+alert.add_button("Delete")
+return unless await(alert.run) == "Delete"
+```
+
+The alert shows the framework's Warning image beside its text. The first
+button takes the keyboard. Escape chooses the button titled Cancel, or yields
+nil when there is none.

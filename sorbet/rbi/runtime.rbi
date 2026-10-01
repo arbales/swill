@@ -85,6 +85,15 @@ module Swill
     sig { params(message: String).void }
     def self.warn(message); end
 
+    # Calls +callback+ with each message warn reports, until the returned
+    # proc is called.
+    sig { params(callback: T.proc.params(message: String).void).returns(T.proc.void) }
+    def self.observeWarnings(callback); end
+
+    # The message of a failed build a development build reported, or nil.
+    sig { returns(T.nilable(String)) }
+    def self.buildFailure; end
+
     sig { params(value: T.untyped).returns(T.untyped) }
     def self.duplicate(value); end
 

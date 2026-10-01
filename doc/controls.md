@@ -155,6 +155,12 @@ choice closes the popup. With no matching value, either arrow chooses the
 first option. Clicking an option also chooses it and closes the popup. Escape,
 focus leaving the control, and a pointer press outside the control close it.
 
+A TextField's input keeps the keys that edit its text: characters, deletion,
+Left, Right, Home and End. Up, Down, Enter, Escape and Tab go up the responder
+chain as commands, so the controller that owns a search field takes Down by
+implementing `move_down`. A TextField subclass that implements a command takes
+it first. See [Responders](responders.md#key-events).
+
 A control's `delegate` can decide whether it may resign first responder. The
 delegate implements `control_should_resign_first_responder(control,
 next_responder)` and returns false to keep the current first responder. With
@@ -167,11 +173,14 @@ through the application.
 Segmented and CustomSelect load the framework's `segmented` and `custom_select`
 templates during construction. These templates replace the root's contents
 and supply the controls' internal outlets. The distribution includes the
-templates in the framework bundle and provides their styles in `swill.css`.
-Load that stylesheet alongside the application's styles.
+templates in the framework bundle's `controls.html`, and their styles in its
+`controls.css`, served from `resources/swill/` beside `swill.js`. Link that
+stylesheet alongside the application's styles.
 
-A control subclass can call `Control#load_template` with a name from the
-installed template catalog. The control owns the resulting outlets, bindings,
+A control subclass can call `Control#load_template` with the name of a template
+in a bundle's HTML catalog, the application's before the framework's, so an
+application can supply templates for its own controls or replace the
+framework's; see [Resources](resources.md#templates). The control owns the resulting outlets, bindings,
 and action handlers. Bindings inside the template resolve against the control;
 actions begin at the control. Loading another template on the same control
 raises `Control template already loaded`. An absent template name raises

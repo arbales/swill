@@ -98,6 +98,7 @@ Writing an application:
 | [Bindings](doc/bindings.md) | Key paths, binding roots, writing back, value transformers, observers, and computed properties |
 | [Swell](doc/swell.md) | Chained DOM edits, attribute and property values, descendant lookup, and event listeners |
 | [Controls](doc/controls.md) | Buttons, text fields, selects, segmented choices, value bindings, keyboard behavior, and control templates |
+| [Resources](doc/resources.md) | Bundles: images, templates and stylesheets found by name and loaded when used, the image control, and the server's view of the same bundles |
 | [Lifecycle](doc/lifecycle.md) | Activation order, restoration from the URL fragment, unloading, and ownership |
 | [Responders](doc/responders.md) | The responder chain, actions, key events, first responder, and focus |
 | [Collections](doc/collections.md) | Lists and tables: row templates, sorting, filtering, editing in place, `ArrayController`, and shared selection |

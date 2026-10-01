@@ -120,34 +120,60 @@ module Swill
       choose(T.must(Swell[button].data_value("value"))) if button && @element.contains(button)
     end
 
-    # Invoked for a key event. Arrow keys choose the previous or next option,
-    # wrapping at either end; Home and End choose the first or last option.
-    # Moves focus to the chosen button. Disabled controls ignore key events.
-    # Enter and Space retain native button activation; other keys pass to
-    # `super`. An override should pass unhandled keys to `super`.
+    # Left and Up choose the previous option, Right and Down the next,
+    # wrapping at either end. Each moves focus to the chosen button. A
+    # disabled control ignores them. Enter and Space stay with the focused
+    # native button.
     sig { override.params(event: KeyboardEvent).void }
-    def key_down(event)
-      return if disabled
-      case event.key
-      when "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"
-        return if options.empty?
-        event.preventDefault
-        index = 0
-        options.each_with_index { |option, position| index = position if option["value"].to_s == value }
-        case event.key
-        when "Home" then index = 0
-        when "End" then index = options.length - 1
-        when "ArrowLeft", "ArrowUp" then index = (index - 1) % options.length
-        else index = (index + 1) % options.length
-        end
-        choose(T.must(options[index])["value"].to_s)
-        focus_selection
-      when "Enter", " "
-        # Let the focused native button activate itself.
-        return
-      else
-        super
-      end
+    def move_left(event)
+      choose_adjacent(event, -1)
+    end
+
+    # Up chooses the previous option, as Left does.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_up(event)
+      choose_adjacent(event, -1)
+    end
+
+    # Right chooses the next option.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_right(event)
+      choose_adjacent(event, 1)
+    end
+
+    # Down chooses the next option, as Right does.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_down(event)
+      choose_adjacent(event, 1)
+    end
+
+    # Home chooses the first option.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_to_beginning_of_document(event)
+      choose_option_at(event, 0)
+    end
+
+    # End chooses the last option.
+    sig { override.params(event: KeyboardEvent).void }
+    def move_to_end_of_document(event)
+      choose_option_at(event, options.length - 1)
+    end
+
+    # Chooses the option +delta+ places from the current one, wrapping.
+    sig { params(event: KeyboardEvent, delta: Integer).void }
+    def choose_adjacent(event, delta) # :nodoc:
+      return if disabled || options.empty?
+      index = 0
+      options.each_with_index { |option, position| index = position if option["value"].to_s == value }
+      choose_option_at(event, (index + delta) % options.length)
+    end
+
+    sig { params(event: KeyboardEvent, index: Integer).void }
+    def choose_option_at(event, index) # :nodoc:
+      return if disabled || options.empty?
+      event.preventDefault
+      choose(T.must(options[index])["value"].to_s)
+      focus_selection
     end
 
     # Returns the button with tabindex zero, or nil when no button has a tab

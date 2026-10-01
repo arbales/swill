@@ -187,9 +187,43 @@ test("Swill.start manually launches and terminates a JavaScript application", ()
   Swill.register(LateController);
   assert.equal(Swill.Runtime.resolve("LateController"), LateController);
   assert.throws(() => Swill.start({root: body}), /already running/);
+  assert.equal(application.development, false, "development is opted into");
   application.terminate();
   assert.equal(Swill.Application.isRunning(), false);
+  const developing = Swill.start({root: element("body"), development: true});
+  assert.equal(developing.development, true, "Swill.start takes development");
+  developing.terminate();
   assert.deepEqual(lifecycle.slice(-2), ["applicationWillTerminate", "viewDidDisappear"]);
+});
+
+test("a failed build is shown in the page instead of launching", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  const errors = [];
+  const original = console.error;
+  console.error = message => errors.push(message);
+  try {
+    // What swill build --show-errors writes in place of app.js.
+    Swill.Runtime.reportBuildFailure("app/application.rb:7: uninitialized constant Movies::StatusField");
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(errors, ["[Swill] The application failed to build: app/application.rb:7: uninitialized constant Movies::StatusField"]);
+  const body = element("body", {application: "Movies::Application"});
+  const document = element("#document", {}, [body]);
+  document.head = element("head");
+  document.readyState = "complete";
+  document.defaultView = new Browser();
+  assert.equal(new Swill.Swill__Launcher().launch(document), null, "no application launches");
+  assert.equal(Swill.Application.isRunning(), false);
+  const dialog = body.children[0];
+  assert.equal(dialog.tagName, "DIALOG");
+  assert.equal(dialog.open, true);
+  const [icon, text] = dialog.children;
+  assert.equal(icon.getAttribute("src"), "resources/swill/Stop.png");
+  assert.deepEqual([text.children[0].textContent, text.children[1].textContent],
+    ["The application failed to build", "app/application.rb:7: uninitialized constant Movies::StatusField"]);
+  assert.equal(dialog.querySelector(".actions"), null, "nothing to dismiss: the fix is in the source");
 });
 
 test("JavaScript lists extend Swill.List and override row hooks in camel case", () => {

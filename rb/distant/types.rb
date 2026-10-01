@@ -82,7 +82,8 @@ module Swill
         else
           members.map { |member| Types.normalize(member) }
         end
-        Type.new(@kind, members: normalized)
+        type = Type.new(@kind, members: normalized)
+        @kind == "enum" && defined?(T::Types::Base) ? Types.sorbet_enum(type) : type
       end
     end
 
@@ -103,6 +104,17 @@ module Swill
       # otherwise the result of parsing its string with `parse`.
       def normalize(value)
         return value if value.is_a?(Type)
+        return value.data_type if defined?(SorbetEnum) && value.is_a?(SorbetEnum)
+        return Type.new("primitive", name: "Boolean") if value.respond_to?(:name) && value.name == "T::Boolean"
+        if defined?(T::Types::Union) && value.is_a?(T::Types::Union)
+          members = value.types
+          non_nil = members.reject { |member| member.name == "NilClass" }
+          if non_nil.length != members.length
+            inner = non_nil.length == 1 ? normalize(non_nil.first) : Type.new("union", members: non_nil.map { |member| normalize(member) })
+            return Type.new("optional", members: [inner])
+          end
+          return Type.new("union", members: members.map { |member| normalize(member) })
+        end
 
         name = value.respond_to?(:name) ? value.name : value.to_s
         return Type.new("primitive", name: name) if PRIMITIVES.include?(name)
@@ -112,6 +124,34 @@ module Swill
         return Type.new("model", name: name) if value.is_a?(Class) || value.is_a?(Module)
 
         parse(name)
+      end
+
+      # Real Sorbet needs a runtime type to compose an enum with T.nilable.
+      def sorbet_enum(type)
+        unless const_defined?(:SorbetEnum, false)
+          const_set(:SorbetEnum, Class.new(T::Types::Base) do
+            attr_reader :data_type
+            def initialize(data_type)
+              @data_type = data_type
+            end
+
+            def name
+              "Swill::Distant::Enum[#{data_type.members.map { |member| member.name.inspect }.join(', ')}]"
+            end
+
+            def valid?(value)
+              (value.is_a?(String) || value.is_a?(Symbol)) && data_type.members.any? { |member| member.name == value.to_s }
+            end
+
+            def build_type; end
+            def build_lazy_fields; end
+
+            private def subtype_of_single?(other)
+              other.is_a?(self.class) && (data_type.members.map(&:name) - other.data_type.members.map(&:name)).empty?
+            end
+          end)
+        end
+        const_get(:SorbetEnum).new(type)
       end
 
       # Returns the `Type` spelled by `text`, the string form of a Sorbet

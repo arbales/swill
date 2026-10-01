@@ -12,7 +12,7 @@ module Swill
     class CLI
       USAGE = <<~TEXT
         Usage:
-          swill build [ENTRY] [--out FILE] [--minify] [--with-framework]
+          swill build [ENTRY] [--out FILE] [--minify] [--with-framework] [--show-errors]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill build --project swill.yml
           swill watch --project swill.yml
@@ -26,6 +26,11 @@ module Swill
         copies swill.js next to it for pages that do not load it from a CDN.
         With no ENTRY, swill.yml in the current directory selects a project
         workflow: data generation, client build, framework copy, and types.
+
+        --show-errors, which watch always uses, turns a compile error into a
+        page error while developing: the output is replaced by a script that
+        shows the error in the page, where the stale build would otherwise
+        keep running unnoticed. The command still fails.
 
         `types` writes the Sorbet artifacts an application needs to typecheck
         itself — the framework's RBI, the DOM's, the runtime's, its own
@@ -45,6 +50,7 @@ module Swill
           opts.on("--out FILE") { |file| options[:out] = file }
           opts.on("--minify") { options[:minify] = true }
           opts.on("--with-framework") { options[:framework] = true }
+          opts.on("--show-errors") { options[:show_errors] = true }
           opts.on("--interval SECONDS", Float) { |seconds| options[:interval] = seconds }
           opts.on("--into DIR") { |dir| options[:into] = dir }
           opts.on("--root DIR") { |dir| options[:root] = dir }
@@ -84,7 +90,12 @@ module Swill
       def build(entry, options)
         started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         build = Build.new(entry, out: options[:out], minify: options[:minify])
-        output = build.run
+        begin
+          output = build.run
+        rescue CompileError => error
+          write_failure(build.out, error.message) if options[:show_errors]
+          raise
+        end
         copy_framework(output) if options[:framework]
         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
         puts format("swill: built %s (%d sources, %.1fs)", output, build.sources.length, elapsed)
@@ -147,7 +158,7 @@ module Swill
           begin
             project = Project.new(path)
             stamps = project.snapshot
-            project.run
+            project.run(show_errors: true)
           rescue CompileError => error
             $stderr.puts "swill: #{error.message}"
           end
@@ -164,7 +175,7 @@ module Swill
     private
 
       def attempt(entry, options)
-        build(entry, options)
+        build(entry, {show_errors: true}.merge(options))
       rescue CompileError => error
         $stderr.puts "swill: #{error.message}"
         nil
@@ -177,12 +188,26 @@ module Swill
         []
       end
 
+      # The script written in place of a build that failed: it reports the
+      # error to the framework, which shows it instead of launching.
+      def write_failure(output, message)
+        FileUtils.mkdir_p(File.dirname(output))
+        File.write(output, <<~JS)
+          // swill build failed; this script shows the error in the page.
+          (function (message) {
+            var runtime = globalThis.Swill && globalThis.Swill.Runtime;
+            if (runtime && runtime.reportBuildFailure) runtime.reportBuildFailure(message);
+            else console.error("[Swill] The application failed to build: " + message);
+          })(#{message.to_json});
+        JS
+        FileUtils.rm_f("#{output}.map")
+      end
+
       def copy_framework(output)
         bundle = Build.framework_bundle
         raise CompileError, "framework bundle not built: #{bundle}" unless File.file?(bundle)
         FileUtils.cp(bundle, File.join(File.dirname(output), "swill.js"))
-        css = File.join(File.dirname(bundle), "swill.css")
-        FileUtils.cp(css, File.join(File.dirname(output), "swill.css")) if File.file?(css)
+        Resources.copy(File.join(File.dirname(bundle), "resources", "swill"), "swill", output)
         map = "#{bundle}.map"
         FileUtils.cp(map, File.join(File.dirname(output), "swill.js.map")) if File.file?(map)
       end

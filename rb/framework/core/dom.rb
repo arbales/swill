@@ -37,6 +37,39 @@ module Swill
       end)
     end
 
+    # Whether the element a key event targets handles the key itself, the way
+    # Cocoa's field editor keeps the keys that edit text. Such a key is
+    # finished: nothing in the chain sees it. A field keeps what moves within
+    # its text; Enter, Escape and Tab, and Up and Down in a single line, are
+    # commands for the chain. A composition in progress belongs to the input
+    # method whatever the key.
+    sig { params(event: KeyboardEvent).returns(T::Boolean) }
+    def self.handles_key?(event)
+      return true if event.isComposing
+      element = event.target
+      key = event.key
+      tag = element.tagName
+      if tag == "TEXTAREA" || element.isContentEditable
+        return key != "Escape" && key != "Tab"
+      end
+      if tag == "SELECT"
+        return key != "Enter" && key != "Escape" && key != "Tab"
+      end
+      return key == "Enter" || key == " " if tag == "BUTTON"
+      return false unless tag == "INPUT"
+      case element.type
+      when "button", "submit", "reset" then key == "Enter" || key == " "
+      when "checkbox" then key == " "
+      when "radio" then key == " " || key.start_with?("Arrow")
+      when "range" then key.start_with?("Arrow") || key == "Home" || key == "End"
+      when "", "text", "search", "email", "url", "tel", "password"
+        !["Enter", "Escape", "Tab", "ArrowUp", "ArrowDown"].include?(key)
+      else
+        # Number and date inputs step with Up and Down.
+        key != "Enter" && key != "Escape" && key != "Tab"
+      end
+    end
+
     # Owned elements matching +selector+, child controller roots excluded.
     sig { params(root: Element, selector: String).returns(T::Array[Element]) }
     def self.owned_matching(root, selector)

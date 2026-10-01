@@ -47,13 +47,15 @@ module Swill
         raise CompileError, "project: #{error.message}"
       end
 
-      def run
+      # +show_errors+ passes --show-errors to the client build, as watching does.
+      def run(show_errors: false)
         config.fetch("before_build", []).each { |argv| execute("before_build", argv) }
         swill("data generation", "data", "generate", config["server"], "--root", config.fetch("root", ".")) if config["server"]
         args = ["build", config.fetch("client")]
         args.concat(["--out", config["out"]]) if config["out"]
         args << "--with-framework" if config.fetch("framework", true)
         args << "--minify" if config.fetch("minify", false)
+        args << "--show-errors" if show_errors
         swill("client build", *args)
         unless config["types"] == false
           swill("type generation", "types", config.fetch("client"), "--into", types_root)
