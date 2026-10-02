@@ -745,6 +745,11 @@
     }
     return classes.get(name);
   }
+  function classIsA(name, ancestor) {
+    const klass = resolve(name);
+    const parent = resolve(ancestor);
+    return klass === parent || klass.prototype instanceof parent;
+  }
 
   // rb/runtime/arguments.mjs
   var KEYWORDS = /* @__PURE__ */ Symbol("Swill keywords");
@@ -914,7 +919,7 @@
     }
     const method = resolveMethod(declarations(object.constructor, "methods"), `${name}=`, 1);
     if (method) {
-      object[name] = value;
+      object[(method.js ?? name).replace(/=$/, "")] = value;
       return value;
     }
     throw new Error(`Unknown writer: ${name}`);
@@ -1109,6 +1114,13 @@
     for (const observer of [...warningObservers]) observer(message);
   }
   var warningObservers = /* @__PURE__ */ new Set();
+  var development = false;
+  function isDevelopment() {
+    return development;
+  }
+  function setDevelopment(flag) {
+    development = flag === true;
+  }
   var failedBuild = null;
   function reportBuildFailure(message) {
     console.error(`[Swill] The application failed to build: ${message}`);
@@ -1133,6 +1145,7 @@
     classWithSetting,
     identityStore,
     resolve,
+    classIsA,
     nameOf,
     // Values
     isTruthy,
@@ -1223,7 +1236,9 @@
     warn,
     observeWarnings,
     reportBuildFailure,
-    buildFailure
+    buildFailure,
+    isDevelopment,
+    setDevelopment
   };
 
   // build/ui/framework.mjs
@@ -1356,6 +1371,12 @@
         index++;
       }
     }
+    static focus(element) {
+      return element.focus({ preventScroll: true });
+    }
+    static focusRevealing(element) {
+      return element.focus();
+    }
     static eachOwned(root, include_root, callback) {
       if (include_root) callback(root, false);
       return Swill__DOM.eachChild(root, (child) => {
@@ -1421,6 +1442,8 @@
     }
   };
   Swill__DOM.eachChild = Swill__DOM_Functions.eachChild;
+  Swill__DOM.focus = Swill__DOM_Functions.focus;
+  Swill__DOM.focusRevealing = Swill__DOM_Functions.focusRevealing;
   Swill__DOM.eachOwned = Swill__DOM_Functions.eachOwned;
   Swill__DOM.isHandlesKey = Swill__DOM_Functions.isHandlesKey;
   Swill__DOM.ownedMatching = Swill__DOM_Functions.ownedMatching;
@@ -2383,6 +2406,18 @@
     acceptsFirstResponder() {
       return false;
     }
+    // The element this responder's focus lies within: a view's element, or a
+    // controller's view's. Nil here, for a responder with no place on the
+    // page.
+    focusRegion() {
+      return null;
+    }
+    // The element that carries this responder's focus: becoming first
+    // responder focuses it. Nil here; a view's is its first focusable
+    // element, and a controller's is its view's.
+    keyElement() {
+      return null;
+    }
     // Called as this responder takes focus. Answer false to refuse it.
     becomeFirstResponder() {
       return true;
@@ -2959,22 +2994,36 @@
       }
     }
     // Returns this view's element when it matches `focusable_selector`, else
-    // its default button, the descendant marked with the `default` class, as
-    // a window's default button takes the keyboard first, else its first
-    // focusable descendant. Returns nil when nothing within it is focusable.
+    // its first focusable descendant, or nil when nothing within it is
+    // focusable.
     firstFocusableElement() {
       if (this._element.matches(this.focusableSelector())) return this._element;
-      return this._element.querySelector(".default") || this._element.querySelector(this.focusableSelector());
+      return this._element.querySelector(this.focusableSelector());
     }
-    // Focuses `first_focusable_element` without scrolling, if there is one.
+    // The view's element, which its focus lies within.
+    focusRegion() {
+      return this._element;
+    }
+    // The element focus goes to when this view becomes first responder: its
+    // `first_focusable_element`.
+    keyElement() {
+      return this.firstFocusableElement();
+    }
+    // Focuses `key_element` without scrolling, if there is one.
     focusElement() {
-      let target = this.firstFocusableElement();
-      return target?.focus({ preventScroll: true });
+      let target = this.keyElement();
+      if (target) return Swill__DOM.focus(target);
     }
-    // Blurs `first_focusable_element`, if there is one.
-    blurElement() {
-      let target = this.firstFocusableElement();
-      return target?.blur();
+    // Blurs the focused element when it lies within this view, which may be
+    // a descendant other than `key_element`. Focus already inside
+    // +next_responder+, as when the browser moved it to a nested control, is
+    // left where it is: resigning never takes focus from the responder that
+    // follows.
+    blurElementWithNextResponder(next_responder) {
+      let active = this._element.ownerDocument.activeElement;
+      if (!Runtime.isTruthy(active && this._element.contains(active))) return;
+      let region = next_responder ? next_responder.focusRegion() : null;
+      if (!Runtime.isTruthy(region && region.contains(active))) return active.blur();
     }
     // Returns the controller rooted at this view, or else its superview. The
     // chain leaves the view tree at the first controller it meets.
@@ -2985,9 +3034,15 @@
     acceptsFirstResponder() {
       return true;
     }
-    // Focuses `first_focusable_element` and returns true.
+    // Focuses `key_element` and returns true.
     becomeFirstResponder() {
       this.focusElement();
+      return true;
+    }
+    // Blurs the focused element within this view and returns true.
+    resignFirstResponder(next_responder) {
+      if (!super.resignFirstResponder(next_responder)) return false;
+      this.blurElementWithNextResponder(next_responder);
       return true;
     }
     // :section: Accessibility
@@ -3011,6 +3066,12 @@
       if (identifier != null) {
         return this._element.setAttribute("aria-labelledby", identifier);
       }
+    }
+    blurElement() {
+      return _Swill__View.prototype.blurElementWithNextResponder.call(
+        this,
+        null
+      );
     }
   };
   var Swill__Control = class extends Swill__View {
@@ -3174,14 +3235,21 @@
         callback
       ));
     }
-    // Returns whether the region contains a focusable element, as `View`
-    // decides it. A controller with nothing to focus refuses first responder.
+    // Returns whether the region has a key element. A controller with nothing
+    // to focus refuses first responder.
     acceptsFirstResponder() {
-      return this._view.firstFocusableElement() != null;
+      return this.keyElement() != null;
     }
-    // Focuses the first focusable element in the region and returns true.
-    // Returns false, focusing nothing, when the current first responder
-    // refuses to resign.
+    // The element of this controller's view, which its focus lies within.
+    focusRegion() {
+      return this._view.element;
+    }
+    // The element focus goes to when this controller becomes first
+    // responder: its view's `key_element`.
+    keyElement() {
+      return this._view.keyElement();
+    }
+    // Focuses the region's key element and returns true.
     becomeFirstResponder() {
       if (!super.becomeFirstResponder()) {
         return false;
@@ -3190,12 +3258,12 @@
       this._view.focusElement();
       return true;
     }
-    // Blurs the region's focused element and returns true. Override to return
-    // false, which refuses the change and keeps this controller first
-    // responder.
+    // Blurs the focused element within the region and returns true. Override
+    // to return false, which refuses the change and keeps this controller
+    // first responder.
     resignFirstResponder(next_responder) {
       if (!super.resignFirstResponder(next_responder)) return false;
-      this._view.blurElement();
+      this._view.blurElementWithNextResponder(next_responder);
       return true;
     }
     // :section: Loading and Unloading
@@ -3747,6 +3815,7 @@
     }
     static walk(element, owner, controllers) {
       let view = element.__swill_view__;
+      if (element.hasAttribute("klass")) this.classify(element);
       if (Runtime.isTruthy(!view && this.isManaged(element))) {
         view = this.createView(element);
       }
@@ -3769,6 +3838,21 @@
         element,
         (child) => this.walk(child, next_owner, controllers)
       );
+    }
+    static classify(element) {
+      let name = Runtime.must(element.getAttribute("klass"));
+      if (Runtime.isTruthy(Runtime.classIsA(name, "Swill::Controller"))) {
+        if (element.hasAttribute("controller")) {
+          throw new Error(`${name} conflicts with controller on the same element`);
+        }
+        ;
+        element.removeAttribute("klass");
+        return element.setAttribute("controller", name);
+      } else if (!Runtime.isTruthy(Runtime.classIsA(name, "Swill::View"))) {
+        return (() => {
+          throw new Error(`${name} is not a Swill::View or Swill::Controller`);
+        })();
+      }
     }
     static isManaged(element) {
       if (element.nodeType !== 1) return false;
@@ -3826,6 +3910,7 @@
   Swill__Awakening.finish = Swill__Awakening_Functions.finish;
   Swill__Awakening.load = Swill__Awakening_Functions.load;
   Swill__Awakening.walk = Swill__Awakening_Functions.walk;
+  Swill__Awakening.classify = Swill__Awakening_Functions.classify;
   Swill__Awakening.isManaged = Swill__Awakening_Functions.isManaged;
   Swill__Awakening.createView = Swill__Awakening_Functions.createView;
   Swill__Awakening.controllersWithin = Swill__Awakening_Functions.controllersWithin;
@@ -3950,10 +4035,11 @@
       this._modal = modal;
       this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
       this._content_name = Runtime.cast(null, "T.nilable(String)");
-      this._saved_first_responder = Runtime.cast(
+      this._first_responder = Runtime.cast(
         null,
         "T.nilable(Swill::Responder)"
       );
+      this._focused_element = null;
       this._restoration_disposers = Runtime.cast(
         [],
         "T::Array[T.proc.void]"
@@ -4006,12 +4092,71 @@
     get closed() {
       return this._closed;
     }
-    get savedFirstResponder() {
-      return this._saved_first_responder;
+    // The responder that has the keyboard while this window is key, or nil
+    // when the window itself (the application, for the page) has it. Set
+    // through Application#make_first_responder.
+    get firstResponder() {
+      return this._first_responder;
     }
-    saveFirstResponder(responder) {
-      this._saved_first_responder = responder;
-      return this._saved_first_responder;
+    set firstResponder(first_responder) {
+      this._first_responder = first_responder;
+      return this._first_responder;
+    }
+    // The element that last had focus in this window, within or beside its
+    // first responder's key element; the keyboard goes back to it when the
+    // window is key again.
+    get focusedElement() {
+      return this._focused_element;
+    }
+    set focusedElement(focused_element) {
+      this._focused_element = focused_element;
+      return this._focused_element;
+    }
+    // :section: Key Views
+    // The elements Tab moves among within the window.
+    // The elements Tab stops at within the window, in document order: those
+    // that are focusable and enabled, not taken out of the order with
+    // `tabindex="-1"`, not hidden or inert, and not inside one of the
+    // +excluded+ roots (other windows the page holds).
+    keyViews(excluded) {
+      let views = Runtime.cast([], "T::Array[Element]");
+      this._root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach((element) => {
+        if (this.isKeyView(element, excluded)) return Runtime.append(views, element);
+      });
+      return views;
+    }
+    // Whether +element+ is one of the window's key views.
+    isKeyView(element, excluded) {
+      if (element.disabled || element.getAttribute("tabindex") === "-1") {
+        return false;
+      }
+      ;
+      if (element.closest("[hidden]") || element.closest("[inert]")) return false;
+      return !excluded.some((root) => root.contains(element));
+    }
+    // Where the keyboard goes as the window opens: an element marked
+    // `autofocus`, else the default button, else the first key view. Nil when
+    // the window has no key view.
+    initialFocusElement(excluded) {
+      return this.firstKeyView("[autofocus]", excluded) || this.defaultButton(excluded) || this.keyViews(excluded)[0];
+    }
+    // The window's default button, the one marked with the `default` class,
+    // which Enter presses from anywhere in the window. Nil when it has none.
+    defaultButton(excluded) {
+      return this.firstKeyView("button.default", excluded);
+    }
+    firstKeyView(selector, excluded) {
+      let found = null;
+      this._root.querySelectorAll(selector).forEach((element) => {
+        if (Runtime.isTruthy(found == null && this.isKeyView(
+          element,
+          excluded
+        ))) {
+          found = element;
+          return found;
+        }
+      });
+      return found;
     }
     assignContent(content_name, controller) {
       this._content_name = content_name;
@@ -4079,10 +4224,9 @@
       this._controllers = Runtime.cast([], "T::Array[Controller]");
       this._templates = Runtime.cast({}, "T::Hash[String, Element]");
       this._captured = Runtime.cast({}, "T::Hash[String, Element]");
-      this._first_responder = Runtime.cast(
-        null,
-        "T.nilable(Swill::Responder)"
-      );
+      this._page = Runtime.cast(null, "T.nilable(Swill::Window)");
+      this._key_windows = Runtime.cast([], "T::Array[Window]");
+      this._changing_windows = Runtime.cast(false, "T::Boolean");
       this._posted_first_responder = Runtime.cast(
         null,
         "T.nilable(Swill::Responder)"
@@ -4116,6 +4260,10 @@
     // alerts as well as in the console. Opt in with a `development` attribute
     // on the application's element, `Swill.start({development: true})`, or by
     // setting this before launch. False by default. See ProblemReporter.
+    // Code in an in_development block runs only while this is true.
+    developmentDidChange(_previous, development2) {
+      return Runtime.setDevelopment(development2);
+    }
     // Starts the application at +root+: awakens the markup beneath it,
     // restores window content from the URL fragment, and begins watching for
     // content added later. One application runs per page.
@@ -4132,12 +4280,15 @@
       let problems = new Swill__ProblemReporter(root.ownerDocument.defaultView);
       if (this.development) problems.start();
       this._problems = problems;
+      let page = new Swill__Window("", root);
+      this._page = page;
+      this._key_windows = [page];
       this._on_focus = (event) => this.focusIn(event);
       this._on_focus_out = (event) => this.focusOut(event);
-      this._on_key_down = (event) => this.firstResponder().keyDown(event);
+      this._on_key_down = (event) => this.keyDownInWindow(event);
       this._on_key_up = (event) => this.firstResponder().keyUp(event);
-      root.addEventListener("focusin", this._on_focus);
-      root.addEventListener("focusout", this._on_focus_out);
+      root.addEventListener("focusin", this._on_focus, true);
+      root.addEventListener("focusout", this._on_focus_out, true);
       root.addEventListener("keydown", this._on_key_down);
       root.addEventListener("keyup", this._on_key_up);
       this._fragments = new Swill__URLFragment(root.ownerDocument.defaultView);
@@ -4213,11 +4364,14 @@
       this._controllers.forEach((controller) => Runtime.send(controller, "unload"));
       Swill__Awakening.detach(this._root);
       this._controllers = [];
-      this._root.removeEventListener("focusin", this._on_focus);
-      this._root.removeEventListener("focusout", this._on_focus_out);
+      this._root.removeEventListener("focusin", this._on_focus, true);
+      this._root.removeEventListener("focusout", this._on_focus_out, true);
       this._root.removeEventListener("keydown", this._on_key_down);
       this._root.removeEventListener("keyup", this._on_key_up);
       this.assignFirstResponder(null);
+      this._key_windows = [];
+      this._page = null;
+      Runtime.setDevelopment(false);
       return _Swill__Application.terminated(this);
     }
     // The application is running and its markup is awake.
@@ -4285,8 +4439,9 @@
       return controller;
     }
     // Present a template as a window appended to the root. A <dialog> root is
-    // shown. Dismiss it with dismiss(controller); the window's closed promise
-    // resolves then.
+    // shown. The window becomes key, and the keyboard goes to its initial
+    // first responder; see Window#initial_focus_element. Dismiss it with
+    // dismiss(controller); the window's closed promise resolves then.
     showWindow(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [{ name: "name", kind: "req" }],
@@ -4299,15 +4454,17 @@
       if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
       let node = this.cloneWindowContent(name);
       into.appendChild(node);
+      let window = this.beginWindow(name, node, false);
       let controllers = Swill__Awakening.awaken(node);
       let controller = Swill__View.controllerFor(node);
       if (!controller) {
+        this._key_windows = this._key_windows.filter((candidate) => !(candidate === window));
         Swill__Awakening.detach(node);
         node.remove();
         throw new Error(`Window root has no controller: ${name}`);
       }
       ;
-      return this.openWindow(name, node, controller, controllers, false);
+      return this.openWindow(window, controller, controllers);
     }
     // Present a controller built in code as a window named +name+, its view
     // appended to the root, as a template's would be. The controller has
@@ -4334,18 +4491,25 @@
       let node = controller.view.element;
       if (node.isConnected) throw new Error(`Window is already presented: ${name}`);
       into.appendChild(node);
+      let window = this.beginWindow(name, node, modal);
       let controllers = Swill__Awakening.awaken(node);
       Swill__Awakening.load(controller);
       return this.openWindow(
-        name,
-        node,
+        window,
         controller,
-        [controller].concat(controllers),
-        modal
+        [controller].concat(controllers)
       );
     }
-    openWindow(name, node, controller, controllers, modal) {
+    // A window about to be presented is key before its content awakens, so
+    // content that takes the keyboard as it loads takes it in this window,
+    // not the page.
+    beginWindow(name, node, modal) {
       let window = new Swill__Window(name, node, Runtime.keywordArguments({ modal }));
+      Runtime.append(this._key_windows, window);
+      return window;
+    }
+    openWindow(window, controller, controllers) {
+      let node = window.root;
       if (Runtime.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
         this._window_titles++;
         window.showTitle(
@@ -4355,19 +4519,22 @@
       }
       ;
       controller.view.updateAccessibility();
+      window.assignContent(window.name, controller);
       if (node.tagName === "DIALOG") {
-        if (modal) {
-          node.showModal();
-          node.addEventListener("cancel", (event) => event.preventDefault());
-        } else {
-          node.show();
-        }
-        ;
+        this.changingWindows(Runtime.blockArgument(() => {
+          if (window.isModal()) {
+            node.showModal();
+            return node.addEventListener(
+              "cancel",
+              (event) => event.preventDefault()
+            );
+          } else {
+            return node.show();
+          }
+        }));
         node.getBoundingClientRect();
       }
       ;
-      window.assignContent(name, controller);
-      window.saveFirstResponder(this.firstResponder());
       Runtime.append(this._windows, window);
       this.restoreWindowState(
         window,
@@ -4375,11 +4542,51 @@
       );
       this.warnUnrestored(controllers);
       Swill__Awakening.finish(controllers);
-      if (!this.isResponderWithin(this.firstResponder(), node)) {
+      this.takeInitialFirstResponder(window, controller);
+      return window;
+    }
+    // The keyboard goes to the window's initial first responder, unless its
+    // content took it while loading; either way it is focused now that the
+    // window is open, since a browser ignores focus in a closed dialog. With
+    // nothing to focus, the controller is offered it and refuses.
+    takeInitialFirstResponder(window, controller) {
+      let chosen = window.firstResponder;
+      let element = chosen ? chosen.keyElement() : window.initialFocusElement(this.excludedRoots(window));
+      if (element) {
+        this.focusInWindow(element);
+      } else if (!chosen) {
         this.makeFirstResponder(controller);
       }
       ;
-      return window;
+      this.postFirstResponderChange();
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+        return this.verifyFocus("a window opened");
+      }
+    }
+    // Focuses +element+, or, when it already has focus (a dialog's own
+    // focusing steps may have chosen it), reconciles the first responder
+    // with it as the focus event would have.
+    focusInWindow(element) {
+      return element.ownerDocument.activeElement === element ? this.syncFirstResponder(
+        element,
+        null
+      ) : Swill__DOM.focus(element);
+    }
+    // Runs +block+ while windows open or close. Focus the browser moves then,
+    // by a dialog's focusing steps or its return of focus on closing, is not
+    // the user's; the framework places the keyboard itself afterward.
+    changingWindows(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(
+        __swill_arguments,
+        { positional: [], keywords: [], keywordRest: null, block: "block" }
+      );
+      let block = Runtime.argument(__swill_bound, "block");
+      this._changing_windows = true;
+      try {
+        return block();
+      } finally {
+        this._changing_windows = false;
+      }
     }
     // The page's theme link, or nil when the page links none.
     themeLink(document2) {
@@ -4435,19 +4642,39 @@
         return Runtime.warn(`${`${name} declares restorable ${paths}, but only a window's content controller is restored; `}declare it there as a path through this controller`);
       });
     }
-    // Closes the window +controller+ belongs to, restoring the first responder
-    // it displaced.
+    // Closes the window +controller+ belongs to. The window that was key
+    // before it is key again, and its first responder, kept all along, takes
+    // the keyboard back.
     dismiss(controller) {
       let window = this.windowContaining(controller);
       if (!window) return false;
       this._windows = this._windows.filter((candidate) => candidate !== window);
-      let saved = window.savedFirstResponder;
-      window.dismiss();
-      if (Runtime.isTruthy(saved && this.isAttached(saved))) {
-        this.makeFirstResponder(saved);
+      this._key_windows = this._key_windows.filter((candidate) => candidate !== window);
+      this.changingWindows(Runtime.blockArgument(() => window.dismiss()));
+      this.refocusKeyWindow();
+      return true;
+    }
+    // The key window's first responder takes focus again, as an NSWindow's
+    // does when the window becomes key, without becoming first responder
+    // anew: at the element within it that last had focus, or else at its key
+    // element.
+    refocusKeyWindow() {
+      let responder = this.firstResponder();
+      let owner = this.responderElement(responder);
+      let window = this.keyWindow();
+      let last = window ? window.focusedElement : null;
+      let element = Runtime.isTruthy(Runtime.logicalAnd(
+        Runtime.logicalAnd(last && owner, () => owner.contains(last)),
+        () => this._root.contains(last)
+      )) ? last : responder.keyElement();
+      if (Runtime.isTruthy(element && this._root.contains(element))) {
+        this.focusInWindow(element);
       }
       ;
-      return true;
+      this.postFirstResponderChange();
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+        return this.verifyFocus("a window closed");
+      }
     }
     // The window with +name+, or nil.
     windowNamed(name) {
@@ -4457,32 +4684,78 @@
     isWindowContent(name) {
       return (this._captured[name] || this.windowTemplate(name)) != null;
     }
-    // ---- first responder ----
-    // The application itself when nothing more specific holds it.
-    firstResponder() {
-      return this._first_responder || this;
+    // ---- key window and first responder ----
+    // The page, the window everything else is presented over, as Cocoa's main
+    // window is the document a panel serves. Its first responder is kept
+    // while other windows are key. Nil before launch.
+    mainWindow() {
+      return this._page;
     }
-    // Cocoa's makeFirstResponder: a responder that does not accept is refused
-    // up front; the current first responder may refuse to resign; a responder
-    // that refuses to become leaves the application as first responder.
+    // The page and the presented windows, in the order they were last key.
+    keyWindows() {
+      return this._key_windows;
+    }
+    // The window that has the keyboard: the most recently presented window
+    // still open, or the window focus last moved into; the page when none
+    // is presented. Nil before launch.
+    keyWindow() {
+      return this._key_windows.at(-1);
+    }
+    // The key window's first responder, which keys go to; the application
+    // itself when nothing more specific holds it.
+    firstResponder() {
+      let window = this.keyWindow();
+      let responder = window ? window.firstResponder : null;
+      return responder || this;
+    }
+    // Cocoa's makeFirstResponder, on the window +responder+ belongs to: a
+    // responder that does not accept is refused up front; that window's
+    // current first responder may refuse to resign; a responder that refuses
+    // to become leaves the window with none, and the application holds it.
+    // In the key window, becoming focuses the responder's key element; a
+    // window that is not key keeps the responder for when it is, as making a
+    // first responder does not make its window key. Nil gives the key
+    // window's first responder up to the application.
+    //
+    // The first responder changes in four places only: here, when the
+    // browser moves focus (sync_first_responder), when focus leaves the page
+    // (focus_left), and when its region is torn down
+    // (release_first_responder).
     makeFirstResponder(responder) {
       if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
         return false;
       }
       ;
-      let current = this.firstResponder();
+      let window = responder ? this.windowOf(responder) : this.keyWindow();
+      if (!window) return false;
+      let current = Runtime.cast(
+        window.firstResponder || this,
+        "Swill::Responder"
+      );
       if (responder === current) return true;
       if (!current.resignFirstResponder(responder)) return false;
-      this._first_responder = null;
-      if (Runtime.isTruthy(responder && responder.becomeFirstResponder())) {
-        if (this._first_responder == null) this._first_responder = responder;
+      window.firstResponder = null;
+      if (window !== this.keyWindow()) {
+        window.firstResponder = responder;
+      } else if (Runtime.isTruthy(responder && responder.becomeFirstResponder())) {
+        if (window.firstResponder == null) window.firstResponder = responder;
       }
       ;
       this.postFirstResponderChange();
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+        this.verifyFocus("make_first_responder");
+      }
+      ;
       return true;
     }
+    // Gives the key window's keyboard to +responder+ without asking anyone,
+    // for the framework's own bookkeeping.
     assignFirstResponder(responder) {
-      this._first_responder = responder;
+      let window = this.keyWindow();
+      if (window) return this.assignWindowFirstResponder(window, responder);
+    }
+    assignWindowFirstResponder(window, responder) {
+      window.firstResponder = responder;
       return this.postFirstResponderChange();
     }
     // Every change of first responder is posted once as
@@ -4491,27 +4764,76 @@
     // without polling. Focus moving during become may already have posted
     // the same responder; the last one posted is remembered for that.
     postFirstResponderChange() {
-      if (this._first_responder === this._posted_first_responder) return;
-      this._posted_first_responder = this._first_responder;
-      if (this.development) {
-        console.log(`[Swill] first responder: ${this.describeResponder(this.firstResponder())}`);
-      }
-      ;
+      let window = this.keyWindow();
+      let responder = window ? window.firstResponder : null;
+      if (responder === this._posted_first_responder) return;
+      this._posted_first_responder = responder;
       return Swill__NotificationCenter.default().post(
         "first_responder_did_change",
         this,
-        this._first_responder
+        responder
       );
     }
     // A responder's class, and for a view or controller the element it is
-    // rooted at, as the first responder log names it.
+    // rooted at, as the development focus checks name it.
     describeResponder(responder) {
       let name = Runtime.logicalOr(
         Runtime.cast(Runtime.nameOf(responder), "T.nilable(String)"),
         () => "a responder"
       );
       let element = this.responderElement(responder);
-      if (!element) return name;
+      return element ? `${name} ${this.describeElement(element)}` : name;
+    }
+    // The window +responder+ belongs to: the innermost window holding its
+    // element, or the key window for one with no element.
+    windowOf(responder) {
+      let element = this.responderElement(responder);
+      return element ? this.windowHolding(element) : this.keyWindow();
+    }
+    // The innermost window holding +element+: a presented window whose root
+    // contains it, else the page.
+    windowHolding(element) {
+      return Runtime.reverse(this.keyWindows()).find((window) => window.root.contains(element));
+    }
+    // The roots of the presented windows other than +window+. The page's
+    // root holds them all, but their controls are not the page's key views.
+    excludedRoots(window) {
+      return this.keyWindows().filter((other) => Runtime.isTruthy(other !== window && other !== this._page)).map((__swill_item) => __swill_item.root);
+    }
+    keyDownInWindow(event) {
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+        this.verifyFocus("a key");
+      }
+      ;
+      return this.firstResponder().keyDown(event);
+    }
+    // In development, checks that the keyboard is where the first responder
+    // says: focus outside the page is fine (the first responder waits for
+    // it), but focus inside it must be in the key window and within the key
+    // window's first responder, which must be attached and accept. A
+    // mismatch is a framework bug or a focus moved behind the framework's
+    // back, and is reported as a warning naming +moment+.
+    verifyFocus(moment) {
+      let window = this.keyWindow();
+      let active = this._root.ownerDocument.activeElement;
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
+        Runtime.logicalAnd(
+          window && active,
+          () => this._root.contains(active)
+        ),
+        () => active !== this._root
+      ))) return;
+      let responder = this.firstResponder();
+      let owner = this.responderElement(responder);
+      let problem = this.windowHolding(active) !== window ? `focus is in another window than the key window ${this.windowLabel(window)}` : Runtime.isTruthy(responder !== this && !this.isAttached(responder)) ? "the first responder is no longer in the page" : Runtime.isTruthy(responder !== this && !responder.acceptsFirstResponder()) ? "the first responder does not accept being first responder" : Runtime.isTruthy(owner && !owner.contains(active)) ? "the focused element is outside the first responder" : null;
+      if (!Runtime.isTruthy(problem)) return;
+      let focused = this.describeElement(active);
+      return Runtime.warn(`Focus check after ${moment}: ${problem}. First responder: ${this.describeResponder(responder)}; focused: ${focused}.`);
+    }
+    windowLabel(window) {
+      return window === this._page ? "(the page)" : `"${window.name}"`;
+    }
+    describeElement(element) {
       let tag = Runtime.downcase(element.tagName);
       ["outlet", "controller", "klass", "data-action", "class"].forEach((attribute) => {
         let value = element.getAttribute(attribute);
@@ -4520,20 +4842,31 @@
           return tag;
         }
       });
-      return `${name} <${tag}>`;
+      return `<${tag}>`;
     }
     focusIn(event) {
-      let window = this.modalWindow();
-      if (Runtime.isTruthy(window && event.target === window.root)) {
-        let target = Runtime.nilable(Swill__View.of(window.root)?.firstFocusableElement());
-        if (Runtime.isTruthy(target && target !== window.root)) return target.focus();
+      if (this._changing_windows) return;
+      let target = event.target;
+      let window = this.windowHolding(target);
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        window && window !== this._page,
+        () => window.root === target
+      ))) {
+        let previous = event.relatedTarget;
+        let back = Runtime.isTruthy(Runtime.logicalAnd(
+          previous && previous !== target,
+          () => target.contains(previous)
+        )) ? previous : null;
+        back ||= window.initialFocusElement(this.excludedRoots(window));
+        if (back) return Swill__DOM.focus(back);
       }
       ;
-      return this.syncFirstResponder(event.target, event.relatedTarget);
+      return this.syncFirstResponder(target, event.relatedTarget);
     }
-    // Tab in a modal window moves through its key view loop: the window's
-    // focusable controls in document order, wrapping at either end, as an
-    // NSWindow's does. Elsewhere the browser moves focus on.
+    // Tab moves through the key window's key view loop: its key views in
+    // document order, wrapping at either end, as an NSWindow's does. The
+    // browser's own Tab is prevented. A responder that takes insert_tab
+    // without calling super keeps Tab for itself.
     insertTab(event) {
       if (!this.selectKeyView(event, 1)) return super.insertTab(event);
     }
@@ -4541,31 +4874,41 @@
     insertBacktab(event) {
       if (!this.selectKeyView(event, -1)) return super.insertBacktab(event);
     }
-    // The topmost modal window, or nil when none is open.
-    modalWindow() {
-      return Runtime.reverse(this._windows).find((__swill_item) => __swill_item.isModal());
-    }
-    selectKeyView(event, delta) {
-      let window = this.modalWindow();
-      if (!window) return false;
-      let views = this.keyViews(window.root);
-      if (Runtime.isEmpty(views)) return false;
-      let current = Runtime.indexOf(views, event.target);
-      let index = current == null ? (() => {
-        return delta > 0 ? 0 : views.length - 1;
-      })() : Runtime.modulo(Runtime.must(current) + delta, views.length);
+    // Enter that nothing else took presses the key window's default button,
+    // the one marked with the `default` class.
+    insertNewline(event) {
+      let window = this.keyWindow();
+      let button = window ? window.defaultButton(this.excludedRoots(window)) : null;
+      if (!button) return super.insertNewline(event);
       event.preventDefault();
-      Runtime.must(views[index]).focus();
-      return true;
+      return button.click();
     }
-    // The elements Tab stops at within +root+, in document order.
-    keyViews(root) {
-      let views = Runtime.cast([], "T::Array[Element]");
-      root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach((element) => {
-        let skipped = element.disabled || element.getAttribute("tabindex") === "-1" || element.closest("[hidden]");
-        if (!Runtime.isTruthy(skipped)) return Runtime.append(views, element);
-      });
-      return views;
+    // Focuses the key view +delta+ places from the event's target in the key
+    // window, wrapping; one focus cannot take (hidden by a style, say) is
+    // passed over.
+    selectKeyView(event, delta) {
+      let window = this.keyWindow();
+      if (!window) return false;
+      let views = window.keyViews(this.excludedRoots(window));
+      if (Runtime.isEmpty(views)) return false;
+      event.preventDefault();
+      let found = Runtime.indexOf(views, event.target);
+      let index = Runtime.cast(
+        found != null ? found : (() => {
+          return delta > 0 ? -1 : 0;
+        })(),
+        "Integer"
+      );
+      let attempts = 0;
+      while (attempts < views.length) {
+        index = Runtime.modulo(index + delta, views.length);
+        let candidate = Runtime.must(views[index]);
+        Swill__DOM.focusRevealing(candidate);
+        if (candidate.ownerDocument.activeElement === candidate) return true;
+        attempts++;
+      }
+      ;
+      return true;
     }
     focusOut(event) {
       return this.focusLeft(event.relatedTarget);
@@ -4575,8 +4918,18 @@
     // make_first_responder refuses it, and so is a change the current first
     // responder will not resign for; either way focus goes back.
     syncFirstResponder(target, previous) {
+      let window = this.windowHolding(target);
+      if (!window) return;
+      if (window !== this.keyWindow()) {
+        this._key_windows = this._key_windows.filter((other) => other !== window).concat([window]);
+      }
+      ;
+      window.focusedElement = target;
       let responder = this.responderFor(target);
-      let current = this.firstResponder();
+      let current = Runtime.cast(
+        window.firstResponder || this,
+        "Swill::Responder"
+      );
       if (responder === current) return;
       if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
         if (this.responderElement(current)) {
@@ -4593,7 +4946,10 @@
         return;
       }
       ;
-      return this.assignFirstResponder(responder);
+      this.assignWindowFirstResponder(window, responder);
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+        return this.verifyFocus("focus moved");
+      }
     }
     // Focus moved to another part of the page: the first responder falls
     // back here. A null destination (the browser's own chrome, or dead space
@@ -4604,12 +4960,17 @@
         return this.assignFirstResponder(null);
       }
     }
-    // A first responder inside a region being torn down falls back here.
+    // A window's first responder inside a region being torn down falls back
+    // to the window, so the application holds it.
     releaseFirstResponder(element) {
-      let owner = this.responderElement(this.firstResponder());
-      if (Runtime.isTruthy(owner && (owner === element || element.contains(owner)))) {
-        return this.assignFirstResponder(null);
-      }
+      this.keyWindows().forEach((window) => {
+        let responder = window.firstResponder;
+        let owner = responder ? this.responderElement(responder) : null;
+        if (Runtime.isTruthy(owner && (owner === element || element.contains(owner)))) {
+          return window.firstResponder = null;
+        }
+      });
+      return this.postFirstResponderChange();
     }
     // The responder for a DOM location: the first managed view above it,
     // which yields its controller for a controller root and itself otherwise.
@@ -4620,21 +4981,13 @@
       return this.responderFor(element.parentElement);
     }
     responderElement(responder) {
-      if (responder instanceof Swill__Controller) {
-        return Runtime.cast(responder, "Swill::Controller").view.element;
-      }
-      ;
-      if (responder instanceof Swill__View) {
-        return Runtime.cast(responder, "Swill::View").element;
-      }
-      ;
-      return null;
+      return responder.focusRegion();
     }
     restoreFocus(responder, previous) {
       let owner = this.responderElement(responder);
       if (!owner) return;
-      let target = Runtime.isTruthy(previous && owner.contains(previous)) ? previous : Runtime.must(owner.__swill_view__).firstFocusableElement();
-      if (target) return target.focus();
+      let target = Runtime.isTruthy(previous && owner.contains(previous)) ? previous : responder.keyElement();
+      if (target) return Swill__DOM.focus(target);
     }
     // ---- window templates, containers, and content ----
     // <template for="window" name="x"> anywhere, or <template name="x"> directly
@@ -6418,6 +6771,14 @@
             "arity": 0,
             "js": "acceptsFirstResponder"
           },
+          "focus_region": {
+            "arity": 0,
+            "js": "focusRegion"
+          },
+          "key_element": {
+            "arity": 0,
+            "js": "keyElement"
+          },
           "become_first_responder": {
             "arity": 0,
             "js": "becomeFirstResponder"
@@ -6676,6 +7037,14 @@
             "arity": 0,
             "js": "firstFocusableElement"
           },
+          "focus_region": {
+            "arity": 0,
+            "js": "focusRegion"
+          },
+          "key_element": {
+            "arity": 0,
+            "js": "keyElement"
+          },
           "focus_element": {
             "arity": 0,
             "js": "focusElement"
@@ -6683,6 +7052,11 @@
           "blur_element": {
             "arity": 0,
             "js": "blurElement"
+          },
+          "blur_element_with_next_responder": {
+            "arity": 1,
+            "js": "blurElementWithNextResponder",
+            "family": "blur_element"
           },
           "next_responder": {
             "arity": 0,
@@ -6695,6 +7069,10 @@
           "become_first_responder": {
             "arity": 0,
             "js": "becomeFirstResponder"
+          },
+          "resign_first_responder": {
+            "arity": 1,
+            "js": "resignFirstResponder"
           },
           "update_accessibility": {
             "arity": 0,
@@ -6820,6 +7198,14 @@
           "accepts_first_responder?": {
             "arity": 0,
             "js": "acceptsFirstResponder"
+          },
+          "focus_region": {
+            "arity": 0,
+            "js": "focusRegion"
+          },
+          "key_element": {
+            "arity": 0,
+            "js": "keyElement"
           },
           "become_first_responder": {
             "arity": 0,
@@ -6950,14 +7336,43 @@
             "arity": 0,
             "accessor": true
           },
-          "saved_first_responder": {
+          "first_responder": {
             "arity": 0,
-            "js": "savedFirstResponder",
+            "js": "firstResponder",
             "accessor": true
           },
-          "save_first_responder": {
+          "first_responder=": {
             "arity": 1,
-            "js": "saveFirstResponder"
+            "js": "firstResponder="
+          },
+          "focused_element": {
+            "arity": 0,
+            "js": "focusedElement",
+            "accessor": true
+          },
+          "focused_element=": {
+            "arity": 1,
+            "js": "focusedElement="
+          },
+          "key_views": {
+            "arity": 1,
+            "js": "keyViews"
+          },
+          "key_view?": {
+            "arity": 2,
+            "js": "isKeyView"
+          },
+          "initial_focus_element": {
+            "arity": 1,
+            "js": "initialFocusElement"
+          },
+          "default_button": {
+            "arity": 1,
+            "js": "defaultButton"
+          },
+          "first_key_view": {
+            "arity": 2,
+            "js": "firstKeyView"
           },
           "assign_content": {
             "arity": 2,
@@ -7002,6 +7417,10 @@
         methods: {
           "initialize": {
             "arity": 0
+          },
+          "development_did_change": {
+            "arity": 2,
+            "js": "developmentDidChange"
           },
           "launch": {
             "arity": 1
@@ -7054,9 +7473,27 @@
             "maximum": 2,
             "js": "presentWindow"
           },
+          "begin_window": {
+            "arity": 3,
+            "js": "beginWindow"
+          },
           "open_window": {
-            "arity": 5,
+            "arity": 3,
             "js": "openWindow"
+          },
+          "take_initial_first_responder": {
+            "arity": 2,
+            "js": "takeInitialFirstResponder"
+          },
+          "focus_in_window": {
+            "arity": 1,
+            "js": "focusInWindow"
+          },
+          "changing_windows": {
+            "arity": 0,
+            "minimum": 0,
+            "maximum": 0,
+            "js": "changingWindows"
           },
           "theme_link": {
             "arity": 1,
@@ -7077,6 +7514,10 @@
           "dismiss": {
             "arity": 1
           },
+          "refocus_key_window": {
+            "arity": 0,
+            "js": "refocusKeyWindow"
+          },
           "window_named": {
             "arity": 1,
             "js": "windowNamed"
@@ -7084,6 +7525,18 @@
           "window_content?": {
             "arity": 1,
             "js": "isWindowContent"
+          },
+          "main_window": {
+            "arity": 0,
+            "js": "mainWindow"
+          },
+          "key_windows": {
+            "arity": 0,
+            "js": "keyWindows"
+          },
+          "key_window": {
+            "arity": 0,
+            "js": "keyWindow"
           },
           "first_responder": {
             "arity": 0,
@@ -7097,6 +7550,10 @@
             "arity": 1,
             "js": "assignFirstResponder"
           },
+          "assign_window_first_responder": {
+            "arity": 2,
+            "js": "assignWindowFirstResponder"
+          },
           "post_first_responder_change": {
             "arity": 0,
             "js": "postFirstResponderChange"
@@ -7104,6 +7561,34 @@
           "describe_responder": {
             "arity": 1,
             "js": "describeResponder"
+          },
+          "window_of": {
+            "arity": 1,
+            "js": "windowOf"
+          },
+          "window_holding": {
+            "arity": 1,
+            "js": "windowHolding"
+          },
+          "excluded_roots": {
+            "arity": 1,
+            "js": "excludedRoots"
+          },
+          "key_down_in_window": {
+            "arity": 1,
+            "js": "keyDownInWindow"
+          },
+          "verify_focus": {
+            "arity": 1,
+            "js": "verifyFocus"
+          },
+          "window_label": {
+            "arity": 1,
+            "js": "windowLabel"
+          },
+          "describe_element": {
+            "arity": 1,
+            "js": "describeElement"
           },
           "focus_in": {
             "arity": 1,
@@ -7117,17 +7602,13 @@
             "arity": 1,
             "js": "insertBacktab"
           },
-          "modal_window": {
-            "arity": 0,
-            "js": "modalWindow"
+          "insert_newline": {
+            "arity": 1,
+            "js": "insertNewline"
           },
           "select_key_view": {
             "arity": 2,
             "js": "selectKeyView"
-          },
-          "key_views": {
-            "arity": 1,
-            "js": "keyViews"
           },
           "focus_out": {
             "arity": 1,

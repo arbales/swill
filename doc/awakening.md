@@ -141,8 +141,11 @@ content that is visible and awakened at launch.
 a `<dialog>`. `Application#present_window(controller, name)` presents a
 controller whose view was built in code instead. The controller attaches the
 element it built, and anything managed inside it awakens before the controller
-loads, as a template's would. Dismissing either kind restores the first
-responder it displaced.
+loads, as a template's would. A presented window is key while it is open, and
+pass `modal: true` to `present_window` to make the rest of the page inert until
+it is dismissed. Dismissing either kind makes the window before it key again,
+its first responder intact; see
+[Windows and the First Responder](responders.md#windows-and-the-first-responder).
 
 `Swill::Alert` is built this way. It asks one question, as NSAlert does, and
 `run` yields the title of the button chosen:

@@ -10,7 +10,7 @@ Current version: see `../VERSION`. This is not an npm package.
 
 1. clone this
 2. open `../examples/ts/static/static.html` to use pre-built swill.
-3. run `../dev.sh` from the repository root
+3. run `ts/dev.sh` from the repository root
 5. navigate to `localhost:3000/examples/ts/breweries/breweries.html`
 
 The other examples probably won't work for you. 

@@ -136,28 +136,40 @@ module Swill
     # Left and Right move focus to the previous and next segment, wrapping at
     # either end, without choosing it; Space and Enter press the focused
     # native button, which chooses. Up and Down are not the control's, and
-    # go up the responder chain. A disabled control ignores them.
+    # go up the responder chain. A disabled or empty control passes these
+    # keys on too.
     sig { override.params(event: KeyboardEvent).void }
     def move_left(event)
+      return super unless movable?
       focus_adjacent(event, -1)
     end
 
     # Right moves focus to the next segment.
     sig { override.params(event: KeyboardEvent).void }
     def move_right(event)
+      return super unless movable?
       focus_adjacent(event, 1)
     end
 
     # Home moves focus to the first segment.
     sig { override.params(event: KeyboardEvent).void }
     def move_to_beginning_of_document(event)
+      return super unless movable?
       focus_segment_at(event, 0)
     end
 
     # End moves focus to the last segment.
     sig { override.params(event: KeyboardEvent).void }
     def move_to_end_of_document(event)
+      return super unless movable?
       focus_segment_at(event, T.must(segments).element.children.length - 1)
+    end
+
+    # Whether the arrows, Home and End move among the segments: the control
+    # is enabled and has some.
+    sig { returns(T::Boolean) }
+    def movable?
+      !disabled && T.must(segments).element.children.length > 0
     end
 
     # Moves focus +delta+ segments from the focused one, or from the
@@ -165,7 +177,6 @@ module Swill
     sig { params(event: KeyboardEvent, delta: Integer).void }
     def focus_adjacent(event, delta) # :nodoc:
       buttons = T.must(segments).element.children
-      return if disabled || buttons.length == 0
       active = @element.ownerDocument.activeElement
       current = T.let(-1, Integer)
       chosen = T.let(0, Integer)
@@ -184,14 +195,13 @@ module Swill
     sig { params(event: KeyboardEvent, index: Integer).void }
     def focus_segment_at(event, index) # :nodoc:
       buttons = T.must(segments).element.children
-      return if disabled || buttons.length == 0
       event.preventDefault
       position = 0
       while position < buttons.length
         T.must(buttons[position]).setAttribute("tabindex", position == index ? "0" : "-1")
         position += 1
       end
-      T.must(buttons[index]).focus({preventScroll: true})
+      DOM.focus(T.must(buttons[index]))
     end
 
     # Returns the button with tabindex zero, or nil when no button has a tab
@@ -212,7 +222,7 @@ module Swill
     sig { void }
     def focus_selection
       button = first_focusable_element
-      button.focus({preventScroll: true}) if button
+      DOM.focus(button) if button
     end
 
     # Assigns `next_value` and dispatches bubbling input and change events.

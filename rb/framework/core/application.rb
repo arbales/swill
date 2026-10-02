@@ -45,7 +45,9 @@ module Swill
       @controllers = T.let([], T::Array[Controller])
       @templates = T.let({}, T::Hash[String, Element])
       @captured = T.let({}, T::Hash[String, Element])
-      @first_responder = T.let(nil, T.nilable(Responder))
+      @page = T.let(nil, T.nilable(Window))
+      @key_windows = T.let([], T::Array[Window])
+      @changing_windows = T.let(false, T::Boolean)
       @posted_first_responder = T.let(nil, T.nilable(Responder))
       @observer = T.let(nil, T.nilable(MutationObserver))
       @unrestored = T.let([], T::Array[String])
@@ -71,6 +73,12 @@ module Swill
     # setting this before launch. False by default. See ProblemReporter.
     property :development, type: T::Boolean, default: false
 
+    # Code in an in_development block runs only while this is true.
+    sig { params(_previous: T::Boolean, development: T::Boolean).void }
+    def development_did_change(_previous, development) # :nodoc:
+      Runtime.setDevelopment(development)
+    end
+
     # Starts the application at +root+: awakens the markup beneath it,
     # restores window content from the URL fragment, and begins watching for
     # content added later. One application runs per page.
@@ -85,12 +93,18 @@ module Swill
       problems = ProblemReporter.new(root.ownerDocument.defaultView)
       problems.start if development
       @problems = problems
+      # The page is the first window, and key until another is presented.
+      page = Window.new("", root)
+      @page = page
+      @key_windows = [page]
       @on_focus = ->(event) { focus_in(event) }
       @on_focus_out = ->(event) { focus_out(event) }
-      @on_key_down = ->(event) { first_responder.key_down(event) }
+      @on_key_down = ->(event) { key_down_in_window(event) }
       @on_key_up = ->(event) { first_responder.key_up(event) }
-      root.addEventListener("focusin", @on_focus)
-      root.addEventListener("focusout", @on_focus_out)
+      # Focus is followed in the capture phase, so content that stops a focus
+      # event cannot hide the move from the first responder.
+      root.addEventListener("focusin", @on_focus, true)
+      root.addEventListener("focusout", @on_focus_out, true)
       root.addEventListener("keydown", @on_key_down)
       root.addEventListener("keyup", @on_key_up)
       @fragments = URLFragment.new(root.ownerDocument.defaultView)
@@ -164,11 +178,14 @@ module Swill
       @controllers.each { |controller| controller.unload }
       Awakening.detach(@root)
       @controllers = []
-      @root.removeEventListener("focusin", @on_focus)
-      @root.removeEventListener("focusout", @on_focus_out)
+      @root.removeEventListener("focusin", @on_focus, true)
+      @root.removeEventListener("focusout", @on_focus_out, true)
       @root.removeEventListener("keydown", @on_key_down)
       @root.removeEventListener("keyup", @on_key_up)
       assign_first_responder(nil)
+      @key_windows = []
+      @page = nil
+      Runtime.setDevelopment(false)
       Application.terminated(self)
     end
 
@@ -216,21 +233,24 @@ module Swill
     end
 
     # Present a template as a window appended to the root. A <dialog> root is
-    # shown. Dismiss it with dismiss(controller); the window's closed promise
-    # resolves then.
+    # shown. The window becomes key, and the keyboard goes to its initial
+    # first responder; see Window#initial_focus_element. Dismiss it with
+    # dismiss(controller); the window's closed promise resolves then.
     sig { params(name: String, into: Element).returns(Window) }
     def show_window(name, into: @root)
       node = clone_window_content(name)
       into.appendChild(node)
+      window = begin_window(name, node, false)
       controllers = Awakening.awaken(node)
       controller = View.controller_for(node)
       unless controller
         # Leave nothing behind: whatever the template awakened is torn down.
+        @key_windows = @key_windows.reject { |candidate| candidate == window }
         Awakening.detach(node)
         node.remove
         raise "Window root has no controller: #{name}"
       end
-      open_window(name, node, controller, controllers, false)
+      open_window(window, controller, controllers)
     end
 
     # Present a controller built in code as a window named +name+, its view
@@ -244,43 +264,96 @@ module Swill
       node = controller.view.element
       raise "Window is already presented: #{name}" if node.isConnected
       into.appendChild(node)
+      window = begin_window(name, node, modal)
       controllers = Awakening.awaken(node)
       Awakening.load(controller)
-      open_window(name, node, controller, [controller] + controllers, modal)
+      open_window(window, controller, [controller] + controllers)
     end
 
-    sig do
-      params(name: String, node: Element, controller: Controller, controllers: T::Array[Controller],
-             modal: T::Boolean).returns(Window)
-    end
-    def open_window(name, node, controller, controllers, modal) # :nodoc:
+    # A window about to be presented is key before its content awakens, so
+    # content that takes the keyboard as it loads takes it in this window,
+    # not the page.
+    sig { params(name: String, node: Element, modal: T::Boolean).returns(Window) }
+    def begin_window(name, node, modal) # :nodoc:
       window = Window.new(name, node, modal: modal)
+      @key_windows << window
+      window
+    end
+
+    sig { params(window: Window, controller: Controller, controllers: T::Array[Controller]).returns(Window) }
+    def open_window(window, controller, controllers) # :nodoc:
+      node = window.root
       if node.tagName == "DIALOG" && node.classList.contains("window")
         @window_titles += 1
         window.show_title("swill-window-title-#{@window_titles}", controller)
       end
       controller.view.update_accessibility
+      window.assign_content(window.name, controller)
       if node.tagName == "DIALOG"
-        if modal
-          node.showModal
-          # Escape is the responder chain's, as cancel_operation; the
-          # browser's own cancel would close the dialog behind its back.
-          node.addEventListener("cancel", ->(event) { event.preventDefault })
-        else
-          node.show
+        # Opening runs the browser's own dialog focusing steps; the window's
+        # initial first responder is chosen below instead.
+        changing_windows do
+          if window.modal?
+            node.showModal
+            # Escape is the responder chain's, as cancel_operation; the
+            # browser's own cancel would close the dialog behind its back.
+            node.addEventListener("cancel", ->(event) { event.preventDefault })
+          else
+            node.show
+          end
         end
         # Safari ignores focus in a dialog it has not laid out since it
         # opened, so the window lays out before its first responder focuses.
         node.getBoundingClientRect
       end
-      window.assign_content(name, controller)
-      window.save_first_responder(first_responder)
       @windows << window
       restore_window_state(window, prune_stale: false, write_content: false)
       warn_unrestored(controllers)
       Awakening.finish(controllers)
-      make_first_responder(controller) unless responder_within?(first_responder, node)
+      take_initial_first_responder(window, controller)
       window
+    end
+
+    # The keyboard goes to the window's initial first responder, unless its
+    # content took it while loading; either way it is focused now that the
+    # window is open, since a browser ignores focus in a closed dialog. With
+    # nothing to focus, the controller is offered it and refuses.
+    sig { params(window: Window, controller: Controller).void }
+    def take_initial_first_responder(window, controller) # :nodoc:
+      chosen = window.first_responder
+      element = chosen ? chosen.key_element : window.initial_focus_element(excluded_roots(window))
+      if element
+        focus_in_window(element)
+      elsif !chosen
+        make_first_responder(controller)
+      end
+      post_first_responder_change
+      in_development { verify_focus("a window opened") }
+    end
+
+    # Focuses +element+, or, when it already has focus (a dialog's own
+    # focusing steps may have chosen it), reconciles the first responder
+    # with it as the focus event would have.
+    sig { params(element: Element).void }
+    def focus_in_window(element) # :nodoc:
+      if element.ownerDocument.activeElement == element
+        sync_first_responder(element, nil)
+      else
+        DOM.focus(element)
+      end
+    end
+
+    # Runs +block+ while windows open or close. Focus the browser moves then,
+    # by a dialog's focusing steps or its return of focus on closing, is not
+    # the user's; the framework places the keyboard itself afterward.
+    sig { params(block: T.proc.void).void }
+    def changing_windows(&block) # :nodoc:
+      @changing_windows = true
+      begin
+        block.call
+      ensure
+        @changing_windows = false
+      end
     end
 
     # The page's theme link, or nil when the page links none.
@@ -333,17 +406,34 @@ module Swill
       end
     end
 
-    # Closes the window +controller+ belongs to, restoring the first responder
-    # it displaced.
+    # Closes the window +controller+ belongs to. The window that was key
+    # before it is key again, and its first responder, kept all along, takes
+    # the keyboard back.
     sig { params(controller: Controller).returns(T::Boolean) }
     def dismiss(controller)
       window = window_containing(controller)
       return false unless window
       @windows = @windows.select { |candidate| candidate != window }
-      saved = window.saved_first_responder
-      window.dismiss
-      make_first_responder(saved) if saved && attached?(saved)
+      @key_windows = @key_windows.select { |candidate| candidate != window }
+      changing_windows { window.dismiss }
+      refocus_key_window
       true
+    end
+
+    # The key window's first responder takes focus again, as an NSWindow's
+    # does when the window becomes key, without becoming first responder
+    # anew: at the element within it that last had focus, or else at its key
+    # element.
+    sig { void }
+    def refocus_key_window # :nodoc:
+      responder = first_responder
+      owner = responder_element(responder)
+      window = key_window
+      last = window ? window.focused_element : nil
+      element = last && owner && owner.contains(last) && @root.contains(last) ? last : responder.key_element
+      focus_in_window(element) if element && @root.contains(element)
+      post_first_responder_change
+      in_development { verify_focus("a window closed") }
     end
 
     # The window with +name+, or nil.
@@ -358,38 +448,86 @@ module Swill
       (@captured[name] || window_template(name)) != nil
     end
 
-    # ---- first responder ----
+    # ---- key window and first responder ----
 
-    # The application itself when nothing more specific holds it.
-    sig { returns(Responder) }
-    def first_responder
-      @first_responder || self
+    # The page, the window everything else is presented over, as Cocoa's main
+    # window is the document a panel serves. Its first responder is kept
+    # while other windows are key. Nil before launch.
+    sig { returns(T.nilable(Window)) }
+    def main_window
+      @page
     end
 
-    # Cocoa's makeFirstResponder: a responder that does not accept is refused
-    # up front; the current first responder may refuse to resign; a responder
-    # that refuses to become leaves the application as first responder.
+    # The page and the presented windows, in the order they were last key.
+    sig { returns(T::Array[Window]) }
+    def key_windows # :nodoc:
+      @key_windows
+    end
+
+    # The window that has the keyboard: the most recently presented window
+    # still open, or the window focus last moved into; the page when none
+    # is presented. Nil before launch.
+    sig { returns(T.nilable(Window)) }
+    def key_window
+      @key_windows.last
+    end
+
+    # The key window's first responder, which keys go to; the application
+    # itself when nothing more specific holds it.
+    sig { returns(Responder) }
+    def first_responder
+      window = key_window
+      responder = window ? window.first_responder : nil
+      responder || self
+    end
+
+    # Cocoa's makeFirstResponder, on the window +responder+ belongs to: a
+    # responder that does not accept is refused up front; that window's
+    # current first responder may refuse to resign; a responder that refuses
+    # to become leaves the window with none, and the application holds it.
+    # In the key window, becoming focuses the responder's key element; a
+    # window that is not key keeps the responder for when it is, as making a
+    # first responder does not make its window key. Nil gives the key
+    # window's first responder up to the application.
+    #
+    # The first responder changes in four places only: here, when the
+    # browser moves focus (sync_first_responder), when focus leaves the page
+    # (focus_left), and when its region is torn down
+    # (release_first_responder).
     sig { params(responder: T.nilable(Responder)).returns(T::Boolean) }
     def make_first_responder(responder)
       return false if responder && !responder.accepts_first_responder?
-      current = first_responder
+      window = responder ? window_of(responder) : key_window
+      return false unless window
+      current = T.let(window.first_responder || self, Responder)
       return true if responder == current
       return false unless current.resign_first_responder(responder)
       # Nobody holds it while the newcomer becomes it, so focus moving
       # during become reconciles against the application. When that focus
       # lands in a nested responder, the keyboard is there, and that
       # responder stays first.
-      @first_responder = nil
-      if responder && responder.become_first_responder
-        @first_responder = responder if @first_responder == nil
+      window.first_responder = nil
+      if window != key_window
+        window.first_responder = responder
+      elsif responder && responder.become_first_responder
+        window.first_responder = responder if window.first_responder.nil?
       end
       post_first_responder_change
+      in_development { verify_focus("make_first_responder") }
       true
     end
 
+    # Gives the key window's keyboard to +responder+ without asking anyone,
+    # for the framework's own bookkeeping.
     sig { params(responder: T.nilable(Responder)).void }
     def assign_first_responder(responder) # :nodoc:
-      @first_responder = responder
+      window = key_window
+      assign_window_first_responder(window, responder) if window
+    end
+
+    sig { params(window: Window, responder: T.nilable(Responder)).void }
+    def assign_window_first_responder(window, responder) # :nodoc:
+      window.first_responder = responder
       post_first_responder_change
     end
 
@@ -400,42 +538,113 @@ module Swill
     # the same responder; the last one posted is remembered for that.
     sig { void }
     def post_first_responder_change
-      return if @first_responder == @posted_first_responder
-      @posted_first_responder = @first_responder
-      puts "[Swill] first responder: #{describe_responder(first_responder)}" if development
-      NotificationCenter.default.post("first_responder_did_change", self, @first_responder)
+      window = key_window
+      responder = window ? window.first_responder : nil
+      return if responder == @posted_first_responder
+      @posted_first_responder = responder
+      NotificationCenter.default.post("first_responder_did_change", self, responder)
     end
 
     # A responder's class, and for a view or controller the element it is
-    # rooted at, as the first responder log names it.
+    # rooted at, as the development focus checks name it.
     sig { params(responder: Responder).returns(String) }
     def describe_responder(responder) # :nodoc:
       name = T.let(Runtime.nameOf(responder), T.nilable(String)) || "a responder"
       element = responder_element(responder)
-      return name unless element
+      element ? "#{name} #{describe_element(element)}" : name
+    end
+
+    # The window +responder+ belongs to: the innermost window holding its
+    # element, or the key window for one with no element.
+    sig { params(responder: Responder).returns(T.nilable(Window)) }
+    def window_of(responder) # :nodoc:
+      element = responder_element(responder)
+      element ? window_holding(element) : key_window
+    end
+
+    # The innermost window holding +element+: a presented window whose root
+    # contains it, else the page.
+    sig { params(element: Element).returns(T.nilable(Window)) }
+    def window_holding(element) # :nodoc:
+      key_windows.reverse.find { |window| window.root.contains(element) }
+    end
+
+    # The roots of the presented windows other than +window+. The page's
+    # root holds them all, but their controls are not the page's key views.
+    sig { params(window: Window).returns(T::Array[Element]) }
+    def excluded_roots(window) # :nodoc:
+      key_windows.select { |other| other != window && other != @page }.map(&:root)
+    end
+
+    sig { params(event: KeyboardEvent).void }
+    def key_down_in_window(event) # :nodoc:
+      in_development { verify_focus("a key") }
+      first_responder.key_down(event)
+    end
+
+    # In development, checks that the keyboard is where the first responder
+    # says: focus outside the page is fine (the first responder waits for
+    # it), but focus inside it must be in the key window and within the key
+    # window's first responder, which must be attached and accept. A
+    # mismatch is a framework bug or a focus moved behind the framework's
+    # back, and is reported as a warning naming +moment+.
+    sig { params(moment: String).void }
+    def verify_focus(moment) # :nodoc:
+      window = key_window
+      active = @root.ownerDocument.activeElement
+      return unless window && active && @root.contains(active) && active != @root
+      responder = first_responder
+      owner = responder_element(responder)
+      problem = if window_holding(active) != window
+        "focus is in another window than the key window #{window_label(window)}"
+      elsif responder != self && !attached?(responder)
+        "the first responder is no longer in the page"
+      elsif responder != self && !responder.accepts_first_responder?
+        "the first responder does not accept being first responder"
+      elsif owner && !owner.contains(active)
+        "the focused element is outside the first responder"
+      end
+      return unless problem
+      focused = describe_element(active)
+      warn "Focus check after #{moment}: #{problem}. First responder: #{describe_responder(responder)}; focused: #{focused}."
+    end
+
+    sig { params(window: Window).returns(String) }
+    def window_label(window) # :nodoc:
+      window == @page ? "(the page)" : "\"#{window.name}\""
+    end
+
+    sig { params(element: Element).returns(String) }
+    def describe_element(element) # :nodoc:
       tag = element.tagName.downcase
       %w[outlet controller klass data-action class].each do |attribute|
         value = element.getAttribute(attribute)
         tag = "#{tag} #{attribute}=\"#{value}\"" if value
       end
-      "#{name} <#{tag}>"
+      "<#{tag}>"
     end
 
     sig { params(event: Event).void }
     def focus_in(event) # :nodoc:
-      window = modal_window
-      if window && event.target == window.root
-        # A modal dialog itself takes focus when its background is clicked,
-        # and Safari tabs to it; its default button takes the keyboard back.
-        target = View.of(window.root)&.first_focusable_element
-        return target.focus if target && target != window.root
+      return if @changing_windows
+      target = event.target
+      window = window_holding(target)
+      if window && window != @page && window.root == target
+        # A dialog itself takes focus when its background is clicked, and
+        # Safari tabs to it; the control focus came from takes it back, or
+        # the window's initial one when focus came from outside.
+        previous = event.relatedTarget
+        back = previous && previous != target && target.contains(previous) ? previous : nil
+        back ||= window.initial_focus_element(excluded_roots(window))
+        return DOM.focus(back) if back
       end
-      sync_first_responder(event.target, event.relatedTarget)
+      sync_first_responder(target, event.relatedTarget)
     end
 
-    # Tab in a modal window moves through its key view loop: the window's
-    # focusable controls in document order, wrapping at either end, as an
-    # NSWindow's does. Elsewhere the browser moves focus on.
+    # Tab moves through the key window's key view loop: its key views in
+    # document order, wrapping at either end, as an NSWindow's does. The
+    # browser's own Tab is prevented. A responder that takes insert_tab
+    # without calling super keeps Tab for itself.
     sig { override.params(event: KeyboardEvent).void }
     def insert_tab(event)
       super unless select_key_view(event, 1)
@@ -447,34 +656,40 @@ module Swill
       super unless select_key_view(event, -1)
     end
 
-    # The topmost modal window, or nil when none is open.
-    sig { returns(T.nilable(Window)) }
-    def modal_window
-      @windows.reverse.find(&:modal?)
+    # Enter that nothing else took presses the key window's default button,
+    # the one marked with the `default` class.
+    sig { override.params(event: KeyboardEvent).void }
+    def insert_newline(event)
+      window = key_window
+      button = window ? window.default_button(excluded_roots(window)) : nil
+      return super unless button
+      event.preventDefault
+      button.click
     end
 
+    # Focuses the key view +delta+ places from the event's target in the key
+    # window, wrapping; one focus cannot take (hidden by a style, say) is
+    # passed over.
     sig { params(event: KeyboardEvent, delta: Integer).returns(T::Boolean) }
     def select_key_view(event, delta) # :nodoc:
-      window = modal_window
+      window = key_window
       return false unless window
-      views = key_views(window.root)
+      views = window.key_views(excluded_roots(window))
       return false if views.empty?
-      current = views.index(event.target)
-      index = current.nil? ? (delta.positive? ? 0 : views.length - 1) : (T.must(current) + delta) % views.length
       event.preventDefault
-      T.must(views[index]).focus
+      found = views.index(event.target)
+      # From outside the loop, Tab starts at the first view and Shift-Tab at
+      # the last.
+      index = T.let(found || (delta.positive? ? -1 : 0), Integer)
+      attempts = 0
+      while attempts < views.length
+        index = (index + delta) % views.length
+        candidate = T.must(views[index])
+        DOM.focus_revealing(candidate)
+        return true if candidate.ownerDocument.activeElement == candidate
+        attempts += 1
+      end
       true
-    end
-
-    # The elements Tab stops at within +root+, in document order.
-    sig { params(root: Element).returns(T::Array[Element]) }
-    def key_views(root) # :nodoc:
-      views = T.let([], T::Array[Element])
-      root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach(->(element) do
-        skipped = element.disabled || element.getAttribute("tabindex") == "-1" || element.closest("[hidden]")
-        views << element unless skipped
-      end)
-      views
     end
 
     sig { params(event: Event).void }
@@ -488,8 +703,14 @@ module Swill
     # responder will not resign for; either way focus goes back.
     sig { params(target: Element, previous: T.nilable(Element)).void }
     def sync_first_responder(target, previous)
+      window = window_holding(target)
+      return unless window
+      # Focus moving into another window, one not modal to the rest, makes
+      # it key, as clicking a window does.
+      @key_windows = @key_windows.select { |other| other != window } + [window] unless window == key_window
+      window.focused_element = target
       responder = responder_for(target)
-      current = first_responder
+      current = T.let(window.first_responder || self, Responder)
       return if responder == current
       if responder && !responder.accepts_first_responder?
         responder_element(current) ? restore_focus(current, previous) : target.blur
@@ -499,7 +720,8 @@ module Swill
         restore_focus(current, previous)
         return
       end
-      assign_first_responder(responder)
+      assign_window_first_responder(window, responder)
+      in_development { verify_focus("focus moved") }
     end
 
     # Focus moved to another part of the page: the first responder falls
@@ -511,11 +733,16 @@ module Swill
       assign_first_responder(nil) if destination && !@root.contains(destination)
     end
 
-    # A first responder inside a region being torn down falls back here.
+    # A window's first responder inside a region being torn down falls back
+    # to the window, so the application holds it.
     sig { params(element: Element).void }
     def release_first_responder(element)
-      owner = responder_element(first_responder)
-      assign_first_responder(nil) if owner && (owner == element || element.contains(owner))
+      key_windows.each do |window|
+        responder = window.first_responder
+        owner = responder ? responder_element(responder) : nil
+        window.first_responder = nil if owner && (owner == element || element.contains(owner))
+      end
+      post_first_responder_change
     end
 
     # The responder for a DOM location: the first managed view above it,
@@ -530,17 +757,15 @@ module Swill
 
     sig { params(responder: Responder).returns(T.nilable(Element)) }
     def responder_element(responder) # :nodoc:
-      return T.cast(responder, Controller).view.element if responder.is_a?(Controller)
-      return T.cast(responder, View).element if responder.is_a?(View)
-      nil
+      responder.focus_region
     end
 
     sig { params(responder: Responder, previous: T.nilable(Element)).void }
     def restore_focus(responder, previous) # :nodoc:
       owner = responder_element(responder)
       return unless owner
-      target = previous && owner.contains(previous) ? previous : T.must(owner.__swill_view__).first_focusable_element
-      target.focus if target
+      target = previous && owner.contains(previous) ? previous : responder.key_element
+      DOM.focus(target) if target
     end
 
     # ---- window templates, containers, and content ----

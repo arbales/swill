@@ -62,9 +62,10 @@ A Button uses the native element's click behavior. The following button sends
 </button>
 ```
 
-The control adds `tabindex="0"` when the element has no tabindex. It preserves
-an existing value, including `-1`. Enter and Space activate the native button;
-other keys follow the responder chain.
+The control declares its tab stop, `tabindex="0"`, when the element has none:
+Safari's Tab skips a plain button unless it has one. It preserves an existing
+value, including `-1`. Enter and Space activate the native button; other keys
+follow the responder chain.
 
 A TextField can wrap an input together with its surrounding label:
 
@@ -146,13 +147,14 @@ the focused native button, which chooses it. Up and Down are not the
 control's, so they go up the responder chain.
 
 Setting Segmented's `disabled` property to true disables its buttons, removes
-their tab stops, and prevents choices through clicks or keys. The default is
-false. Set this property on the control through its outlet; `bind-disabled`
+their tab stops, and prevents choices through clicks or keys; its keys then
+pass up the responder chain. The default is false. Set this property on the control through its outlet; `bind-disabled`
 assigns a DOM property on the element.
 
-CustomSelect starts with its popup closed. Enter and Space toggle it. While
-open, Up and Down choose the adjacent option, wrapping at either end, and the
-choice closes the popup. With no matching value, either arrow chooses the
+CustomSelect is one tab stop, its root. It starts with its popup closed. Enter
+and Space toggle it. While open, Up and Down choose the adjacent option,
+wrapping at either end, and the choice closes the popup; while closed, Up and
+Down are not the control's and go up the responder chain. With no matching value, either arrow chooses the
 first option. Clicking an option also chooses it and closes the popup. Escape,
 focus leaving the control, and a pointer press outside the control close it.
 
@@ -168,6 +170,10 @@ next_responder)` and returns false to keep the current first responder. With
 no delegate, or no such method, the control follows its superclass behavior.
 The default delegate is nil. See [Responders](responders.md) for focus changes
 through the application.
+
+Controls declare their own tab stops; markup carries no `tabindex`. See
+[Key Views and Tab Stops](responders.md#key-views-and-tab-stops) and
+[The Key View Loop](responders.md#the-key-view-loop).
 
 ## Accessibility
 

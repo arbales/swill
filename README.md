@@ -65,7 +65,7 @@ copying, and type artifacts. See [the project workflow](doc/getting_started.md#p
 | `sorbet/rbi/runtime.rbi` | Types for runtime and DSL boundaries |
 | `doc/` | The guides |
 | `build/` | Disposable intermediate modules and test files |
-| `ts/` | The TypeScript implementation: `src/`, its own `dist/`, and `build.sh` |
+| `ts/` | The legacy TypeScript implementation: `src/`, its own `dist/`, `build.sh`, and its dev server (`dev.sh`, `dev_server.py`) |
 
 ## Architecture
 

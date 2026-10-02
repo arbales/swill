@@ -186,7 +186,8 @@ module Swill
 
       def bundle(entrypoint)
         command = ["esbuild", entrypoint, "--bundle", "--format=iife", "--target=es2022", "--sourcemap", "--outfile=#{out}"]
-        command << "--minify" if minify
+        # A minified build is optimized, and leaves in_development blocks out.
+        command.push("--minify", "--define:globalThis.__SWILL_DEV__=false") if minify
         output, status = Open3.capture2e(*command)
         raise CompileError, "bundling failed: #{output}" unless status.success?
       rescue Errno::ENOENT

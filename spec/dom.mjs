@@ -50,9 +50,24 @@ export class Element {
     for (const child of [...this.children]) child.remove();
     for (const node of nodes) this.append(node);
   }
-  show() { this.open = true; }
-  showModal() { this.open = true; this.modal = true; }
-  close() { this.open = false; this.modal = false; }
+  // Opening a dialog runs the browser's focusing steps: its [autofocus]
+  // element, else its first focusable descendant, else the dialog itself.
+  show() { this.open = true; this.focusDialog(); }
+  showModal() { this.open = true; this.modal = true; this.focusDialog(); }
+  focusDialog() {
+    const target = this.querySelector("[autofocus]") ??
+      this.querySelectorAll(FOCUSABLE).find(candidate => !candidate.disabled && !candidate.closest("[hidden]")) ?? this;
+    target.focus();
+  }
+  // Closing drops focus held inside. Browsers then restore the element
+  // focused before the dialog opened; this one does not, so the
+  // framework's own restoration is what the tests see.
+  close() {
+    this.open = false;
+    this.modal = false;
+    const active = this.ownerDocument.activeElement;
+    if (active && this.contains(active)) active.leaveFocus(null);
+  }
 
   // Like the DOM, string properties coerce what they are assigned.
   get value() { return this._value; }
@@ -148,10 +163,12 @@ export class Element {
   getBoundingClientRect() { return {x: 0, y: 0, width: 0, height: 0}; }
   getSelection() { return null; }
 
-  // tag, [attr], [attr=value], and combinations such as template[name].
+  // tag, .class, tag.class, [attr], [attr=value], and combinations such as
+  // template[name].
   matches(selector) {
     return selector.split(",").map(part => part.trim()).some(simple => {
-      if (/^\.[\w-]+$/.test(simple)) return this.classList.contains(simple.slice(1));
+      const classed = simple.match(/^([\w-]*)\.([\w-]+)$/);
+      if (classed) return (!classed[1] || classed[1].toUpperCase() === this.tagName) && this.classList.contains(classed[2]);
       const parsed = simple.match(/^([\w-]*)((?:\[[^\]]+\])*)$/);
       if (!parsed) return false;
       const [, tag, attributes] = parsed;
@@ -209,12 +226,15 @@ export class Element {
         entry.listener.call(node, event);
       }
     };
-    for (const node of [...path].reverse()) run(node, true);
+    for (const node of [...path].reverse()) {
+      run(node, true);
+      if (event.cancelBubble) return !event.defaultPrevented;
+    }
     for (const node of path) {
       run(node, false);
-      if (!event.bubbles) break;
+      if (!event.bubbles || event.cancelBubble) break;
     }
-    return true;
+    return !event.defaultPrevented;
   }
 
   click(init = {}) { this.dispatchEvent(Object.assign(new Event("click", {bubbles: true}), init)); }
@@ -246,12 +266,39 @@ export class Element {
     this.dispatchEvent(event);
   }
 
-  blur() { this.leaveFocus(null); }
+  // Only the focused element can be blurred; on any other blur does nothing.
+  blur() { if (this.ownerDocument.activeElement === this) this.leaveFocus(null); }
 }
+
+const FOCUSABLE = "input, select, textarea, button, [tabindex]";
 
 export const element = (tagName, attributes, children) => new Element(tagName, attributes, children);
 
-export const keyEvent = (type, key, modifiers = {}) => Object.assign(new Event(type, {bubbles: true}), {key, ...modifiers});
+export const keyEvent = (type, key, modifiers = {}) =>
+  Object.assign(new Event(type, {bubbles: true, cancelable: true}), {key, ...modifiers});
+
+// A key pressed on the focused element. A Tab nothing prevented moves focus
+// on as the browser would: to the next focusable element in document order,
+// inside the topmost modal dialog when one is open (Safari also stops on the
+// dialog itself, after its content, when document.dialogIsTabStop is set),
+// and out of the page past the last. The browser never wraps; wrapping is
+// the framework's to do.
+export const pressKey = (target, key, modifiers = {}) => {
+  const event = keyEvent("keydown", key, modifiers);
+  target.dispatchEvent(event);
+  target.dispatchEvent(keyEvent("keyup", key, modifiers));
+  if (key !== "Tab" || event.defaultPrevented) return event;
+  const document = target.ownerDocument;
+  const modal = document.querySelectorAll("dialog").filter(dialog => dialog.open && dialog.modal).at(-1);
+  const scope = modal ?? document;
+  const stops = scope.querySelectorAll(FOCUSABLE).filter(candidate =>
+    !candidate.disabled && candidate.getAttribute("tabindex") !== "-1" && !candidate.closest("[hidden]"));
+  if (modal && document.dialogIsTabStop) stops.push(modal);
+  const index = stops.indexOf(target);
+  const next = index < 0 ? stops[0] : stops[index + (modifiers.shiftKey ? -1 : 1)];
+  if (next) next.focus(); else target.leaveFocus(null);
+  return event;
+};
 
 // A browser window for tests: location and history keep a hash and a stack
 // of entries; back() pops one and fires popstate as a browser would.

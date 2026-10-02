@@ -235,5 +235,11 @@ module Swill
     def await(value)
       value
     end
+
+    # in_development compiles to a block that runs only in a development
+    # application in the browser; on MRI it never runs.
+    def self.in_development; end
+
+    def in_development; end
   end
 end

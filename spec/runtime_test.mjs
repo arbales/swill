@@ -259,6 +259,10 @@ test("dynamic writers mirror dynamic readers and primitives skip metadata", () =
   const controller = new Controller();
   Runtime.write(view, "controller", controller);
   assert.equal(view.controllerValue(), controller);
+  const window = new (Runtime.resolve("Swill::Window"))("x", {});
+  Runtime.write(window, "first_responder", controller);
+  assert.equal(window.firstResponder, controller, "a writer of two words is reached under its JavaScript name");
+  assert.equal(Runtime.read(window, "first_responder"), controller);
   assert.equal(Runtime.read(" Ada ", "strip"), "Ada");
   assert.equal(Runtime.read(null, "strip"), null);
   assert.throws(() => Runtime.read(42, "strip"), /requires a string/);
@@ -598,7 +602,7 @@ test("a did_change hook runs for stored properties and keeps a computed property
 
 // ---- nested controller ownership ----
 
-import {element, keyEvent, Browser} from "./dom.mjs";
+import {element, keyEvent, pressKey, Browser} from "./dom.mjs";
 
 const Awakening = swill.Swill__Awakening;
 const Badge = Runtime.resolve("Demo::Badge");
@@ -1179,6 +1183,28 @@ test("klass awakens View subclasses, alone or together with a controller", () =>
   assert.equal(both.children[0].textContent, "Badge 0");
 });
 
+test("klass awakens controller subclasses and preserves their outlet region", () => {
+  const name = installHost({child: false});
+  const nested = element("span", {bind: "title"});
+  const child = element("section", {klass: "Demo::Badge", outlet: "child"}, [nested]);
+  const [host, badge] = launched(element("body", {}, [element("main", {controller: name}, [child])]));
+  assert.equal(host.child, badge);
+  assert.equal(badge.parent(), host);
+  assert.equal(child.getAttribute("controller"), "Demo::Badge");
+  assert.equal(child.hasAttribute("klass"), false);
+  assert.equal(nested.textContent, "Badge 0");
+  const wrapped = element("section", {klass: "Demo::Badge"});
+  new View(wrapped);
+  const [wrappedBadge] = launched(element("body", {}, [wrapped]));
+  assert.equal(wrappedBadge.view.element, wrapped, "a preexisting row view can gain a controller");
+  assert.throws(() => launched(element("body", {}, [
+    element("section", {klass: "Demo::Badge", controller: "Demo::Controller"})
+  ])), /conflicts with controller/);
+  assert.throws(() => launched(element("body", {}, [
+    element("section", {klass: "Demo::Person"})
+  ])), /not a Swill::View or Swill::Controller/);
+});
+
 test("outlet mistakes fail at awakening with the outlet name", () => {
   const hostName = installHost({panel: false, movie_list: true});
   const awaken = children => launched(element("body", {}, [element("main", {controller: hostName}, children)]));
@@ -1200,7 +1226,7 @@ test("outlet mistakes fail at awakening with the outlet name", () => {
     `<div outlet="panel"> does, but it is inside <section controller="Demo::Badge">'s region, whose outlets are its own. ` +
     `Add the attribute to an element ${hostName} owns, or declare the outlet \`optional: true\``,
     "an element inside a nested controller's region is named, with the region");
-  assert.throws(() => awaken([element("div", {klass: "Demo::Badge", outlet: "panel"})]), /Demo::Badge is not a Swill::View/);
+  assert.throws(() => awaken([element("div", {klass: "Demo::Person", outlet: "panel"})]), /not a Swill::View or Swill::Controller/);
   assert.throws(() => awaken([element("div", {klass: "Nope::View", outlet: "panel"})]), /Unknown class: Nope::View/);
   const broken = element("script", {type: "application/json", outlet: "panel"});
   broken.textContent = "{not json";
@@ -1868,20 +1894,25 @@ test("an alert builds its own window and yields the button chosen", async () => 
   assert.equal(f.application.firstResponder(), buttons[0].__swill_view__, "the default button is first responder");
   assert.equal(f.application.firstResponder().nextResponder().nextResponder(), alert, "and the alert follows its dialog in the chain");
   assert.equal(f.document.activeElement, buttons[0], "the first button takes the keyboard");
-  buttons[0].dispatchEvent(keyEvent("keydown", "Tab"));
-  assert.equal(f.document.activeElement, buttons[1], "Tab moves through the modal window's key view loop");
-  buttons[1].dispatchEvent(keyEvent("keydown", "Tab"));
-  assert.equal(f.document.activeElement, buttons[0], "and wraps rather than leaving the window");
-  buttons[0].dispatchEvent(keyEvent("keydown", "Tab", {shiftKey: true}));
+  // Safari's Tab would stop on the dialog itself after its buttons.
+  f.document.dialogIsTabStop = true;
+  pressKey(buttons[0], "Tab");
+  assert.equal(f.document.activeElement, buttons[1], "Tab moves through the window's key view loop");
+  pressKey(buttons[1], "Tab");
+  assert.equal(f.document.activeElement, buttons[0], "and wraps, never reaching the dialog or leaving the window");
+  pressKey(buttons[0], "Tab", {shiftKey: true});
   assert.equal(f.document.activeElement, buttons[1], "Shift-Tab wraps backward");
-  buttons[1].dispatchEvent(keyEvent("keydown", "Tab", {shiftKey: true}));
+  pressKey(buttons[1], "Tab", {shiftKey: true});
   assert.equal(f.document.activeElement, buttons[0], "and steps back");
+  buttons[1].focus();
   dialog.focus();
-  assert.equal(f.document.activeElement, buttons[0], "the dialog itself hands focus to its default button");
+  assert.equal(f.document.activeElement, buttons[1], "the dialog itself hands focus back to the control it came from");
   buttons[1].click();
   assert.equal(await answer, "Delete");
   assert.equal(dialog.parentElement, null, "choosing dismisses the alert");
-  assert.equal(f.application.firstResponder(), parent.nameField, "the saved first responder returns");
+  assert.equal(f.application.keyWindow(), f.application.mainWindow(), "the page is key again");
+  assert.equal(f.application.firstResponder(), parent.nameField, "and its first responder has the keyboard");
+  assert.equal(f.document.activeElement, parent.nameField.element);
 
   const [cancelled, cancelAnswer] = ask(["Delete", "Cancel"]);
   cancelled.view.element.querySelector("button").dispatchEvent(keyEvent("keydown", "Escape"));
@@ -1929,6 +1960,177 @@ test("a window shows its content controller's title, and the page's theme can be
   application.terminate();
 });
 
+// A page with one host controller holding +children+, and window templates
+// whose dialogs hold +windows+' children under their own host controllers.
+function keyViewPage(children, windows = {}) {
+  const hostName = installHost({});
+  const main = element("main", {controller: hostName}, children);
+  const templates = Object.entries(windows).map(([name, content]) =>
+    element("template", {for: "window", name}, [element("dialog", {controller: installHost({})}, content)]));
+  const body = element("body", {application: "Demo::Application"}, [main, ...templates]);
+  const document = element("#document", {}, [body]);
+  document.readyState = "complete";
+  document.defaultView = new Browser("");
+  const application = new Launcher().launch(document);
+  return {application, document, body, main, host: application.controllers[0]};
+}
+
+test("a window takes its initial first responder: autofocus, then the default button, then the first key view", () => {
+  const f = keyViewPage([element("input", {})], {
+    autofocused: [element("input", {}), element("input", {autofocus: ""})],
+    defaulted: [element("input", {}), element("button", {class: "default"})],
+    plain: [element("p", {}), element("input", {}), element("button", {})]
+  });
+  const open = name => {
+    const window = f.application.showWindow(name);
+    const chosen = f.document.activeElement;
+    f.application.dismiss(window.controller);
+    return [window.root, chosen];
+  };
+  let [dialog, chosen] = open("autofocused");
+  assert.equal(chosen, dialog.children[1], "an autofocus element first");
+  [dialog, chosen] = open("defaulted");
+  assert.equal(chosen, dialog.children[1], "then the default button");
+  [dialog, chosen] = open("plain");
+  assert.equal(chosen, dialog.children[1], "then the first key view");
+});
+
+test("a window's content keeps the first responder it chose while loading", () => {
+  const Host = class extends SwillController {
+    controllerDidLoad() { this.application().makeFirstResponder(View.of(this.view.element.children[1])); }
+  };
+  Runtime.install({classes: {"Test::ChoosingHost": {constructor: Host}}});
+  const f = keyViewPage([element("input", {outlet: "page_field"})]);
+  const page = f.main.children[0];
+  f.application.makeFirstResponder(View.of(page) ?? f.host);
+  const before = f.application.firstResponder();
+  const template = element("template", {for: "window", name: "chooser"}, [
+    element("dialog", {controller: "Test::ChoosingHost"}, [element("input", {}), element("input", {outlet: "second"})])
+  ]);
+  f.body.append(template);
+  const window = f.application.showWindow("chooser");
+  const second = window.root.children[1];
+  assert.equal(f.document.activeElement, second, "the content's choice stands over the dialog's own focusing");
+  assert.equal(f.application.firstResponder(), View.of(second));
+  assert.equal(f.application.mainWindow().firstResponder, before, "the page's first responder is untouched");
+  f.application.dismiss(window.controller);
+  assert.equal(f.application.firstResponder(), before, "and has the keyboard again when the window goes");
+  assert.equal(f.document.activeElement, page);
+});
+
+test("Tab wraps through the key window's views, in the page as in a dialog", () => {
+  const first = element("input", {});
+  const button = element("button", {});
+  const skipped = element("button", {tabindex: "-1"});
+  const disabled = element("input", {});
+  disabled.disabled = true;
+  const last = element("select", {});
+  const f = keyViewPage([first, button, skipped, disabled, last], {palette: [element("input", {})]});
+  first.focus();
+  pressKey(first, "Tab");
+  assert.equal(f.document.activeElement, button);
+  pressKey(button, "Tab");
+  assert.equal(f.document.activeElement, last, "taken out of the order and disabled controls are passed over");
+  pressKey(last, "Tab");
+  assert.equal(f.document.activeElement, first, "the page's loop wraps too");
+  pressKey(first, "Tab", {shiftKey: true});
+  assert.equal(f.document.activeElement, last);
+  const palette = f.application.showWindow("palette");
+  const field = palette.root.children[0];
+  assert.equal(f.document.activeElement, field);
+  pressKey(field, "Tab");
+  assert.equal(f.document.activeElement, field, "a dialog's loop holds only its own views");
+  f.application.dismiss(palette.controller);
+  assert.equal(f.document.activeElement, last, "the page's first responder takes the keyboard back");
+  pressKey(last, "Tab");
+  assert.equal(f.document.activeElement, first, "and the dismissed window's views are gone from its loop");
+});
+
+test("a responder that takes insert_tab keeps Tab", () => {
+  const seen = [];
+  const Host = class extends SwillController {
+    insertTab(event) { seen.push(event.key); }
+  };
+  Runtime.install({classes: {"Test::TabTaker": {constructor: Host}}});
+  const field = element("input", {});
+  const other = element("input", {});
+  const body = element("body", {}, [element("main", {controller: "Test::TabTaker"}, [field]), other]);
+  launched(body);
+  field.focus();
+  const event = pressKey(field, "Tab");
+  assert.deepEqual(seen, ["Tab"]);
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(body.ownerDocument.activeElement, other, "the browser's own Tab then moves on");
+});
+
+test("Enter that nothing takes presses the key window's default button", () => {
+  const f = keyViewPage([element("input", {})], {
+    confirm: [element("input", {}), element("button", {class: "default"})]
+  });
+  const window = f.application.showWindow("confirm");
+  const [field, button] = window.root.children;
+  let pressed = 0;
+  button.addEventListener("click", () => { pressed += 1; });
+  field.focus();
+  const event = pressKey(field, "Enter");
+  assert.equal(pressed, 1);
+  assert.equal(event.defaultPrevented, true);
+  f.application.dismiss(window.controller);
+  const page = f.main.children[0];
+  page.focus();
+  assert.equal(pressKey(page, "Enter").defaultPrevented, false, "a window without a default button leaves Enter alone");
+});
+
+test("resigning first responder blurs the focused element, not the first focusable one", () => {
+  const second = element("input", {});
+  const f = keyViewPage([element("input", {}), second]);
+  f.application.makeFirstResponder(f.host);
+  second.focus();
+  assert.equal(f.application.firstResponder(), f.host);
+  f.application.makeFirstResponder(null);
+  assert.equal(f.document.activeElement, null);
+  assert.equal(f.application.firstResponder(), f.application);
+});
+
+test("in development, a first responder the keyboard is not in is reported", () => {
+  const f = windowedPage();
+  const [parent] = f.application.controllers;
+  const warnings = [];
+  const stop = Runtime.observeWarnings(message => warnings.push(message));
+  parent.nameField.element.focus();
+  f.application.assignFirstResponder(View.controllerFor(f.badge));
+  parent.nameField.element.dispatchEvent(keyEvent("keydown", "x"));
+  assert.deepEqual(warnings, [], "outside development nothing is checked");
+  f.application.development = true;
+  parent.nameField.element.dispatchEvent(keyEvent("keydown", "x"));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Focus check after a key: the focused element is outside the first responder\. First responder: Demo::Badge <section outlet="badge" controller="Demo::Badge">; focused: <input outlet="name_field">/);
+  f.application.makeFirstResponder(parent.nameField);
+  parent.nameField.element.dispatchEvent(keyEvent("keydown", "x"));
+  assert.equal(warnings.length, 1, "agreement is not reported");
+  stop();
+  f.application.development = false;
+});
+
+test("focus moving into a nested responder stays there", () => {
+  const field = element("input", {outlet: "field"});
+  const button = element("button", {});
+  const f = keyViewPage([button, field]);
+  button.focus();
+  assert.equal(f.application.firstResponder(), f.host);
+  field.focus();
+  assert.equal(f.document.activeElement, field, "the controller resigning does not blur where focus went");
+  assert.equal(f.application.firstResponder(), View.of(field));
+});
+
+test("focus changes are seen even when content stops the focus event", () => {
+  const f = windowedPage();
+  f.main.addEventListener("focusin", event => event.stopPropagation());
+  const button = f.badge.querySelector("button");
+  button.focus();
+  assert.equal(f.application.firstResponder(), View.controllerFor(f.badge));
+});
+
 test("show_window presents a dialog whose dismissal restores the first responder", async () => {
   const f = windowedPage();
   const [parent] = f.application.controllers;
@@ -1938,8 +2140,9 @@ test("show_window presents a dialog whose dismissal restores the first responder
   assert.equal(dialog.open, true, "a dialog root is shown");
   assert.ok(window.controller instanceof Badge);
   assert.equal(window.isContainer(), false);
+  assert.equal(f.application.keyWindow(), window, "a presented window becomes key");
   assert.equal(f.application.firstResponder(), window.controller);
-  assert.equal(window.savedFirstResponder, parent.nameField);
+  assert.equal(f.application.mainWindow().firstResponder, parent.nameField, "the page keeps its first responder meanwhile");
   let resolved = false;
   window.closed.then(() => { resolved = true; });
   dialog.querySelector("[data-action=close]").click();
@@ -1948,7 +2151,9 @@ test("show_window presents a dialog whose dismissal restores the first responder
   assert.equal(dialog.parentElement, null, "dismiss removes the root");
   assert.equal(dialog.open, false);
   assert.equal(window.controller.view.controllerValue(), null, "dismiss tears down the controller");
-  assert.equal(f.application.firstResponder(), parent.nameField, "the saved first responder returns");
+  assert.equal(f.application.keyWindow(), f.application.mainWindow(), "the page is key again");
+  assert.equal(f.application.firstResponder(), parent.nameField, "and its first responder has the keyboard");
+  assert.equal(f.document.activeElement, parent.nameField.element);
   assert.equal(f.application.dismiss(window.controller), false, "a dismissed window is gone");
   assert.throws(() => f.application.showWindow("ignored"), /No window content template: ignored/);
   const plain = element("template", {for: "window", name: "plain"}, [
@@ -2662,6 +2867,13 @@ test("a control's delegate can refuse to let it resign first responder", () => {
   assert.equal(application.makeFirstResponder(controller.other), true, "without a delegate the control resigns");
 });
 
+test("a custom select declares its tab stop without overriding an author's tabindex", () => {
+  const declared = element("div", {klass: "Swill::Control::CustomSelect"});
+  const authored = element("div", {klass: "Swill::Control::CustomSelect", tabindex: "-1"});
+  launched(element("body", {}, [element("main", {controller: installHost({})}, [declared, authored])]));
+  assert.deepEqual([declared.getAttribute("tabindex"), authored.getAttribute("tabindex")], ["0", "-1"]);
+});
+
 test("a custom select builds its chrome, follows the keyboard and pointer, and reports choices as events", () => {
   const picker = element("div", {klass: "Swill::Control::CustomSelect", outlet: "picker"});
   const host = installHost({picker: false});
@@ -2694,6 +2906,10 @@ test("a custom select builds its chrome, follows the keyboard and pointer, and r
   key("Enter");
   key("Escape");
   assert.equal(popup().hidden, true, "Escape closes");
+  const closedDown = keyEvent("keydown", "ArrowDown");
+  picker.dispatchEvent(closedDown);
+  assert.deepEqual([control.value, popup().hidden, closedDown.defaultPrevented], ["a", true, false],
+    "closed, Down is not the control's and goes up the chain untouched");
   key(" ");
   rows()[1].click();
   assert.deepEqual([control.value, popup().hidden, events.length], ["b", true, 2], "clicking an option chooses it");
@@ -3377,6 +3593,9 @@ test("segmented binds one selection, roves focus, emits user changes and release
   host.choice = "b";
   assert.deepEqual(changes, ["a"], "assignments are silent");
   control.disabled = true;
+  const declined = keyEvent("keydown", "ArrowLeft");
+  buttons()[0].dispatchEvent(declined);
+  assert.equal(declined.defaultPrevented, false, "a disabled control passes its keys on");
   buttons()[0].click();
   assert.equal(host.choice, "b");
   assert.ok(buttons().every(button => button.disabled));

@@ -127,16 +127,27 @@ module Swill
       retain(NotificationCenter.default.add_observer(name, callback))
     end
 
-    # Returns whether the region contains a focusable element, as `View`
-    # decides it. A controller with nothing to focus refuses first responder.
+    # Returns whether the region has a key element. A controller with nothing
+    # to focus refuses first responder.
     sig { override.returns(T::Boolean) }
     def accepts_first_responder?
-      @view.first_focusable_element != nil
+      key_element != nil
     end
 
-    # Focuses the first focusable element in the region and returns true.
-    # Returns false, focusing nothing, when the current first responder
-    # refuses to resign.
+    # The element of this controller's view, which its focus lies within.
+    sig { override.returns(T.nilable(Element)) }
+    def focus_region
+      @view.element
+    end
+
+    # The element focus goes to when this controller becomes first
+    # responder: its view's `key_element`.
+    sig { override.returns(T.nilable(Element)) }
+    def key_element
+      @view.key_element
+    end
+
+    # Focuses the region's key element and returns true.
     sig { override.returns(T::Boolean) }
     def become_first_responder # rubocop:disable Naming/PredicateMethod
       return false unless super
@@ -145,14 +156,14 @@ module Swill
       true
     end
 
-    # Blurs the region's focused element and returns true. Override to return
-    # false, which refuses the change and keeps this controller first
-    # responder.
+    # Blurs the focused element within the region and returns true. Override
+    # to return false, which refuses the change and keeps this controller
+    # first responder.
     sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
     def resign_first_responder(next_responder) # rubocop:disable Naming/PredicateMethod
       return false unless super
 
-      @view.blur_element
+      @view.blur_element(next_responder)
       true
     end
 

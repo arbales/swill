@@ -16,6 +16,7 @@ group :development do
   gem "async-websocket"
   gem "falcon"
   gem "roda"
+  gem "slim"
   gem "sqlite3"
   gem "ruby-lsp"
   gem "rubocop"

@@ -437,6 +437,56 @@ try {
     return result;
   })()`), ["inline-flex", 1, true, "ada", true, "grace", "Grace Hopper", "grace", true, "grace", true, "katherine", "katherine", true, 2]);
 
+  // Windows and the key view loop, with keys the browser itself receives,
+  // so its own Tab handling is what the framework has to contain.
+  const press = async (key, {shift = false} = {}) => {
+    const codes = {Tab: 9, Escape: 27, Enter: 13};
+    for (const type of ["rawKeyDown", "keyUp"]) {
+      await call("Input.dispatchKeyEvent", {type, key, code: key, windowsVirtualKeyCode: codes[key],
+        modifiers: shift ? 8 : 0}, sessionId);
+    }
+  };
+  const focused = () => evaluate(`(() => {
+    const active = document.activeElement;
+    const app = Swill.Application.shared();
+    return [active.textContent.trim() || active.getAttribute("outlet") || active.tagName,
+      app.keyWindow() === app.mainWindow() ? "page" : app.keyWindow().name];
+  })()`);
+  await evaluate(`(() => {
+    document.querySelector("[data-action=show_palette]").focus();
+    document.querySelector("[data-action=confirm]").click();
+  })()`);
+  assert.deepEqual(await focused(), ["Cancel", "alert"], "an alert is key, its default button focused");
+  await press("Tab");
+  assert.deepEqual(await focused(), ["Discard", "alert"]);
+  await press("Tab");
+  assert.deepEqual(await focused(), ["Cancel", "alert"], "Tab wraps within the alert");
+  await press("Tab", {shift: true});
+  assert.deepEqual(await focused(), ["Discard", "alert"], "Shift-Tab wraps back");
+  await press("Escape");
+  assert.deepEqual(await focused(), ["Palette", "page"], "dismissed, the page is key, focused where it was");
+  assert.equal(await evaluate(`document.querySelector("[bind=answer]").textContent`), "Cancel");
+  await evaluate(`document.querySelector("[data-action=show_palette]").click()`);
+  assert.deepEqual(await focused(), ["field", "palette"], "a palette's content keeps the field it chose");
+  await press("Tab");
+  assert.deepEqual(await focused(), ["Close", "palette"]);
+  await press("Tab");
+  assert.deepEqual(await focused(), ["field", "palette"], "a non-modal window's loop wraps too");
+  await evaluate(`document.querySelector(".palette-window [data-action=close]").click()`);
+  assert.deepEqual(await focused(), ["Palette", "page"]);
+  assert.deepEqual(await evaluate(`(() => {
+    const app = Swill.Application.shared();
+    const views = app.mainWindow().keyViews([]);
+    views[0].focus();
+    return [views.length > 3, views.at(-1).outerHTML];
+  })()`).then(async ([many]) => {
+    await press("Tab", {shift: true});
+    return [many, await evaluate(`(() => {
+      const views = Swill.Application.shared().mainWindow().keyViews([]);
+      return document.activeElement === views.at(-1);
+    })()`)];
+  }), [true, true], "Shift-Tab from the page's first key view wraps to its last");
+
   // A second page uses the same framework bundle directly from plain
   // JavaScript: registration is metadata-backed and startup is explicit.
   await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/rb/javascript.html`}, sessionId);

@@ -79,6 +79,7 @@ module Swill
     sig { params(element: Element, owner: T.nilable(View), controllers: T::Array[Controller]).void }
     def self.walk(element, owner, controllers)
       view = element.__swill_view__
+      classify(element) if element.hasAttribute("klass")
       view = create_view(element) if !view && managed?(element)
       if view
         owner.adopt_subview(view) if owner && !view.superview
@@ -93,6 +94,21 @@ module Swill
       DOM.each_child(element, ->(child) { walk(child, next_owner, controllers) })
     end
 
+    # A class named by `klass` can be a view or controller. Normalize
+    # controllers before region walks inspect their boundaries.
+    sig { params(element: Element).void }
+    def self.classify(element)
+      name = T.must(element.getAttribute("klass"))
+      if Runtime.classIsA(name, "Swill::Controller")
+        raise "#{name} conflicts with controller on the same element" if element.hasAttribute("controller")
+
+        element.removeAttribute("klass")
+        element.setAttribute("controller", name)
+      elsif !Runtime.classIsA(name, "Swill::View")
+        raise "#{name} is not a Swill::View or Swill::Controller"
+      end
+    end
+
     # A live element with klass, controller, or outlet. Templates and JSON
     # scripts are inert content, never objects.
     sig { params(element: Element).returns(T::Boolean) }
@@ -102,7 +118,7 @@ module Swill
       element.hasAttribute("klass") || element.hasAttribute("controller") || element.hasAttribute("outlet")
     end
 
-    # klass names a View subclass; a plain managed element gets a plain View.
+    # After classification, klass names a View subclass.
     sig { params(element: Element).returns(View) }
     def self.create_view(element)
       name = element.getAttribute("klass")

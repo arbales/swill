@@ -54,6 +54,9 @@ module Static
   class Menubar < Swill::Controller
     extend T::Sig
 
+    # The button the last confirmation alert was answered with.
+    property :answer, type: String, default: ""
+
     sig { override.void }
     def controller_did_load
       observe_notification("example_did_change", ->(notification) { sync_selected_example(notification.user_info) })
@@ -70,6 +73,18 @@ module Static
     sig { void }
     def show_palette
       application.show_window("palette")
+    end
+
+    # Asks before discarding, as a modal alert: Cancel is its default
+    # button.
+    sig { void }
+    async def confirm
+      alert = Swill::Alert.new
+      alert.message_text = "Discard the draft?"
+      alert.informative_text = "Its changes cannot be recovered."
+      alert.add_button("Cancel")
+      alert.add_button("Discard")
+      self.answer = (await alert.run).to_s
     end
 
     sig { void }

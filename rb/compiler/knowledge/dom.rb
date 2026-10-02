@@ -63,6 +63,7 @@ module Swill
           "replaceChildren" => [:method, "void", "nodes?: Node"],
           "focus" => [:method, "void", "options?: T.untyped"],
           "blur" => [:method, "void", ""],
+          "click" => [:method, "void", ""],
           "scrollIntoView" => [:method, "void", "options?: T.untyped"],
           "getBoundingClientRect" => [:method, "T.untyped", ""],
           # Form and dialog members live on Element here rather than on each

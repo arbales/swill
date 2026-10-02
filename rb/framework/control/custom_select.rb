@@ -93,18 +93,21 @@ module Swill
     end
 
     # Down chooses the next option while the popup is open; choosing closes
-    # it.
+    # it. With the popup closed, Down goes up the responder chain.
     sig { override.params(event: KeyboardEvent).void }
     def move_down(event)
+      return super unless @open
       event.preventDefault
-      move_selection(1) if @open
+      move_selection(1)
     end
 
-    # Up chooses the previous option while the popup is open.
+    # Up chooses the previous option while the popup is open, and otherwise
+    # goes up the responder chain.
     sig { override.params(event: KeyboardEvent).void }
     def move_up(event)
+      return super unless @open
       event.preventDefault
-      move_selection(-1) if @open
+      move_selection(-1)
     end
 
     # Space toggles the popup, as Enter does. Other keys pass to `super`.
@@ -121,7 +124,8 @@ module Swill
     sig { void }
     def install_chrome
       root = @element
-      Swell[@element].add_class('custom-select').attr('tabindex', '0')
+      Swell[@element].add_class('custom-select')
+      ensure_focusable
       load_template("custom_select")
       focus_handler = ->(event) { focus_out(event) }
       retain(Swell[root].listen("focusout", focus_handler))

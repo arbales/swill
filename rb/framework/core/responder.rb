@@ -41,6 +41,22 @@ module Swill
       false
     end
 
+    # The element this responder's focus lies within: a view's element, or a
+    # controller's view's. Nil here, for a responder with no place on the
+    # page.
+    sig { returns(T.nilable(Element)) }
+    def focus_region
+      nil
+    end
+
+    # The element that carries this responder's focus: becoming first
+    # responder focuses it. Nil here; a view's is its first focusable
+    # element, and a controller's is its view's.
+    sig { returns(T.nilable(Element)) }
+    def key_element
+      nil
+    end
+
     # Called as this responder takes focus. Answer false to refuse it.
     sig { returns(T::Boolean) }
     def become_first_responder

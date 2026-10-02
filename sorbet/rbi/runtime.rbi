@@ -85,6 +85,13 @@ module Swill
     sig { params(message: String).void }
     def self.warn(message); end
 
+    # Whether the running application is in development.
+    sig { returns(T::Boolean) }
+    def self.isDevelopment; end
+
+    sig { params(flag: T::Boolean).void }
+    def self.setDevelopment(flag); end
+
     # Calls +callback+ with each message warn reports, until the returned
     # proc is called.
     sig { params(callback: T.proc.params(message: String).void).returns(T.proc.void) }
@@ -99,6 +106,9 @@ module Swill
 
     sig { params(object: T.untyped).returns(T.nilable(String)) }
     def self.nameOf(object); end
+
+    sig { params(name: String, ancestor: String).returns(T::Boolean) }
+    def self.classIsA(name, ancestor); end
 
     sig { params(value: T.untyped).returns(T::Boolean) }
     def self.is_number(value); end
@@ -223,6 +233,15 @@ class Swill::Object
 
   sig { type_parameters(:T).params(value: T.type_parameter(:T)).returns(T.type_parameter(:T)) }
   def self.await(value); end
+
+  # in_development { ... }: the block runs only while the application is in
+  # development, and an optimized build leaves it out altogether. On MRI it
+  # never runs.
+  sig { params(block: T.proc.void).void }
+  def in_development(&block); end
+
+  sig { params(block: T.proc.void).void }
+  def self.in_development(&block); end
 end
 
 module Swill::Model::Associations

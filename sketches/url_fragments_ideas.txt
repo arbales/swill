@@ -1,0 +1,6 @@
+/ruby#main.show=all&main.selection=36&main.v=all&main.s=31
+/ruby#main(show=all,selection=36)&other(v=all,s=31)
+/ruby#main[show=all,selection=36],other[sort=down]
+/ruby#show=all,selection=36;other[sort=down,filter=watched]
+/ruby#main:show=all,selection=36;other:sort=down,filter=watched
+/ruby#[main:show=all,selection=36][other:sort=down,filter=watched]

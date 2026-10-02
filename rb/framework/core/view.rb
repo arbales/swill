@@ -243,28 +243,46 @@ module Swill
     end
 
     # Returns this view's element when it matches `focusable_selector`, else
-    # its default button, the descendant marked with the `default` class, as
-    # a window's default button takes the keyboard first, else its first
-    # focusable descendant. Returns nil when nothing within it is focusable.
+    # its first focusable descendant, or nil when nothing within it is
+    # focusable.
     sig { returns(T.nilable(Element)) }
     def first_focusable_element
       return @element if @element.matches(focusable_selector)
 
-      @element.querySelector(".default") || @element.querySelector(focusable_selector)
+      @element.querySelector(focusable_selector)
     end
 
-    # Focuses `first_focusable_element` without scrolling, if there is one.
+    # The view's element, which its focus lies within.
+    sig { override.returns(T.nilable(Element)) }
+    def focus_region
+      @element
+    end
+
+    # The element focus goes to when this view becomes first responder: its
+    # `first_focusable_element`.
+    sig { override.returns(T.nilable(Element)) }
+    def key_element
+      first_focusable_element
+    end
+
+    # Focuses `key_element` without scrolling, if there is one.
     sig { void }
     def focus_element
-      target = first_focusable_element
-      target&.focus({ preventScroll: true })
+      target = key_element
+      DOM.focus(target) if target
     end
 
-    # Blurs `first_focusable_element`, if there is one.
-    sig { void }
-    def blur_element
-      target = first_focusable_element
-      target&.blur()
+    # Blurs the focused element when it lies within this view, which may be
+    # a descendant other than `key_element`. Focus already inside
+    # +next_responder+, as when the browser moved it to a nested control, is
+    # left where it is: resigning never takes focus from the responder that
+    # follows.
+    sig { params(next_responder: T.nilable(Responder)).void }
+    def blur_element(next_responder = nil)
+      active = @element.ownerDocument.activeElement
+      return unless active && @element.contains(active)
+      region = next_responder ? next_responder.focus_region : nil
+      active.blur unless region && region.contains(active)
     end
 
     # Returns the controller rooted at this view, or else its superview. The
@@ -280,10 +298,19 @@ module Swill
       true
     end
 
-    # Focuses `first_focusable_element` and returns true.
+    # Focuses `key_element` and returns true.
     sig { override.returns(T::Boolean) }
     def become_first_responder # rubocop:disable Naming/PredicateMethod
       focus_element
+      true
+    end
+
+    # Blurs the focused element within this view and returns true.
+    sig { override.params(next_responder: T.nilable(Responder)).returns(T::Boolean) }
+    def resign_first_responder(next_responder) # rubocop:disable Naming/PredicateMethod
+      return false unless super
+
+      blur_element(next_responder)
       true
     end
 

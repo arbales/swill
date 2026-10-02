@@ -9,7 +9,7 @@ namely controllers and views.
 | `application` | The application's root element, and its `Application` subclass | [Getting started](getting_started.md) |
 | `development` | On the application's element: show problems as alerts as well as in the console | [Getting started](getting_started.md#development) |
 | `controller` | Instantiates a `Controller` whose root element or `View` is this tag | [Awakening](awakening.md) |
-| `klass` | Awaken this element as a `View` subclass | [Awakening](awakening.md) |
+| `klass` | Awaken this element as a `View` or `Controller` subclass | [Awakening](awakening.md) |
 | `outlet` | Connect this element to a named property on its owner | [Awakening](awakening.md) |
 | `bind` | A value binding | [Bindings](bindings.md) |
 | `bind-*` | A one-way binding to a DOM property, or a `data-*` or `aria-*` attribute | [Bindings](bindings.md) |
@@ -40,15 +40,16 @@ ends.
 
 ## klass
 
-Awakens the element as an instance of the named class, which must be a `View`
-subclass.
+Awakens the element as an instance of the named `View` or `Controller`
+subclass. A controller class gets a plain `View` for its element.
 
 ```html
 <input klass="Swill::Control::TextField">
 ```
 
-`klass` and `controller` may appear together: the element is wrapped in `klass`,
-the controller is created, and the controller's `view` is set to that object.
+`klass` and `controller` may appear together when `klass` names a `View`: the
+element is wrapped in that view, and the controller's `view` is set to it.
+If `klass` itself names a controller, adding `controller` is an error.
 
 ## outlet
 

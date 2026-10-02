@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+# Runs from the repository root: the server serves examples/ts from there.
+cd "$(dirname "$0")/.."
 
 PORT="${PORT:-3000}"
 PIDFILE="tmp/dev.pid"
@@ -53,7 +54,7 @@ fi
 ESBUILD_PID=$!
 echo "$ESBUILD_PID" > "$ESBUILD_PIDFILE"
 
-python3 dev_server.py "$PORT" &
+python3 ts/dev_server.py "$PORT" &
 PYTHON_PID=$!
 echo "$PYTHON_PID" > "$PYTHON_PIDFILE"
 

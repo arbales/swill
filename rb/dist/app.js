@@ -324,6 +324,7 @@
   var Static__Application = class extends Swill__Application {
   };
   var Static__Menubar = class extends Swill__Controller {
+    // The button the last confirmation alert was answered with.
     controllerDidLoad() {
       this.observeNotification(
         "example_did_change",
@@ -341,6 +342,14 @@
     }
     showPalette() {
       return this.application().showWindow("palette");
+    }
+    async confirm() {
+      let alert = new Swill__Alert();
+      alert.messageText = "Discard the draft?";
+      alert.informativeText = "Its changes cannot be recovered.";
+      alert.addButton("Cancel");
+      alert.addButton("Discard");
+      return this.answer = Runtime.stringify(await alert.run());
     }
     showIntro() {
       return this.application().loadWindowContent(
@@ -1390,7 +1399,15 @@
       },
       "Static::Menubar": {
         constructor: Static__Menubar,
-        properties: {},
+        properties: {
+          "answer": {
+            type: "String",
+            attribute: false,
+            defaultValue() {
+              return "";
+            }
+          }
+        },
         methods: {
           "controller_did_load": {
             "arity": 0,
@@ -1403,6 +1420,9 @@
           "show_palette": {
             "arity": 0,
             "js": "showPalette"
+          },
+          "confirm": {
+            "arity": 0
           },
           "show_intro": {
             "arity": 0,

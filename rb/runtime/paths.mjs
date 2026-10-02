@@ -178,9 +178,11 @@ export function write(object, name, value) {
     return writeProperty(object, property, value);
   }
 
+  // A writer method compiles to a JavaScript setter under its JavaScript
+  // name, which differs from the Ruby one for a name of two or more words.
   const method = resolveMethod(declarations(object.constructor, "methods"), `${name}=`, 1);
   if (method) {
-    object[name] = value;
+    object[(method.js ?? name).replace(/=$/, "")] = value;
     return value;
   }
 

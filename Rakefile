@@ -86,8 +86,9 @@ def bundle_spike(minify: false)
   Swill::Ruby2JS::Resources.copy(FRAMEWORK_RESOURCES, "swill", "rb/dist/swill.js")
   {"browser" => "swill", "application" => "app", "ui/browser" => "swill-ui"}.each do |source, target|
     output = "rb/dist/#{target}#{minify ? '.min' : ''}.js"
+    # An optimized build leaves in_development blocks out.
     sh "esbuild", "build/#{source}.mjs", "--bundle", "--format=iife", "--target=es2022",
-       "--sourcemap", "--outfile=#{output}", *(minify ? ["--minify"] : [])
+       "--sourcemap", "--outfile=#{output}", *(minify ? ["--minify", "--define:globalThis.__SWILL_DEV__=false"] : [])
   end
 end
 
@@ -120,6 +121,7 @@ task test: :typecheck do
     sh "bundle exec ruby spec/cli_test.rb"
     sh "bundle exec ruby spec/bundles_test.rb"
     sh "bundle exec ruby spec/development_test.rb"
+    sh "bundle exec ruby spec/slim_test.rb"
     sh "bundle exec ruby spec/data_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
     sh "deno test -A spec/data_transport_test.mjs"

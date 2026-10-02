@@ -383,3 +383,10 @@ export function resolve(name) {
 
   return classes.get(name);
 }
+
+// Classify a registered markup class without constructing it.
+export function classIsA(name, ancestor) {
+  const klass = resolve(name);
+  const parent = resolve(ancestor);
+  return klass === parent || klass.prototype instanceof parent;
+}

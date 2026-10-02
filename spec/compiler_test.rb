@@ -275,6 +275,9 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes own, 'this.warn("mine")', "an entry's own warn is a method call"
     assert_includes javascript("def go; puts(\"line\"); end"), 'console.log("line")'
     assert_includes javascript("def go(stop); stop&.(); end"), "stop?.call(null)", "a proc called through &. is an optional call"
+    checked = javascript("def go(x); in_development { warn(x) }; x; end")
+    assert_includes checked, "if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {\n      Runtime.warn(x);",
+                    "in_development runs in place, only in development, and an optimized build can drop it"
   end
 
   def test_a_constructor_with_keywords_returns_nothing
@@ -291,6 +294,29 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_includes built, 'new Example("b", Runtime.keywordArguments({ modal: true }))'
   end
 
+  def test_a_local_first_assigned_in_a_condition_is_declared
+    js = javascript(<<~RUBY)
+      def find(value)
+        if (match = value) && match.size
+          match
+        end
+      end
+
+      def pick(value, flag)
+        flag ? 1 : (other = value) && other
+      end
+
+      def rescued
+        raise "boom"
+      rescue => failure
+        failure.message
+      end
+    RUBY
+    assert_match(/find\(value\) \{\n\s+let match;\n/, js, "declared at the top of the method, as strict mode needs")
+    assert_match(/pick\(value, flag\) \{\n\s+let other;\n/, js)
+    refute_match(/let failure;/, js, "a rescued error is declared by its catch")
+  end
+
   def test_a_local_assigned_from_a_block_parameter_keeps_its_type
     js = javascript(<<~RUBY)
       extend T::Sig
@@ -302,6 +328,8 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
       end
     RUBY
     assert_includes js, "Runtime.modulo(index + delta, items.length)", "Ruby's modulo, so -1 wraps to the end"
+    assert_includes javascript("def wrap(x, y); x % y; end"), "Runtime.modulo(x, y)",
+                    "an untyped % is Ruby's too; only a String's formats"
   end
 
   def test_class_indexing_calls_the_declared_method_and_preserves_native_indexing

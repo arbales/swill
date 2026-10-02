@@ -19,6 +19,7 @@ import {
   classWithSetting,
   identityStore,
   resolve,
+  classIsA,
   nameOf
 } from "./install.mjs";
 import {observe, observed, retain, release, dealloc, disconnect} from "./properties.mjs";
@@ -62,6 +63,28 @@ export function warn(message) {
 
 const warningObservers = new Set();
 
+let development = false;
+
+/**
+ * Whether the running application is in development. Code in an
+ * `in_development` block runs only then; see doc/compiler.md.
+ *
+ * @returns {boolean}
+ */
+export function isDevelopment() {
+  return development;
+}
+
+/**
+ * Records whether the running application is in development. The
+ * application sets it from its `development` property.
+ *
+ * @param {boolean} flag
+ */
+export function setDevelopment(flag) {
+  development = flag === true;
+}
+
 let failedBuild = null;
 
 /**
@@ -102,7 +125,7 @@ export function observeWarnings(callback) {
 export const Runtime = {
   // Classes
   install, include, installClass,
-  inheritableRegistry, classSetting, classWithSetting, identityStore, resolve, nameOf,
+  inheritableRegistry, classSetting, classWithSetting, identityStore, resolve, classIsA, nameOf,
 
   // Values
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
@@ -136,5 +159,5 @@ export const Runtime = {
   bindArguments, argument, yieldBlock,
 
   // Reporting
-  warn, observeWarnings, reportBuildFailure, buildFailure
+  warn, observeWarnings, reportBuildFailure, buildFailure, isDevelopment, setDevelopment
 };

@@ -261,7 +261,9 @@ binding. Keyword arguments remain distinct from a positional Hash, and an
 omitted optional argument remains distinct from an explicit `nil`. Missing
 required keywords, unknown keywords, and invalid positional argument counts
 raise errors when the method is called. Static and `ClassMethods` methods also
-support optional and keyword parameters.
+support optional and keyword parameters, and so does `initialize`: `new` passes
+its keywords as any call to such a method does, and the constructor returns
+nothing, since an object a JavaScript constructor returns replaces the instance.
 
 A block passed to a collected method requires a statically resolved call. Blocks
 on typed collections use the rules in [Core Value Types](#core-value-types).
@@ -594,7 +596,7 @@ nil-safe (`Runtime.stringify`) because `nil.to_s` is `""`.
 | --- | --- | --- |
 | `String` | `length`/`size` (`.length`); `include?`, `start_with?`, `end_with?` (`includes`, `startsWith`, `endsWith`); `to_s`, `to_sym`, `dup` (identity); `chars` (`Array.from`) | `strip`, `upcase`, `downcase`, `capitalize`, `blank?`, `present?`, `empty?`, `to_i` (leading integer or 0), `to_f`, `split` (whitespace or separator, trailing empties dropped), `slice(index)` / `slice(start, length)` |
 | `Symbol` | `to_s`, `to_sym` (identity) | |
-| `Integer` | `zero?`, `positive?`, `negative?`, `even?`, `odd?` (comparisons); `abs` (`Math.abs`); `to_i`, `to_f` (identity) | `to_s`, `clamp`, `between?`; `/` and `%` with an Integer divisor floor and take the divisor's sign (`intDiv`, `modulo`) |
+| `Integer` | `zero?`, `positive?`, `negative?`, `even?`, `odd?` (comparisons); `abs` (`Math.abs`); `to_i`, `to_f` (identity) | `to_s`, `clamp`, `between?`; `/` with an Integer divisor floors (`intDiv`); `%` takes the divisor's sign (`modulo`), on any receiver the compiler cannot tell is a String |
 | `Float` | `floor`, `ceil`, `round`, `to_i` (`Math`); `zero?`, `positive?`, `negative?`, `abs` | `to_s`, `clamp`, `between?` |
 | `T::Boolean`, `NilClass` | `nil.to_a` (`[]`), `nil.to_i` (`0`) | `to_s` (`nil.to_s` is `""`) |
 | `Array` | `length`/`size`/`count` (`.length`); `first` (`[0]`); `last` (`at(-1)`); `include?` (`includes`); `pop`, `shift`; `join` (default `""`); `take`, `drop` (`slice`); `dup` (`slice()`); `freeze` (`Object.freeze`, shallow); `to_a`; `+` (`concat`) | `blank?`, `present?`, `empty?`, `index` (Ruby equality, nil when absent), `push` and `<<` (return the array), `unshift`, `reverse`, `sort` (copy, Ruby ordering), `uniq`, `compact`, `flatten`, `sum`, `min`, `max` (nil when empty), `-` (Ruby equality) |
@@ -670,6 +672,24 @@ element, as MRI's `await` would yield it, and the compiler types the awaited
 value. `Promise.all`, `Promise.resolve`, and the rest of the browser's promise
 API are native, as any DOM class is, and their awaited values are untyped.
 
+### Development Blocks
+
+`in_development { ... }` runs its body in place, without a function of its own,
+only while the application is in development (see
+[Getting Started](getting_started.md#development)). It compiles to
+`if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) { ... }`. A
+minified build (`swill build --minify`, `rake optimize`) defines
+`globalThis.__SWILL_DEV__` as `false`, so the bundler leaves the body out
+entirely: checks written this way cost an optimized build nothing. On MRI the
+block never runs. The framework's [focus checks](responders.md#development-checks)
+are written this way.
+
+### Console Output
+
+`warn message` is `Runtime.warn`, which a development application also shows
+as an alert; `puts message` is `console.log`. Each takes one message. A class
+that defines its own `warn` or `puts` keeps it.
+
 ### Exceptions
 
 `raise "message"` and `raise "interpolated #{message}"` compile to `throw new
@@ -685,9 +705,11 @@ boundary: a thrown value is whatever JavaScript threw.
 `receiver&.member` is lowered wherever the compiler resolves the member
 statically: a declared property or an `attr_reader` reads, a collected method is
 called, and each hop guards the next, so `recipe&.detail&.glassware` is one
-expression. A core value type and an untyped receiver are rejected, because both
-lower through helpers that take the receiver as an argument, and `?.` cannot
-guard an argument.
+expression. A proc, or a value with no static type, called with `&.()` or
+`&.call` is JavaScript's optional call, which skips nil as Ruby does. Otherwise
+a core value type and an untyped receiver are rejected, because both lower
+through helpers that take the receiver as an argument, and `?.` cannot guard an
+argument.
 
 For framework objects, the result is normalized to `null`, matching Ruby's
 `nil`. JavaScript optional chaining returns `undefined`, which is omitted from
@@ -707,7 +729,7 @@ the build. The following table groups these restrictions by construct:
 | Declarations | A macro's own keywords are Ruby's, so a missing or unknown one is rejected where it is written. The declaration primitives reject: an unsupported property name, a stored property ending in `?`, a duplicate name, a mutable default other than an empty array or Hash, a computed property with a default, a computed outlet, a restorable path that is not dotted property names, and registry storage other than `:hash` or `:array`. The compiler rejects a declared class name that does not name a class, and a class body that calls something no ancestor declares. Which classes may declare `outlet` and `restorable` is where their macros are defined; whether a `restorable` path starts at a declared property, and whether keys collide, is checked by the runtime at installation |
 | Mixins | Properties or includes on a mixin itself; a second `self.included`; non-literal hook bodies; `base.extend` of anything but `ClassMethods`; declaring `ClassMethods` without contents; the same mixin included twice along one ancestor chain; `prepend` |
 | `ClassMethods` | Non-literal registry or setting names; registry storage other than `:hash` / `:array`; `class_setting` coercion blocks; any other statement |
-| Expressions | Any `T` construct in an executable body other than `T.must`, `T.cast`, `T.let`, `T.assert_type!`, `T.unsafe`, `T.absurd`, and `T.bind(self, ...)` with the right number of arguments; a type argument outside the checkable types, or naming a mixin or an unknown constant; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments; safe navigation (`&.`) on a core value type or an untyped receiver |
+| Expressions | Any `T` construct in an executable body other than `T.must`, `T.cast`, `T.let`, `T.assert_type!`, `T.unsafe`, `T.absurd`, and `T.bind(self, ...)` with the right number of arguments; a type argument outside the checkable types, or naming a mixin or an unknown constant; `public_send`, `send`, `__send__`, `const_get`, `define_method`, `instance_exec`, `eval`; `respond_to?` with a non-literal name; a block on an untyped receiver; a method or block on a core value type receiver outside its lowering table, or with the wrong number of arguments; safe navigation (`&.`) on a core value type or an untyped receiver, other than calling it with `&.()` |
 | Exceptions | Any `raise` form other than a message string (a literal, or an expression typed `String`) or a typed rescued error |
 | Pragmas | Any pragma other than `array`, `hash`, `string` |
 | Members | Two members with the same encoded JavaScript name |
@@ -724,6 +746,15 @@ the build with Ruby2JS's own error.
 | ActiveSupport | Its `blank?` behavior conflicts with Swill value readers |
 | ESM / Require | Imports and exports come from compiler metadata |
 | camelCase / underscore | Source names and metadata keys must remain stable |
+
+### Upstream Corrections
+
+`rb/compiler/converter_patches.rb` prepends fixes to Ruby2JS's own converter,
+each as narrow as the handler it corrects, until upstream has them.
+
+| Handler | Correction |
+| --- | --- |
+| `lvasgn` | A local first assigned inside an expression, as in `if (match = find)` or `(owner = element) && owner.contains?(other)`, is declared with `let` at the top of its scope. Upstream emits a bare assignment to an undeclared name, a ReferenceError in strict mode, and records it as declared so no later assignment declares it either. |
 
 ## Extending the Boundary
 
@@ -771,7 +802,8 @@ The compiler and runtime implementations are organized as follows:
 | `rb/compiler/loader.rb` | Containers, the shared framework container, DOM stubs, and load errors |
 | `rb/compiler/knowledge/dom.rb` | The DOM and browser intrinsics as the compiler knows them; generates `sorbet/rbi/dom.rbi` |
 | `rb/compiler/knowledge/signatures.rb` | Reading `sig` parameter and return types and source ranges |
-| `rb/compiler/filters/shared_lowering.rb` | `raise`, callable invocation, constructor, static method, `warn`, and `respond_to?` lowering |
+| `rb/compiler/converter_patches.rb` | Corrections to upstream converter handlers |
+| `rb/compiler/filters/shared_lowering.rb` | `raise`, callable invocation, constructor (including keyword constructors), static method, `warn`, `puts`, `in_development`, and `respond_to?` lowering |
 | `rb/compiler/filters/static_types.rb` | Static type facts: literal, local, signature, and result types |
 | `rb/compiler/filters/core_types.rb` | Lowering tables for String, Symbol, Integer, Float, Boolean, nil, Array, and Hash receivers and their blocks |
 | `rb/compiler/filters/ruby_surface.rb` | The shared-Ruby surface: AST hooks, receiver dispatch, truthiness, and logic |

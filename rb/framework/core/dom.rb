@@ -18,6 +18,21 @@ module Swill
       end
     end
 
+    # Focuses +element+ without scrolling to it, the one way the framework
+    # moves focus. See `DOM.focus_revealing` for a move the user made, which
+    # should bring the element into view.
+    sig { params(element: Element).void }
+    def self.focus(element)
+      element.focus({preventScroll: true})
+    end
+
+    # Focuses +element+ and scrolls it into view, as the browser does when
+    # Tab moves to it.
+    sig { params(element: Element).void }
+    def self.focus_revealing(element)
+      element.focus
+    end
+
     # Walks one connection region. Child controllers and templated controls
     # are visited as boundaries, but their internals belong to them.
     # +include_root+ visits root as well.

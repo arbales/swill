@@ -12,17 +12,8 @@ These links require the local Dash server. This first pass covers
 CollectionArrangement, ArrayController, and their List/EditableList integration.
 It is not a completed audit of the entire framework.
 
-## Corrected
-
-`arranged_objects` is now the computed, observable property. Removed the
-`arranged_content` property and forwarding method; renamed the List and
-EditableList change hooks. Ruby reads, bindings, and observations use the same
-name. JavaScript uses the `arrangedObjects` property, not a method call.
-
-Cocoa explicitly documents `arrangedObjects` as observable. The previous split
-was accidental drift, not a requirement of caching or dependency tracking.
-Tests cover direct observation, binding, cached reads, list rendering, and
-teardown using the corrected property.
+The `arranged_objects` correction is recorded in [Completed](COMPLETED.md).
+The findings below remain open proposals, not approved API changes.
 
 ## Findings and proposed decisions
 

@@ -18,6 +18,7 @@ rescue LoadError
   MESSAGE
 end
 require "ruby2js/filter/return"
+require_relative "converter_patches"
 require_relative "names"
 require_relative "knowledge"
 require_relative "loader"

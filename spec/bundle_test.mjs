@@ -6,6 +6,13 @@ import {Browser, element} from "./dom.mjs";
 
 const minified = process.env.MINIFIED === "1";
 
+test("in_development checks are in a development build and left out of an optimized one", () => {
+  const source = readFileSync(new URL(`../rb/dist/swill${minified ? ".min" : ""}.js`, import.meta.url), "utf8");
+  const checks = source.match(/\.isDevelopment\(\)/g) ?? [];
+  if (minified) assert.equal(checks.length, 0, "the bundler drops every in_development block");
+  else assert.ok(checks.length > 0, "the framework's own checks are there");
+});
+
 test("script loading installs both artifacts using a single runtime", () => {
   const environment = bundleEnvironment({minified});
   const Swill = environment.load("swill");

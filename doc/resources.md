@@ -162,9 +162,10 @@ reads correctly in either: `--bg`, `--fg`, `--dim`, `--bright`, `--accent`,
 A window presented with `Application#show_window` or `present_window` gets a
 title bar showing its content controller's `title`, kept in step as the title
 changes. Linear hides it; Bioplastic shows it. A window's default button,
-marked with the `default` class, takes focus first, so Enter chooses it; an
-alert's first button is its default. Bioplastic draws a focused button in a
-ring, and the default button wears it however focus came.
+marked with the `default` class, takes focus as the window opens and Enter
+presses it from anywhere in the window; an alert's first button is its default
+(see [The Key View Loop](responders.md#the-key-view-loop)). Bioplastic draws a
+focused button in a ring, and the default button wears it however focus came.
 
 ## On the Server
 

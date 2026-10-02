@@ -32,7 +32,7 @@ module Swill
     # host means the editor is already released.
     sig { params(responder: T.nilable(Responder)).returns(T::Boolean) }
     def allow_resignation_to?(responder)
-      element = responder_element(responder)
+      element = responder ? responder.focus_region : nil
       return true if element && @view.contains?(element)
       host = editing_host
       host ? host.editor_should_end_editing(self) : true
@@ -50,13 +50,6 @@ module Swill
     def editing_host
       owner = parent
       owner && owner.respond_to?(:editor_should_end_editing) ? owner : nil
-    end
-
-    sig { params(responder: T.nilable(Responder)).returns(T.nilable(Element)) }
-    def responder_element(responder)
-      return T.cast(responder, Controller).view.element if responder.is_a?(Controller)
-      return T.cast(responder, View).element if responder.is_a?(View)
-      nil
     end
   end
 end

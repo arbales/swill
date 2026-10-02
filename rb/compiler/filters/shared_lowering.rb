@@ -139,6 +139,24 @@ module Swill
           s(:call, s(:const, nil, :Runtime), :warn, process(args.first))
         end
 
+        # in_development { ... }, unless the entry defines its own: the body
+        # runs where the method is, without a function of its own, only while
+        # the application is in development. An optimized build defines
+        # globalThis.__SWILL_DEV__ as false, and the bundler drops the body.
+        def in_development_block?(node)
+          call, args, = node.children
+          call.type == :send && call.children[0].nil? && call.children[1] == :in_development &&
+            call.children.length == 2 && args.children.empty? &&
+            !@knowledge.method_defined?(@entry["name"], :in_development)
+        end
+
+        def lower_in_development(node)
+          built = s(:send, s(:attr, s(:const, nil, :globalThis), :__SWILL_DEV__), :!=, s(:false))
+          running = s(:call, s(:const, nil, :Runtime), :isDevelopment)
+          body = node.children[2]
+          s(:if, s(:and, built, running), body ? process(body) : nil, nil)
+        end
+
         # Kernel#puts, unless the entry defines its own: a line in the console.
         def puts_call?(receiver, method)
           receiver.nil? && method == :puts && !@knowledge.method_defined?(@entry["name"], :puts)

@@ -224,6 +224,7 @@ module Swill
         # A block on an untyped receiver has no lowering: only a statically
         # resolved collected method or typed collection can define its call shape.
         def on_block(node)
+          return lower_in_development(node) if in_development_block?(node)
           # A block is called at a fixed arity by whatever yields to it, so an
           # optional parameter would only ever take its default.
           if node.children[1].children.any? { |arg| arg.type == :optarg }
@@ -587,6 +588,12 @@ module Swill
           setter = name.match?(/\A[a-z_]\w*=\z/) && args.length == 1
           base = name.delete_suffix("=")
           type = static_type(receiver)
+          # Ruby's % takes the sign of the divisor and JavaScript's that of the
+          # dividend, so -1 % 3 differs. Whatever the compiler cannot tell is
+          # a String (whose % formats) gets Ruby's, an Integer's or a Float's.
+          if method == :% && args.length == 1 && !type.to_s.include?("String")
+            return s(:call, s(:const, nil, :Runtime), :modulo, process(receiver), process(args.first))
+          end
           if method == :new && receiver.type == :const
             owner = swill_class(@knowledge.constant(receiver))
             constructed = owner && lower_complex_new(receiver, owner, args)
