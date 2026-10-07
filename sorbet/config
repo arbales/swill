@@ -17,6 +17,8 @@
 --ignore=/rb/distant/
 --ignore=/rb/bundles/
 --ignore=/rb/bundles.rb
+--ignore=/rb/swill/server/
+--ignore=/rb/swill/development.rb
 --ignore=/examples/opal/
 --ignore=/rakelib/
 --silence-dev-message

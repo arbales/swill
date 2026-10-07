@@ -43,6 +43,7 @@ module Swill
       # declares a distant interface, in name order; a schema of no models
       # when Sequel is not loaded or none declares one. `new` names the
       # models instead.
+      #
       def self.discover
         candidates = defined?(Sequel::Model) ? descendants(Sequel::Model) : []
         new(candidates.select { |klass| klass.name && Interface.of(klass) }.sort_by(&:name))
@@ -66,8 +67,14 @@ module Swill
       # `returns:`, with a block parameter, or whose projection names an
       # unknown field; and a type naming a model or value the schema does not
       # hold.
+      #
+      # Without the database (see Distant.database), each model's columns
+      # come from the previously generated schema: a field gets a reader, a
+      # writer and its type from there unless it has its own.
       def initialize(items)
+        @previous = Distant.previous_schema
         pairs = items.map { |item| Interface.pair(item) }
+        pairs.each { |klass, _| define_previous_columns(klass) } if @previous
         @classes = pairs.to_h { |klass, _| [klass.name, klass] }
         @models = pairs.to_h { |klass, interface| [klass.name, model_schema(klass, interface)] }.freeze
         @values = discover_values.freeze
@@ -158,11 +165,28 @@ module Swill
           name = field.to_sym
           explicit = declaration.fetch("field_types", {})[field]
           descriptor = klass.db_schema[name]
+          explicit ||= previous_type(klass, field) unless descriptor
           raise ArgumentError, "unknown client field #{klass.name}.#{field}" unless descriptor || explicit
           type = explicit || Types.parse(SEQUEL_TYPES.fetch(descriptor[:type], "T.untyped"))
           type = Type.new("optional", members: [type]) if descriptor && descriptor[:allow_null] && !explicit
           [field, { "name" => field, "type" => type.to_h }]
         end
+      end
+
+      # Gives `klass` a reader and writer for each field and writable field it
+      # had in the previous payload and lacks.
+      def define_previous_columns(klass)
+        model = @previous.dig("models", klass.name)
+        return unless model && klass.respond_to?(:def_column_accessor, true)
+        names = (model.fetch("fields").keys + model.fetch("writable_fields")).uniq
+        missing = names.reject { |field| klass.method_defined?(field) && klass.method_defined?("#{field}=") }
+        klass.send(:def_column_accessor, *missing.map(&:to_sym)) unless missing.empty?
+      end
+
+      # The type `field` of `klass` had in the previous payload, or nil.
+      def previous_type(klass, field)
+        encoded = @previous&.dig("models", klass.name, "fields", field, "type")
+        encoded && Types.load(encoded)
       end
 
       # Returns the association descriptions of `klass` from `declaration`,

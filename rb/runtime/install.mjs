@@ -223,6 +223,7 @@ export function classWithSetting(name, value) {
   return null;
 }
 
+
 /**
  * Returns the identity store for `klass`, created on first use, in which its
  * records are pooled by id. A subclass has its own store.

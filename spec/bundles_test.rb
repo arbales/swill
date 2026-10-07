@@ -3,6 +3,7 @@ require "json"
 require "open3"
 require "tmpdir"
 require "rack/mock"
+require "rack/builder"
 require_relative "../rb/swill/bundles"
 
 # The server's view of bundles, and that it agrees with the browser's.
@@ -78,6 +79,54 @@ class BundlesTest < Minitest::Test
 
   # The browser's Swill::Bundle, compiled from the framework's Ruby, answers
   # exactly what the server does for the same manifest.
+  def test_a_server_composes_the_bundles_the_middleware_and_the_pages
+    require_relative "../rb/swill/server"
+    Swill::Server.default = nil
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "index.html.erb"), "<head><%= swill.head(theme: \"linear\") %></head><body application=\"X\"></body>")
+      state = File.join(dir, "state.json")
+      Swill::Development::Revision.new(state).publish!
+      server = Swill::Server.new(assets: {url: "/assets/", directory: PUBLIC, bundles: ["app"]},
+                                 development: state, pages: {"/" => File.join(dir, "index.html.erb")})
+      assert_equal "/assets", server.assets_url
+      assert_nil server.data_app
+      assert_equal [Swill::Development::Middleware, {path: state}], server.middleware
+      builder = Rack::Builder.new
+      server.use_in(builder)
+      builder.run(->(env) { [200, {}, [env["swill.development"].to_json]] })
+      assert_equal true, JSON.parse(Rack::MockRequest.new(builder.to_app).get("/").body)["ready"], "use_in adds the middleware"
+      script = Rack::MockRequest.new(server).get("/assets/swill.js")
+      assert_equal 200, script.status
+      assert_equal 200, Rack::MockRequest.new(server).get("/assets/resources/app/Poster.png").status
+      assert_equal 404, Rack::MockRequest.new(server).get("/assets/missing.js").status
+      status = Rack::MockRequest.new(server).get("/__swill/development")
+      assert_equal true, JSON.parse(status.body)["ready"], "the development middleware answers its endpoint"
+      page = Rack::MockRequest.new(server).get("/")
+      assert_equal 200, page.status
+      assert_equal "no-store", page.headers["cache-control"]
+      assert_includes page.body, '<meta name="swill-development" content="'
+      assert_includes page.body, '<link rel="stylesheet" href="/assets/resources/swill/linear.css" data-swill-theme="">'
+      assert_includes page.body, '<script src="/assets/swill.js"></script>'
+      assert_equal 404, Rack::MockRequest.new(server).get("/other").status
+      helpers = server.helpers({})
+      assert_equal "", helpers.development_metadata, "outside the middleware the poller is not started"
+      assert_equal Swill::Server.default, server
+      view = Object.new.extend(Swill::Bundles::Helpers)
+      view.define_singleton_method(:env) { {} }
+      assert_includes view.swill.script_tags, "swill.js"
+    end
+  end
+
+  def test_a_server_with_data_mounts_the_connection
+    require_relative "../rb/swill/server"
+    connection = Object.new
+    connection.define_singleton_method(:call) { |_env| [426, {"content-type" => "text/plain"}, ["WebSocket required"]] }
+    server = Swill::Server.new(assets: {url: "/assets", directory: PUBLIC}, data: connection, development: nil)
+    assert_nil server.middleware
+    assert_equal connection, server.data_app
+    assert_equal 426, Rack::MockRequest.new(server).get("/data").status
+  end
+
   def test_the_browser_bundle_agrees_with_the_server
     names = [["Poster", nil], ["icons/Star", "svg"], ["icons/Star", "png"], ["read me", nil], ["theme", "css"],
              ["Missing", nil], ["icons/Star", nil]]

@@ -281,15 +281,29 @@ the server's. The client entry loads the generated classes and then the
 extensions; the compiler merges the two bodies into one JavaScript class, a
 method in the extension replacing a generated one of the same name.
 
-Generation runs the server entry as ordinary Ruby, so it may need the
-database: Sequel reflects column types and associations from the connection
-when a model is defined, whether or not the interface states explicit types.
-An application that generates without a database supplies a schema loader —
-`Sequel.mock`, explicit types, `def_column_accessor` — that makes the same
-declarations as the running server. Swill does not start the application and
-defines no schema-only mode. The [project
+Generation runs the server entry as ordinary Ruby, with `SWILL_SCHEMA_ONLY`
+set, and Sequel reflects each model's columns from the database as the model
+is defined. Connect through `Swill::Distant.database` and generation also
+works without the database:
+
+```ruby
+DB = Swill::Distant.database { Sequel.connect(ENV.fetch("DATABASE_URL")) }
+```
+
+Outside schema-only mode the block's connection is the database. In it, a
+database that does not connect within five seconds is replaced by a mock, and
+each model's fields take their columns and types from the
+`client/models/generated/schema.json` generated last, so the output is the
+same. A field added since then needs the database, or an explicit type, and
+the first generation needs the database. `Swill::Distant.schema_only?` lets
+the entry skip what only serving needs, such as an API client. Swill does not
+start the application. The [project
 workflow](getting_started.md#project-workflow) runs generation before each
 build.
+
+A field typed as an enum, `Swill::Distant::Enum[:high, :low]`, is a `String`
+on the client, and its proxy carries the members in declaration order as a
+constant named for the field: `PRIORITY_VALUES` for `priority`.
 
 ## Connecting
 
@@ -317,6 +331,7 @@ plain Sequel), the actor, and an opaque token that identifies the
 authenticated scope. A new actor or scope is a new token. A request that is
 not a WebSocket upgrade is answered `426`.
 
+`Swill::Server` mounts the connection for you; see [Serving](serving.md).
 Start the Rack server with `bundle exec falcon serve`; the
 [project workflow](getting_started.md#project-workflow) does not manage it.
 

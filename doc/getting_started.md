@@ -1,7 +1,29 @@
 # Getting Started
 
-This guide covers building an application with the `swill` command, the
-`swill.yml` project workflow, and installing Swill as a gem.
+This guide covers starting an application with `swill new`, developing it
+with `swill dev`, building with the `swill` command, the `swill.yml` project
+file, and installing Swill as a gem.
+
+## A New Application
+
+```sh
+bundle exec swill new hello
+cd hello
+bundle install
+bundle exec swill dev
+```
+
+Then open http://localhost:9292: a page greeting the name typed into it.
+`swill new` writes a `Gemfile`, a `swill.yml`, a `config.ru` that serves the
+page and the bundles with `Swill::Server` (see [Serving](serving.md)), the page
+in `pages/index.html.erb`, and the client in `client/`: `app.rb` lists its
+sources, `application.rb` and `controllers/hello.rb` are the application, and
+`client/resources/` holds its stylesheet. `--data` adds `server/server.rb`, a
+server entry for [Distant Objects](server_data.md). A directory that already
+has files is refused.
+
+An existing application adds a `swill.yml` beside its own server, as below;
+`swill dev` runs that server's `config.ru`.
 
 ## Building an Application
 
@@ -26,73 +48,95 @@ cache. `Swill::Application#browser` is the window, for `prompt` and `print`.
 
 ## Project Workflow
 
-For applications with a server data schema, put `swill.yml` at the project
-root. All paths are relative to that file, even when the command is invoked
-from another directory:
+`swill.yml` at the project root says what to build and watch. All paths are
+relative to that file, even when the command is invoked from another
+directory:
 
 ```yaml
-server: server.rb
+server: server/server.rb        # optional: the Distant data entry
 client: client/app.rb
-root: .
 out: public/assets/app.js
-framework: true
-types: client
+framework: false                # true copies swill.js beside the output
+types: false                    # or a directory for Sorbet artifacts
+watch:
+  client: ["client/**/*.rb"]
+  resources: ["client/resources/**/*"]
+  schema: ["server/**/*.rb"]
+  server: ["config.ru", "lib/**/*.rb"]
+  pages: ["pages/**/*"]
+assets:
+  - watch: ["assets/css/**/*.css"]
+    run: ["esbuild", "assets/css/app.css", "--bundle", "--outdir=public/assets"]
+dev:
+  port: 9292
+  server: auto
 ```
 
 ```sh
-bundle exec swill build
-bundle exec swill watch
-# Or select a project explicitly from another working directory:
-bundle exec swill build --project /path/to/app/swill.yml
+bundle exec swill dev           # build, serve, and rebuild on edits
+bundle exec swill dev --once    # build and serve once, then exit
+bundle exec swill build         # build once, without a server
 ```
 
-Each build generates the data proxies and schema, compiles the application,
-copies the installed gem's framework bundle and source map, and generates
-client Sorbet artifacts. Each step runs in a fresh Ruby process, so edits to
-server models are reflected on every rebuild. A failing step stops the build
-and names the stage; watch mode reports the failure and retries after the next
-edit. The build does not start or restart the application's Rack server, and
-does not reload the browser.
+`swill dev` builds everything, starts the server, and then rebuilds only what
+an edit affects, by the category of the file that changed:
 
-`server` is optional for applications without distant data. `root` defaults
-to the configuration directory and controls data generation. `out` defaults
-to `dist/app.js` beside the client entry. `framework` defaults to true;
-`minify` defaults to false. `types` defaults to the client entry directory;
-`false` skips type generation. Generation does not run `srb tc`. An existing
-`sorbet/config` belongs to the application: update its source list when adding
-client files, or remove it to regenerate the default.
+| Category | On an edit |
+| --- | --- |
+| `client`, `resources` | The client is rebuilt (and its types, unless `types: false`) |
+| `schema` | The data proxies are generated; the client is rebuilt if they changed; the server restarts |
+| `server` | The server restarts |
+| any other, such as `pages` | Nothing is rebuilt; the page is offered a reload |
+| an `assets` entry | Its `run` command runs, in `chdir` when given |
+| `swill.yml` itself | It is read again, and everything is rebuilt |
+
+The installed framework bundle is watched too, and a new one is copied and the
+client rebuilt. A `watch` that is a plain list of globs, or no `watch`, is one
+category in which any edit rebuilds everything. The build's own outputs (the
+generated data proxies, Sorbet artifacts, and the scripts and resources it
+writes) are never watched, nor are `tmp`, `vendor`, `node_modules`, `build`
+and `.git` folders.
+
+The server is the project's `config.ru`: `dev.server` is `auto` (Falcon when
+the bundle has it, else `rackup`), `falcon`, `rackup`, a command of its own as
+an argument array, or `false`. It runs with `RACK_ENV=development` and
+`SWILL_DEVELOPMENT_STATE`, the revision file `dev.state` names
+(`tmp/swill-development.json` by default), which `Swill::Server` reads to turn
+on the development reload. `--port`, then `PORT`, then `dev.port` choose the
+port; `--no-server` builds and watches without one. Once a rebuild succeeds
+and the server answers, the revision is published and the page offers to
+reload; a failed step leaves it unpublished, and the page shows the build's
+error after a reload (see [Development](#development)).
+
+Each step runs in a fresh Ruby process, so edits to server models are
+reflected on every rebuild. `server` is optional for applications without
+distant data. `root` defaults to the configuration directory and controls
+data generation. `out` defaults to `dist/app.js` beside the client entry.
+`framework` defaults to true; `minify` defaults to false. `types` defaults to
+the client entry directory; `false` skips type generation. Generation does not
+run `srb tc`. An existing `sorbet/config` belongs to the application: update
+its source list when adding client files, or remove it to regenerate the
+default.
 
 Keep the client Sorbet root separate from server Sorbet configuration. Data
 generation also emits shims under `<root>/sorbet/rbi/shims/generated`; those
 are for tooling contexts without the executable client proxies. Do not load
 both representations of the same class into the client typecheck.
 
-By default the watcher tracks Ruby files, `Gemfile`, `Gemfile.lock`, and the
-project configuration. It detects added and removed files and excludes
-generated data and type outputs, `build`, `vendor`, and `node_modules`.
-Supply `watch` patterns for additional sources such as stylesheets. Add asset
-steps as argument arrays; these execute directly, without shell interpolation:
-
-```yaml
-before_build:
-  - [bin/build_assets]
-watch:
-  - "server/**/*.rb"
-  - "server.rb"
-  - "client/**/*.rb"
-  - "assets/**/*.css"
-  - "Gemfile*"
-```
-
-The optional `env` mapping supplies string environment variables to build
-steps. For example, `env: { SWILL_SCHEMA_ONLY: "1" }` can select an
-application's own schema-only loader; Swill does not interpret that variable.
-Prefer a dedicated server entry that loads model declarations without
-starting listeners or workers, or making external service calls.
+`before_build` runs argument arrays before every full build; `assets` entries
+are the per-edit alternative. Both execute directly, without shell
+interpolation. The optional `env` mapping supplies string environment
+variables to the build steps (not the server). For example,
+data generation always runs with `SWILL_SCHEMA_ONLY` set, which
+`Swill::Distant.database` reads to generate without the database (see
+[Server Data](server_data.md#generating)). Prefer a dedicated server entry
+that loads model declarations without starting listeners or workers, or
+making external service calls.
 
 An explicit entry on the command line bypasses project discovery. With
 `--project`, put build options in the file rather than mixing them with
-command-line build flags. `--interval` controls watch polling.
+command-line build flags. `--interval` controls watch polling, and `swill
+watch` with a project is `swill dev --no-server`.
 
 ## Development
 

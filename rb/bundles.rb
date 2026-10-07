@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "cgi"
+require "erb"
 require_relative "bundles/manifest"
 
 module Swill
@@ -75,6 +76,76 @@ module Swill
       # The URL of the bundle's script.
       def script_url
         "#{@url}#{@script}"
+      end
+    end
+
+    # What a page needs from the server, for a template to write: the
+    # bundles' tags, the theme, and the meta tag the browser reads for
+    # development reloads. Swill::Server#helpers
+    # answers one for a request; a view context that includes Helpers has it
+    # as +swill+. The tags are HTML, so a template engine that escapes
+    # output, such as Roda's Erubi, writes them with `<%==`; Ruby's ERB, which
+    # renders a Swill::Server page, with `<%=`:
+    #
+    #     <head><%== swill.head(theme: "linear") %></head>
+    class Page
+      attr_reader :catalog, :env
+
+      def initialize(catalog, env)
+        @catalog = catalog
+        @env = env
+      end
+
+      # Renders the ERB +template+ with +page+ as +swill+.
+      def self.render(template, page)
+        ERB.new(File.read(template), trim_mode: "-").result(page.template_binding)
+      end
+
+      def template_binding # :nodoc:
+        swill = self
+        binding
+      end
+
+      # `<script>` tags for every bundle, the framework's first.
+      def script_tags
+        @catalog.script_tags
+      end
+
+      # A `<link rel="stylesheet">` for the stylesheet +name+.
+      def stylesheet_tag(name, **attributes)
+        @catalog.stylesheet_tag(name, **attributes)
+      end
+
+      # An `<img>` for the image +name+; see Catalog#image_tag.
+      def image_tag(name, **attributes)
+        @catalog.image_tag(name, **attributes)
+      end
+
+      # The link to the theme +name+, marked `data-swill-theme` so
+      # Swill::Application#theme can read and switch it.
+      def theme_link(name)
+        @catalog.stylesheet_tag(name, "data-swill-theme": "")
+      end
+
+      # The meta tag the development poller reads, or nothing outside
+      # development; see Swill::Development.metadata.
+      def development_metadata
+        Development.metadata(@env)
+      end
+
+      # Everything a page's head needs, in order: the development metadata,
+      # the theme, and the scripts.
+      def head(theme: "linear")
+        [development_metadata, theme_link(theme), script_tags].reject(&:empty?).join("\n")
+      end
+    end
+
+    # Mix into a view context (Roda's or Sinatra's) to render the page
+    # helpers as +swill+, for the server Swill::Server.default names; the
+    # context answers +request+ or +env+.
+    module Helpers
+      def swill
+        @swill ||= Swill::Server.default.helpers(respond_to?(:request) ? request.env : env)
       end
     end
 

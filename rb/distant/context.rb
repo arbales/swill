@@ -130,7 +130,9 @@ module Swill
       # that the record is saved and the fields are named; `refresh` and
       # `invalidate` differ only in the kind.
       def record_effect(kind, record, fields)
-        raise ArgumentError, "effects require a saved Sequel model" unless record.is_a?(Sequel::Model) && record.pk
+        unless defined?(Sequel::Model) && record.is_a?(Sequel::Model) && record.pk
+          raise ArgumentError, "effects require a saved Sequel model"
+        end
         raise ArgumentError, "effects require at least one field" if fields.empty?
 
         effects << { kind: kind, model: record.class.name, id: record.pk.to_s, fields: fields.map(&:to_s).uniq }

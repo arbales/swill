@@ -100,10 +100,11 @@ module Swill
         context.use { dispatch(type, message) }
       rescue RemoteError => e
         error_message(message, e.code, e.message, e.details)
-      rescue Sequel::ValidationFailed => e
-        details = e.respond_to?(:model) && e.model ? e.model.errors.to_hash : nil
-        error_message(message, "validation_failed", e.message, details)
       rescue StandardError => e
+        if validation_error?(e)
+          details = e.respond_to?(:model) && e.model ? e.model.errors.to_hash : nil
+          return error_message(message, "validation_failed", e.message, details)
+        end
         code = privacy_error?(e) ? "unauthorized" : "operation_failed"
         error_message(message, code, e.message)
       end
@@ -269,7 +270,7 @@ module Swill
                     returned = receiver.public_send(name, *arguments, **keywords)
                     Validator.result!(returned, declaration.fetch("returns"))
                     response(message, "RETURN", returned, declaration.fetch("projection", []), generation,
-                             receiver: receiver.is_a?(Sequel::Model) ? receiver : nil,
+                             receiver: sequel_model?(receiver) ? receiver : nil,
                              changes: declaration.fetch("changes", []))
                   end
                   reply = declaration.fetch("transaction", true) ? transaction(klass, &invoke) : invoke.call
@@ -445,6 +446,16 @@ module Swill
       # Returns true when `error` is a sequel-privacy `Unauthorized` or
       # `FieldUnauthorized`, which `call` answers as `unauthorized`; false
       # when sequel-privacy is not loaded.
+      # Whether `error` is Sequel's validation failure; false without Sequel.
+      def validation_error?(error)
+        defined?(Sequel::ValidationFailed) && error.is_a?(Sequel::ValidationFailed)
+      end
+
+      # Whether `value` is a Sequel model instance; false without Sequel.
+      def sequel_model?(value)
+        defined?(Sequel::Model) && value.is_a?(Sequel::Model)
+      end
+
       def privacy_error?(error)
         return false unless defined?(Sequel::Privacy)
         %i[Unauthorized FieldUnauthorized].filter_map do |name|

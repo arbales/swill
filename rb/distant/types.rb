@@ -189,6 +189,13 @@ module Swill
         normalize(type).to_h
       end
 
+      # Returns the `Type` the schema's Hash form `encoded` describes, the
+      # inverse of `dump`.
+      def load(encoded)
+        members = encoded.fetch("members", []).map { |member| load(member) }
+        Type.new(encoded.fetch("kind"), name: encoded["name"], members: members)
+      end
+
       # Returns the text inside `name[...]` or `name(...)` when `source` is
       # wrapped by `name`, or nil.
       def wrapped(source, name)

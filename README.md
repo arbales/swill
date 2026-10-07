@@ -27,6 +27,9 @@ What you need depends on what you are doing:
 | --- | --- |
 | Use Swill from plain JavaScript | Nothing: load `swill.js` |
 | Build an application written in Ruby | Ruby 3.2+, Bundler, and `esbuild` |
+| Serve it with `Swill::Server` | Rack, which the gem depends on; see [Serving](doc/serving.md) |
+| Serve Distant Objects | Sequel, and `falcon` with `async-websocket` for the WebSocket; neither is a dependency of the gem |
+| Type-check it | The `sorbet` gem |
 | Work on Swill itself | The above, plus Deno 2.9+ for the JavaScript tests, and Chrome for `rake browser` |
 
 Swill uses neither Node nor npm. `esbuild` is a standalone binary, and the

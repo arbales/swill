@@ -19,8 +19,10 @@ module Swill
     #       )
     #     end
     #
-    # The connection needs `async-websocket` and a Rack server that supports
-    # it, such as Falcon. See [Server Data](rdoc-ref:doc/server_data.md).
+    # The connection needs the `async-websocket` gem and a Rack server that
+    # supports it, such as Falcon; neither is a dependency of the gem, and a
+    # request raises naming them when they are missing. See
+    # [Server Data](rdoc-ref:doc/server_data.md).
     class Connection
       # Creates a connection serving `schema`. `authenticate` is a callable
       # invoked with the Rack `env` when a browser connects; it returns a
@@ -42,8 +44,13 @@ module Swill
       # `426` response with the plain-text body "WebSocket required". An
       # exception raised by `authenticate` propagates to the Rack server.
       def call(env)
-        require "async/websocket/adapters/rack"
-        require "protocol/websocket/message"
+        begin
+          require "async/websocket/adapters/rack"
+          require "protocol/websocket/message"
+        rescue LoadError => e
+          raise LoadError, "Swill::Distant::Connection needs the async-websocket gem and a server that " \
+                           "supports it, such as Falcon (#{e.message})"
+        end
 
         Async::WebSocket::Adapters::Rack.open(env) do |connection|
           identity = @authenticate.call(env)

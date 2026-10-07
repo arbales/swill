@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "distant/types"
+require_relative "distant/database"
 require_relative "distant/value"
 require_relative "distant/sig"
 require_relative "distant/type_facade"

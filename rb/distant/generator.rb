@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "json"
 
 module Swill
   module Distant
@@ -18,6 +19,9 @@ module Swill
         return @schema if @schema
         raise ArgumentError, "no server entry: #{entry}" unless File.file?(entry)
 
+        # A schema built while the database is out of reach reads the
+        # columns from the last one generated here.
+        Distant.generated_schema = File.join(root, "client", "models", "generated", "schema.json")
         require entry
         @schema = Schema.discover
       end
@@ -107,6 +111,8 @@ module Swill
 
       def proxy_source(model)
         body = ["model_name #{model['name'].to_json}"]
+        constants = enum_constants(model)
+        body.concat(constants.map { |name, members| "#{name} = #{members.inspect}.freeze" })
         model.fetch("fields").each_value do |field|
           next if field["name"] == "id"
 
@@ -151,7 +157,7 @@ module Swill
       end
 
       def rbi_source(model)
-        body = []
+        body = enum_constants(model).map { |name, members| "#{name} = T.let(#{members.inspect}.freeze, T::Array[String])" }
         model.fetch("fields").each_value do |field|
           next if field["name"] == "id"
 
@@ -248,6 +254,18 @@ module Swill
         lines << "#{'  ' * depth}end"
         namespace.length.times.reverse_each { |index| lines << "#{'  ' * index}end" }
         lines.join("\n")
+      end
+
+      # A constant for each enum field, `PRIORITY_VALUES` for `priority`,
+      # holding its members' names in declaration order, so the client has
+      # the values the server declared. Nilable enums count too.
+      def enum_constants(model)
+        model.fetch("fields").each_value.filter_map do |field|
+          type = field.fetch("type")
+          type = type.fetch("members").fetch(0) if type.fetch("kind") == "optional"
+          next unless type.fetch("kind") == "enum"
+          ["#{field['name'].upcase}_VALUES", type.fetch("members").map { |member| member.fetch("name") }]
+        end
       end
 
       def ruby_type(type)

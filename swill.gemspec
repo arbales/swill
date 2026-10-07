@@ -63,9 +63,12 @@ Gem::Specification.new do |spec|
   # reflection when it loads an application's Ruby.
   spec.add_dependency "sorbet-runtime", ">= 0.5"
   spec.add_dependency "msgpack", ">= 1.7"
-  spec.add_dependency "sequel", ">= 5"
-  # Applications opt into sequel-privacy and a WebSocket Rack adapter.
-  # Plain Sequel and client-only builds need neither integration installed.
+  # Swill::Server and Swill::Bundles::Server are Rack applications.
+  spec.add_dependency "rack", ">= 3"
+  # Distant Objects serve Sequel models over a WebSocket, so an application
+  # using them adds sequel, and falcon with async-websocket, itself; a
+  # client-only application needs none of them. sequel-privacy is optional
+  # on top of that.
 
   # esbuild is required on PATH: it formats generated JavaScript and bundles
   # the application. It is not a gem.

@@ -169,6 +169,59 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_data_generate_goes_without_the_database_using_the_last_generated_schema
+    Dir.mktmpdir do |dir|
+      database = File.join(dir, "notes.sqlite3")
+      setup = <<~RUBY
+        require "sequel"
+        db = Sequel.sqlite(#{database.inspect})
+        db.create_table(:notes) { String :id, primary_key: true; String :title, null: false; Integer :stars; String :mood }
+      RUBY
+      output, status = Open3.capture2e(RbConfig.ruby, "-e", setup)
+      assert status.success?, output
+      File.write(File.join(dir, "server.rb"), <<~RUBY)
+        require "sequel"
+        require "swill/server"
+        DB = Swill::Distant.database { Sequel.sqlite(ENV.fetch("NOTES_DATABASE")) }
+        module Offline
+          class Note < Sequel::Model(DB[:notes])
+            module DistantInterface
+              extend Swill::Distant::Interface
+              fields :title, :stars, mood: T.nilable(Swill::Distant::Enum[:calm, :keen])
+              writable :title
+            end
+          end
+        end
+      RUBY
+      generate = lambda do |path|
+        environment = {"RUBYLIB" => File.join(ROOT, "rb"), "SWILL_SCHEMA_ONLY" => "1", "NOTES_DATABASE" => path}
+        Open3.capture2e(environment, RbConfig.ruby, File.join(ROOT, "exe/swill"), "data", "generate", "server.rb", chdir: dir)
+      end
+      unreachable = File.join(dir, "missing", "folder", "notes.sqlite3")
+      output, status = generate.(unreachable)
+      refute status.success?, "the first generation needs the database"
+      assert_includes output, "generate once with the database"
+
+      output, status = generate.(database)
+      assert status.success?, output
+      generated = File.join(dir, "client/models/generated")
+      with_database = Dir.glob("#{generated}/**/*").select { |file| File.file?(file) }.sort.to_h { |file| [file, File.read(file)] }
+      proxy = with_database.fetch(File.join(generated, "offline/note.rb"))
+      assert_includes proxy, "attribute :stars"
+      assert_includes proxy, 'MOOD_VALUES = ["calm", "keen"].freeze', "an enum's members reach the client"
+
+      output, status = generate.(unreachable)
+      assert status.success?, output
+      without = Dir.glob("#{generated}/**/*").select { |file| File.file?(file) }.sort.to_h { |file| [file, File.read(file)] }
+      assert_equal with_database, without, "the same proxies and schema hash, from the last generated schema"
+
+      File.write(File.join(dir, "server.rb"), File.read(File.join(dir, "server.rb")).sub("fields :title, :stars,", "fields :title, :stars, :body,"))
+      output, status = generate.(unreachable)
+      refute status.success?
+      assert_includes output, "unknown client field Offline::Note.body", "a field new since then needs the database or a type"
+    end
+  end
+
   def test_project_reports_config_and_hook_errors
     Dir.mktmpdir do |dir|
       config = File.join(dir, "swill.yml")
@@ -215,6 +268,52 @@ class CLITest < Minitest::Test
       RUBY
       output, status = Open3.capture2e(RbConfig.ruby, "-I#{File.join(ROOT, 'rb')}", "-e", script)
       assert status.success?, output
+    end
+  end
+
+  def test_new_writes_an_application_that_builds_and_serves_its_page
+    Dir.mktmpdir do |dir|
+      app = File.join(dir, "hello-app")
+      stdout, stderr, status = swill("new", app, "--data")
+      assert status.success?, stderr
+      assert_includes stdout, "bundle exec swill dev"
+      %w[Gemfile swill.yml config.ru pages/index.html.erb client/app.rb client/application.rb
+         client/controllers/hello.rb client/resources/app.css server/server.rb README.md .gitignore].each do |path|
+        assert File.file?(File.join(app, path)), path
+      end
+      assert_includes File.read(File.join(app, "client/application.rb")), "module HelloApp"
+      assert_includes File.read(File.join(app, "Gemfile")), %(gem "swill", path: #{ROOT.inspect})
+      _stdout, stderr, status = swill("new", app)
+      refute status.success?, "an existing application is never overwritten"
+      assert_includes stderr, "is not empty"
+
+      environment = {"RUBYLIB" => File.join(ROOT, "rb")}
+      output, status = Open3.capture2e(environment, RbConfig.ruby, File.join(ROOT, "exe/swill"), "build", chdir: app)
+      assert status.success?, output
+      assert File.file?(File.join(app, "public/assets/app.js"))
+      assert File.file?(File.join(app, "public/assets/resources/app/app.css"))
+      script = <<~RUBY
+        require "rack/builder"
+        require "rack/mock"
+        app = Rack::Builder.parse_file("config.ru")
+        page = Rack::MockRequest.new(app).get("/")
+        abort page.body unless page.status == 200 && page.body.include?('<script src="/assets/app.js"></script>') &&
+                               page.body.include?('application="HelloApp::Application"')
+        abort "app.js" unless Rack::MockRequest.new(app).get("/assets/app.js").status == 200
+        abort "swill.js" unless Rack::MockRequest.new(app).get("/assets/swill.js").status == 200
+        puts "served"
+      RUBY
+      output, status = Open3.capture2e(environment, RbConfig.ruby, "-e", script, chdir: app)
+      assert status.success?, output
+      assert_includes output, "served"
+    end
+  end
+
+  def test_new_rejects_a_name_that_makes_no_module
+    Dir.mktmpdir do |dir|
+      _stdout, stderr, status = swill("new", File.join(dir, "123"))
+      refute status.success?
+      assert_includes stderr, "does not make a Ruby module name"
     end
   end
 

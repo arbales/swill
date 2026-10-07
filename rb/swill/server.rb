@@ -7,3 +7,4 @@ end
 require_relative "../compiler/version"
 require_relative "../distant"
 require_relative "../bundles"
+require_relative "server/app"

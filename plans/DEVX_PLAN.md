@@ -8,12 +8,14 @@ that caused them. An application owns its application; Swill owns the loop.
 
 Two ways in:
 
+# FIXME: How will the existing application flow interact with Sinatra's public folder? Or with Roda's Assets plugin?
+
 - **A new project.** `swill new` writes a self-contained application: the
   client, a page, a `swill.yml`, and nothing else by default. `swill dev`
   builds it and serves the page and the bundles itself, so there is no server
   to write until the application needs one. `--rack` adds a `config.ru` whose
   app is `Swill::Server`, and `--data` adds a server entry for Distant.
-- **An existing application** (a Roda, Rails, Sinatra or plain Rack app that
+- **An existing application** (a Roda, Sinatra or plain Rack app that
   already serves pages). `swill init` writes only `swill.yml` and a `client/`
   skeleton beside what is there, and prints what to add to the page: the
   helpers, or the three tags. Swill never takes over the server: the author
@@ -34,7 +36,7 @@ under `movies/` are in that repository; the rest are here.
 | Project file | None; `swill.yml` mode reruns every step on any change and never serves | `rb/compiler/project.rb:51-63`, `doc/getting_started.md:54` |
 | Reload | The in-page monitor polls `/__swill/development`, but nothing in Swill publishes a revision | `rb/framework/core/development_monitor.rb:25-66`; `Revision#publish!` is called only by specs |
 | Framework assets | Copied by hand into `public/assets/ruby` | `movies/lib/development.rb:137-147` against `rb/compiler/cli.rb:206-213` |
-| Page wiring | Asset URLs hard-coded; two development switches; `/data` and the schema hash repeated on the client | `movies/views/ruby.erb:5-14`, `movies/ruby/client/application.rb:11` |
+| Page wiring | Asset URLs hard-coded; two development switches | `movies/views/ruby.erb:5-14` |
 | Schema-only codegen | `Sequel.mock` and 14 columns listed by hand, as the docs recommend | `movies/ruby/server/movie.rb:6-18`; `doc/server_data.md:288` |
 | Types | `# typed: true` everywhere and nothing checks it; `sorbet/config` written once, with absolute gem paths | `rb/compiler/build.rb:155-171`, `doc/sorbet.md:165` |
 | Onboarding | No `swill new`; no runnable hello world in `getting_started.md` | `rb/compiler/cli.rb:13-40` |
@@ -183,14 +185,8 @@ framework owns.
   `data_app`, `middleware`, `catalog`, `helpers`, `to_app`.
 - **Helpers** (`Swill::Bundles::Helpers`): `script_tags`, `stylesheet_tag`,
   `image_tag`, `theme_link(name)` (with `data-swill-theme`),
-  `development_metadata`, `data_metadata`, and `head(theme:)` for all of them;
-  `Swill::Rails::Helper` with `swill_` prefixes. A new `doc/serving.md` covers
-  rackup, Roda, Sinatra and Rails `mount`.
-- **Data from the page.** `<meta name="swill-data" content="/data"
-  data-schema="…">`, written by `data_metadata`. `Application#launch`
-  configures `Distant::Client` from it when that class is present; an explicit
-  `configure` in app code wins; development warns when the page's hash and
-  the built client's differ. Movies deletes `application.rb:11`.
+  `development_metadata`, and `head(theme:)` for all of them.
+  A new `doc/serving.md` covers rackup, Roda and Sinatra.
 - **Codegen without a column listing.** Nobody lists columns by hand. `swill
   data generate` loads the server entry against the real database whenever it
   can reach one, and Sequel reflects the columns as it does in production.
@@ -335,10 +331,32 @@ save, cancel, dismiss); a status channel (`Application#post_status`); a typed
 ## Sequencing
 
 1. Workstream 2's gemspec, `Swill::Server`, helpers and data meta, which
-   unblock the scaffold page and simplify movies.
+   unblock the scaffold page and simplify movies. **Done:** the gem no longer
+   depends on Sequel and declares Rack; `Swill::Server` (`rb/swill/server/app.rb`)
+   with `use_in`, `assets_app`, `data_app`, `helpers`; `Swill::Bundles::Page`
+   and the `Helpers` mixin; `doc/serving.md`; movies' pages render through
+   `swill.head`. The data connection stays configured in code with
+   `Distant::Client.configure`: one way.
 2. Workstream 1: `swill dev`, then `swill new`; migrate movies and delete its
-   dev tooling. **This is the first slice.**
-3. Workstream 2's codegen without a column listing, and enums.
+   dev tooling. **This is the first slice.** **Done:** `swill dev`
+   (`rb/compiler/dev.rb`: watch categories, `assets` entries with `chdir`,
+   the `dev` key, the server's start, restart and readiness, revision
+   publishing) and `swill new NAME [--data]` (`rb/compiler/scaffold.rb`,
+   always with a `config.ru`); `swill watch --project` is `swill dev
+   --no-server`. Movies has a `swill.yml`; its `lib/development.rb`,
+   `bin/dev`, `bin/build_ruby_assets` and development specs go once
+   `swill dev` has replaced `bin/dev --server` in daily use. Deferred: the
+   Sorbet single-directory configuration and `types: {check:}`; `swill
+   init`; and, for a plain `swill watch ENTRY`, stamping `resources/**` and
+   rediscovering the sources after a failed build.
+3. Workstream 2's codegen without a column listing, and enums. **Done:**
+   `Swill::Distant.database { … }` (`rb/distant/database.rb`) connects, or in
+   schema-only mode falls back within five seconds to a mock whose models
+   take their fields' readers, writers and types from the last generated
+   `schema.json`; `swill data` sets `SWILL_SCHEMA_ONLY`; proxies carry each
+   enum field's members as `<FIELD>_VALUES`. Movies deleted its `Sequel.mock`
+   block and column listing, its duplicated enum lists, and its old dev
+   tooling.
 4. Workstream 3's names, `register`, hiding, theme and example, then
    `swill.d.ts` and the guide; Workstream 6, so the guide has a URL.
 5. Workstream 4.

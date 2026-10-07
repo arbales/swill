@@ -4,6 +4,8 @@
 require "optparse"
 require_relative "build"
 require_relative "project"
+require_relative "dev"
+require_relative "scaffold"
 
 module Swill
   module Ruby2JS
@@ -14,6 +16,8 @@ module Swill
         Usage:
           swill build [ENTRY] [--out FILE] [--minify] [--with-framework] [--show-errors]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
+          swill new NAME [--data]
+          swill dev [--port N] [--no-server] [--once] [--interval S] [--project FILE]
           swill build --project swill.yml
           swill watch --project swill.yml
           swill types [ENTRY] [--into DIR]
@@ -26,6 +30,15 @@ module Swill
         copies swill.js next to it for pages that do not load it from a CDN.
         With no ENTRY, swill.yml in the current directory selects a project
         workflow: data generation, client build, framework copy, and types.
+
+        `new` writes an application in a new directory NAME that `swill dev`
+        runs as it is; --data adds a server entry for Distant Objects.
+
+        `dev` builds the project in swill.yml, runs its server (config.ru, with
+        Falcon when the bundle has it, else rackup), and rebuilds what each
+        edit affects, restarting the server when server code changed. The page
+        offers to reload once a rebuild succeeds. --once builds, serves, and
+        exits; `watch --project` is `dev --no-server`.
 
         --show-errors, which watch always uses, turns a compile error into a
         page error while developing: the output is replaced by a script that
@@ -55,8 +68,14 @@ module Swill
           opts.on("--into DIR") { |dir| options[:into] = dir }
           opts.on("--root DIR") { |dir| options[:root] = dir }
           opts.on("--project FILE") { |file| options[:project] = file }
+          opts.on("--port PORT", Integer) { |port| options[:port] = port }
+          opts.on("--no-server") { options[:server] = false }
+          opts.on("--once") { options[:once] = true }
+          opts.on("--data") { options[:data] = true }
         end
         arguments = parser.parse(rest)
+        return dev(options) if command == "dev"
+        return scaffold(arguments, options) if command == "new"
         project = options[:project]
         project ||= "swill.yml" if %w[build watch].include?(command) && arguments.empty? && File.file?("swill.yml")
         if project
@@ -116,6 +135,9 @@ module Swill
         unless %w[generate check].include?(action) && entry
           raise OptionParser::ParseError, "data expects generate or check and a SERVER_ENTRY"
         end
+        # The server entry describes its schema here, without serving; see
+        # Swill::Distant.schema_only?.
+        ENV["SWILL_SCHEMA_ONLY"] ||= "1"
         generator = Swill::Distant::Generator.new(entry, root: options[:root] || Dir.pwd)
         if action == "generate"
           written = generator.generate
@@ -146,30 +168,38 @@ module Swill
         puts
       end
 
+      # `swill build --project` runs every step once; `swill watch --project`
+      # is `swill dev` without a server.
       def run_project(path, watch:, interval:)
         raise CompileError, "watch interval must be positive" unless interval.positive?
-        project = Project.new(path)
         unless watch
-          project.run
+          Project.new(path).run
           return 0
         end
-
-        loop do
-          begin
-            project = Project.new(path)
-            stamps = project.snapshot
-            project.run(show_errors: true)
-          rescue CompileError => error
-            $stderr.puts "swill: #{error.message}"
-          end
-          stamps ||= project.snapshot
-          puts "swill: watching project #{project.path} (Ctrl-C to stop)"
-          sleep interval while project.snapshot == stamps
-          stamps = nil
-        end
-      rescue Interrupt
-        puts
+        Dev.new(path, server: false, interval: interval).start
         0
+      end
+
+      # `swill new NAME`: a new application.
+      def scaffold(arguments, options)
+        name = arguments.first
+        raise OptionParser::ParseError, "new expects the NAME of a new directory" unless name && arguments.length == 1
+        scaffold = Scaffold.new(name, data: options.fetch(:data, false))
+        written = scaffold.write
+        puts "swill: wrote #{written.length} files into #{name}"
+        puts "swill: cd #{name} && bundle install && bundle exec swill dev"
+        0
+      end
+
+      # `swill dev`: the project's build, server, and rebuilds on edits.
+      def dev(options)
+        path = options[:project] || "swill.yml"
+        raise CompileError, "swill dev needs a swill.yml (or --project FILE)" unless File.file?(path)
+        interval = options.fetch(:interval, 0.3)
+        raise CompileError, "watch interval must be positive" unless interval.positive?
+        ok = Dev.new(path, port: options[:port], server: options.fetch(:server, true),
+                           once: options.fetch(:once, false), interval: interval).start
+        ok ? 0 : 1
       end
 
     private
