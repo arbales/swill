@@ -358,7 +358,18 @@ save, cancel, dismiss); a status channel (`Application#post_status`); a typed
    block and column listing, its duplicated enum lists, and its old dev
    tooling.
 4. Workstream 3's names, `register`, hiding, theme and example, then
-   `swill.d.ts` and the guide; Workstream 6, so the guide has a URL.
+   `swill.d.ts` and the guide; Workstream 6, so the guide has a URL. **Done:** names
+   and `register`: every method reachable, `xDidChange` hooks, `static
+   restorable`, dotted class names, and JavaScript spellings of framework
+   names, all applied at registration so compiled Ruby pays nothing. Bundles
+   and themes: `Swill.registerBundle`, `swill manifest`, `start` loading the
+   bundle's catalogs, and the example linking a theme; the zero-code
+   `data-swill-bundle` script tag is dropped as a second way.
+   Guide: `doc/javascript_getting_started.md`, whose complete example is the
+   docs navigator, rewritten to read as one (`PaneLayout`, commands for keys,
+   `queryDidChange`); a separate example was cut; markup resolves the framework's
+   JavaScript class names (`Swill.List`); launch adopts focus the browser
+   gave before it, as to an `autofocus` field.
 5. Workstream 4.
 
 ## Risks

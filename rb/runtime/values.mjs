@@ -68,6 +68,10 @@ export function isEqual(left, right) {
   // touched) reads as undefined where the rest of the runtime says null.
   // Both spell nothing.
   if (left == null && right == null) return true;
+  const valueType = left?.[Symbol.for("swill.data.type")];
+  if (valueType && valueType === right?.[Symbol.for("swill.data.type")]) {
+    return left.equals(right);
+  }
 
   return Array.isArray(left) &&
     Array.isArray(right) &&

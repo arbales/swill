@@ -2,6 +2,12 @@
 
 module Swill
   module Distant
+    # Read-only protocol values for PostgreSQL types without a matching Ruby
+    # core value. Server models may still use Sequel's own PGRange/SQLTime and
+    # ActiveSupport::Duration values.
+    RangeValue = Data.define(:db_type, :empty, :first, :last, :exclude_first, :exclude_last)
+    Interval = Data.define(:months, :days, :microseconds)
+    TimeOfDay = Data.define(:iso)
     # A `Type` describes a value that crosses the connection: a field, a
     # remote method's parameter or its result. It is the schema's type, not
     # Sorbet's or Ruby's, so client and server agree on it whatever either
@@ -94,7 +100,7 @@ module Swill
     # [Server Data](rdoc-ref:doc/server_data.md).
     module Types
       # The names of the primitive types, as they appear in `Type#name`.
-      PRIMITIVES = %w[String Integer Float Boolean Time Date].freeze
+      PRIMITIVES = %w[String Integer Float BigDecimal Boolean Time Date DateTime TimeOfDay Interval].freeze
 
       module_function
 

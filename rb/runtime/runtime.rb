@@ -3,6 +3,8 @@
 
 require "sorbet-runtime"
 require "time"
+require "date"
+require "bigdecimal"
 require_relative "declarations"
 require_relative "properties"
 require_relative "attributes"
@@ -117,10 +119,54 @@ module Swill
       def connect_data; end
       def data_connected = false
       def data_request(*) = raise("remote data is available only in the browser runtime")
-      def data_time(value) = value.is_a?(Time)
-      def data_time_iso(value) = value.iso8601(3)
+      def data_time(value) = value.is_a?(Time) && !(defined?(Sequel::SQLTime) && value.is_a?(Sequel::SQLTime))
+      def data_time_iso(value) = value.utc.iso8601(6)
       def data_time_from_iso(value) = Time.iso8601(value)
       def data_record(value) = value.is_a?(Hash)
+      def data_value_type(value)
+        case value
+        when DateTime then "DateTime"
+        when Date then "Date"
+        when BigDecimal then "BigDecimal"
+        else
+          return "TimeOfDay" if defined?(Sequel::SQLTime) && value.is_a?(Sequel::SQLTime)
+          return "RangeValue" if defined?(Sequel::Postgres::PGRange) && value.is_a?(Sequel::Postgres::PGRange)
+          return "Interval" if defined?(ActiveSupport::Duration) && value.is_a?(ActiveSupport::Duration)
+          nil
+        end
+      end
+      def data_value_payload(value)
+        case data_value_type(value)
+        when "Date" then value.iso8601
+        when "DateTime" then value.new_offset(0).iso8601(6)
+        when "BigDecimal" then value.to_s("F")
+        when "TimeOfDay" then value.strftime("%H:%M:%S.%6N")
+        when "RangeValue"
+          [value.db_type, value.empty?, value.begin, value.end, value.exclude_begin?, value.exclude_end?]
+        when "Interval"
+          parts = value.parts
+          months = parts.fetch(:years, 0) * 12 + parts.fetch(:months, 0)
+          days = parts.fetch(:weeks, 0) * 7 + parts.fetch(:days, 0)
+          seconds = parts.fetch(:hours, 0) * 3600 + parts.fetch(:minutes, 0) * 60 + parts.fetch(:seconds, 0)
+          [months, days, (BigDecimal(seconds.to_s) * 1_000_000).to_i.to_s]
+        end
+      end
+      def data_date_from_iso(value) = Date.iso8601(value)
+      def data_date_iso(value) = value.iso8601
+      def data_date_time_from_iso(value) = DateTime.iso8601(value)
+      def data_decimal_from_string(value) = BigDecimal(value)
+      def data_time_of_day_from_iso(value) = Sequel::SQLTime.parse(value)
+      def data_range(name, empty, first, last, exclude_first, exclude_last)
+        return Sequel::Postgres::PGRange.empty(name) if empty
+        Sequel::Postgres::PGRange.new(first, last, db_type: name,
+          exclude_begin: exclude_first, exclude_end: exclude_last)
+      end
+      def data_interval(months, days, micros)
+        seconds = BigDecimal(micros.to_s) / 1_000_000
+        ActiveSupport::Duration.new(months * 2_592_000 + days * 86_400 + seconds.to_f,
+          months: months, days: days, seconds: seconds)
+      end
+      def compare_decimal(left, right) = left <=> right
       def is_number(value) = value.is_a?(Numeric)
       def is_boolean(value) = value.equal?(true) || value.equal?(false)
       def compare_text(left, right) = left <=> right

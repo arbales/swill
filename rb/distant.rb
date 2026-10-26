@@ -20,6 +20,6 @@ module Swill
     # its own in the `HELLO` message, the `Schema` writes it into its payload
     # and so into the schema hash, and the `Dispatcher` answers
     # `schema_mismatch` when the browser's differs.
-    PROTOCOL_VERSION = 2
+    PROTOCOL_VERSION = 3
   end
 end

@@ -114,6 +114,7 @@ Boundaries and tooling:
 | Guide | Covers |
 | --- | --- |
 | [Sorbet](doc/sorbet.md) | How types drive lowering, the `T` operations a body may use, declared types, and typing an application |
+| [Getting Started in JavaScript](doc/javascript_getting_started.md) | A page in plain JavaScript: getting `swill.js`, controllers, lists, keys, resources, and which build to load |
 | [Plain JavaScript](doc/plain_javascript.md) | Using `swill.js` with no build step, through `Swill.register` and `Swill.start` |
 | [Compiler and Runtime](doc/compiler.md) | The pipeline, the accepted Ruby subset, lowering rules, rejected forms, and extending the boundary |
 | [Runtime](doc/runtime.md) | The `Runtime` API generated code calls: installation, dispatch, values, Sorbet operations, and observation |

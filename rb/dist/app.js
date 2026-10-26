@@ -13,6 +13,7 @@
   var Swill__ValueTransformer = framework.Swill__ValueTransformer;
   var Swill__NumberTransformer = framework.Swill__NumberTransformer;
   var Swill__BooleanTransformer = framework.Swill__BooleanTransformer;
+  var Swill__DateTransformer = framework.Swill__DateTransformer;
   var Swill__BindingDestination = framework.Swill__BindingDestination;
   var Swill__BindingDestination__Text = framework.Swill__BindingDestination__Text;
   var Swill__BindingDestination__Field = framework.Swill__BindingDestination__Field;

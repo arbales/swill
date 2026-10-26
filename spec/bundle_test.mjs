@@ -109,6 +109,71 @@ test("plain JavaScript classes use the public registration surface", () => {
   assert.equal(specialized.emphaticGreeting, "Hello Ada!");
 });
 
+test("JavaScript classes reach every method, hook their own changes, and restore their properties", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  const changes = [];
+  class Counter extends Swill.Controller {
+    static properties = {count: {default: 0}, label: {default: "clicks"}, expanded: {default: false}};
+    static restorable = {count: "n", label: "label", expanded: "open"};
+    increment() { this.count += 1; }
+    addMany(sender, event, extra) { this.count += extra ?? 10; }
+    countDidChange(previous, value) { changes.push([previous, value]); }
+  }
+  Swill.register("Demo.Counter", Counter);
+  assert.equal(Swill.Runtime.resolve("Demo::Counter"), Counter, "a dotted name is a namespace");
+  assert.equal(Swill.Runtime.resolve("Demo.Counter"), Counter, "and markup may write it with dots");
+  assert.equal(Swill.Runtime.resolve("Swill.List"), Swill.List, "markup may name a framework class as JavaScript does");
+  assert.equal(Swill.Runtime.resolve("Swill.Controller.List"), Swill.List);
+  const counter = new Counter();
+  Swill.Runtime.performAction(counter, "increment", null, null);
+  assert.equal(counter.count, 1, "a method markup sends needs no static actions");
+  Swill.Runtime.invoke(counter, "addMany", null, null, 5);
+  assert.equal(counter.count, 6, "nor one a path invokes");
+  assert.deepEqual(changes, [[0, 1], [1, 6]], "countDidChange is count's change hook");
+  assert.equal(JSON.stringify(Swill.Runtime.restorations(counter).map(item => [item.path, item.key, item.type])),
+    JSON.stringify([["count", "n", "Integer"], ["label", "label", "String"], ["expanded", "open", "T::Boolean"]]),
+    "a restorable value is typed by its property's default");
+});
+
+test("a page with JavaScript classes may spell framework names in JavaScript", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  const seen = [];
+  class Roster extends Swill.List {
+    makeRowElement(item) {
+      const row = element("li", {});
+      row.textContent = item.name;
+      return row;
+    }
+  }
+  Swill.register(Roster);
+  class Page extends Swill.Controller {
+    static outlets = {roster: {}};
+  }
+  Swill.register(Page);
+  const list = element("ul", {controller: "Roster", outlet: "roster"});
+  const chosen = element("p", {bind: "roster.selectedObject.name"});
+  const empty = element("p", {"bind-hidden": "roster.selectedObject.nil?"});
+  const main = element("main", {controller: "Page"}, [list, chosen, empty]);
+  const body = element("body", {}, [main]);
+  const document = element("#document", {}, [body]);
+  document.defaultView = new Browser();
+  const application = Swill.start({root: body});
+  const [page, roster] = application.controllers;
+  roster.observe("selectedObjects", value => seen.push(value.length));
+  roster.representedObject = [{name: "Ada"}, {name: "Grace"}];
+  assert.equal(empty.hidden, true);
+  list.children[1].click();
+  assert.equal(chosen.textContent, "Grace", "selectedObject is selected_object, and bindings follow it");
+  assert.equal(empty.hidden, false);
+  assert.deepEqual(seen, [1], "observing the JavaScript spelling observes the property");
+  assert.equal(Swill.Runtime.read(roster, "selectedObject").name, "Grace");
+  assert.equal(Swill.Runtime.read(roster, "selected_object").name, "Grace", "the Ruby spelling still answers");
+  assert.equal(page.roster, roster);
+  application.terminate();
+});
+
 test("JavaScript registration rejects ambiguous declarations", () => {
   const environment = bundleEnvironment({minified});
   const Swill = environment.load("swill");
@@ -343,4 +408,31 @@ test("plain JavaScript extends the object, transformer, and model roots", () => 
   class Primary extends Swill.Button {}
   Swill.register(Primary);
   assert.equal(Runtime.resolve("Primary"), Primary);
+});
+
+test("a page without a build registers its bundle, and starting waits for its templates", async () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  const fetched = [];
+  environment.context.fetch = async url => {
+    fetched.push(url);
+    return {ok: true, status: 200, text: async () => '<template name="row"><li></li></template>'};
+  };
+  const bundle = Swill.registerBundle("app", {base: "https://example.test/assets", manifest: ["Poster.png", "rows.html"]});
+  assert.equal(Swill.Bundle.main(), bundle);
+  assert.equal(Swill.Image.named("Poster").url, "https://example.test/assets/resources/app/Poster.png");
+  assert.ok(Swill.Image.named("Warning"), "the framework's images are still found");
+  assert.throws(() => Swill.registerBundle("app", {manifest: "Poster.png"}), /manifest must be an array/);
+
+  const body = element("body", {});
+  const document = element("#document", {}, [body]);
+  document.defaultView = new Browser();
+  const application = Swill.start({root: body});
+  assert.equal(Swill.Application.isRunning(), false, "it launches once its templates arrive");
+  assert.throws(() => Swill.start({root: body}), /already running/);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(Swill.Application.shared(), application);
+  assert.deepEqual(fetched, ["https://example.test/assets/resources/app/rows.html"]);
+  assert.match(bundle.loadedResourceWithExtension("rows", "html"), /name="row"/);
+  application.terminate();
 });

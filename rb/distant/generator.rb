@@ -272,11 +272,16 @@ module Swill
         members = type.fetch("members", [])
         case type.fetch("kind")
         when "primitive"
-          type.fetch("name") == "Boolean" ? "T::Boolean" : type.fetch("name")
+          name = type.fetch("name")
+          return "T::Boolean" if name == "Boolean"
+          return "Swill::Distant::#{name}" if %w[TimeOfDay Interval].include?(name)
+          name
         when "model", "value" then type.fetch("name")
         when "enum" then "String"
         when "optional" then "T.nilable(#{ruby_type(members.fetch(0))})"
         when "array" then "T::Array[#{ruby_type(members.fetch(0))}]"
+        when "range" then "Swill::Distant::RangeValue"
+        when "json" then "T.untyped"
         when "result_set" then "Swill::Model::ResultSet[#{ruby_type(members.fetch(0))}]"
         else "T.untyped"
         end

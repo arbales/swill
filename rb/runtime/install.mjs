@@ -1,5 +1,5 @@
 // Install generated declarations once at load time.
-import {declarations, hasMetadata, installMetadata} from "./metadata.mjs";
+import {declarations, hasMetadata, installMetadata, aliasJavaScriptNames} from "./metadata.mjs";
 import {record, computedValue, storedValue, writeProperty} from "./properties.mjs";
 
 const classes = new Map();
@@ -378,12 +378,33 @@ export function nameOf(object) {
  * @throws {Error} `Unknown class` when nothing is installed under the name.
  */
 export function resolve(name) {
+  // JavaScript names a namespace with dots: Swill.Controller.List.
+  if (!classes.has(name) && name.includes(".") && !name.includes("::")) name = name.replaceAll(".", "::");
+  if (!classes.has(name) && publicNames.has(name)) return publicNames.get(name);
   if (!classes.has(name)) {
     throw new Error(`Unknown class: ${name}`);
   }
 
   return classes.get(name);
 }
+
+/**
+ * Adds the JavaScript spelling of every installed class's properties and
+ * methods as aliases; see `aliasJavaScriptNames`. `Swill.register` calls
+ * it, so only pages with JavaScript classes pay for it.
+ *
+ * @param {Object<string, Function>} [names] The framework's classes by their
+ *   JavaScript names, such as `"Swill::List"`, for markup to resolve.
+ * @returns {void}
+ */
+export function aliasInstalledJavaScriptNames(names = {}) {
+  for (const klass of classes.values()) aliasJavaScriptNames(klass);
+  for (const [name, klass] of Object.entries(names)) publicNames.set(name, klass);
+}
+
+// The framework's JavaScript names, such as `Swill::List` for
+// `Swill::Controller::List`, once a page registers a JavaScript class.
+const publicNames = new Map();
 
 // Classify a registered markup class without constructing it.
 export function classIsA(name, ancestor) {

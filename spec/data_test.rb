@@ -140,9 +140,49 @@ class DataTest < Minitest::Test
       "reference" => Swill::Distant::Protocol::Reference.new("DataFixture::Post", "1"),
       "nil" => nil,
       "time" => Time.utc(2026, 1, 2, 3, 4, 5),
-      "date" => Date.new(2026, 1, 2)
+      "date" => Date.new(2026, 1, 2),
+      "date_time" => DateTime.iso8601("2026-01-02T03:04:05.123456-04:00"),
+      "decimal" => BigDecimal("12345678901234567890.123456")
     }
     assert_equal value, Swill::Distant::Protocol.unpack(Swill::Distant::Protocol.pack(value))
+  end
+
+  def test_date_and_datetime_are_distinct_at_the_boundary
+    date = {"kind" => "primitive", "name" => "Date"}
+    instant = {"kind" => "primitive", "name" => "DateTime"}
+    value = DateTime.iso8601("2026-10-06T12:34:56.123456-04:00")
+    refute Swill::Distant::Validator.send(:matches?, value, date)
+    assert Swill::Distant::Validator.send(:matches?, value, instant)
+    tagged = Swill::Distant::Protocol.send(:encode, value)
+    assert_equal ["$datetime"], tagged.keys
+    assert_equal DateTime.iso8601("2026-10-06T16:34:56.123456+00:00"),
+                 Swill::Distant::Protocol.unpack(Swill::Distant::Protocol.pack(value))
+  end
+
+  def test_range_round_trip_preserves_empty_unbounded_and_excluded_bounds
+    require "sequel/extensions/pg_range"
+    range = Sequel::Postgres::PGRange.new(nil, 20, db_type: "int4range", exclude_end: true)
+    empty = Sequel::Postgres::PGRange.empty("daterange")
+    decoded = Swill::Distant::Protocol.unpack(Swill::Distant::Protocol.pack([range, empty]))
+    assert_nil decoded[0].begin
+    assert_equal 20, decoded[0].end
+    assert decoded[0].exclude_end?
+    assert decoded[1].empty?
+  end
+
+  def test_reflection_preserves_common_types_and_rejects_unknown_columns
+    decimal = @schema.send(:reflected_type, DataFixture::Post, "amount", type: :decimal, db_type: "numeric(12,2)")
+    date = @schema.send(:reflected_type, DataFixture::Post, "watched_at", type: :date, db_type: "date")
+    array = @schema.send(:reflected_type, DataFixture::Post, "tags", type: :array, db_type: "text[]")
+    range = @schema.send(:reflected_type, DataFixture::Post, "dates", type: :range, db_type: "daterange")
+    assert_equal "BigDecimal", decimal.name
+    assert_equal "Date", date.name
+    assert_equal "String", array.members.first.name
+    assert_equal "Date", range.members.first.name
+    error = assert_raises(ArgumentError) do
+      @schema.send(:reflected_type, DataFixture::Post, "location", type: :geometry, db_type: "geometry")
+    end
+    assert_match(/Post.location.*explicit type/, error.message)
   end
 
   def test_swill_and_sorbet_signatures_normalize_to_protocol_types

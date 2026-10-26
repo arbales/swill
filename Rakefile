@@ -126,6 +126,7 @@ task test: :typecheck do
     sh "bundle exec ruby spec/data_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
     sh "deno test -A spec/data_transport_test.mjs"
+    sh "deno test -A spec/data_values_test.mjs"
     sh "deno test -A spec/data_client_test.mjs"
     build_data_fixture_client
     sh "deno test -A spec/data_integration_test.mjs"

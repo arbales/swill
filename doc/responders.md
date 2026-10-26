@@ -49,7 +49,11 @@ command and calls it, as Cocoa's `interpretKeyEvents:` does:
 | Home, End | `move_to_beginning_of_document`, `move_to_end_of_document` |
 
 Each command passes to the next responder by default, so implementing one in a
-controller takes that key for its region, and calling `super` declines it.
+controller takes that key for its region, and calling `super` declines it. A
+command something takes is the key's whole effect: the framework prevents the
+browser's own handling, so a method that takes Down need not call
+`preventDefault`. A command that reaches the end of the chain untaken leaves
+the key to the browser.
 Commands start at the first responder, so a control can take one before its
 controller does.
 

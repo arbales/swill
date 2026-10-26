@@ -2694,6 +2694,14 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_equal names.length, names.map { |name| Swill::Ruby2JS::Knowledge.identifier(name) }.uniq.length
   end
 
+  def test_member_names_preserve_iso_acronym
+    names = Swill::Ruby2JS::Names
+    assert_equal "dataDateFromISO", names.member(:data_date_from_iso)
+    assert_equal "dataDateISO", names.member(:data_date_iso)
+    assert_equal "dataTimeISO", names.member(:data_time_iso)
+    assert_equal "dataTimeOfDayFromISO", names.member(:data_time_of_day_from_iso)
+  end
+
   def test_readable_class_headers_and_reference_based_wiring
     framework = Swill::Ruby2JS::Compiler.new
     Swill::Ruby2JS::FRAMEWORK_SOURCES.each do |path|

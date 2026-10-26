@@ -84,6 +84,21 @@ function declarationsFor(klass) {
     names.add(name);
   }
 
+  // Every method is reachable from markup and paths, as a Ruby method is.
+  for (const [name, descriptor] of Object.entries(prototypeDescriptors)) {
+    if (name === "constructor" || typeof descriptor.value !== "function" || names.has(name)) continue;
+    methods[name] = {arity: descriptor.value.length, js: name};
+    // fooDidChange is the change hook of foo, as foo_did_change is in Ruby;
+    // a framework property is named in Ruby, so both spellings are hooked.
+    const changed = /^(.+)DidChange$/.exec(name)?.[1];
+    if (changed) {
+      for (const property of new Set([changed, snakeCase(changed)])) {
+        methods[`${property}_did_change`] ??= {arity: descriptor.value.length, js: name};
+      }
+    }
+  }
+
+  // static actions, when given, checks the methods markup is meant to send.
   const actions = ownDeclaration(klass, "actions", []);
   if (!Array.isArray(actions)) throw new TypeError("static actions must be an array");
   const actionNames = new Set();
@@ -96,10 +111,32 @@ function declarationsFor(klass) {
       throw new TypeError(`Missing action method: ${name}`);
     }
     if (descriptor.value.length > 2) throw new TypeError(`Action ${name} accepts more than two arguments`);
-    methods[name] = {arity: descriptor.value.length};
     actionNames.add(name);
   }
-  return {properties, methods};
+
+  return {properties, methods, restorations: restorationsFor(klass, declared)};
+}
+
+const snakeCase = name => name.replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+
+// static restorable = ["page"] keeps a property in the URL fragment under its
+// own name; {page: "p"} names the key. A value is decoded as its property's
+// default is typed: a number as an integer, a boolean as a boolean, anything
+// else as text.
+function restorationsFor(klass, declared) {
+  const restorable = ownDeclaration(klass, "restorable", []);
+  const entries = Array.isArray(restorable)
+    ? restorable.map(path => [path, path])
+    : (assertDescriptorMap(restorable, "restorable"), Object.entries(restorable));
+  return entries.map(([path, key]) => {
+    if (typeof path !== "string" || !path || typeof key !== "string" || !key) {
+      throw new TypeError("Restorable paths and keys must be non-empty strings");
+    }
+    const sample = declared[path.split(".")[0]]?.default;
+    const value = typeof sample === "function" ? undefined : sample;
+    const type = typeof value === "number" ? "Integer" : typeof value === "boolean" ? "T::Boolean" : "String";
+    return {path, key, type};
+  });
 }
 
 // The framework this page runs, set once by browserAPI: one per page, as one
@@ -132,6 +169,8 @@ export function register(name, klass) {
     klass = name;
     name = klass?.name;
   }
+  // A namespace may be written with dots, as JavaScript writes it.
+  if (typeof name === "string" && name.includes(".") && !name.includes("::")) name = name.replaceAll(".", "::");
   if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
   if (typeof name !== "string" || name.trim().length === 0) {
     throw new TypeError("Registered classes need a name");
@@ -141,11 +180,62 @@ export function register(name, klass) {
   if (!framework.roots.has(parent) && !registered.has(parent)) {
     throw new Error(`Register the parent class before ${name}`);
   }
-  const {properties, methods} = declarationsFor(klass);
-  framework.Runtime.install({classes: {[name]: {constructor: klass, properties, methods}}});
+  const {properties, methods, restorations} = declarationsFor(klass);
+  // Framework names answer to their JavaScript spelling too, once a page
+  // registers JavaScript classes; a page of Ruby alone never pays for it.
+  framework.Runtime.aliasInstalledJavaScriptNames(framework.publicNames);
+  framework.Runtime.install({classes: {[name]: {constructor: klass, properties, methods, restorations}}});
   registered.add(klass);
   return klass;
 }
+
+/**
+ * Registers an application's bundle: the resources a page without a build
+ * keeps in `resources/<name>/`, found by name as a compiled application's
+ * are. The manifest lists the files under that folder; `swill manifest`
+ * writes one.
+ *
+ * @param {string} name The bundle's name, such as `"app"`.
+ * @param {object} [options]
+ * @param {string} [options.base] The folder `resources/` is in; the
+ *   current script's folder by default, or the page's for an inline script.
+ * @param {string[]} [options.manifest] The paths under `resources/<name>/`.
+ * @param {boolean} [options.main] Whether it is the application's bundle,
+ *   searched before the framework's; true by default.
+ * @returns {object} The bundle.
+ */
+export function registerBundle(name, options = {}) {
+  if (typeof name !== "string" || name.trim().length === 0) throw new TypeError("Bundles need a name");
+  if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.registerBundle options must be an object");
+  assertKeys(options, ["base", "manifest", "main"], "registerBundle");
+  const manifest = options.manifest ?? [];
+  if (!Array.isArray(manifest) || manifest.some(path => typeof path !== "string")) {
+    throw new TypeError("manifest must be an array of paths");
+  }
+  let base = options.base ?? defaultBase();
+  if (base && !base.endsWith("/")) base += "/";
+  return framework.Bundle.register(name, base, manifest, {}, options.main ?? true);
+}
+
+function defaultBase() {
+  const document = globalThis.document;
+  if (!document) return "";
+  const script = document.currentScript;
+  return new URL(".", script?.src || document.baseURI).href;
+}
+
+// The main bundle's HTML catalogs, which a page without a build fetches
+// before its controls ask for their templates.
+function unloadedCatalogs() {
+  const bundle = framework.Bundle.main();
+  if (!bundle) return [];
+  return bundle.manifest
+    .filter(path => path.endsWith(".html") && bundle.loadedPath(path) == null)
+    .map(path => bundle.loadResource(path.replace(/\.html$/, ""), "html"));
+}
+
+// Whether an application is waiting for its templates before it launches.
+let starting = false;
 
 /**
  * Launches the application: awakens the markup under the root, then keeps
@@ -160,7 +250,10 @@ export function register(name, klass) {
  *   alerts as well as in the console; false by default.
  * @param {Function} [options.application] A registered subclass of
  *   `Swill.Application`; `Swill.Application` by default.
- * @returns {object} The running application.
+ * When the application's bundle lists HTML catalogs not yet loaded, the
+ * application launches once they arrive.
+ *
+ * @returns {object} The application.
  * @throws {Error} When an application is already running, or there is no root.
  */
 export function start(options = {}) {
@@ -178,12 +271,26 @@ export function start(options = {}) {
   if (ApplicationClass !== Application && !registered.has(ApplicationClass)) {
     throw new Error("Register the application class before starting it");
   }
+  if (starting) throw new Error("A Swill application is already running");
   const application = new ApplicationClass();
   if (options.development) application.development = true;
-  application.launch(root);
-  root.ownerDocument?.defaultView?.addEventListener("pagehide", event => {
-    if (!event.persisted) application.terminate();
-  });
+  const launch = () => {
+    starting = false;
+    application.launch(root);
+    root.ownerDocument?.defaultView?.addEventListener("pagehide", event => {
+      if (!event.persisted) application.terminate();
+    });
+  };
+  const catalogs = unloadedCatalogs();
+  if (catalogs.length === 0) {
+    launch();
+  } else {
+    starting = true;
+    Promise.all(catalogs).then(launch, error => {
+      starting = false;
+      console.error("Swill could not load the application's templates", error);
+    });
+  }
   return application;
 }
 
@@ -227,7 +334,11 @@ export function browserAPI(definitions, Runtime, names = {}, roots = []) {
   framework = {
     Runtime,
     Application: definitions.Swill__Application,
+    Bundle: definitions.Swill__Bundle,
+    publicNames: Object.fromEntries(Object.entries(names)
+      .filter(([, identifier]) => definitions[identifier])
+      .map(([name, identifier]) => [`Swill::${name.replaceAll(".", "::")}`, definitions[identifier]])),
     roots: new Set(roots.map(name => definitions[names[name]]).filter(Boolean))
   };
-  return Object.freeze({...definitions, Runtime, install, ...classes, register, start});
+  return Object.freeze({...definitions, Runtime, install, ...classes, register, registerBundle, start});
 }

@@ -122,7 +122,7 @@ module Swill
       # done. Raises `schema_mismatch` when either differs.
       def hello(message)
         unless message["protocol_version"] == PROTOCOL_VERSION && message["schema_hash"] == schema.hash
-          raise RemoteError.new("schema_mismatch", "client and server data schemas differ")
+          raise RemoteError.new("schema_mismatch", "This application's database has been updated, so you need to reload this page.")
         end
 
         @welcomed = true

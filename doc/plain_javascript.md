@@ -48,9 +48,19 @@ explicitly. Put these scripts at the end of `body` so the default root,
 Every native getter on a registered class is an observable computed property.
 Dependencies are collected while the getter runs. Scalar properties may use a
 literal default; arrays and objects use a zero-argument factory so instances do
-not share mutable state. Actions are explicit and accept zero, one, or two
-arguments; the framework supplies the sender and DOM event when requested.
-Outlets are required unless their descriptor has `optional: true`.
+not share mutable state. Every method a class defines is reachable from markup
+and the responder chain; `static actions` only checks, at registration, that
+the names it lists exist. An action accepts zero, one, or two arguments; the
+framework supplies the sender and DOM event when requested. Outlets are
+required unless their descriptor has `optional: true`.
+
+A method named for a property and `DidChange`, such as `nameDidChange(previous)`,
+is called when that property changes, as a Ruby class's `name_did_change` is.
+
+`static restorable` lists the properties a controller restores, by path, as
+`["query", "page"]`, or with their keys, as `{query: "q"}`. A property's type
+comes from its default: a number restores as an integer, a boolean as a
+boolean, and anything else as a string.
 
 Controller subclasses may override `bindingRoot`, `decodeOutletData`,
 `viewDidLoad`, `awakeFromDOM`, `controllerDidRestore`, `controllerDidLoad`,
@@ -61,15 +71,9 @@ after it and before `awakeFromDOM`. Application subclasses may override
 may override `makeRowElement`, `configureRow`, `rowsAreViews`, `isRowElement`,
 `selectedObjectDidChange`, and `activateSelection`.
 
-Known gap: property change hooks are not available to JavaScript classes. The
-runtime dispatches `name_did_change` from a class's installed method table,
-and `Swill.register` fills that table only from `static actions`, so a
-`nameDidChange` method on a registered class is never called. Observe the
-property instead: `this.observe("name", (value, previous) => ...)` in
-`viewDidLoad`, or `this.observeWithObject(other, "name", ...)` for another
-object's property; both observations are released at `unload`. Closing the
-gap means registering hook methods in the table; their names already match,
-since compiled members are camelCase.
+Once a page registers a JavaScript class, markup and `observe` may spell the
+framework's names as JavaScript does: `bind="roster.selectedObject.name"` and
+`bind="roster.selected_object.name"` reach the same property.
 
 A registered class extends one of the framework's public classes:
 `Swill.Object`, for an observable object of the application's own;
@@ -82,13 +86,42 @@ attributes; attributes are declared in Ruby. The other public classes, such as
 `Swill.NotificationCenter` and `Swill.Distant.Client`, are used as they
 are.
 
-`Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly.
+`Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly;
+`"Admin.Editor"` names the same class.
 Register a JavaScript parent before its subclasses. For another root or a
 custom registered application class, use
 `Swill.start({root: element, application: MyApplication})`. One application
 runs per page: `start` returns it, `Swill.Application.shared()` returns it
 from anywhere, `Swill.Application.isRunning()` says whether one is up, and a
 second `start` while it runs throws.
+
+## Themes and Resources
+
+A page links a theme beside `swill.js`, first among its stylesheets:
+
+```html
+<link rel="stylesheet" data-swill-theme href="/assets/resources/swill/linear.css">
+<script src="/assets/swill.js"></script>
+```
+
+The framework's images, templates and themes are found beside `swill.js`
+wherever it is served from, and `application.theme = "bioplastic"` switches
+theme. See [Themes](resources.md#themes).
+
+An application's own resources live in `resources/<name>/` beside its
+script, as a built application's do, and `Swill.registerBundle` names them:
+
+```js
+Swill.registerBundle("app", {manifest: ["Poster.png", "icons/Star.svg", "rows.html"]});
+```
+
+`base`, the folder `resources/` is in, defaults to the current script's
+folder, or the page's for an inline script. The manifest lists the files
+under the folder; `swill manifest resources/app` prints it. The bundle is then
+the application's: `Swill.Image.named("Poster")` and `image="Poster"` find its
+files before the framework's. Without a build, nothing is embedded, so
+`Swill.start` loads the bundle's HTML catalogs first and launches once they
+arrive; `applicationDidLaunch` runs then.
 
 JavaScript methods use JavaScript semantics. Markup bindings follow Swill's
 one truthiness rule: only `false`, `null`, and `undefined` are false for

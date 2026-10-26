@@ -11,7 +11,7 @@ class Socket {
   send(bytes) { this.sent.push(unpack(bytes)); }
   close() { this.emit("close"); }
   welcome(scope = "actor") {
-    this.emit("message", {data: pack({type: "WELCOME", protocol_version: 2, schema_hash: "schema", actor_scope: scope})});
+    this.emit("message", {data: pack({type: "WELCOME", protocol_version: 3, schema_hash: "schema", actor_scope: scope})});
   }
 }
 const turn = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -106,7 +106,7 @@ for (const mismatch of ["schema", "protocol", "actor"]) {
       const socket = f.sockets.at(-1);
       socket.emit("open");
       if (mismatch === "actor") socket.welcome("another-actor");
-      else socket.emit("message", {data: pack({type: "WELCOME", protocol_version: mismatch === "protocol" ? 3 : 2, schema_hash: "other", actor_scope: "actor"})});
+      else socket.emit("message", {data: pack({type: "WELCOME", protocol_version: mismatch === "protocol" ? 4 : 3, schema_hash: "other", actor_scope: "actor"})});
       await failure;
       await assert.rejects(transport.dataRequest("QUERY", {}), {code});
       assert.equal(f.states.at(-1)[0], "reload_required");

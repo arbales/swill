@@ -85,7 +85,7 @@ module Swill
       # neither's name depends on the other. A name starting with an underscore
       # is JavaScript's own (an expando such as __swill_view__) and is left
       # alone.
-      ACRONYMS = %w[dom url json html].freeze
+      ACRONYMS = %w[dom url json html iso].freeze
       PREDICATE_VERBS = %w[accepts allow allows can confirm contains has holds includes matches needs requires should supports].freeze
       PREDICATE_LINKS = %w[are is has].freeze
 

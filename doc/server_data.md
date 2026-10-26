@@ -236,6 +236,26 @@ demands and loads a field is described in [identity, partial fields, and
 collections](models.md#identity-partial-fields-and-collections). An
 application whose policies deny fields declares those fields nilable.
 
+Bare field names reflect Sequel columns. Integer, float, text, boolean, UUID,
+enum, date, timestamp, time of day, numeric, JSON/JSONB, PostgreSQL arrays,
+ranges, multiranges and intervals have wire representations. A numeric becomes
+`BigDecimal` and keeps its decimal digits; a date stays a calendar `Date`,
+distinct from a timestamp. Ranges retain empty and unbounded states and both
+bound exclusions. Intervals retain months, days and microseconds separately.
+The generated Ruby type for JSON is `T.untyped`; its values must be ordinary
+JSON values. The generated range type is `Swill::Distant::RangeValue`. The
+browser's decimal value can be displayed and compared exactly, but implicit
+JavaScript arithmetic on it raises instead of silently rounding it.
+
+PostgreSQL `timestamp without time zone` needs an explicit policy:
+`Sequel.database_timezone = :utc` before schema generation, or an explicit
+field type. UTC instants are sent with microsecond precision. Types outside
+this set raise during schema generation so the application can declare its
+own representation. PostgreSQL geometric, network, binary, composite and
+user-defined column types are not inferred. PostgreSQL interval decoding
+requires Sequel's `pg_interval` extension and its ActiveSupport dependency;
+ranges and arrays likewise require their Sequel PostgreSQL extensions.
+
 sequel-privacy is an optional integration, not a dependency. An application
 using it adds `gem "sequel-privacy", ">= 0.7.2"` to its Gemfile and requires
 it before `swill/server`. When it is loaded, queries and writes go through
@@ -370,6 +390,6 @@ A message that fails answers an `ERROR` with a code and a message:
 | `unauthorized` | A privacy policy denied the remote method or write |
 | `operation_failed` | Any other exception in the method |
 
-The protocol version is 2.
+The protocol version is 3.
 
 See [a bound data form](data_form.md) for the complete model-to-form path.

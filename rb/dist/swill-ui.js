@@ -23,6 +23,18 @@
     }
     return false;
   }
+  function aliasJavaScriptNames(klass) {
+    const known = metadata.get(klass);
+    if (!known || known.aliased) return;
+    for (const kind of ["properties", "methods"]) {
+      const map = known[kind];
+      for (const [name, descriptor] of [...map]) {
+        const js = descriptor.js?.replace(/=$/, "");
+        if (js && js !== name && !map.has(js)) map.set(js, descriptor);
+      }
+    }
+    known.aliased = true;
+  }
   function installMetadata(klass, properties, methods, restorations2 = []) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
@@ -60,6 +72,10 @@
   function isEqual(left, right) {
     if (left === right) return true;
     if (left == null && right == null) return true;
+    const valueType = left?.[/* @__PURE__ */ Symbol.for("swill.data.type")];
+    if (valueType && valueType === right?.[/* @__PURE__ */ Symbol.for("swill.data.type")]) {
+      return left.equals(right);
+    }
     return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => isEqual(value, right[index]));
   }
   function isPlainObject(value) {
@@ -392,7 +408,7 @@
       throw new Error(`Unknown observable property: ${name}`);
     }
     if (descriptor.computed) computedValue(object, descriptor);
-    const set = listeners(object, name, kind);
+    const set = listeners(object, descriptor.name, kind);
     set.add(callback);
     return () => set.delete(callback);
   }
@@ -740,11 +756,18 @@
     return null;
   }
   function resolve(name) {
+    if (!classes.has(name) && name.includes(".") && !name.includes("::")) name = name.replaceAll(".", "::");
+    if (!classes.has(name) && publicNames.has(name)) return publicNames.get(name);
     if (!classes.has(name)) {
       throw new Error(`Unknown class: ${name}`);
     }
     return classes.get(name);
   }
+  function aliasInstalledJavaScriptNames(names2 = {}) {
+    for (const klass of classes.values()) aliasJavaScriptNames(klass);
+    for (const [name, klass] of Object.entries(names2)) publicNames.set(name, klass);
+  }
+  var publicNames = /* @__PURE__ */ new Map();
   function classIsA(name, ancestor) {
     const klass = resolve(name);
     const parent = resolve(ancestor);
@@ -1084,6 +1107,14 @@
         return typeof value === "number";
       case "T::Boolean":
         return typeof value === "boolean";
+      case "Date":
+      case "DateTime":
+      case "Time":
+      case "BigDecimal":
+      case "TimeOfDay":
+      case "Interval":
+      case "Swill::Distant::RangeValue":
+        return value?.[/* @__PURE__ */ Symbol.for("swill.data.type")] === (type === "Swill::Distant::RangeValue" ? "RangeValue" : type);
       default:
     }
     if (type === "Array" || type.startsWith("T::Array[")) return Array.isArray(value);
@@ -1135,7 +1166,7 @@
       warningObservers.delete(callback);
     };
   }
-  var Runtime = {
+  var UIRuntime = {
     // Classes
     install,
     include,
@@ -1147,6 +1178,7 @@
     resolve,
     classIsA,
     nameOf,
+    aliasInstalledJavaScriptNames,
     // Values
     isTruthy,
     logicalAnd,
@@ -1268,6 +1300,7 @@
     Swill__Controller: () => Swill__Controller,
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__DOM: () => Swill__DOM,
+    Swill__DateTransformer: () => Swill__DateTransformer,
     Swill__DevelopmentMonitor: () => Swill__DevelopmentMonitor,
     Swill__Image: () => Swill__Image,
     Swill__Launcher: () => Swill__Launcher,
@@ -1303,7 +1336,7 @@
       // sorbet-runtime will not wrap a method whose optional parameter comes
       // first, so this signature is static only.
       observeWithObject(object, name, callback) {
-        return this.retain(Runtime.observe(
+        return this.retain(UIRuntime.observe(
           object == null ? this : object,
           name,
           callback
@@ -1314,21 +1347,21 @@
       // observation, a notification, a DOM listener, a binding's release.
       // Answers the disposer.
       retain(disposer) {
-        return Runtime.retain(this, disposer);
+        return UIRuntime.retain(this, disposer);
       }
       // Gives up a disposer ahead of `dealloc`.
       release(disposer) {
-        return Runtime.release(this, disposer);
+        return UIRuntime.release(this, disposer);
       }
       // Releases everything retained and leaves the observation graph. End of
       // life for the object.
       dealloc() {
-        return Runtime.dealloc(this);
+        return UIRuntime.dealloc(this);
       }
       // Leaves the observation graph without ending: stored values are kept and
       // computed properties resubscribe on the next read.
       disconnect() {
-        return Runtime.disconnect(this);
+        return UIRuntime.disconnect(this);
       }
       // Runs before a write lands, answering the value to store. Override it to
       // coerce or to reject the write by raising.
@@ -1381,7 +1414,7 @@
       if (include_root) callback(root, false);
       return Swill__DOM.eachChild(root, (child) => {
         let view = child.__swill_view__;
-        return Runtime.isTruthy(child.hasAttribute("controller") || view && view.isOwnsContent()) ? callback(
+        return UIRuntime.isTruthy(child.hasAttribute("controller") || view && view.isOwnsContent()) ? callback(
           child,
           true
         ) : Swill__DOM.eachOwned(child, true, callback);
@@ -1397,7 +1430,7 @@
       }
       ;
       if (tag === "SELECT") {
-        return Runtime.logicalAnd(
+        return UIRuntime.logicalAnd(
           key !== "Enter" && key !== "Escape",
           () => key !== "Tab"
         );
@@ -1425,17 +1458,17 @@
         case "password":
           return !["Enter", "Escape", "Tab", "ArrowUp", "ArrowDown"].includes(key);
         default:
-          return Runtime.logicalAnd(
+          return UIRuntime.logicalAnd(
             key !== "Enter" && key !== "Escape",
             () => key !== "Tab"
           );
       }
     }
     static ownedMatching(root, selector) {
-      let found = Runtime.cast([], "T::Array[Element]");
+      let found = UIRuntime.cast([], "T::Array[Element]");
       Swill__DOM.eachOwned(root, true, (element, _controller_root) => {
-        if (Runtime.isTruthy((element === root || !element.hasAttribute("controller")) && element.matches(selector))) {
-          return Runtime.append(found, element);
+        if (UIRuntime.isTruthy((element === root || !element.hasAttribute("controller")) && element.matches(selector))) {
+          return UIRuntime.append(found, element);
         }
       });
       return found;
@@ -1449,14 +1482,14 @@
   Swill__DOM.ownedMatching = Swill__DOM_Functions.ownedMatching;
   var Swill__Swell = class _Swill__Swell extends Swill__Object {
     static $index(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [{ name: "element", kind: "req" }],
         keywords: [],
         keywordRest: null,
         block: "block"
       });
-      let element = Runtime.argument(__swill_bound, "element");
-      let block = Runtime.argument(__swill_bound, "block");
+      let element = UIRuntime.argument(__swill_bound, "element");
+      let block = UIRuntime.argument(__swill_bound, "block");
       let dom = new this(element);
       if (block) block(dom);
       return dom;
@@ -1510,7 +1543,7 @@
       } else {
         this._element.setAttribute(
           name,
-          value === true ? "" : Runtime.send(value, "to_s")
+          value === true ? "" : UIRuntime.send(value, "to_s")
         );
       }
       ;
@@ -1538,7 +1571,7 @@
     aria(name, value) {
       return this.attr(
         `aria-${name}`,
-        value == null ? null : Runtime.send(value, "to_s")
+        value == null ? null : UIRuntime.send(value, "to_s")
       );
     }
     // Sets `data-name` to the string form of `value` and returns the wrapper.
@@ -1547,7 +1580,7 @@
     data(name, value) {
       return this.attr(
         `data-${name}`,
-        value == null ? null : Runtime.send(value, "to_s")
+        value == null ? null : UIRuntime.send(value, "to_s")
       );
     }
     // Returns the value of `aria-name`, or nil when absent. `name` is the
@@ -1581,7 +1614,7 @@
     // returns the wrapper. Text is displayed literally; nil clears the
     // contents. See `#text_content` and `#empty`.
     text(value) {
-      this._element.textContent = Runtime.send(value, "to_s");
+      this._element.textContent = UIRuntime.send(value, "to_s");
       return this;
     }
     // Returns the element's text content, or an empty string when it has
@@ -1648,7 +1681,7 @@
     // Retain the returned callable on the controller or view that owns the
     // listener so it is removed when that owner unloads.
     listen(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "type", kind: "req" },
           { name: "handler", kind: "req" }
@@ -1657,10 +1690,10 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let type = Runtime.argument(__swill_bound, "type");
-      let handler = Runtime.argument(__swill_bound, "handler");
-      let capture = Runtime.argument(__swill_bound, "capture");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(capture))) capture = false;
+      let type = UIRuntime.argument(__swill_bound, "type");
+      let handler = UIRuntime.argument(__swill_bound, "handler");
+      let capture = UIRuntime.argument(__swill_bound, "capture");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(capture))) capture = false;
       this._element.addEventListener(type, handler, capture);
       return () => this._element.removeEventListener(type, handler, capture);
     }
@@ -1693,15 +1726,15 @@
     static default() {
       let center = this._default;
       if (center) return center;
-      this._default = Runtime.cast(
+      this._default = UIRuntime.cast(
         new _Swill__NotificationCenter(),
         "T.nilable(Swill::NotificationCenter)"
       );
-      return Runtime.must(this._default);
+      return UIRuntime.must(this._default);
     }
     constructor() {
       super();
-      this._observers = Runtime.cast(
+      this._observers = UIRuntime.cast(
         {},
         "T::Hash[String, T::Array[T.proc.params(notification:Notification).void]]"
       );
@@ -1713,11 +1746,11 @@
         this._observers[name] = list;
       }
       ;
-      Runtime.append(list, callback);
+      UIRuntime.append(list, callback);
       return () => {
         let current = this._observers[name];
         if (current) {
-          return this._observers[name] = current.filter((candidate) => !Runtime.isEqual(candidate, callback));
+          return this._observers[name] = current.filter((candidate) => !UIRuntime.isEqual(candidate, callback));
         }
       };
     }
@@ -1741,15 +1774,16 @@
     static registry() {
       let known = this._registry;
       if (known) return known;
-      this._registry = Runtime.cast(
+      this._registry = UIRuntime.cast(
         {
           string: new _Swill__ValueTransformer(),
           number: new Swill__NumberTransformer(),
-          boolean: new Swill__BooleanTransformer()
+          boolean: new Swill__BooleanTransformer(),
+          date: new Swill__DateTransformer()
         },
         "T.nilable(T::Hash[String, ValueTransformer])"
       );
-      return Runtime.must(this._registry);
+      return UIRuntime.must(this._registry);
     }
     // The text shown for a value; nil shows as nothing.
     format(value) {
@@ -1762,16 +1796,24 @@
   };
   var Swill__NumberTransformer = class extends Swill__ValueTransformer {
     parse(text) {
-      let stripped = Runtime.strip(text);
-      return Runtime.isEmpty(stripped) ? null : Runtime.toFloat(stripped);
+      let stripped = UIRuntime.strip(text);
+      return UIRuntime.isEmpty(stripped) ? null : UIRuntime.toFloat(stripped);
     }
   };
   var Swill__BooleanTransformer = class extends Swill__ValueTransformer {
     format(value) {
-      return Runtime.isTruthy(value) ? "true" : "false";
+      return UIRuntime.isTruthy(value) ? "true" : "false";
     }
     parse(text) {
       return text === "true" || text === "1" || text === "on";
+    }
+  };
+  var Swill__DateTransformer = class extends Swill__ValueTransformer {
+    format(value) {
+      return value == null ? "" : UIRuntime.dataDateISO(value);
+    }
+    parse(text) {
+      return UIRuntime.isEmpty(text) ? null : UIRuntime.dataDateFromISO(text);
     }
   };
   var Swill__BindingDestination = class extends Object {
@@ -1810,24 +1852,24 @@
     static forElement(element) {
       let tag = element.tagName;
       if (tag === "INPUT") {
-        if (element.type === "checkbox") return Runtime.must(this.shared().checkbox);
-        return Runtime.must(this.shared().field);
+        if (element.type === "checkbox") return UIRuntime.must(this.shared().checkbox);
+        return UIRuntime.must(this.shared().field);
       }
       ;
-      if (tag === "TEXTAREA") return Runtime.must(this.shared().field);
-      if (tag === "SELECT") return Runtime.must(this.shared().select);
-      return Runtime.must(this.shared().text);
+      if (tag === "TEXTAREA") return UIRuntime.must(this.shared().field);
+      if (tag === "SELECT") return UIRuntime.must(this.shared().select);
+      return UIRuntime.must(this.shared().text);
     }
     static elementProperty() {
-      return Runtime.must(this.shared().property);
+      return UIRuntime.must(this.shared().property);
     }
     static objectProperty() {
-      return Runtime.must(this.shared().object);
+      return UIRuntime.must(this.shared().object);
     }
     static shared() {
       let known = this._shared;
       if (known) return known;
-      this._shared = Runtime.cast(
+      this._shared = UIRuntime.cast(
         {
           text: new Swill__BindingDestination__Text(),
           field: new Swill__BindingDestination__Field(),
@@ -1838,7 +1880,7 @@
         },
         "T.nilable(T::Hash[String, BindingDestination])"
       );
-      return Runtime.must(this._shared);
+      return UIRuntime.must(this._shared);
     }
   };
   var Swill__BindingDestination__Text = class extends Swill__BindingDestination {
@@ -1878,7 +1920,7 @@
   };
   var Swill__BindingDestination__Checkbox = class extends Swill__BindingDestination__Field {
     write(receiver, binding, value) {
-      return receiver.checked = Runtime.isTruthy(value);
+      return receiver.checked = UIRuntime.isTruthy(value);
     }
     read(receiver, binding) {
       return receiver.checked;
@@ -1895,9 +1937,9 @@
   };
   var Swill__BindingDestination__ElementProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
-      let property = Runtime.must(binding);
+      let property = UIRuntime.must(binding);
       if (property.startsWith("data-") || property.startsWith("aria-")) {
-        if (Runtime.isTruthy(value == null || value === "" || value === false && property.startsWith("data-"))) {
+        if (UIRuntime.isTruthy(value == null || value === "" || value === false && property.startsWith("data-"))) {
           receiver.removeAttribute(property);
         } else {
           receiver.setAttribute(property, value);
@@ -1906,13 +1948,13 @@
         return;
       }
       ;
-      if (Runtime.isTruthy((property === "href" || property === "src") && value == null)) {
+      if (UIRuntime.isTruthy((property === "href" || property === "src") && value == null)) {
         receiver.removeAttribute(property);
         receiver[property] = "";
         return;
       }
       ;
-      return receiver[property] = this.isBooleanProperty(property) ? Runtime.isTruthy(value) : value;
+      return receiver[property] = this.isBooleanProperty(property) ? UIRuntime.isTruthy(value) : value;
     }
     isBooleanProperty(property) {
       switch (property) {
@@ -1937,10 +1979,10 @@
   };
   var Swill__BindingDestination__ObjectProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
-      return Runtime.write(receiver, Runtime.must(binding), value);
+      return UIRuntime.write(receiver, UIRuntime.must(binding), value);
     }
     read(receiver, binding) {
-      return Runtime.read(receiver, Runtime.must(binding));
+      return UIRuntime.read(receiver, UIRuntime.must(binding));
     }
     isTwoWay(receiver, binding) {
       return true;
@@ -1950,9 +1992,9 @@
       return null;
     }
     listen(receiver, binding, callback) {
-      return Runtime.observe(
+      return UIRuntime.observe(
         receiver,
-        Runtime.must(binding),
+        UIRuntime.must(binding),
         (value) => callback(value)
       );
     }
@@ -1961,21 +2003,21 @@
     static establish(destination, receiver, binding, object, key_path, transformer, placeholder, one_way) {
       let transforms = transformer != null && destination.isTransforms();
       let two_way = !one_way && destination.isTwoWay(receiver, binding);
-      if (Runtime.isTruthy(two_way)) Runtime.assertWritablePath(object, key_path);
+      if (UIRuntime.isTruthy(two_way)) UIRuntime.assertWritablePath(object, key_path);
       let push = (_value) => {
-        let value = Runtime.readPath(object, key_path);
-        value = Runtime.isTruthy(transforms) ? Runtime.must(transformer).format(value) : (() => {
+        let value = UIRuntime.readPath(object, key_path);
+        value = UIRuntime.isTruthy(transforms) ? UIRuntime.must(transformer).format(value) : (() => {
           return value == null ? placeholder : value;
         })();
         return destination.write(receiver, binding, value);
       };
       push(null);
-      let release_push = Runtime.observePath(object, key_path, push);
-      if (!Runtime.isTruthy(two_way)) return release_push;
-      let release_pull = destination.listen(receiver, binding, (value) => Runtime.writePath(
+      let release_push = UIRuntime.observePath(object, key_path, push);
+      if (!UIRuntime.isTruthy(two_way)) return release_push;
+      let release_pull = destination.listen(receiver, binding, (value) => UIRuntime.writePath(
         object,
         key_path,
-        Runtime.isTruthy(transforms) ? Runtime.must(transformer).parse(value) : value
+        UIRuntime.isTruthy(transforms) ? UIRuntime.must(transformer).parse(value) : value
       ));
       return () => {
         release_push();
@@ -1992,7 +2034,7 @@
       // markup, and raises when no transformer has that name. A binding already
       // established under this name is released first.
       bind(...__swill_arguments) {
-        let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
           positional: [{ name: "binding", kind: "req" }],
           keywords: [
             { name: "to", kind: "keyreq" },
@@ -2003,22 +2045,22 @@
           keywordRest: null,
           block: "__swill_block"
         });
-        let binding = Runtime.argument(__swill_bound, "binding");
-        let to = Runtime.argument(__swill_bound, "to");
-        let key_path = Runtime.argument(__swill_bound, "key_path");
-        let null_placeholder = Runtime.argument(
+        let binding = UIRuntime.argument(__swill_bound, "binding");
+        let to = UIRuntime.argument(__swill_bound, "to");
+        let key_path = UIRuntime.argument(__swill_bound, "key_path");
+        let null_placeholder = UIRuntime.argument(
           __swill_bound,
           "null_placeholder"
         );
-        if (Runtime.isTruthy(Runtime.isOmittedArgument(null_placeholder))) {
+        if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(null_placeholder))) {
           null_placeholder = null;
         }
         ;
-        let transform = Runtime.argument(__swill_bound, "transform");
-        if (Runtime.isTruthy(Runtime.isOmittedArgument(transform))) transform = null;
+        let transform = UIRuntime.argument(__swill_bound, "transform");
+        if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(transform))) transform = null;
         this.unbind(binding);
         let transformer = transform != null ? Swill__ValueTransformer.named(transform) : null;
-        if (Runtime.isTruthy(transform != null ? !transformer : transform)) {
+        if (UIRuntime.isTruthy(transform != null ? !transformer : transform)) {
           throw new Error(`unknown transform ${transform}`);
         }
         ;
@@ -2038,9 +2080,9 @@
       // object.
       unbind(binding) {
         let dispose = this.objectBindings()[binding];
-        if (!Runtime.isTruthy(dispose)) return this;
+        if (!UIRuntime.isTruthy(dispose)) return this;
         dispose();
-        Runtime.deleteKey(this.objectBindings(), binding);
+        UIRuntime.deleteKey(this.objectBindings(), binding);
         return this;
       }
       // Releases every binding on the object and returns it. A controller
@@ -2101,17 +2143,17 @@
       // ascending order; an empty array when nothing is selected.
       // :section: Arranging Content
       coercePropertyValue(name, value, previous) {
-        if (Runtime.isTruthy(Runtime.logicalAnd(
+        if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
           name === "content" && value != null,
           () => this.arrayController
         ))) throw new Error("Use either content or array_controller, not both");
-        if (Runtime.isTruthy(name === "array_controller" && value)) {
+        if (UIRuntime.isTruthy(name === "array_controller" && value)) {
           if (this.content != null) {
             throw new Error("Use either content or array_controller, not both");
           }
           ;
-          let cursor = Runtime.cast(
-            Runtime.cast(value, "T.nilable(Swill::ArrayController)"),
+          let cursor = UIRuntime.cast(
+            UIRuntime.cast(value, "T.nilable(Swill::ArrayController)"),
             "T.nilable(Swill::ArrayController)"
           );
           while (cursor) {
@@ -2134,29 +2176,29 @@
         let controller = this.arrayController;
         if (controller) return controller.arrangedObjects;
         let source = this.content;
-        if (this.isCollection(source)) source = Runtime.send(source, "records");
-        let objects = Runtime.cast(
-          Runtime.cast(
-            Runtime.logicalOr(source, () => []),
+        if (this.isCollection(source)) source = UIRuntime.send(source, "records");
+        let objects = UIRuntime.cast(
+          UIRuntime.cast(
+            UIRuntime.logicalOr(source, () => []),
             "T::Array[T.untyped]"
           ),
           "T::Array[T.untyped]"
         );
         let options = this.arrangementOptions;
-        let leading = Runtime.isEqual(options.source, this.content) ? Runtime.cast(
-          Runtime.logicalOr(options.leading, () => []),
+        let leading = UIRuntime.isEqual(options.source, this.content) ? UIRuntime.cast(
+          UIRuntime.logicalOr(options.leading, () => []),
           "T::Array[T.untyped]"
         ) : [];
         leading = leading.filter((object) => this.includesObject(object));
-        objects = objects.filter((object) => Runtime.isTruthy(!leading.includes(object) && this.includesObject(object)));
-        let key = Runtime.cast(options.key, "T.nilable(String)");
+        objects = objects.filter((object) => UIRuntime.isTruthy(!leading.includes(object) && this.includesObject(object)));
+        let key = UIRuntime.cast(options.key, "T.nilable(String)");
         if (key != null) {
           let direction = options.direction === "descending" ? -1 : 1;
-          let values = Runtime.cast(
-            objects.map((object) => [Runtime.read(object, key), object]),
+          let values = UIRuntime.cast(
+            objects.map((object) => [UIRuntime.read(object, key), object]),
             "T::Array[T::Array[T.untyped]]"
           );
-          values = Runtime.sortWith(
+          values = UIRuntime.sortWith(
             values,
             (left, right) => this.compareSortValues(left[0], right[0]) * direction
           );
@@ -2181,9 +2223,9 @@
         };
       }
       isCollection(objects) {
-        return Runtime.logicalAnd(
+        return UIRuntime.logicalAnd(
           objects != null && !Array.isArray(objects),
-          () => Runtime.respondsTo(objects, "records")
+          () => UIRuntime.respondsTo(objects, "records")
         );
       }
       // Places `object` ahead of the arranged content, whether or not the
@@ -2213,38 +2255,42 @@
         }
         ;
         let source = this.content;
-        let records = this.isCollection(source) ? Runtime.send(
+        let records = this.isCollection(source) ? UIRuntime.send(
           source,
           "records"
         ) : source;
-        let values = Runtime.cast(
-          Runtime.logicalOr(records, () => []),
+        let values = UIRuntime.cast(
+          UIRuntime.logicalOr(records, () => []),
           "T::Array[T.untyped]"
-        ).map((object) => Runtime.isEqual(object, original) ? replacement : object);
-        return this.isCollection(source) ? Runtime.invoke(
+        ).map((object) => UIRuntime.isEqual(object, original) ? replacement : object);
+        return this.isCollection(source) ? UIRuntime.invoke(
           source,
           "replace",
           values
         ) : this.content = values;
       }
       compareSortValues(left, right) {
-        if (Runtime.isTruthy(left == null && right == null)) return 0;
+        if (UIRuntime.isTruthy(left == null && right == null)) return 0;
         if (left == null) return 1;
         if (right == null) return -1;
-        if (Runtime.isTruthy(Runtime.logicalAnd(
-          Runtime.isNumber(left),
-          () => Runtime.isNumber(right)
-        ))) return left - right;
-        if (Runtime.isTruthy(Runtime.logicalAnd(
-          Runtime.isBoolean(left),
-          () => Runtime.isBoolean(right)
-        ))) {
-          return (Runtime.isTruthy(left) ? 1 : 0) - (Runtime.isTruthy(right) ? 1 : 0);
+        if (UIRuntime.isTruthy(UIRuntime.dataValueType(left) === "BigDecimal" && UIRuntime.dataValueType(right) === "BigDecimal")) {
+          return UIRuntime.compareDecimal(left, right);
         }
         ;
-        return Runtime.compareText(
-          Runtime.send(left, "to_s"),
-          Runtime.send(right, "to_s")
+        if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
+          UIRuntime.isNumber(left),
+          () => UIRuntime.isNumber(right)
+        ))) return left - right;
+        if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
+          UIRuntime.isBoolean(left),
+          () => UIRuntime.isBoolean(right)
+        ))) {
+          return (UIRuntime.isTruthy(left) ? 1 : 0) - (UIRuntime.isTruthy(right) ? 1 : 0);
+        }
+        ;
+        return UIRuntime.compareText(
+          UIRuntime.send(left, "to_s"),
+          UIRuntime.send(right, "to_s")
         );
       }
       // :section: Sorting
@@ -2266,7 +2312,7 @@
       // Sorts by `key`: descending when `key` is already the sort key in
       // ascending order, ascending otherwise. A sort header's action.
       toggleSort(key) {
-        let direction = Runtime.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
+        let direction = UIRuntime.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
         return this.sort(key, direction);
       }
       // Sorts by `key` in the current direction; the writer of `sort_key`.
@@ -2283,18 +2329,18 @@
         let controller = this.arrayController;
         if (controller) return controller.selectedObjects;
         let objects = this.arrangedObjects;
-        let requested = Runtime.cast(
-          Runtime.logicalOr(this.selectionState.objects, () => []),
+        let requested = UIRuntime.cast(
+          UIRuntime.logicalOr(this.selectionState.objects, () => []),
           "T::Array[T.untyped]"
         );
         let selected = requested.filter((object) => objects.includes(object));
-        if (Runtime.isEmpty(selected)) {
-          let identifier = Runtime.cast(
-            Runtime.logicalOr(this.selectionState.id, () => null),
+        if (UIRuntime.isEmpty(selected)) {
+          let identifier = UIRuntime.cast(
+            UIRuntime.logicalOr(this.selectionState.id, () => null),
             "T.nilable(String)"
           );
           let found = identifier != null ? objects.find((object) => this.identifierFor(object) === identifier) : null;
-          if (Runtime.isTruthy(found)) selected = [found];
+          if (UIRuntime.isTruthy(found)) selected = [found];
         }
         ;
         return selected;
@@ -2323,10 +2369,10 @@
       // the current selection. An index outside the content is ignored.
       selectIndexes(indexes) {
         let arranged = this.arrangedObjects;
-        let objects = Runtime.cast([], "T::Array[T.untyped]");
+        let objects = UIRuntime.cast([], "T::Array[T.untyped]");
         indexes.forEach((index) => {
-          if (Runtime.isTruthy(index >= 0 && index < arranged.length)) {
-            Runtime.append(objects, arranged[index]);
+          if (UIRuntime.isTruthy(index >= 0 && index < arranged.length)) {
+            UIRuntime.append(objects, arranged[index]);
           }
         });
         return this.selectedObjects = objects;
@@ -2342,7 +2388,7 @@
       // Selects the first arranged object when nothing is selected and there
       // is one.
       selectFirstIfNothingSelected() {
-        if (Runtime.isTruthy(Runtime.isEmpty(this.selectedObjects) && !Runtime.isEmpty(this.arrangedObjects))) {
+        if (UIRuntime.isTruthy(UIRuntime.isEmpty(this.selectedObjects) && !UIRuntime.isEmpty(this.arrangedObjects))) {
           return this.selectIndexes([0]);
         }
       }
@@ -2350,21 +2396,21 @@
       // the arranged content.
       objectAt(index) {
         let objects = this.arrangedObjects;
-        return Runtime.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
+        return UIRuntime.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
       }
       // Returns `object`'s `id` as a string, or nil when `object` is nil, has
       // no `id`, or its id is nil.
       identifierFor(object) {
-        if (!Runtime.isTruthy(object)) return null;
-        if (!Runtime.isTruthy(Runtime.respondsTo(object, "id"))) return null;
-        let value = Runtime.send(object, "id");
+        if (!UIRuntime.isTruthy(object)) return null;
+        if (!UIRuntime.isTruthy(UIRuntime.respondsTo(object, "id"))) return null;
+        let value = UIRuntime.send(object, "id");
         if (value == null) return null;
-        return Runtime.send(value, "to_s");
+        return UIRuntime.send(value, "to_s");
       }
       // Returns the arranged object whose id is `identifier`, or nil when none
       // has it or `identifier` is nil or empty.
       objectWithId(identifier) {
-        if (identifier == null || Runtime.isEmpty(identifier)) return null;
+        if (identifier == null || UIRuntime.isEmpty(identifier)) return null;
         return this.arrangedObjects.find((object) => this.identifierFor(object) === identifier);
       }
       currentSelection() {
@@ -2383,7 +2429,7 @@
   }
   var Swill__ArrayController = class extends Swill__Object {
   };
-  var Swill__Responder = class extends Swill__Object {
+  var Swill__Responder = class _Swill__Responder extends Swill__Object {
     // The next link in the chain, or nil at the end of it.
     nextResponder() {
       return null;
@@ -2393,13 +2439,13 @@
     performAction(name, sender, event) {
       let target = this.actionTarget(name);
       if (!target) throw new Error(`Unhandled action: ${name}`);
-      return Runtime.performAction(target, name, sender, event);
+      return UIRuntime.performAction(target, name, sender, event);
     }
     // TODO: It's unclear to me that this is the right place to handle this bubbling.
     // The responder that would handle +name+, or nil.
     actionTarget(name) {
-      if (Runtime.isTruthy(Runtime.respondsTo(this, name))) return this;
-      return Runtime.nilable(this.nextResponder()?.actionTarget(name));
+      if (UIRuntime.isTruthy(UIRuntime.respondsTo(this, name))) return this;
+      return UIRuntime.nilable(this.nextResponder()?.actionTarget(name));
     }
     // Whether this responder will take focus. False here; a controller
     // accepts when its region holds something focusable.
@@ -2427,38 +2473,73 @@
       return true;
     }
     // Translates a key into a command and sends it to this responder, as
-    // Cocoa's interpretKeyEvents: does. A key the focused element handles
-    // itself, such as typing in a field, stops here. A key held with Control,
-    // Command or Option, or one no command names, passes to the next
-    // responder as it is. An override sees the raw key before any of this.
+    // Cocoa's interpretKeyEvents: does. A command something in the chain
+    // takes is the key's whole effect, so the browser's own is prevented; one
+    // that reaches the end of the chain untaken leaves the key to the
+    // browser. A key the focused element handles itself, such as typing in a
+    // field, stops here. A key held with Control, Command or Option, or one no
+    // command names, passes to the next responder as it is. An override sees
+    // the raw key before any of this.
     keyDown(event) {
       if (event.isComposing) return;
       if (!event.ctrlKey && !event.metaKey && !event.altKey) {
         if (Swill__DOM.isHandlesKey(event)) return;
-        switch (event.key) {
-          case "Escape":
-            return this.cancelOperation(event);
-          case "Enter":
-            return this.insertNewline(event);
-          case "Tab":
-            return event.shiftKey ? this.insertBacktab(event) : this.insertTab(event);
-          case "ArrowUp":
-            return this.moveUp(event);
-          case "ArrowDown":
-            return this.moveDown(event);
-          case "ArrowLeft":
-            return this.moveLeft(event);
-          case "ArrowRight":
-            return this.moveRight(event);
-          case "Home":
-            return this.moveToBeginningOfDocument(event);
-          case "End":
-            return this.moveToEndOfDocument(event);
+        if (this.commandFor(event)) {
+          if (!_Swill__Responder.isDeclined(event)) event.preventDefault();
+          return;
         }
       }
       ;
       let target = this.nextResponder();
       if (target) return target.keyDown(event);
+    }
+    // Sends the command +event+'s key names, answering whether there is one.
+    commandFor(event) {
+      switch (event.key) {
+        case "Escape":
+          this.cancelOperation(event);
+          break;
+        case "Enter":
+          this.insertNewline(event);
+          break;
+        case "Tab":
+          if (event.shiftKey) {
+            this.insertBacktab(event);
+          } else {
+            this.insertTab(event);
+          }
+          ;
+          break;
+        case "ArrowUp":
+          this.moveUp(event);
+          break;
+        case "ArrowDown":
+          this.moveDown(event);
+          break;
+        case "ArrowLeft":
+          this.moveLeft(event);
+          break;
+        case "ArrowRight":
+          this.moveRight(event);
+          break;
+        case "Home":
+          this.moveToBeginningOfDocument(event);
+          break;
+        case "End":
+          this.moveToEndOfDocument(event);
+          break;
+        default:
+          return false;
+      }
+      ;
+      return true;
+    }
+    static decline(event) {
+      this._declined = event;
+      return this._declined;
+    }
+    static isDeclined(event) {
+      return this._declined === event;
     }
     // Passes to the next responder.
     keyUp(event) {
@@ -2468,56 +2549,56 @@
     // :section: Commands
     // What keys mean. Each passes to the next responder, so implementing one
     // takes that key for this responder's region, and calling super declines
-    // it.
+    // it. A command taken prevents the browser's handling of its key.
     // Escape. Dismiss what is open.
     cancelOperation(event) {
       let target = this.nextResponder();
-      if (target) return target.cancelOperation(event);
+      return target ? target.cancelOperation(event) : _Swill__Responder.decline(event);
     }
     // Enter. Commit what is being edited.
     insertNewline(event) {
       let target = this.nextResponder();
-      if (target) return target.insertNewline(event);
+      return target ? target.insertNewline(event) : _Swill__Responder.decline(event);
     }
-    // Tab. Unless something prevents it, the browser then moves focus on.
+    // Tab. The application moves through the key view loop.
     insertTab(event) {
       let target = this.nextResponder();
-      if (target) return target.insertTab(event);
+      return target ? target.insertTab(event) : _Swill__Responder.decline(event);
     }
     // Shift-Tab.
     insertBacktab(event) {
       let target = this.nextResponder();
-      if (target) return target.insertBacktab(event);
+      return target ? target.insertBacktab(event) : _Swill__Responder.decline(event);
     }
     // Up arrow.
     moveUp(event) {
       let target = this.nextResponder();
-      if (target) return target.moveUp(event);
+      return target ? target.moveUp(event) : _Swill__Responder.decline(event);
     }
     // Down arrow.
     moveDown(event) {
       let target = this.nextResponder();
-      if (target) return target.moveDown(event);
+      return target ? target.moveDown(event) : _Swill__Responder.decline(event);
     }
     // Left arrow.
     moveLeft(event) {
       let target = this.nextResponder();
-      if (target) return target.moveLeft(event);
+      return target ? target.moveLeft(event) : _Swill__Responder.decline(event);
     }
     // Right arrow.
     moveRight(event) {
       let target = this.nextResponder();
-      if (target) return target.moveRight(event);
+      return target ? target.moveRight(event) : _Swill__Responder.decline(event);
     }
     // Home.
     moveToBeginningOfDocument(event) {
       let target = this.nextResponder();
-      if (target) return target.moveToBeginningOfDocument(event);
+      return target ? target.moveToBeginningOfDocument(event) : _Swill__Responder.decline(event);
     }
     // End.
     moveToEndOfDocument(event) {
       let target = this.nextResponder();
-      if (target) return target.moveToEndOfDocument(event);
+      return target ? target.moveToEndOfDocument(event) : _Swill__Responder.decline(event);
     }
   };
   function Swill__OutletOwner(Superclass) {
@@ -2544,12 +2625,12 @@
     static register(name, base_url, manifest, embedded, main) {
       let bundle = new _Swill__Bundle(name, base_url, manifest, embedded);
       let bundles = this._bundles || {};
-      this._bundles = Runtime.cast(
+      this._bundles = UIRuntime.cast(
         bundles,
         "T.nilable(T::Hash[String, Bundle])"
       );
       bundles[name] = bundle;
-      if (main) this._main = Runtime.cast(bundle, "T.nilable(Swill::Bundle)");
+      if (main) this._main = UIRuntime.cast(bundle, "T.nilable(Swill::Bundle)");
       return bundle;
     }
     static main() {
@@ -2563,7 +2644,7 @@
       return bundles ? bundles[name] : null;
     }
     static searchOrder() {
-      return Runtime.uniq(Runtime.compact([this.main(), this.framework()]));
+      return UIRuntime.uniq(UIRuntime.compact([this.main(), this.framework()]));
     }
     // Creates a bundle; a bundle's script calls Bundle.register instead.
     // +embedded+ holds contents already loaded, by path.
@@ -2572,15 +2653,15 @@
       this._name = name;
       this._base_url = base_url;
       this._manifest = manifest;
-      this._contents = Runtime.cast(
+      this._contents = UIRuntime.cast(
         Object.assign({}, embedded),
         "T::Hash[String, String]"
       );
-      this._stems = Runtime.cast({}, "T::Hash[String, T::Array[String]]");
+      this._stems = UIRuntime.cast({}, "T::Hash[String, T::Array[String]]");
       manifest.forEach((path) => {
         let stem = _Swill__Bundle.stem(path);
         let paths = this._stems[stem];
-        return paths ? Runtime.append(paths, path) : this._stems[stem] = [path];
+        return paths ? UIRuntime.append(paths, path) : this._stems[stem] = [path];
       });
     }
     // The bundle's name, which is also its folder under `resources/`.
@@ -2610,15 +2691,15 @@
       }
       ;
       let paths = this._stems[name] || [];
-      if (Runtime.send(paths, "length") > 1) {
-        throw new Error(`Ambiguous resource ${name} in bundle ${this._name}: ${Runtime.invoke(
+      if (UIRuntime.send(paths, "length") > 1) {
+        throw new Error(`Ambiguous resource ${name} in bundle ${this._name}: ${UIRuntime.invoke(
           paths,
           "join",
           ", "
         )}`);
       }
       ;
-      return Runtime.send(paths, "first");
+      return UIRuntime.send(paths, "first");
     }
     // The URL of a resource, or nil when the bundle has none. See
     // #path_for_resource.
@@ -2632,7 +2713,7 @@
     }
     // The URL of the resource at +path+ in the manifest.
     urlForPath(path) {
-      let encoded = Runtime.split(path, "/").map((segment) => encodeURIComponent(segment)).join("/");
+      let encoded = UIRuntime.split(path, "/").map((segment) => encodeURIComponent(segment)).join("/");
       return `${this._base_url}resources/${encodeURIComponent(this._name)}/${encoded}`;
     }
     async loadResource(name, extension) {
@@ -2641,7 +2722,7 @@
         throw new Error(`No resource ${name} in bundle ${this._name}`);
       }
       ;
-      let loaded = Runtime.fetch(this._contents, path, null);
+      let loaded = UIRuntime.fetch(this._contents, path, null);
       if (loaded != null) return loaded;
       let response = await fetch(this.urlForPath(path));
       if (!response.ok) {
@@ -2656,11 +2737,11 @@
     // otherwise. See #load_resource.
     loadedResourceWithExtension(name, extension) {
       let path = this.pathForResourceWithExtension(name, extension);
-      return path != null ? Runtime.fetch(this._contents, path, null) : null;
+      return path != null ? UIRuntime.fetch(this._contents, path, null) : null;
     }
     // The loaded text of the resource at +path+, or nil.
     loadedPath(path) {
-      return Runtime.fetch(this._contents, path, null);
+      return UIRuntime.fetch(this._contents, path, null);
     }
     // Links the stylesheet +name+ into +document+ once, and answers a promise
     // that settles as it loads. Pages usually link their stylesheets
@@ -2688,10 +2769,10 @@
       return loaded;
     }
     static stem(path) {
-      let segments2 = Runtime.split(path, "/");
-      let file = Runtime.must(segments2.pop());
-      let parts = Runtime.split(file, ".");
-      let name = Runtime.isTruthy(parts.length > 1 && !Runtime.isEmpty(Runtime.must(parts[0]))) ? parts.slice(
+      let segments2 = UIRuntime.split(path, "/");
+      let file = UIRuntime.must(segments2.pop());
+      let parts = UIRuntime.split(file, ".");
+      let name = UIRuntime.isTruthy(parts.length > 1 && !UIRuntime.isEmpty(UIRuntime.must(parts[0]))) ? parts.slice(
         0,
         parts.length - 1
       ).join(".") : file;
@@ -2733,10 +2814,10 @@
   }
   var Swill__Templates_Functions = class extends Object {
     static named(name, document2) {
-      let unloaded = Runtime.cast([], "T::Array[String]");
+      let unloaded = UIRuntime.cast([], "T::Array[String]");
       let found = null;
       Swill__Bundle.searchOrder().forEach((bundle) => bundle.manifest.filter((path) => path.endsWith(".html")).forEach((path) => {
-        if (Runtime.isTruthy(found)) return;
+        if (UIRuntime.isTruthy(found)) return;
         let source = bundle.loadedPath(path);
         if (source != null) {
           found = Swill__Templates.find(
@@ -2745,11 +2826,11 @@
           );
           return found;
         } else {
-          return Runtime.append(unloaded, `${bundle.name}/${path}`);
+          return UIRuntime.append(unloaded, `${bundle.name}/${path}`);
         }
       }));
       if (found) return found;
-      let hint = Runtime.isEmpty(unloaded) ? "" : ` (not loaded yet: ${unloaded.join(", ")}; await Bundle#load_resource first)`;
+      let hint = UIRuntime.isEmpty(unloaded) ? "" : ` (not loaded yet: ${unloaded.join(", ")}; await Bundle#load_resource first)`;
       return (() => {
         throw new Error(`Unknown control template: ${name}${hint}`);
       })();
@@ -2775,7 +2856,7 @@
       let templates = catalog.content.children;
       let index = 0;
       while (index < templates.length) {
-        let template = Runtime.must(templates[index]);
+        let template = UIRuntime.must(templates[index]);
         if (template.getAttribute("name") === name) return template;
         index++;
       }
@@ -2792,8 +2873,8 @@
     }
     static named(name) {
       let urls = Swill__Bundle.searchOrder().flatMap((bundle) => _Swill__Image.extensions().map((extension) => bundle.urlForResourceWithExtension(name, extension)));
-      let url = Runtime.compact(urls)[0];
-      return Runtime.isTruthy(url) ? new _Swill__Image(url) : null;
+      let url = UIRuntime.compact(urls)[0];
+      return UIRuntime.isTruthy(url) ? new _Swill__Image(url) : null;
     }
     // An image at +url+, a path or URL as an `<img src>` would take it.
     constructor(url) {
@@ -2812,11 +2893,11 @@
     // holds at most one view; `View.of` finds it.
     constructor(element) {
       super();
-      this._owns_content = Runtime.cast(false, "T::Boolean");
+      this._owns_content = UIRuntime.cast(false, "T::Boolean");
       this._element = element;
-      this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
-      this._superview = Runtime.cast(null, "T.nilable(Swill::View)");
-      this._subviews = Runtime.cast([], "T::Array[View]");
+      this._controller = UIRuntime.cast(null, "T.nilable(Swill::Controller)");
+      this._superview = UIRuntime.cast(null, "T.nilable(Swill::View)");
+      this._subviews = UIRuntime.cast([], "T::Array[View]");
       element.__swill_view__ = this;
     }
     // Template internals have their own connections, but stay in the view tree.
@@ -2869,16 +2950,16 @@
     owner() {
       let own = this._controller;
       if (own) return own;
-      return Runtime.nilable(this._superview?.owner());
+      return UIRuntime.nilable(this._superview?.owner());
     }
     // Adopts `child` as a subview, releasing it from any previous superview,
     // and returns it. Adoption changes the view tree only; it does not move
     // or awaken elements.
     adoptSubview(child) {
       let previous = child.superview;
-      Runtime.nilable(previous?.releaseSubview(child));
+      UIRuntime.nilable(previous?.releaseSubview(child));
       child.assignSuperview(this);
-      Runtime.append(this._subviews, child);
+      UIRuntime.append(this._subviews, child);
       return child;
     }
     // Releases `child` from this view's subviews, leaving it with no superview.
@@ -2889,7 +2970,7 @@
     // Releases this view from its superview, if it has one.
     removeFromSuperview() {
       let superview = this._superview;
-      return Runtime.nilable(superview?.releaseSubview(this));
+      return UIRuntime.nilable(superview?.releaseSubview(this));
     }
     // Set by adopt_subview and release_subview, which keep both sides consistent.
     assignSuperview(superview) {
@@ -2901,7 +2982,7 @@
     }
     static controllerFor(element) {
       let view = _Swill__View.of(element);
-      return Runtime.nilable(view?.controllerValue());
+      return UIRuntime.nilable(view?.controllerValue());
     }
     // Returns whether this view's element carries the attribute `name`.
     hasAttribute(name) {
@@ -2962,7 +3043,7 @@
     // a callable that removes it. A controller retains the callable so the
     // listener is removed when it unloads.
     listen(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "type", kind: "req" },
           { name: "handler", kind: "req" }
@@ -2971,10 +3052,10 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let type = Runtime.argument(__swill_bound, "type");
-      let handler = Runtime.argument(__swill_bound, "handler");
-      let capture = Runtime.argument(__swill_bound, "capture");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(capture))) capture = false;
+      let type = UIRuntime.argument(__swill_bound, "type");
+      let handler = UIRuntime.argument(__swill_bound, "handler");
+      let capture = UIRuntime.argument(__swill_bound, "capture");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(capture))) capture = false;
       this._element.addEventListener(type, handler, capture);
       return () => this._element.removeEventListener(type, handler, capture);
     }
@@ -3021,9 +3102,9 @@
     // follows.
     blurElementWithNextResponder(next_responder) {
       let active = this._element.ownerDocument.activeElement;
-      if (!Runtime.isTruthy(active && this._element.contains(active))) return;
+      if (!UIRuntime.isTruthy(active && this._element.contains(active))) return;
       let region = next_responder ? next_responder.focusRegion() : null;
-      if (!Runtime.isTruthy(region && region.contains(active))) return active.blur();
+      if (!UIRuntime.isTruthy(region && region.contains(active))) return active.blur();
     }
     // Returns the controller rooted at this view, or else its superview. The
     // chain leaves the view tree at the first controller it meets.
@@ -3058,7 +3139,7 @@
     // a window's view is updated as the window opens.
     updateAccessibility() {
       let header = this._element.firstElementChild;
-      if (!Runtime.isTruthy(header && header.classList.contains("window-title"))) {
+      if (!UIRuntime.isTruthy(header && header.classList.contains("window-title"))) {
         return;
       }
       ;
@@ -3100,11 +3181,11 @@
     // See `#delegate`.
     resignFirstResponder(next_responder) {
       let current = this.delegate;
-      if (Runtime.isTruthy(Runtime.logicalAnd(
+      if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
         current,
-        () => Runtime.respondsTo(current, "control_should_resign_first_responder")
+        () => UIRuntime.respondsTo(current, "control_should_resign_first_responder")
       ))) {
-        if (!Runtime.isTruthy(Runtime.invoke(
+        if (!UIRuntime.isTruthy(UIRuntime.invoke(
           current,
           "control_should_resign_first_responder",
           this,
@@ -3138,7 +3219,7 @@
       this.value = found;
     }
     coercePropertyValue(name, value, previous) {
-      if (!Runtime.isTruthy(name === "value" && Runtime.conforms(
+      if (!UIRuntime.isTruthy(name === "value" && UIRuntime.conforms(
         value,
         "String"
       ))) return super.coercePropertyValue(name, value, previous);
@@ -3207,12 +3288,12 @@
     // Returns the controller that owns the containing region, or nil for a
     // root controller.
     parent() {
-      return Runtime.nilable(this._view.superview?.owner());
+      return UIRuntime.nilable(this._view.superview?.owner());
     }
     // Returns the controllers rooted directly within this region, in document
     // order; an empty array when there are none.
     childControllers() {
-      let found = Runtime.cast([], "T::Array[Controller]");
+      let found = UIRuntime.cast([], "T::Array[Controller]");
       this.collectChildControllers(this._view, found);
       return found;
     }
@@ -3332,7 +3413,7 @@
     collectChildControllers(view, found) {
       return view.subviews.forEach((subview) => {
         let controller = subview.controllerValue();
-        return controller ? Runtime.append(found, controller) : this.collectChildControllers(
+        return controller ? UIRuntime.append(found, controller) : this.collectChildControllers(
           subview,
           found
         );
@@ -3348,16 +3429,16 @@
     static establish(controller) {
       let root = controller.view.element;
       let prefix = controller.bindingRoot();
-      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
+      let disposers = UIRuntime.cast([], "T::Array[T.proc.void]");
       this.propertiesIn(controller, prefix, root, disposers);
       this.regionIn(controller, prefix, root, disposers);
       controller.retain(this.releasing(disposers));
       return controller;
     }
     static establishIn(element, object) {
-      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
+      let disposers = UIRuntime.cast([], "T::Array[T.proc.void]");
       if (element.hasAttribute("bind")) {
-        Runtime.append(disposers, this.connect(object, element, null));
+        UIRuntime.append(disposers, this.connect(object, element, null));
       }
       ;
       if (!element.hasAttribute("controller")) {
@@ -3373,7 +3454,7 @@
         false,
         (child, _controller_root) => {
           if (child.hasAttribute("bind")) {
-            Runtime.append(disposers, this.connect(object, child, prefix));
+            UIRuntime.append(disposers, this.connect(object, child, prefix));
           }
           ;
           if (!child.hasAttribute("controller")) {
@@ -3385,13 +3466,13 @@
     static propertiesIn(object, prefix, element, disposers) {
       return element.getAttributeNames().forEach((name) => {
         if (!name.startsWith("bind-")) return;
-        let property = Runtime.must(Runtime.slice(name, 5, name.length));
-        return Runtime.append(disposers, this.connectProperty(
+        let property = UIRuntime.must(UIRuntime.slice(name, 5, name.length));
+        return UIRuntime.append(disposers, this.connectProperty(
           object,
           prefix,
           element,
           property,
-          Runtime.must(element.getAttribute(name))
+          UIRuntime.must(element.getAttribute(name))
         ));
       });
     }
@@ -3400,8 +3481,8 @@
     }
     static resolvePath(prefix, path) {
       if (path[0] === "@") {
-        return Runtime.logicalOr(
-          Runtime.slice(path, 1, path.length),
+        return UIRuntime.logicalOr(
+          UIRuntime.slice(path, 1, path.length),
           () => ""
         );
       }
@@ -3419,7 +3500,7 @@
     static connect(object, element, prefix) {
       let path = this.resolvePath(
         prefix,
-        Runtime.must(element.getAttribute("bind"))
+        UIRuntime.must(element.getAttribute("bind"))
       );
       let transformer = this.transformerFor(element);
       let view = element.__swill_view__;
@@ -3428,7 +3509,7 @@
       if (view instanceof Swill__Control) {
         return this.connectControl(
           object,
-          Runtime.cast(view, "Swill::Control"),
+          UIRuntime.cast(view, "Swill::Control"),
           path,
           transformer
         );
@@ -3509,7 +3590,7 @@
       return controller;
     }
     static establishIn(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "element", kind: "req" },
           { name: "controller", kind: "req" }
@@ -3518,14 +3599,14 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let element = Runtime.argument(__swill_bound, "element");
-      let controller = Runtime.argument(__swill_bound, "controller");
-      let include_root = Runtime.argument(__swill_bound, "include_root");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(include_root))) {
+      let element = UIRuntime.argument(__swill_bound, "element");
+      let controller = UIRuntime.argument(__swill_bound, "controller");
+      let include_root = UIRuntime.argument(__swill_bound, "include_root");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(include_root))) {
         include_root = true;
       }
       ;
-      let disposers = Swill__DOM.ownedMatching(element, "[data-action]").map((target) => Runtime.isTruthy(target === element && !include_root) ? () => null : this.connect(
+      let disposers = Swill__DOM.ownedMatching(element, "[data-action]").map((target) => UIRuntime.isTruthy(target === element && !include_root) ? () => null : this.connect(
         target,
         controller
       ));
@@ -3535,12 +3616,12 @@
       let event_name, action_name;
       if (element.__swill_action__) return () => null;
       let attribute = element.getAttribute("data-action");
-      let specification = attribute != null ? Runtime.strip(attribute) : "";
-      if (Runtime.isEmpty(specification)) return () => null;
+      let specification = attribute != null ? UIRuntime.strip(attribute) : "";
+      if (UIRuntime.isEmpty(specification)) return () => null;
       if (specification.includes(":")) {
-        let parts = Runtime.split(specification, ":");
-        event_name = Runtime.must(parts[0]);
-        action_name = Runtime.must(parts[1]);
+        let parts = UIRuntime.split(specification, ":");
+        event_name = UIRuntime.must(parts[0]);
+        action_name = UIRuntime.must(parts[1]);
       } else {
         event_name = "click";
         action_name = specification;
@@ -3565,17 +3646,17 @@
   }
   var Swill__Connections__Outlets_Functions = class extends Object {
     static establish(controller, root) {
-      let declared = Runtime.cast(
-        Runtime.outlets(controller),
+      let declared = UIRuntime.cast(
+        UIRuntime.outlets(controller),
         "T::Array[T.untyped]"
       );
-      if (Runtime.isEmpty(declared)) return controller;
-      let by_name = Runtime.cast({}, "T::Hash[String, T.untyped]");
-      declared.forEach((descriptor) => by_name[Runtime.send(descriptor, "name")] = descriptor);
-      let connected = Runtime.cast({}, "T::Hash[String, Element]");
+      if (UIRuntime.isEmpty(declared)) return controller;
+      let by_name = UIRuntime.cast({}, "T::Hash[String, T.untyped]");
+      declared.forEach((descriptor) => by_name[UIRuntime.send(descriptor, "name")] = descriptor);
+      let connected = UIRuntime.cast({}, "T::Hash[String, Element]");
       this.candidates(root).forEach((element) => {
-        let name = Runtime.must(element.getAttribute("outlet"));
-        if (!Runtime.isTruthy(by_name[name])) {
+        let name = UIRuntime.must(element.getAttribute("outlet"));
+        if (!UIRuntime.isTruthy(by_name[name])) {
           throw new Error(this.undeclared(
             controller,
             name,
@@ -3590,15 +3671,15 @@
         }
         ;
         connected[name] = element;
-        return Runtime.write(
+        return UIRuntime.write(
           controller,
           name,
           this.valueFor(controller, by_name[name], element)
         );
       });
       declared.forEach((descriptor) => {
-        let name = Runtime.send(descriptor, "name");
-        if (Runtime.isTruthy(!Runtime.isTruthy(Runtime.send(
+        let name = UIRuntime.send(descriptor, "name");
+        if (UIRuntime.isTruthy(!UIRuntime.isTruthy(UIRuntime.send(
           descriptor,
           "optional"
         )) && !connected[name])) {
@@ -3617,11 +3698,11 @@
       let owner = this.ownerName(controller);
       let message = `Undeclared outlet ${name} on ${owner}: ${this.describe(element)} names an outlet ${owner} does not declare`;
       let similar = this.similarNames(name, declared);
-      if (!Runtime.isEmpty(similar)) {
+      if (!UIRuntime.isEmpty(similar)) {
         message += `. Did you mean ${similar.join(" or ")}?`;
       }
       ;
-      let known = Runtime.isEmpty(declared) ? "none" : declared.join(", ");
+      let known = UIRuntime.isEmpty(declared) ? "none" : declared.join(", ");
       return `${message} Its outlets: ${known}. Declare it with \`outlet :${name}, type: ...\`, or remove the attribute`;
     }
     static unresolved(controller, name, root) {
@@ -3636,20 +3717,20 @@
       return `${message}. Add the attribute to an element ${owner} owns, or declare the outlet \`optional: true\``;
     }
     static ownerName(controller) {
-      return Runtime.logicalOr(
-        Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
+      return UIRuntime.logicalOr(
+        UIRuntime.cast(UIRuntime.nameOf(controller), "T.nilable(String)"),
         () => "the application"
       );
     }
     static describe(element) {
       let attributes = ["controller", "klass", "outlet", "id"].filter((name) => element.hasAttribute(name)).map((name) => ` ${name}="${element.getAttribute(name)}"`);
-      return `<${Runtime.downcase(element.tagName)}${attributes.join("")}>`;
+      return `<${UIRuntime.downcase(element.tagName)}${attributes.join("")}>`;
     }
     static regionOwner(element, root) {
       let current = element.parentElement;
       while (current && current !== root) {
         let view = current.__swill_view__;
-        if (Runtime.isTruthy(current.hasAttribute("controller") || view && view.isOwnsContent())) {
+        if (UIRuntime.isTruthy(current.hasAttribute("controller") || view && view.isOwnsContent())) {
           return `${this.describe(current)}'s region`;
         }
         ;
@@ -3659,32 +3740,32 @@
       return "another region";
     }
     static similarNames(name, declared) {
-      let folded = Runtime.split(Runtime.downcase(name), "_").join("");
+      let folded = UIRuntime.split(UIRuntime.downcase(name), "_").join("");
       let limit = name.length > 3 ? 2 : 1;
-      return declared.filter((candidate) => Runtime.split(Runtime.downcase(candidate), "_").join("") === folded || this.editDistance(
+      return declared.filter((candidate) => UIRuntime.split(UIRuntime.downcase(candidate), "_").join("") === folded || this.editDistance(
         name,
         candidate
       ) <= limit);
     }
     static editDistance(a, b) {
-      let previous = Runtime.cast([], "T::Array[Integer]");
+      let previous = UIRuntime.cast([], "T::Array[Integer]");
       let column = 0;
       while (column <= b.length) {
-        Runtime.append(previous, column);
+        UIRuntime.append(previous, column);
         column++;
       }
       ;
       let row = 1;
       while (row <= a.length) {
-        let current = Runtime.cast([row], "T::Array[Integer]");
+        let current = UIRuntime.cast([row], "T::Array[Integer]");
         column = 1;
         while (column <= b.length) {
-          let cost = Runtime.isEqual(a[row - 1], b[column - 1]) ? 0 : 1;
-          let deletion = Runtime.must(previous[column]) + 1;
-          let insertion = Runtime.must(current[column - 1]) + 1;
-          let substitution = Runtime.must(previous[column - 1]) + cost;
+          let cost = UIRuntime.isEqual(a[row - 1], b[column - 1]) ? 0 : 1;
+          let deletion = UIRuntime.must(previous[column]) + 1;
+          let insertion = UIRuntime.must(current[column - 1]) + 1;
+          let substitution = UIRuntime.must(previous[column - 1]) + cost;
           let nearer = deletion < insertion ? deletion : insertion;
-          Runtime.append(
+          UIRuntime.append(
             current,
             nearer < substitution ? nearer : substitution
           );
@@ -3695,27 +3776,27 @@
         row++;
       }
       ;
-      return Runtime.must(previous[b.length]);
+      return UIRuntime.must(previous[b.length]);
     }
     static candidates(root) {
-      let found = Runtime.cast([], "T::Array[Element]");
+      let found = UIRuntime.cast([], "T::Array[Element]");
       Swill__DOM.eachOwned(root, false, (element, _controller_root) => {
-        if (element.hasAttribute("outlet")) return Runtime.append(found, element);
+        if (element.hasAttribute("outlet")) return UIRuntime.append(found, element);
       });
       return found;
     }
     static valueFor(controller, descriptor, element) {
-      let name = Runtime.send(descriptor, "name");
+      let name = UIRuntime.send(descriptor, "name");
       let value = this.materialize(controller, name, element);
-      let typed = Runtime.logicalAnd(
-        Runtime.send(descriptor, "type"),
-        () => Runtime.send(descriptor, "type") !== "T.untyped"
+      let typed = UIRuntime.logicalAnd(
+        UIRuntime.send(descriptor, "type"),
+        () => UIRuntime.send(descriptor, "type") !== "T.untyped"
       );
-      if (Runtime.isTruthy(Runtime.logicalAnd(typed, () => !Runtime.isTruthy(Runtime.conforms(
+      if (UIRuntime.isTruthy(UIRuntime.logicalAnd(typed, () => !UIRuntime.isTruthy(UIRuntime.conforms(
         value,
-        Runtime.send(descriptor, "type")
+        UIRuntime.send(descriptor, "type")
       ))))) {
-        throw new Error(`Outlet ${name} expects ${Runtime.send(
+        throw new Error(`Outlet ${name} expects ${UIRuntime.send(
           descriptor,
           "type"
         )}`);
@@ -3724,7 +3805,7 @@
       return value;
     }
     static materialize(controller, name, element) {
-      if (Runtime.isTruthy(element.tagName === "SCRIPT" && element.type === "application/json")) {
+      if (UIRuntime.isTruthy(element.tagName === "SCRIPT" && element.type === "application/json")) {
         return this.decode(controller, name, element);
       }
       ;
@@ -3735,10 +3816,10 @@
       return owner ? owner : view;
     }
     static decode(controller, name, element) {
-      let text = Runtime.strip(element.textContent);
+      let text = UIRuntime.strip(element.textContent);
       return controller.decodeOutletData(
         name,
-        Runtime.isEmpty(text) ? null : JSON.parse(text)
+        UIRuntime.isEmpty(text) ? null : JSON.parse(text)
       );
     }
   };
@@ -3767,47 +3848,47 @@
     }
     static awaken(root) {
       let controllers = this.prepare(root);
-      Runtime.reverse(controllers).forEach((controller) => this.load(controller));
+      UIRuntime.reverse(controllers).forEach((controller) => this.load(controller));
       return controllers;
     }
     static prepare(root) {
-      let controllers = Runtime.cast([], "T::Array[Controller]");
+      let controllers = UIRuntime.cast([], "T::Array[Controller]");
       this.walk(root, this.nearestView(root.parentElement), controllers);
       return controllers;
     }
     static awakenOwned(root, owner) {
-      let controllers = Runtime.cast([], "T::Array[Controller]");
+      let controllers = UIRuntime.cast([], "T::Array[Controller]");
       Swill__DOM.eachChild(
         root,
         (child) => this.walk(child, owner, controllers)
       );
       Swill__Connections__Outlets.establish(owner, root);
-      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
+      let disposers = UIRuntime.cast([], "T::Array[T.proc.void]");
       Swill__Connections__Bindings.regionIn(owner, null, root, disposers);
       owner.retain(Swill__Connections__Bindings.releasing(disposers));
       owner.retain(Swill__Connections__Actions.establishIn(
         root,
         owner,
-        Runtime.keywordArguments({ include_root: false })
+        UIRuntime.keywordArguments({ include_root: false })
       ));
-      Runtime.reverse(controllers).forEach((controller) => this.load(controller));
+      UIRuntime.reverse(controllers).forEach((controller) => this.load(controller));
       return this.finish(controllers);
     }
     static finish(controllers) {
-      Runtime.reverse(controllers).forEach((controller) => controller.controllerDidLoad());
-      Runtime.reverse(controllers).forEach((controller) => controller.viewWillAppear());
-      return Runtime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
+      UIRuntime.reverse(controllers).forEach((controller) => controller.controllerDidLoad());
+      UIRuntime.reverse(controllers).forEach((controller) => controller.viewWillAppear());
+      return UIRuntime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
     }
     static load(controller) {
       let root = controller.view.element;
       Swill__Connections__Outlets.establish(controller, root);
       controller.viewDidLoad();
-      let added = Runtime.cast([], "T::Array[Controller]");
+      let added = UIRuntime.cast([], "T::Array[Controller]");
       Swill__DOM.eachChild(
         root,
         (child) => this.walk(child, controller.view, added)
       );
-      Runtime.reverse(added).forEach((child) => this.load(child));
+      UIRuntime.reverse(added).forEach((child) => this.load(child));
       this.finish(added);
       Swill__Connections__Bindings.establish(controller);
       Swill__Connections__Actions.establish(controller);
@@ -3816,23 +3897,23 @@
     static walk(element, owner, controllers) {
       let view = element.__swill_view__;
       if (element.hasAttribute("klass")) this.classify(element);
-      if (Runtime.isTruthy(!view && this.isManaged(element))) {
+      if (UIRuntime.isTruthy(!view && this.isManaged(element))) {
         view = this.createView(element);
       }
       ;
       if (view) {
-        if (Runtime.isTruthy(owner && !view.superview)) owner.adoptSubview(view);
-        if (Runtime.isTruthy(element.hasAttribute("controller") && !view.controllerValue())) {
-          let controller = Runtime.cast(
-            new (Runtime.resolve(Runtime.must(element.getAttribute("controller"))))(),
+        if (UIRuntime.isTruthy(owner && !view.superview)) owner.adoptSubview(view);
+        if (UIRuntime.isTruthy(element.hasAttribute("controller") && !view.controllerValue())) {
+          let controller = UIRuntime.cast(
+            new (UIRuntime.resolve(UIRuntime.must(element.getAttribute("controller"))))(),
             "Swill::Controller"
           );
           controller.attach(element);
-          Runtime.append(controllers, controller);
+          UIRuntime.append(controllers, controller);
         }
       }
       ;
-      if (Runtime.isTruthy(view && view.isOwnsContent())) return;
+      if (UIRuntime.isTruthy(view && view.isOwnsContent())) return;
       let next_owner = view || owner;
       return Swill__DOM.eachChild(
         element,
@@ -3840,15 +3921,15 @@
       );
     }
     static classify(element) {
-      let name = Runtime.must(element.getAttribute("klass"));
-      if (Runtime.isTruthy(Runtime.classIsA(name, "Swill::Controller"))) {
+      let name = UIRuntime.must(element.getAttribute("klass"));
+      if (UIRuntime.isTruthy(UIRuntime.classIsA(name, "Swill::Controller"))) {
         if (element.hasAttribute("controller")) {
           throw new Error(`${name} conflicts with controller on the same element`);
         }
         ;
         element.removeAttribute("klass");
         return element.setAttribute("controller", name);
-      } else if (!Runtime.isTruthy(Runtime.classIsA(name, "Swill::View"))) {
+      } else if (!UIRuntime.isTruthy(UIRuntime.classIsA(name, "Swill::View"))) {
         return (() => {
           throw new Error(`${name} is not a Swill::View or Swill::Controller`);
         })();
@@ -3865,7 +3946,7 @@
     static createView(element) {
       let name = element.getAttribute("klass");
       if (name == null) return new Swill__View(element);
-      let view = new (Runtime.resolve(name))(element);
+      let view = new (UIRuntime.resolve(name))(element);
       if (!(view instanceof Swill__View)) {
         throw new Error(`${name} is not a Swill::View`);
       }
@@ -3873,14 +3954,14 @@
       return view;
     }
     static controllersWithin(node) {
-      let found = Runtime.cast([], "T::Array[Controller]");
+      let found = UIRuntime.cast([], "T::Array[Controller]");
       this.collectControllers(node, found);
       return found;
     }
     static collectControllers(element, found) {
       let view = element.__swill_view__;
       let controller = view ? view.controllerValue() : null;
-      if (controller) Runtime.append(found, controller);
+      if (controller) UIRuntime.append(found, controller);
       return Swill__DOM.eachChild(
         element,
         (child) => this.collectControllers(child, found)
@@ -3922,22 +4003,22 @@
       super();
       this._browser = browser;
       this._suspended = false;
-      this._on_change = Runtime.cast(
+      this._on_change = UIRuntime.cast(
         null,
         "T.nilable(T.proc.params(event:Event).void)"
       );
     }
     isAvailable() {
       let browser = this._browser;
-      return Runtime.logicalAnd(
+      return UIRuntime.logicalAnd(
         browser != null && browser.location != null,
         () => browser.history != null
       );
     }
     params() {
-      let found = Runtime.cast({}, "T::Hash[String, String]");
+      let found = UIRuntime.cast({}, "T::Hash[String, String]");
       let browser = this._browser;
-      if (!Runtime.isTruthy(browser && this.isAvailable())) return found;
+      if (!UIRuntime.isTruthy(browser && this.isAvailable())) return found;
       let search = new URLSearchParams(browser.location.hash.replace(
         /^#/m,
         ""
@@ -3948,7 +4029,7 @@
     // :push adds a history entry, :replace rewrites the current one, :none is
     // a no-op. Writes are also dropped while fragment state is being applied.
     write(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "key", kind: "req" },
           { name: "value", kind: "req" }
@@ -3957,12 +4038,12 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let key = Runtime.argument(__swill_bound, "key");
-      let value = Runtime.argument(__swill_bound, "value");
-      let history = Runtime.argument(__swill_bound, "history");
+      let key = UIRuntime.argument(__swill_bound, "key");
+      let value = UIRuntime.argument(__swill_bound, "value");
+      let history = UIRuntime.argument(__swill_bound, "history");
       if (history === "none" || this._suspended) return;
       let browser = this._browser;
-      if (!Runtime.isTruthy(browser && this.isAvailable())) return;
+      if (!UIRuntime.isTruthy(browser && this.isAvailable())) return;
       let location = browser.location;
       let search = new URLSearchParams(location.hash.replace(/^#/m, ""));
       if (value == null) {
@@ -3972,7 +4053,7 @@
       }
       ;
       let query = search.toString();
-      let next_url = location.pathname + location.search + (Runtime.isEmpty(query) ? "" : "#" + query);
+      let next_url = location.pathname + location.search + (UIRuntime.isEmpty(query) ? "" : "#" + query);
       if (next_url === location.pathname + location.search + location.hash) return;
       return history === "push" ? browser.history.pushState(
         null,
@@ -3983,22 +4064,22 @@
     // Run a block with writes suppressed, so observers fired by applying
     // fragment values do not write back mid-application.
     suspended(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(
+      let __swill_bound = UIRuntime.bindArguments(
         __swill_arguments,
         { positional: [], keywords: [], keywordRest: null, block: "block" }
       );
-      let block = Runtime.argument(__swill_bound, "block");
+      let block = UIRuntime.argument(__swill_bound, "block");
       let _implicitBlockYield = block;
       this._suspended = true;
       try {
-        return Runtime.yieldBlock(_implicitBlockYield);
+        return UIRuntime.yieldBlock(_implicitBlockYield);
       } finally {
         this._suspended = false;
       }
     }
     startObserving(callback) {
       let browser = this._browser;
-      if (!Runtime.isTruthy(browser && this.isAvailable())) return;
+      if (!UIRuntime.isTruthy(browser && this.isAvailable())) return;
       let on_change = (_event) => callback();
       this._on_change = on_change;
       browser.addEventListener("popstate", on_change);
@@ -4007,7 +4088,7 @@
     stopObserving() {
       let on_change = this._on_change;
       let browser = this._browser;
-      if (!Runtime.isTruthy(Runtime.logicalAnd(on_change, () => browser))) return;
+      if (!UIRuntime.isTruthy(UIRuntime.logicalAnd(on_change, () => browser))) return;
       browser.removeEventListener("popstate", on_change);
       browser.removeEventListener("hashchange", on_change);
       this._on_change = null;
@@ -4016,7 +4097,7 @@
   };
   var Swill__Window = class extends Swill__Object {
     constructor(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "name", kind: "req" },
           { name: "root", kind: "req" }
@@ -4025,26 +4106,26 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let name = Runtime.argument(__swill_bound, "name");
-      let root = Runtime.argument(__swill_bound, "root");
-      let modal = Runtime.argument(__swill_bound, "modal");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(modal))) modal = false;
+      let name = UIRuntime.argument(__swill_bound, "name");
+      let root = UIRuntime.argument(__swill_bound, "root");
+      let modal = UIRuntime.argument(__swill_bound, "modal");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(modal))) modal = false;
       super();
       this._name = name;
       this._root = root;
       this._modal = modal;
-      this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
-      this._content_name = Runtime.cast(null, "T.nilable(String)");
-      this._first_responder = Runtime.cast(
+      this._controller = UIRuntime.cast(null, "T.nilable(Swill::Controller)");
+      this._content_name = UIRuntime.cast(null, "T.nilable(String)");
+      this._first_responder = UIRuntime.cast(
         null,
         "T.nilable(Swill::Responder)"
       );
       this._focused_element = null;
-      this._restoration_disposers = Runtime.cast(
+      this._restoration_disposers = UIRuntime.cast(
         [],
         "T::Array[T.proc.void]"
       );
-      this._restoration_keys = Runtime.cast([], "T::Array[String]");
+      this._restoration_keys = UIRuntime.cast([], "T::Array[String]");
       this._resolve_closed = null;
       this._closed = new Promise((resolve2, _reject) => {
         this._resolve_closed = resolve2;
@@ -4059,8 +4140,8 @@
       return `${this._name}.${key}`;
     }
     addRestoration(disposer, key) {
-      Runtime.append(this._restoration_disposers, disposer);
-      return Runtime.append(this._restoration_keys, key);
+      UIRuntime.append(this._restoration_disposers, disposer);
+      return UIRuntime.append(this._restoration_keys, key);
     }
     // Release the current restoration subscriptions; returns the scoped keys
     // they covered so a caller can prune ones the next controller will not own.
@@ -4119,9 +4200,9 @@
     // `tabindex="-1"`, not hidden or inert, and not inside one of the
     // +excluded+ roots (other windows the page holds).
     keyViews(excluded) {
-      let views = Runtime.cast([], "T::Array[Element]");
+      let views = UIRuntime.cast([], "T::Array[Element]");
       this._root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach((element) => {
-        if (this.isKeyView(element, excluded)) return Runtime.append(views, element);
+        if (this.isKeyView(element, excluded)) return UIRuntime.append(views, element);
       });
       return views;
     }
@@ -4148,7 +4229,7 @@
     firstKeyView(selector, excluded) {
       let found = null;
       this._root.querySelectorAll(selector).forEach((element) => {
-        if (Runtime.isTruthy(found == null && this.isKeyView(
+        if (UIRuntime.isTruthy(found == null && this.isKeyView(
           element,
           excluded
         ))) {
@@ -4205,7 +4286,7 @@
       return this._running != null;
     }
     static launched(application) {
-      this._running = Runtime.cast(
+      this._running = UIRuntime.cast(
         application,
         "T.nilable(Swill::Application)"
       );
@@ -4220,36 +4301,36 @@
     // Creates the application. Call #launch to start it.
     constructor() {
       super();
-      this._windows = Runtime.cast([], "T::Array[Window]");
-      this._controllers = Runtime.cast([], "T::Array[Controller]");
-      this._templates = Runtime.cast({}, "T::Hash[String, Element]");
-      this._captured = Runtime.cast({}, "T::Hash[String, Element]");
-      this._page = Runtime.cast(null, "T.nilable(Swill::Window)");
-      this._key_windows = Runtime.cast([], "T::Array[Window]");
-      this._changing_windows = Runtime.cast(false, "T::Boolean");
-      this._posted_first_responder = Runtime.cast(
+      this._windows = UIRuntime.cast([], "T::Array[Window]");
+      this._controllers = UIRuntime.cast([], "T::Array[Controller]");
+      this._templates = UIRuntime.cast({}, "T::Hash[String, Element]");
+      this._captured = UIRuntime.cast({}, "T::Hash[String, Element]");
+      this._page = UIRuntime.cast(null, "T.nilable(Swill::Window)");
+      this._key_windows = UIRuntime.cast([], "T::Array[Window]");
+      this._changing_windows = UIRuntime.cast(false, "T::Boolean");
+      this._posted_first_responder = UIRuntime.cast(
         null,
         "T.nilable(Swill::Responder)"
       );
       this._observer = null;
-      this._unrestored = Runtime.cast([], "T::Array[String]");
-      this._unrestorable_paths = Runtime.cast([], "T::Array[String]");
-      this._problems = Runtime.cast(
+      this._unrestored = UIRuntime.cast([], "T::Array[String]");
+      this._unrestorable_paths = UIRuntime.cast([], "T::Array[String]");
+      this._problems = UIRuntime.cast(
         null,
         "T.nilable(Swill::ProblemReporter)"
       );
-      this._development_monitor = Runtime.cast(
+      this._development_monitor = UIRuntime.cast(
         null,
         "T.nilable(Swill::DevelopmentMonitor)"
       );
-      this._connection_state = Runtime.cast("idle", "String");
-      this._reconnect = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._connection_state = UIRuntime.cast("idle", "String");
+      this._reconnect = UIRuntime.cast(null, "T.nilable(T.proc.void)");
       this._on_online = (_event) => {
         if (this._connection_state === "disconnected") {
           return this._reconnect?.call(null);
         }
       };
-      this._window_titles = Runtime.cast(0, "Integer");
+      this._window_titles = UIRuntime.cast(0, "Integer");
     }
     // The theme the page is drawn in: the name of one of the framework's
     // stylesheets, such as linear or bioplastic. The page links its theme as
@@ -4262,7 +4343,7 @@
     // setting this before launch. False by default. See ProblemReporter.
     // Code in an in_development block runs only while this is true.
     developmentDidChange(_previous, development2) {
-      return Runtime.setDevelopment(development2);
+      return UIRuntime.setDevelopment(development2);
     }
     // Starts the application at +root+: awakens the markup beneath it,
     // restores window content from the URL fragment, and begins watching for
@@ -4296,13 +4377,14 @@
       this.prepareWindowContainers();
       this._controllers = Swill__Awakening.prepare(root);
       Swill__Connections__Outlets.establish(this, root);
-      Runtime.reverse(this._controllers).forEach((controller) => Swill__Awakening.load(controller));
+      UIRuntime.reverse(this._controllers).forEach((controller) => Swill__Awakening.load(controller));
       this.registerWindowContainers();
       this.restoreLaunchedWindows();
       this.warnUnrestored(this._controllers);
       Swill__Awakening.finish(this._controllers);
       this._fragments.startObserving(() => this.applyFragment());
       this.watch(root);
+      this.adoptFocus(root);
       this.applicationDidLaunch();
       Swill__NotificationCenter.default().post(
         "application_did_launch",
@@ -4319,16 +4401,16 @@
     connectionChanged(state2, detail, retry_action) {
       this._connection_state = state2;
       this._reconnect = retry_action;
-      return Runtime.nilable(this._problems?.connectionChanged(state2, detail, retry_action));
+      return UIRuntime.nilable(this._problems?.connectionChanged(state2, detail, retry_action));
     }
     // Reports a recoverable operation problem, including in production.
     reportProblem(message, detail) {
-      return Runtime.nilable(this._problems?.report("Warning", message, detail));
+      return UIRuntime.nilable(this._problems?.report("Warning", message, detail));
     }
     // The browser window the application runs in, for what only it offers:
     // a prompt, printing.
     browser() {
-      return Runtime.must(this.root.ownerDocument.defaultView);
+      return UIRuntime.must(this.root.ownerDocument.defaultView);
     }
     // Every controller awakened at launch, in document order.
     get controllers() {
@@ -4340,16 +4422,16 @@
     }
     // Idempotent: a page may see more than one pagehide before it is unloaded.
     terminate() {
-      if (!Runtime.isTruthy(_Swill__Application.isRunning() && _Swill__Application.shared() === this)) {
+      if (!UIRuntime.isTruthy(_Swill__Application.isRunning() && _Swill__Application.shared() === this)) {
         return;
       }
       ;
       this.applicationWillTerminate();
       this.root.ownerDocument.defaultView?.removeEventListener("online", this._on_online);
       this._reconnect = null;
-      Runtime.nilable(this._development_monitor?.stop());
+      UIRuntime.nilable(this._development_monitor?.stop());
       this._development_monitor = null;
-      Runtime.nilable(this._problems?.stop());
+      UIRuntime.nilable(this._problems?.stop());
       this._problems = null;
       Swill__NotificationCenter.default().post(
         "application_will_terminate",
@@ -4361,7 +4443,7 @@
       if (observer) observer.disconnect();
       this._windows.forEach((window) => this.releaseWindow(window));
       this._windows = [];
-      this._controllers.forEach((controller) => Runtime.send(controller, "unload"));
+      this._controllers.forEach((controller) => UIRuntime.send(controller, "unload"));
       Swill__Awakening.detach(this._root);
       this._controllers = [];
       this._root.removeEventListener("focusin", this._on_focus, true);
@@ -4371,7 +4453,7 @@
       this.assignFirstResponder(null);
       this._key_windows = [];
       this._page = null;
-      Runtime.setDevelopment(false);
+      UIRuntime.setDevelopment(false);
       return _Swill__Application.terminated(this);
     }
     // The application is running and its markup is awake.
@@ -4390,7 +4472,7 @@
     // history is :push for navigation, :replace to rewrite the entry, or :none
     // when the fragment itself asked for the content (Back/Forward).
     loadWindowContent(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "window_name", kind: "req" },
           { name: "content_name", kind: "req" }
@@ -4399,10 +4481,10 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let window_name = Runtime.argument(__swill_bound, "window_name");
-      let content_name = Runtime.argument(__swill_bound, "content_name");
-      let history = Runtime.argument(__swill_bound, "history");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(history))) history = "push";
+      let window_name = UIRuntime.argument(__swill_bound, "window_name");
+      let content_name = UIRuntime.argument(__swill_bound, "content_name");
+      let history = UIRuntime.argument(__swill_bound, "history");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(history))) history = "push";
       let window = this.windowNamed(window_name);
       if (!window) throw new Error(`No window container: ${window_name}`);
       let container = window.root;
@@ -4419,9 +4501,9 @@
       this._fragments.write(
         window.name,
         content_name,
-        Runtime.keywordArguments({ history })
+        UIRuntime.keywordArguments({ history })
       );
-      this.restoreWindowState(window, Runtime.keywordArguments({
+      this.restoreWindowState(window, UIRuntime.keywordArguments({
         prune_stale: history !== "none",
         write_content: history !== "none"
       }));
@@ -4443,15 +4525,15 @@
     // first responder; see Window#initial_focus_element. Dismiss it with
     // dismiss(controller); the window's closed promise resolves then.
     showWindow(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [{ name: "name", kind: "req" }],
         keywords: [{ name: "into", kind: "key" }],
         keywordRest: null,
         block: "__swill_block"
       });
-      let name = Runtime.argument(__swill_bound, "name");
-      let into = Runtime.argument(__swill_bound, "into");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
+      let name = UIRuntime.argument(__swill_bound, "name");
+      let into = UIRuntime.argument(__swill_bound, "into");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(into))) into = this._root;
       let node = this.cloneWindowContent(name);
       into.appendChild(node);
       let window = this.beginWindow(name, node, false);
@@ -4473,7 +4555,7 @@
     // it is shown modally: the rest of the page is inert until it is
     // dismissed, and the keyboard stays inside it.
     presentWindow(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [
           { name: "controller", kind: "req" },
           { name: "name", kind: "req" }
@@ -4482,12 +4564,12 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let controller = Runtime.argument(__swill_bound, "controller");
-      let name = Runtime.argument(__swill_bound, "name");
-      let into = Runtime.argument(__swill_bound, "into");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
-      let modal = Runtime.argument(__swill_bound, "modal");
-      if (Runtime.isTruthy(Runtime.isOmittedArgument(modal))) modal = false;
+      let controller = UIRuntime.argument(__swill_bound, "controller");
+      let name = UIRuntime.argument(__swill_bound, "name");
+      let into = UIRuntime.argument(__swill_bound, "into");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(into))) into = this._root;
+      let modal = UIRuntime.argument(__swill_bound, "modal");
+      if (UIRuntime.isTruthy(UIRuntime.isOmittedArgument(modal))) modal = false;
       let node = controller.view.element;
       if (node.isConnected) throw new Error(`Window is already presented: ${name}`);
       into.appendChild(node);
@@ -4504,13 +4586,13 @@
     // content that takes the keyboard as it loads takes it in this window,
     // not the page.
     beginWindow(name, node, modal) {
-      let window = new Swill__Window(name, node, Runtime.keywordArguments({ modal }));
-      Runtime.append(this._key_windows, window);
+      let window = new Swill__Window(name, node, UIRuntime.keywordArguments({ modal }));
+      UIRuntime.append(this._key_windows, window);
       return window;
     }
     openWindow(window, controller, controllers) {
       let node = window.root;
-      if (Runtime.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
+      if (UIRuntime.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
         this._window_titles++;
         window.showTitle(
           `swill-window-title-${this._window_titles}`,
@@ -4521,7 +4603,7 @@
       controller.view.updateAccessibility();
       window.assignContent(window.name, controller);
       if (node.tagName === "DIALOG") {
-        this.changingWindows(Runtime.blockArgument(() => {
+        this.changingWindows(UIRuntime.blockArgument(() => {
           if (window.isModal()) {
             node.showModal();
             return node.addEventListener(
@@ -4535,10 +4617,10 @@
         node.getBoundingClientRect();
       }
       ;
-      Runtime.append(this._windows, window);
+      UIRuntime.append(this._windows, window);
       this.restoreWindowState(
         window,
-        Runtime.keywordArguments({ prune_stale: false, write_content: false })
+        UIRuntime.keywordArguments({ prune_stale: false, write_content: false })
       );
       this.warnUnrestored(controllers);
       Swill__Awakening.finish(controllers);
@@ -4559,7 +4641,7 @@
       }
       ;
       this.postFirstResponderChange();
-      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && UIRuntime.isDevelopment()) {
         return this.verifyFocus("a window opened");
       }
     }
@@ -4576,11 +4658,11 @@
     // by a dialog's focusing steps or its return of focus on closing, is not
     // the user's; the framework places the keyboard itself afterward.
     changingWindows(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(
+      let __swill_bound = UIRuntime.bindArguments(
         __swill_arguments,
         { positional: [], keywords: [], keywordRest: null, block: "block" }
       );
-      let block = Runtime.argument(__swill_bound, "block");
+      let block = UIRuntime.argument(__swill_bound, "block");
       this._changing_windows = true;
       try {
         return block();
@@ -4595,18 +4677,18 @@
     adoptTheme(document2) {
       let link = this.themeLink(document2);
       if (!link) return;
-      let file = Runtime.stringify(Runtime.split(
-        Runtime.must(Runtime.split(
-          Runtime.must(link.getAttribute("href")),
+      let file = UIRuntime.stringify(UIRuntime.split(
+        UIRuntime.must(UIRuntime.split(
+          UIRuntime.must(link.getAttribute("href")),
           "?"
         )[0]),
         "/"
       ).at(-1));
-      return this.theme = Runtime.split(file, ".")[0];
+      return this.theme = UIRuntime.split(file, ".")[0];
     }
     themeDidChange(_previous, theme) {
       let root = this._root;
-      if (!Runtime.isTruthy(theme != null ? root : theme)) return;
+      if (!UIRuntime.isTruthy(theme != null ? root : theme)) return;
       let link = this.themeLink(root.ownerDocument);
       if (!link) return;
       let framework2 = Swill__Bundle.framework();
@@ -4615,7 +4697,7 @@
         "css"
       ) : null;
       if (url == null) throw new Error(`Unknown theme: ${theme}`);
-      let current = Runtime.stringify(link.getAttribute("href"));
+      let current = UIRuntime.stringify(link.getAttribute("href"));
       if (current.endsWith(`/${theme}.css`) || current === `${theme}.css`) return;
       return link.setAttribute("href", url);
     }
@@ -4624,22 +4706,22 @@
     // per class, naming the paths. A class that is some window's content as
     // well is declaring for that use, so it is not warned about.
     warnUnrestored(controllers) {
-      let contents = Runtime.compact(this._windows.map((window) => Runtime.send(window, "controller"))).map((content) => Runtime.nameOf(content));
+      let contents = UIRuntime.compact(this._windows.map((window) => UIRuntime.send(window, "controller"))).map((content) => UIRuntime.nameOf(content));
       return controllers.forEach((controller) => {
-        if (this._windows.some((window) => Runtime.send(window, "controller") === controller)) return;
-        let declarations2 = Runtime.cast(
-          Runtime.restorations(controller),
+        if (this._windows.some((window) => UIRuntime.send(window, "controller") === controller)) return;
+        let declarations2 = UIRuntime.cast(
+          UIRuntime.restorations(controller),
           "T::Array[T.untyped]"
         );
-        if (Runtime.isEmpty(declarations2)) return;
-        let name = Runtime.logicalOr(
-          Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
+        if (UIRuntime.isEmpty(declarations2)) return;
+        let name = UIRuntime.logicalOr(
+          UIRuntime.cast(UIRuntime.nameOf(controller), "T.nilable(String)"),
           () => "a controller"
         );
         if (contents.includes(name) || this._unrestored.includes(name)) return;
-        Runtime.append(this._unrestored, name);
-        let paths = declarations2.map((declaration) => Runtime.send(declaration, "path")).join(", ");
-        return Runtime.warn(`${`${name} declares restorable ${paths}, but only a window's content controller is restored; `}declare it there as a path through this controller`);
+        UIRuntime.append(this._unrestored, name);
+        let paths = declarations2.map((declaration) => UIRuntime.send(declaration, "path")).join(", ");
+        return UIRuntime.warn(`${`${name} declares restorable ${paths}, but only a window's content controller is restored; `}declare it there as a path through this controller`);
       });
     }
     // Closes the window +controller+ belongs to. The window that was key
@@ -4650,7 +4732,7 @@
       if (!window) return false;
       this._windows = this._windows.filter((candidate) => candidate !== window);
       this._key_windows = this._key_windows.filter((candidate) => candidate !== window);
-      this.changingWindows(Runtime.blockArgument(() => window.dismiss()));
+      this.changingWindows(UIRuntime.blockArgument(() => window.dismiss()));
       this.refocusKeyWindow();
       return true;
     }
@@ -4663,16 +4745,16 @@
       let owner = this.responderElement(responder);
       let window = this.keyWindow();
       let last = window ? window.focusedElement : null;
-      let element = Runtime.isTruthy(Runtime.logicalAnd(
-        Runtime.logicalAnd(last && owner, () => owner.contains(last)),
+      let element = UIRuntime.isTruthy(UIRuntime.logicalAnd(
+        UIRuntime.logicalAnd(last && owner, () => owner.contains(last)),
         () => this._root.contains(last)
       )) ? last : responder.keyElement();
-      if (Runtime.isTruthy(element && this._root.contains(element))) {
+      if (UIRuntime.isTruthy(element && this._root.contains(element))) {
         this.focusInWindow(element);
       }
       ;
       this.postFirstResponderChange();
-      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && UIRuntime.isDevelopment()) {
         return this.verifyFocus("a window closed");
       }
     }
@@ -4722,13 +4804,13 @@
     // (focus_left), and when its region is torn down
     // (release_first_responder).
     makeFirstResponder(responder) {
-      if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
+      if (UIRuntime.isTruthy(responder && !responder.acceptsFirstResponder())) {
         return false;
       }
       ;
       let window = responder ? this.windowOf(responder) : this.keyWindow();
       if (!window) return false;
-      let current = Runtime.cast(
+      let current = UIRuntime.cast(
         window.firstResponder || this,
         "Swill::Responder"
       );
@@ -4737,12 +4819,12 @@
       window.firstResponder = null;
       if (window !== this.keyWindow()) {
         window.firstResponder = responder;
-      } else if (Runtime.isTruthy(responder && responder.becomeFirstResponder())) {
+      } else if (UIRuntime.isTruthy(responder && responder.becomeFirstResponder())) {
         if (window.firstResponder == null) window.firstResponder = responder;
       }
       ;
       this.postFirstResponderChange();
-      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && UIRuntime.isDevelopment()) {
         this.verifyFocus("make_first_responder");
       }
       ;
@@ -4777,8 +4859,8 @@
     // A responder's class, and for a view or controller the element it is
     // rooted at, as the development focus checks name it.
     describeResponder(responder) {
-      let name = Runtime.logicalOr(
-        Runtime.cast(Runtime.nameOf(responder), "T.nilable(String)"),
+      let name = UIRuntime.logicalOr(
+        UIRuntime.cast(UIRuntime.nameOf(responder), "T.nilable(String)"),
         () => "a responder"
       );
       let element = this.responderElement(responder);
@@ -4793,19 +4875,28 @@
     // The innermost window holding +element+: a presented window whose root
     // contains it, else the page.
     windowHolding(element) {
-      return Runtime.reverse(this.keyWindows()).find((window) => window.root.contains(element));
+      return UIRuntime.reverse(this.keyWindows()).find((window) => window.root.contains(element));
     }
     // The roots of the presented windows other than +window+. The page's
     // root holds them all, but their controls are not the page's key views.
     excludedRoots(window) {
-      return this.keyWindows().filter((other) => Runtime.isTruthy(other !== window && other !== this._page)).map((__swill_item) => __swill_item.root);
+      return this.keyWindows().filter((other) => UIRuntime.isTruthy(other !== window && other !== this._page)).map((__swill_item) => __swill_item.root);
     }
     keyDownInWindow(event) {
-      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && UIRuntime.isDevelopment()) {
         this.verifyFocus("a key");
       }
       ;
       return this.firstResponder().keyDown(event);
+    }
+    // Focus the browser gave before launch, as to an `autofocus` field,
+    // makes its responder first, as later focus does.
+    adoptFocus(root) {
+      let active = root.ownerDocument.activeElement;
+      if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
+        active && active !== root,
+        () => root.contains(active)
+      ))) return this.syncFirstResponder(active, null);
     }
     // In development, checks that the keyboard is where the first responder
     // says: focus outside the page is fine (the first responder waits for
@@ -4816,8 +4907,8 @@
     verifyFocus(moment) {
       let window = this.keyWindow();
       let active = this._root.ownerDocument.activeElement;
-      if (!Runtime.isTruthy(Runtime.logicalAnd(
-        Runtime.logicalAnd(
+      if (!UIRuntime.isTruthy(UIRuntime.logicalAnd(
+        UIRuntime.logicalAnd(
           window && active,
           () => this._root.contains(active)
         ),
@@ -4825,16 +4916,16 @@
       ))) return;
       let responder = this.firstResponder();
       let owner = this.responderElement(responder);
-      let problem = this.windowHolding(active) !== window ? `focus is in another window than the key window ${this.windowLabel(window)}` : Runtime.isTruthy(responder !== this && !this.isAttached(responder)) ? "the first responder is no longer in the page" : Runtime.isTruthy(responder !== this && !responder.acceptsFirstResponder()) ? "the first responder does not accept being first responder" : Runtime.isTruthy(owner && !owner.contains(active)) ? "the focused element is outside the first responder" : null;
-      if (!Runtime.isTruthy(problem)) return;
+      let problem = this.windowHolding(active) !== window ? `focus is in another window than the key window ${this.windowLabel(window)}` : UIRuntime.isTruthy(responder !== this && !this.isAttached(responder)) ? "the first responder is no longer in the page" : UIRuntime.isTruthy(responder !== this && !responder.acceptsFirstResponder()) ? "the first responder does not accept being first responder" : UIRuntime.isTruthy(owner && !owner.contains(active)) ? "the focused element is outside the first responder" : null;
+      if (!UIRuntime.isTruthy(problem)) return;
       let focused = this.describeElement(active);
-      return Runtime.warn(`Focus check after ${moment}: ${problem}. First responder: ${this.describeResponder(responder)}; focused: ${focused}.`);
+      return UIRuntime.warn(`Focus check after ${moment}: ${problem}. First responder: ${this.describeResponder(responder)}; focused: ${focused}.`);
     }
     windowLabel(window) {
       return window === this._page ? "(the page)" : `"${window.name}"`;
     }
     describeElement(element) {
-      let tag = Runtime.downcase(element.tagName);
+      let tag = UIRuntime.downcase(element.tagName);
       ["outlet", "controller", "klass", "data-action", "class"].forEach((attribute) => {
         let value = element.getAttribute(attribute);
         if (value != null) {
@@ -4848,12 +4939,12 @@
       if (this._changing_windows) return;
       let target = event.target;
       let window = this.windowHolding(target);
-      if (Runtime.isTruthy(Runtime.logicalAnd(
+      if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
         window && window !== this._page,
         () => window.root === target
       ))) {
         let previous = event.relatedTarget;
-        let back = Runtime.isTruthy(Runtime.logicalAnd(
+        let back = UIRuntime.isTruthy(UIRuntime.logicalAnd(
           previous && previous !== target,
           () => target.contains(previous)
         )) ? previous : null;
@@ -4890,10 +4981,10 @@
       let window = this.keyWindow();
       if (!window) return false;
       let views = window.keyViews(this.excludedRoots(window));
-      if (Runtime.isEmpty(views)) return false;
+      if (UIRuntime.isEmpty(views)) return false;
       event.preventDefault();
-      let found = Runtime.indexOf(views, event.target);
-      let index = Runtime.cast(
+      let found = UIRuntime.indexOf(views, event.target);
+      let index = UIRuntime.cast(
         found != null ? found : (() => {
           return delta > 0 ? -1 : 0;
         })(),
@@ -4901,8 +4992,8 @@
       );
       let attempts = 0;
       while (attempts < views.length) {
-        index = Runtime.modulo(index + delta, views.length);
-        let candidate = Runtime.must(views[index]);
+        index = UIRuntime.modulo(index + delta, views.length);
+        let candidate = UIRuntime.must(views[index]);
         Swill__DOM.focusRevealing(candidate);
         if (candidate.ownerDocument.activeElement === candidate) return true;
         attempts++;
@@ -4926,12 +5017,12 @@
       ;
       window.focusedElement = target;
       let responder = this.responderFor(target);
-      let current = Runtime.cast(
+      let current = UIRuntime.cast(
         window.firstResponder || this,
         "Swill::Responder"
       );
       if (responder === current) return;
-      if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
+      if (UIRuntime.isTruthy(responder && !responder.acceptsFirstResponder())) {
         if (this.responderElement(current)) {
           this.restoreFocus(current, previous);
         } else {
@@ -4947,7 +5038,7 @@
       }
       ;
       this.assignWindowFirstResponder(window, responder);
-      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && UIRuntime.isDevelopment()) {
         return this.verifyFocus("focus moved");
       }
     }
@@ -4956,7 +5047,7 @@
     // in the page) leaves it alone, as Cocoa does, so keys still reach it
     // when focus returns.
     focusLeft(destination) {
-      if (Runtime.isTruthy(destination && !this._root.contains(destination))) {
+      if (UIRuntime.isTruthy(destination && !this._root.contains(destination))) {
         return this.assignFirstResponder(null);
       }
     }
@@ -4966,7 +5057,7 @@
       this.keyWindows().forEach((window) => {
         let responder = window.firstResponder;
         let owner = responder ? this.responderElement(responder) : null;
-        if (Runtime.isTruthy(owner && (owner === element || element.contains(owner)))) {
+        if (UIRuntime.isTruthy(owner && (owner === element || element.contains(owner)))) {
           return window.firstResponder = null;
         }
       });
@@ -4986,7 +5077,7 @@
     restoreFocus(responder, previous) {
       let owner = this.responderElement(responder);
       if (!owner) return;
-      let target = Runtime.isTruthy(previous && owner.contains(previous)) ? previous : responder.keyElement();
+      let target = UIRuntime.isTruthy(previous && owner.contains(previous)) ? previous : responder.keyElement();
       if (target) return Swill__DOM.focus(target);
     }
     // ---- window templates, containers, and content ----
@@ -4994,7 +5085,7 @@
     // under the root. Templates are inert; content is cloned from them.
     scanTemplates() {
       return this._root.querySelectorAll("template[name]").forEach((template) => {
-        let name = Runtime.must(template.getAttribute("name"));
+        let name = UIRuntime.must(template.getAttribute("name"));
         if (template.getAttribute("for") === "window" || template.parentElement === this._root) {
           return this._templates[name] = template;
         }
@@ -5017,9 +5108,9 @@
       return node.cloneNode(true);
     }
     windowContainers() {
-      let found = Runtime.cast([], "T::Array[Element]");
-      if (this._root.hasAttribute("window")) Runtime.append(found, this._root);
-      this._root.querySelectorAll("[window]").forEach((container) => Runtime.append(found, container));
+      let found = UIRuntime.cast([], "T::Array[Element]");
+      if (this._root.hasAttribute("window")) UIRuntime.append(found, this._root);
+      this._root.querySelectorAll("[window]").forEach((container) => UIRuntime.append(found, container));
       return found;
     }
     // Before awakening: capture pre-rendered content under the container's
@@ -5028,13 +5119,13 @@
     prepareWindowContainers() {
       let params = this._fragments.params();
       return this.windowContainers().forEach((container) => {
-        let window_name = Runtime.must(container.getAttribute("window"));
-        let default_name = Runtime.logicalOr(
+        let window_name = UIRuntime.must(container.getAttribute("window"));
+        let default_name = UIRuntime.logicalOr(
           container.getAttribute("name"),
           () => window_name
         );
         let first = container.firstElementChild;
-        if (Runtime.isTruthy(first && !this._captured[default_name])) {
+        if (UIRuntime.isTruthy(first && !this._captured[default_name])) {
           this._captured[default_name] = first.cloneNode(true);
         }
         ;
@@ -5043,7 +5134,7 @@
           default_name,
           params[window_name]
         );
-        if (Runtime.isTruthy(first && content_name === default_name)) return;
+        if (UIRuntime.isTruthy(first && content_name === default_name)) return;
         container.replaceChildren();
         container.appendChild(this.cloneWindowContent(content_name));
         return container.setAttribute("name", content_name);
@@ -5054,17 +5145,17 @@
     requestedContent(window_name, default_name, requested) {
       if (requested == null || requested === default_name) return default_name;
       if (this.isWindowContent(requested)) return requested;
-      Runtime.warn(`window "${window_name}" requested unknown content "${requested}"`);
+      UIRuntime.warn(`window "${window_name}" requested unknown content "${requested}"`);
       return default_name;
     }
     registerWindowContainers() {
       return this.windowContainers().forEach((container) => {
-        let window = new Swill__Window(Runtime.must(container.getAttribute("window")), container);
+        let window = new Swill__Window(UIRuntime.must(container.getAttribute("window")), container);
         window.assignContent(
           container.getAttribute("name"),
           this.topControllerIn(container)
         );
-        return Runtime.append(this._windows, window);
+        return UIRuntime.append(this._windows, window);
       });
     }
     // The first controller inside the container whose parent is outside it.
@@ -5113,7 +5204,7 @@
     // phase and before controller_did_load, so restored values are in place
     // for it.
     restoreWindowState(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+      let __swill_bound = UIRuntime.bindArguments(__swill_arguments, {
         positional: [{ name: "window", kind: "req" }],
         keywords: [
           { name: "prune_stale", kind: "keyreq" },
@@ -5122,22 +5213,22 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let window = Runtime.argument(__swill_bound, "window");
-      let prune_stale = Runtime.argument(__swill_bound, "prune_stale");
-      let write_content = Runtime.argument(__swill_bound, "write_content");
+      let window = UIRuntime.argument(__swill_bound, "window");
+      let prune_stale = UIRuntime.argument(__swill_bound, "prune_stale");
+      let write_content = UIRuntime.argument(__swill_bound, "write_content");
       let stale = window.disposeRestoration();
       let controller = window.controller;
-      let declarations2 = Runtime.cast(
-        controller ? Runtime.restorations(controller) : [],
+      let declarations2 = UIRuntime.cast(
+        controller ? UIRuntime.restorations(controller) : [],
         "T::Array[T.untyped]"
       );
-      let keys = declarations2.map((declaration) => window.scopedKey(Runtime.send(declaration, "key")));
+      let keys = declarations2.map((declaration) => window.scopedKey(UIRuntime.send(declaration, "key")));
       let content = window.contentName;
-      if (Runtime.isTruthy(write_content && content)) {
+      if (UIRuntime.isTruthy(write_content && content)) {
         this._fragments.write(
           window.name,
           content,
-          Runtime.keywordArguments({ history: "replace" })
+          UIRuntime.keywordArguments({ history: "replace" })
         );
       }
       ;
@@ -5147,7 +5238,7 @@
             this._fragments.write(
               key,
               null,
-              Runtime.keywordArguments({ history: "replace" })
+              UIRuntime.keywordArguments({ history: "replace" })
             );
           }
         });
@@ -5156,76 +5247,76 @@
       if (!controller) return;
       let params = this._fragments.params();
       let applied = 0;
-      let unrestorable = Runtime.cast([], "T::Array[String]");
-      this._fragments.suspended(Runtime.blockArgument(() => declarations2.forEach((declaration) => {
-        let key = window.scopedKey(Runtime.send(declaration, "key"));
+      let unrestorable = UIRuntime.cast([], "T::Array[String]");
+      this._fragments.suspended(UIRuntime.blockArgument(() => declarations2.forEach((declaration) => {
+        let key = window.scopedKey(UIRuntime.send(declaration, "key"));
         let text = params[key];
         if (text == null) return;
         let value = this.decodeFragmentValue(
-          Runtime.send(declaration, "type"),
+          UIRuntime.send(declaration, "type"),
           text
         );
         if (value == null) return;
         return this.restorePath(
           controller,
-          Runtime.send(declaration, "path"),
+          UIRuntime.send(declaration, "path"),
           value
-        ) ? ++applied : Runtime.append(unrestorable, key);
+        ) ? ++applied : UIRuntime.append(unrestorable, key);
       })));
       unrestorable.forEach((key) => this._fragments.write(
         key,
         null,
-        Runtime.keywordArguments({ history: "replace" })
+        UIRuntime.keywordArguments({ history: "replace" })
       ));
-      if (!Runtime.isEmpty(declarations2)) {
+      if (!UIRuntime.isEmpty(declarations2)) {
         controller.controllerDidRestore(applied > 0);
       }
       ;
       return declarations2.forEach((declaration) => {
-        let disposer = Runtime.observePath(
+        let disposer = UIRuntime.observePath(
           controller,
-          Runtime.send(declaration, "path"),
+          UIRuntime.send(declaration, "path"),
           (_value) => this.writeWindowState(window)
         );
         return window.addRestoration(
           disposer,
-          window.scopedKey(Runtime.send(declaration, "key"))
+          window.scopedKey(UIRuntime.send(declaration, "key"))
         );
       });
     }
     restoreLaunchedWindows() {
       return this._windows.forEach((window) => this.restoreWindowState(
         window,
-        Runtime.keywordArguments({ prune_stale: false, write_content: true })
+        UIRuntime.keywordArguments({ prune_stale: false, write_content: true })
       ));
     }
     // Push the controller's current restorable state into the fragment.
     writeWindowState(window) {
       let controller = window.controller;
       if (!controller) return;
-      return Runtime.cast(
-        Runtime.restorations(controller),
+      return UIRuntime.cast(
+        UIRuntime.restorations(controller),
         "T::Array[T.untyped]"
       ).forEach((declaration) => {
-        let path = Runtime.send(declaration, "path");
+        let path = UIRuntime.send(declaration, "path");
         let value = this.isWritablePath(controller, path) ? this.encodeFragmentValue(
           controller,
-          Runtime.readPath(controller, path),
+          UIRuntime.readPath(controller, path),
           path
         ) : null;
         return this._fragments.write(
-          window.scopedKey(Runtime.send(declaration, "key")),
+          window.scopedKey(UIRuntime.send(declaration, "key")),
           value,
-          Runtime.keywordArguments({ history: "replace" })
+          UIRuntime.keywordArguments({ history: "replace" })
         );
       });
     }
     // Typed URL leaves; nil rejects invalid values.
     decodeFragmentValue(type, text) {
       if (type === "Integer" || type === "T.nilable(Integer)") {
-        let stripped = Runtime.strip(text);
-        if (!Runtime.isTruthy(/^[+-]?\d/.test(stripped))) return null;
-        return Runtime.toInteger(stripped);
+        let stripped = UIRuntime.strip(text);
+        if (!UIRuntime.isTruthy(/^[+-]?\d/.test(stripped))) return null;
+        return UIRuntime.toInteger(stripped);
       }
       ;
       if (type === "T::Boolean" || type === "T.nilable(T::Boolean)") {
@@ -5241,8 +5332,8 @@
     // with a warning, rather than written as text that cannot be restored.
     encodeFragmentValue(controller, value, path) {
       if (value == null || value === "") return null;
-      if (Runtime.conforms(value, "String")) return value;
-      if (Runtime.conforms(value, "Integer") || Runtime.conforms(
+      if (UIRuntime.conforms(value, "String")) return value;
+      if (UIRuntime.conforms(value, "Integer") || UIRuntime.conforms(
         value,
         "Float"
       ) || value === true || value === false) return `${value}`;
@@ -5257,7 +5348,7 @@
     // cannot take it, so the rest of the window's state still restores.
     restorePath(controller, path, value) {
       try {
-        Runtime.writePath(controller, path, value);
+        UIRuntime.writePath(controller, path, value);
         return true;
       } catch (error) {
         this.warnUnrestorable(controller, path, error.message);
@@ -5268,7 +5359,7 @@
     // through an owner that is missing for now still counts as writable.
     isWritablePath(controller, path) {
       try {
-        Runtime.assertWritablePath(controller, path);
+        UIRuntime.assertWritablePath(controller, path);
         return true;
       } catch (error) {
         this.warnUnrestorable(controller, path, error.message);
@@ -5277,13 +5368,13 @@
     }
     // Warns once per class and path.
     warnUnrestorable(controller, path, reason) {
-      let name = Runtime.logicalOr(
-        Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
+      let name = UIRuntime.logicalOr(
+        UIRuntime.cast(UIRuntime.nameOf(controller), "T.nilable(String)"),
         () => "a controller"
       );
       if (this._unrestorable_paths.includes(`${name} ${path}`)) return;
-      Runtime.append(this._unrestorable_paths, `${name} ${path}`);
-      return Runtime.warn(`${name}: restorable ${path} is left out of the URL: ${reason}`);
+      UIRuntime.append(this._unrestorable_paths, `${name} ${path}`);
+      return UIRuntime.warn(`${name}: restorable ${path} is left out of the URL: ${reason}`);
     }
     // Back/Forward: a container whose fragment names other known content loads
     // it without touching history; otherwise its state is reapplied.
@@ -5294,16 +5385,16 @@
     applyFragmentTo(window, params) {
       if (!window.isContainer()) return;
       let requested = params[window.name];
-      if (Runtime.isTruthy(requested != null && requested !== window.contentName)) {
+      if (UIRuntime.isTruthy(requested != null && requested !== window.contentName)) {
         return this.isWindowContent(requested) ? this.loadWindowContent(
           window.name,
           requested,
-          Runtime.keywordArguments({ history: "none" })
-        ) : Runtime.warn(`window "${window.name}" requested unknown content "${requested}"`);
+          UIRuntime.keywordArguments({ history: "none" })
+        ) : UIRuntime.warn(`window "${window.name}" requested unknown content "${requested}"`);
       } else {
         return this.restoreWindowState(
           window,
-          Runtime.keywordArguments({ prune_stale: false, write_content: false })
+          UIRuntime.keywordArguments({ prune_stale: false, write_content: false })
         );
       }
     }
@@ -5311,7 +5402,7 @@
     // observer wires added subtrees and detaches removed ones. Explicit wiring
     // before the observer runs is harmless, since both are idempotent.
     watch(root) {
-      if (!Runtime.isTruthy(typeof MutationObserver !== "undefined")) return;
+      if (!UIRuntime.isTruthy(typeof MutationObserver !== "undefined")) return;
       let observer = new MutationObserver((records, _observer) => records.forEach((record2) => {
         record2.removedNodes.forEach((node) => {
           if (node.nodeType === 1) return Swill__Awakening.detach(node);
@@ -5339,8 +5430,8 @@
     launch(document2) {
       let element = document2.querySelector("[application]");
       if (!element) return null;
-      let failure = Runtime.cast(
-        Runtime.buildFailure(),
+      let failure = UIRuntime.cast(
+        UIRuntime.buildFailure(),
         "T.nilable(String)"
       );
       if (failure != null) {
@@ -5349,12 +5440,12 @@
       }
       ;
       if (Swill__Application.isRunning()) return Swill__Application.shared();
-      let application = Runtime.cast(
-        new (Runtime.resolve(Runtime.must(element.getAttribute("application"))))(),
+      let application = UIRuntime.cast(
+        new (UIRuntime.resolve(UIRuntime.must(element.getAttribute("application"))))(),
         "Swill::Application"
       );
       application.launch(element);
-      Runtime.must(document2.defaultView).addEventListener(
+      UIRuntime.must(document2.defaultView).addEventListener(
         "pagehide",
         (event) => {
           if (!event.persisted) return application.terminate();
@@ -5367,13 +5458,13 @@
     // error is shown as an alert is, without one, in +root+, the element that
     // names the application.
     showBuildFailure(root, message) {
-      let dialog = Runtime.must(Swill__Templates.named(
+      let dialog = UIRuntime.must(Swill__Templates.named(
         "alert",
         root.ownerDocument
       ).content.firstElementChild).cloneNode(true);
       let alert = Swill__Swell.$index(dialog);
       alert.findBang("h2").text("The application failed to build");
-      Swill__Swell.$index(Runtime.must(alert.findBang(".alert-text").element.querySelector("p"))).text(message);
+      Swill__Swell.$index(UIRuntime.must(alert.findBang(".alert-text").element.querySelector("p"))).text(message);
       let stop = Swill__Image.named("Stop");
       if (stop) alert.findBang("img").attr("src", stop.url);
       alert.findBang(".actions").remove();
@@ -5384,12 +5475,12 @@
   var Swill__Controller__List = class extends Swill__Controller {
     // bind accepts either content or an explicit arrangement owner.
     setRepresentedObject(objects) {
-      if (Runtime.isEqual(this.representedObject, objects)) return;
+      if (UIRuntime.isEqual(this.representedObject, objects)) return;
       this._setting_content = true;
       try {
         if (objects instanceof Swill__ArrayController) {
           this.content = null;
-          this.arrayController = Runtime.cast(
+          this.arrayController = UIRuntime.cast(
             objects,
             "Swill::ArrayController"
           );
@@ -5414,7 +5505,7 @@
       let target = this.nextResponder();
       let handler = target ? target.actionTarget("activate_selection") : null;
       if (handler) {
-        return Runtime.performAction(
+        return UIRuntime.performAction(
           handler,
           "activate_selection",
           this,
@@ -5432,7 +5523,7 @@
     // way an action handler learns which row its sender sits in.
     rowFor(element) {
       let row = this.containerView().childContaining(element);
-      let index = row ? Runtime.indexOf(this.rowElements(), row) : null;
+      let index = row ? UIRuntime.indexOf(this.rowElements(), row) : null;
       return index == null ? -1 : index;
     }
     // ---- lifecycle ----
@@ -5455,7 +5546,7 @@
     }
     arrangedObjectsDidChange(_previous, _objects) {
       this._selection_anchor = null;
-      if (Runtime.isTruthy(this._awakened && !this._setting_content)) {
+      if (UIRuntime.isTruthy(this._awakened && !this._setting_content)) {
         return this.renderAll();
       }
     }
@@ -5475,7 +5566,7 @@
       if (total === 0) return super.moveDown(event);
       event.preventDefault();
       let indexes = this.currentIndexes();
-      let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
+      let current = UIRuntime.isEmpty(indexes) ? -1 : UIRuntime.must(indexes[0]);
       let index = current < 0 ? 0 : current + 1;
       if (index > total - 1) index = total - 1;
       this.selectIndexes([index]);
@@ -5488,7 +5579,7 @@
       if (this.arrangedObjects.length === 0) return super.moveUp(event);
       event.preventDefault();
       let indexes = this.currentIndexes();
-      let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
+      let current = UIRuntime.isEmpty(indexes) ? -1 : UIRuntime.must(indexes[0]);
       if (current <= 0) {
         return this.cancelOperation(event);
       } else {
@@ -5499,7 +5590,7 @@
     }
     // Enter activates the selection when there is one.
     insertNewline(event) {
-      if (!Runtime.isEmpty(this.currentSelection())) {
+      if (!UIRuntime.isEmpty(this.currentSelection())) {
         event.preventDefault();
         return this.activateSelection();
       } else {
@@ -5509,7 +5600,7 @@
     // ---- rows ----
     // Where rows mount.
     container() {
-      return Runtime.nilable(this.rows?.element) || this._view.element;
+      return UIRuntime.nilable(this.rows?.element) || this._view.element;
     }
     containerView() {
       let mount = this.rows;
@@ -5518,10 +5609,10 @@
     // Rows in order: the container's children other than templates and
     // whatever row_element? rejects.
     rowElements() {
-      let found = Runtime.cast([], "T::Array[Element]");
+      let found = UIRuntime.cast([], "T::Array[Element]");
       Swill__DOM.eachChild(this.container(), (child) => {
-        if (Runtime.isTruthy(child.tagName !== "TEMPLATE" && this.isRowElement(child))) {
-          return Runtime.append(found, child);
+        if (UIRuntime.isTruthy(child.tagName !== "TEMPLATE" && this.isRowElement(child))) {
+          return UIRuntime.append(found, child);
         }
       });
       return found;
@@ -5541,7 +5632,7 @@
         this._view.element,
         'template[for="row"]'
       );
-      return Runtime.isEmpty(found) ? null : found[0];
+      return UIRuntime.isEmpty(found) ? null : found[0];
     }
     // The element for item. Clones the row template; override to build rows
     // in code. Bindings, actions, selection, and configure_row still apply.
@@ -5608,7 +5699,7 @@
       let indexes = this.currentIndexes();
       let elements = this.rowElements();
       elements.forEach((element, index) => this.containerView().markSelected(element, indexes.includes(index)));
-      let first = Runtime.isEmpty(indexes) ? null : elements[Runtime.must(indexes[0])];
+      let first = UIRuntime.isEmpty(indexes) ? null : elements[UIRuntime.must(indexes[0])];
       if (first) return this.containerView().reveal(first);
     }
     // ---- mouse: click selects, shift-click extends, double-click activates ----
@@ -5620,7 +5711,7 @@
       let stop_click = this._view.listen(
         "click",
         (event) => this.rowClicked(event),
-        Runtime.keywordArguments({ capture: true })
+        UIRuntime.keywordArguments({ capture: true })
       );
       let stop_double_click = this._view.listen(
         "dblclick",
@@ -5638,7 +5729,7 @@
     // Shift-click extends the selection; suppress the browser's text
     // selection sweep across rows.
     rowMouseDown(event) {
-      if (!Runtime.isTruthy(this.allowsMultipleSelection && event.shiftKey)) return;
+      if (!UIRuntime.isTruthy(this.allowsMultipleSelection && event.shiftKey)) return;
       if (this.rowFor(event.target) < 0) return;
       event.preventDefault();
       return this._view.clearTextSelection();
@@ -5647,7 +5738,7 @@
       let index = this.rowFor(event.target);
       if (index < 0) return;
       let anchor = this._selection_anchor;
-      if (Runtime.isTruthy(Runtime.logicalAnd(
+      if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
         this.allowsMultipleSelection && event.shiftKey,
         () => anchor != null
       ))) {
@@ -5668,10 +5759,10 @@
     selectRange(anchor, index) {
       let low = anchor < index ? anchor : index;
       let high = anchor < index ? index : anchor;
-      let indexes = Runtime.cast([], "T::Array[Integer]");
+      let indexes = UIRuntime.cast([], "T::Array[Integer]");
       let current = low;
       while (current <= high) {
-        Runtime.append(indexes, current);
+        UIRuntime.append(indexes, current);
         current++;
       }
       ;
@@ -5688,24 +5779,24 @@
     // buttons, then #run it.
     constructor() {
       super();
-      this._button_titles = Runtime.cast([], "T::Array[String]");
-      this._choice = Runtime.cast(null, "T.nilable(String)");
+      this._button_titles = UIRuntime.cast([], "T::Array[String]");
+      this._choice = UIRuntime.cast(null, "T.nilable(String)");
     }
     // Adds a button titled +title+ after those already added. An alert with
     // none shows OK.
     addButton(title) {
-      return Runtime.append(this._button_titles, title);
+      return UIRuntime.append(this._button_titles, title);
     }
     async run() {
       let document2 = this.application().root.ownerDocument;
       let template = Swill__Templates.named("alert", document2);
-      let dialog = Runtime.must(template.content.firstElementChild).cloneNode(true);
+      let dialog = UIRuntime.must(template.content.firstElementChild).cloneNode(true);
       this.attach(dialog);
       if (this.title == null) this.title = document2.title;
       let window = this.application().presentWindow(
         this,
         "alert",
-        Runtime.keywordArguments({ modal: true })
+        UIRuntime.keywordArguments({ modal: true })
       );
       await window.closed;
       return this._choice;
@@ -5728,8 +5819,8 @@
     // each sends choose.
     viewDidLoad() {
       let actions = Swill__Swell.$index(this.view.element).findBang(".actions");
-      return (Runtime.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((label, index) => {
-        let button = Swill__Swell.$index(this.view.cloneTemplate(Runtime.must(this.buttonTemplate))).text(label);
+      return (UIRuntime.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((label, index) => {
+        let button = Swill__Swell.$index(this.view.cloneTemplate(UIRuntime.must(this.buttonTemplate))).text(label);
         if (index === 0) button.addClass("default");
         return actions.append(button.element);
       });
@@ -5741,8 +5832,8 @@
     static REFRESH_TITLE = "Refresh";
     constructor() {
       super();
-      this._retry_action = Runtime.cast(null, "T.nilable(T.proc.void)");
-      this._required = Runtime.cast(false, "T::Boolean");
+      this._retry_action = UIRuntime.cast(null, "T.nilable(T.proc.void)");
+      this._required = UIRuntime.cast(false, "T::Boolean");
     }
     set retryAction(retry_action) {
       this._retry_action = retry_action;
@@ -5754,7 +5845,7 @@
     }
     choose(sender) {
       let action = this._retry_action;
-      if (Runtime.isTruthy(sender.textContent === _Swill__SystemAlert.RETRY_TITLE && action)) {
+      if (UIRuntime.isTruthy(sender.textContent === _Swill__SystemAlert.RETRY_TITLE && action)) {
         return action();
       } else if ([
         _Swill__SystemAlert.RELOAD_TITLE,
@@ -5774,11 +5865,11 @@
       super();
       this._document = document2;
       this._reporter = reporter;
-      this._endpoint = Runtime.cast("", "String");
-      this._loaded_revision = Runtime.cast("", "String");
-      this._timer = Runtime.cast(null, "T.nilable(Integer)");
+      this._endpoint = UIRuntime.cast("", "String");
+      this._loaded_revision = UIRuntime.cast("", "String");
+      this._timer = UIRuntime.cast(null, "T.nilable(Integer)");
       this._request = null;
-      this._stopped = Runtime.cast(true, "T::Boolean");
+      this._stopped = UIRuntime.cast(true, "T::Boolean");
       this._on_visibility = (_event) => {
         if (this._document.visibilityState === "visible") return this.poll();
       };
@@ -5786,9 +5877,9 @@
     start() {
       let metadata2 = this._document.querySelector('meta[name="swill-development"]');
       if (!metadata2) return;
-      this._endpoint = Runtime.stringify(metadata2.getAttribute("data-endpoint"));
-      this._loaded_revision = Runtime.stringify(metadata2.getAttribute("content"));
-      if (Runtime.isEmpty(this._endpoint)) return;
+      this._endpoint = UIRuntime.stringify(metadata2.getAttribute("data-endpoint"));
+      this._loaded_revision = UIRuntime.stringify(metadata2.getAttribute("content"));
+      if (UIRuntime.isEmpty(this._endpoint)) return;
       this._stopped = false;
       this._document.addEventListener(
         "visibilitychange",
@@ -5812,7 +5903,7 @@
       return !this._stopped;
     }
     async poll() {
-      if (Runtime.isTruthy(this._stopped || this._request)) {
+      if (UIRuntime.isTruthy(this._stopped || this._request)) {
         return;
       }
       ;
@@ -5830,15 +5921,15 @@
           { cache: "no-store", signal: request.signal }
         );
         if (response.ok) {
-          state2 = Runtime.cast(
+          state2 = UIRuntime.cast(
             await response.json(),
             "T::Hash[String, T.untyped]"
           );
-          revision = Runtime.send(state2.revision, "to_s");
-          if (Runtime.isTruthy(Runtime.logicalAnd(
-            Runtime.logicalAnd(
+          revision = UIRuntime.send(state2.revision, "to_s");
+          if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
+            UIRuntime.logicalAnd(
               this.isRunning() && state2.ready === true,
-              () => !Runtime.send(revision, "empty?")
+              () => !UIRuntime.send(revision, "empty?")
             ),
             () => revision !== this._loaded_revision
           ))) return this._reporter.revisionChanged(revision);
@@ -5868,19 +5959,19 @@
     constructor(window) {
       super();
       this._window = window;
-      this._pending = Runtime.cast([], "T::Array[T::Hash[Symbol, String]]");
-      this._current = Runtime.cast(null, "T.nilable(String)");
-      this._active = Runtime.cast(null, "T.nilable(Swill::SystemAlert)");
+      this._pending = UIRuntime.cast([], "T::Array[T::Hash[Symbol, String]]");
+      this._current = UIRuntime.cast(null, "T.nilable(String)");
+      this._active = UIRuntime.cast(null, "T.nilable(Swill::SystemAlert)");
       this._kind = "";
       this._state = "idle";
       this._stopped = false;
-      this._retry = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._retry = UIRuntime.cast(null, "T.nilable(T.proc.void)");
       this._revision = "";
       this._dismissed = false;
       this._acknowledged_revision = "";
       this._on_error = (event) => this.reportError(event);
       this._on_rejection = (event) => this.reportRejection(event);
-      this._stop_warnings = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._stop_warnings = UIRuntime.cast(null, "T.nilable(T.proc.void)");
     }
     // Starts reporting uncaught errors, rejected promises and warnings.
     start() {
@@ -5890,7 +5981,7 @@
         window.addEventListener("unhandledrejection", this._on_rejection);
       }
       ;
-      this._stop_warnings = Runtime.observeWarnings((message) => this.report("Warning", message, ""));
+      this._stop_warnings = UIRuntime.observeWarnings((message) => this.report("Warning", message, ""));
       return this._stop_warnings;
     }
     // Stops reporting and closes any notice before application teardown.
@@ -5906,13 +5997,13 @@
       this._stop_warnings = null;
       this._pending = [];
       this._stopped = true;
-      return Runtime.nilable(this._active?.finish(null));
+      return UIRuntime.nilable(this._active?.finish(null));
     }
     reportError(event) {
       let error = event.error;
       let message = error == null ? event.message : _Swill__ProblemReporter.messageOf(error);
       let origin = error == null ? "" : _Swill__ProblemReporter.originOf(error);
-      if (Runtime.isTruthy(Runtime.isEmpty(origin) && !Runtime.isEmpty(event.filename))) {
+      if (UIRuntime.isTruthy(UIRuntime.isEmpty(origin) && !UIRuntime.isEmpty(event.filename))) {
         origin = `at ${event.filename}:${event.lineno}:${event.colno}`;
       }
       ;
@@ -5920,12 +6011,12 @@
     }
     reportRejection(event) {
       let reason = event.reason;
-      if (Runtime.isTruthy(reason instanceof Error && [
+      if (UIRuntime.isTruthy(reason instanceof Error && [
         "connection_lost",
         "schema_mismatch",
         "actor_scope_changed",
         "outcome_unknown"
-      ].includes(Runtime.stringify(reason.code)))) {
+      ].includes(UIRuntime.stringify(reason.code)))) {
         return;
       }
       ;
@@ -5938,7 +6029,7 @@
     // Queues a problem, showing it now when no alert is showing.
     report(icon, message, detail) {
       if (this._stopped || this._current === message || this._pending.some((problem) => problem.message === message)) return;
-      Runtime.append(this._pending, { kind: "", icon, message, detail });
+      UIRuntime.append(this._pending, { kind: "", icon, message, detail });
       if (this._current == null) return this.showNext();
     }
     // These notices are available in production, independent of error reporting.
@@ -5972,7 +6063,7 @@
     enqueueNotice(kind, message, detail) {
       if (this._stopped || this._kind === kind || this._pending.some((item) => item.kind === kind)) return;
       let icon = kind === _Swill__ProblemReporter.CONNECTION ? "NetworkLost" : "Warning";
-      Runtime.prepend(this._pending, { kind, icon, message, detail });
+      UIRuntime.prepend(this._pending, { kind, icon, message, detail });
       if (this._current == null) return this.showNext();
     }
     async showNext() {
@@ -5981,33 +6072,33 @@
       }
       ;
       let first = this._pending[0];
-      if (Runtime.isTruthy(Runtime.logicalAnd(
+      if (UIRuntime.isTruthy(UIRuntime.logicalAnd(
         first && first.kind === _Swill__ProblemReporter.REVISION,
         () => ["disconnected", "connecting"].includes(this._state)
       ))) return;
       let problem = this._pending.shift();
       if (!problem) return;
-      this._current = Runtime.fetch(problem, "message");
-      this._kind = Runtime.fetch(problem, "kind");
+      this._current = UIRuntime.fetch(problem, "message");
+      this._kind = UIRuntime.fetch(problem, "kind");
       let kind = this._kind;
       try {
         let alert = new Swill__SystemAlert();
         alert.retryAction = kind === _Swill__ProblemReporter.CONNECTION ? this._retry : null;
         alert.required = kind === _Swill__ProblemReporter.RELOAD;
         this._active = alert;
-        alert.icon = Runtime.fetch(problem, "icon");
-        alert.title = Runtime.isEmpty(kind) ? (() => {
+        alert.icon = UIRuntime.fetch(problem, "icon");
+        alert.title = UIRuntime.isEmpty(kind) ? (() => {
           return alert.icon === "Stop" ? "Error" : "Warning";
         })() : "Application";
-        alert.messageText = Runtime.fetch(problem, "message");
-        alert.informativeText = Runtime.fetch(problem, "detail");
+        alert.messageText = UIRuntime.fetch(problem, "message");
+        alert.informativeText = UIRuntime.fetch(problem, "detail");
         this.buttonTitles(kind).forEach((label) => alert.addButton(label));
         await alert.run();
-        if (Runtime.isTruthy(kind === _Swill__ProblemReporter.CONNECTION && [
+        if (UIRuntime.isTruthy(kind === _Swill__ProblemReporter.CONNECTION && [
           "disconnected",
           "connecting"
         ].includes(this._state))) this._dismissed = true;
-        if (Runtime.isTruthy(kind === _Swill__ProblemReporter.REVISION && [
+        if (UIRuntime.isTruthy(kind === _Swill__ProblemReporter.REVISION && [
           "idle",
           "connected"
         ].includes(this._state))) this._acknowledged_revision = this._revision;
@@ -6019,7 +6110,7 @@
         this._active = null;
       }
       ;
-      if (!Runtime.isEmpty(this._pending)) return this.showNext();
+      if (!UIRuntime.isEmpty(this._pending)) return this.showNext();
     }
     connectionRestored() {
       this._dismissed = false;
@@ -6027,7 +6118,7 @@
       if ([
         _Swill__ProblemReporter.CONNECTION,
         _Swill__ProblemReporter.RELOAD
-      ].includes(this._kind)) Runtime.nilable(this._active?.finish(null));
+      ].includes(this._kind)) UIRuntime.nilable(this._active?.finish(null));
       if (this._current == null) return this.showNext();
     }
     requireReload(detail) {
@@ -6041,18 +6132,18 @@
         detail
       );
       if (this._kind !== _Swill__ProblemReporter.RELOAD) {
-        return Runtime.nilable(this._active?.finish(null));
+        return UIRuntime.nilable(this._active?.finish(null));
       }
     }
     connectionLost() {
       if (this._kind === _Swill__ProblemReporter.REVISION) {
-        Runtime.append(this._pending, {
+        UIRuntime.append(this._pending, {
           kind: _Swill__ProblemReporter.REVISION,
           icon: "Warning",
           message: _Swill__ProblemReporter.REVISION_MESSAGE,
           detail: _Swill__ProblemReporter.REVISION_DETAIL
         });
-        Runtime.nilable(this._active?.finish(null));
+        UIRuntime.nilable(this._active?.finish(null));
       }
       ;
       return this.enqueueNotice(
@@ -6075,23 +6166,23 @@
     }
     static messageOf(value) {
       if (value instanceof Error) return value.message;
-      return Runtime.send(value, "to_s");
+      return UIRuntime.send(value, "to_s");
     }
     static originOf(value) {
       if (!(value instanceof Error)) return "";
-      let stack = Runtime.logicalOr(value.stack, () => "");
-      let found = Runtime.split(stack, "\n").find((line) => Runtime.isTruthy(/:\d+:\d+\)?$/m.test(Runtime.strip(line))));
+      let stack = UIRuntime.logicalOr(value.stack, () => "");
+      let found = UIRuntime.split(stack, "\n").find((line) => UIRuntime.isTruthy(/:\d+:\d+\)?$/m.test(UIRuntime.strip(line))));
       if (found == null) return "";
-      let frame = Runtime.cast(Runtime.strip(found), "String");
+      let frame = UIRuntime.cast(UIRuntime.strip(found), "String");
       if (frame.startsWith("at ")) return frame;
-      let parts = Runtime.cast(
-        Runtime.split(frame, "@"),
+      let parts = UIRuntime.cast(
+        UIRuntime.split(frame, "@"),
         "T::Array[String]"
       );
       if (parts.length < 2) return `at ${frame}`;
-      let $function = Runtime.must(parts[0]);
+      let $function = UIRuntime.must(parts[0]);
       let location = parts.slice(1).join("@");
-      return Runtime.isEmpty($function) ? `at ${location}` : `at ${$function} (${location})`;
+      return UIRuntime.isEmpty($function) ? `at ${location}` : `at ${$function} (${location})`;
     }
   };
 
@@ -6479,6 +6570,18 @@
           }
         }
       },
+      "Swill::DateTransformer": {
+        constructor: Swill__DateTransformer,
+        properties: {},
+        methods: {
+          "format": {
+            "arity": 1
+          },
+          "parse": {
+            "arity": 1
+          }
+        }
+      },
       "Swill::BindingDestination": {
         constructor: Swill__BindingDestination,
         properties: {},
@@ -6666,8 +6769,8 @@
             writer: "changeSortKey",
             compute: function compute_sortKey() {
               let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime.cast(
-                Runtime.logicalOr(this.arrangementOptions.key, () => null),
+              return controller ? controller.sortKey : UIRuntime.cast(
+                UIRuntime.logicalOr(this.arrangementOptions.key, () => null),
                 "T.nilable(String)"
               );
             }
@@ -6679,8 +6782,8 @@
             writer: "changeSortDirection",
             compute: function compute_sortDirection() {
               let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime.cast(
-                Runtime.logicalOr(
+              return controller ? controller.sortDirection : UIRuntime.cast(
+                UIRuntime.logicalOr(
                   this.arrangementOptions.direction,
                   () => "ascending"
                 ),
@@ -6721,8 +6824,8 @@
             writer: "selectIdentifier",
             compute: function compute_selectedObjectId() {
               let controller = this.arrayController;
-              return controller ? controller.selectedObjectId : Runtime.cast(
-                Runtime.logicalOr(this.selectionState.id, () => null),
+              return controller ? controller.selectedObjectId : UIRuntime.cast(
+                UIRuntime.logicalOr(this.selectionState.id, () => null),
                 "T.nilable(String)"
               );
             }
@@ -6732,7 +6835,7 @@
             type: "T.untyped",
             attribute: false,
             compute: function compute_selectedObject() {
-              return Runtime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+              return UIRuntime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
             }
           },
           "selected_indexes": {
@@ -6741,9 +6844,9 @@
             attribute: false,
             compute: function compute_selectedIndexes() {
               let selected = this.selectedObjects;
-              let indexes = Runtime.cast([], "T::Array[Integer]");
+              let indexes = UIRuntime.cast([], "T::Array[Integer]");
               this.arrangedObjects.forEach((object, index) => {
-                if (selected.includes(object)) Runtime.append(indexes, index);
+                if (selected.includes(object)) UIRuntime.append(indexes, index);
               });
               return indexes;
             }
@@ -6790,6 +6893,10 @@
           "key_down": {
             "arity": 1,
             "js": "keyDown"
+          },
+          "command_for": {
+            "arity": 1,
+            "js": "commandFor"
           },
           "key_up": {
             "arity": 1,
@@ -7578,6 +7685,10 @@
             "arity": 1,
             "js": "keyDownInWindow"
           },
+          "adopt_focus": {
+            "arity": 1,
+            "js": "adoptFocus"
+          },
           "verify_focus": {
             "arity": 1,
             "js": "verifyFocus"
@@ -7803,8 +7914,8 @@
             writer: "changeSortKey",
             compute: function compute_sortKey2() {
               let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime.cast(
-                Runtime.logicalOr(this.arrangementOptions.key, () => null),
+              return controller ? controller.sortKey : UIRuntime.cast(
+                UIRuntime.logicalOr(this.arrangementOptions.key, () => null),
                 "T.nilable(String)"
               );
             }
@@ -7816,8 +7927,8 @@
             writer: "changeSortDirection",
             compute: function compute_sortDirection2() {
               let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime.cast(
-                Runtime.logicalOr(
+              return controller ? controller.sortDirection : UIRuntime.cast(
+                UIRuntime.logicalOr(
                   this.arrangementOptions.direction,
                   () => "ascending"
                 ),
@@ -7858,8 +7969,8 @@
             writer: "selectIdentifier",
             compute: function compute_selectedObjectId2() {
               let controller = this.arrayController;
-              return controller ? controller.selectedObjectId : Runtime.cast(
-                Runtime.logicalOr(this.selectionState.id, () => null),
+              return controller ? controller.selectedObjectId : UIRuntime.cast(
+                UIRuntime.logicalOr(this.selectionState.id, () => null),
                 "T.nilable(String)"
               );
             }
@@ -7869,7 +7980,7 @@
             type: "T.untyped",
             attribute: false,
             compute: function compute_selectedObject2() {
-              return Runtime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+              return UIRuntime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
             }
           },
           "selected_indexes": {
@@ -7878,9 +7989,9 @@
             attribute: false,
             compute: function compute_selectedIndexes2() {
               let selected = this.selectedObjects;
-              let indexes = Runtime.cast([], "T::Array[Integer]");
+              let indexes = UIRuntime.cast([], "T::Array[Integer]");
               this.arrangedObjects.forEach((object, index) => {
-                if (selected.includes(object)) Runtime.append(indexes, index);
+                if (selected.includes(object)) UIRuntime.append(indexes, index);
               });
               return indexes;
             }
@@ -8223,7 +8334,7 @@
   };
 
   // build/ui/framework.mjs
-  Runtime.install(meta);
+  UIRuntime.install(meta);
 
   // rb/runtime/browser_api.mjs
   var registered2 = /* @__PURE__ */ new WeakSet();
@@ -8290,6 +8401,16 @@
       properties[name] = { compute: descriptor.get };
       names2.add(name);
     }
+    for (const [name, descriptor] of Object.entries(prototypeDescriptors)) {
+      if (name === "constructor" || typeof descriptor.value !== "function" || names2.has(name)) continue;
+      methods[name] = { arity: descriptor.value.length, js: name };
+      const changed = /^(.+)DidChange$/.exec(name)?.[1];
+      if (changed) {
+        for (const property of /* @__PURE__ */ new Set([changed, snakeCase(changed)])) {
+          methods[`${property}_did_change`] ??= { arity: descriptor.value.length, js: name };
+        }
+      }
+    }
     const actions = ownDeclaration(klass, "actions", []);
     if (!Array.isArray(actions)) throw new TypeError("static actions must be an array");
     const actionNames = /* @__PURE__ */ new Set();
@@ -8302,10 +8423,23 @@
         throw new TypeError(`Missing action method: ${name}`);
       }
       if (descriptor.value.length > 2) throw new TypeError(`Action ${name} accepts more than two arguments`);
-      methods[name] = { arity: descriptor.value.length };
       actionNames.add(name);
     }
-    return { properties, methods };
+    return { properties, methods, restorations: restorationsFor(klass, declared) };
+  }
+  var snakeCase = (name) => name.replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+  function restorationsFor(klass, declared) {
+    const restorable = ownDeclaration(klass, "restorable", []);
+    const entries = Array.isArray(restorable) ? restorable.map((path) => [path, path]) : (assertDescriptorMap(restorable, "restorable"), Object.entries(restorable));
+    return entries.map(([path, key]) => {
+      if (typeof path !== "string" || !path || typeof key !== "string" || !key) {
+        throw new TypeError("Restorable paths and keys must be non-empty strings");
+      }
+      const sample = declared[path.split(".")[0]]?.default;
+      const value = typeof sample === "function" ? void 0 : sample;
+      const type = typeof value === "number" ? "Integer" : typeof value === "boolean" ? "T::Boolean" : "String";
+      return { path, key, type };
+    });
   }
   var framework = null;
   function register(name, klass) {
@@ -8313,6 +8447,7 @@
       klass = name;
       name = klass?.name;
     }
+    if (typeof name === "string" && name.includes(".") && !name.includes("::")) name = name.replaceAll(".", "::");
     if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
     if (typeof name !== "string" || name.trim().length === 0) {
       throw new TypeError("Registered classes need a name");
@@ -8322,11 +8457,36 @@
     if (!framework.roots.has(parent) && !registered2.has(parent)) {
       throw new Error(`Register the parent class before ${name}`);
     }
-    const { properties, methods } = declarationsFor(klass);
-    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods } } });
+    const { properties, methods, restorations: restorations2 } = declarationsFor(klass);
+    framework.Runtime.aliasInstalledJavaScriptNames(framework.publicNames);
+    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods, restorations: restorations2 } } });
     registered2.add(klass);
     return klass;
   }
+  function registerBundle(name, options = {}) {
+    if (typeof name !== "string" || name.trim().length === 0) throw new TypeError("Bundles need a name");
+    if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.registerBundle options must be an object");
+    assertKeys(options, ["base", "manifest", "main"], "registerBundle");
+    const manifest = options.manifest ?? [];
+    if (!Array.isArray(manifest) || manifest.some((path) => typeof path !== "string")) {
+      throw new TypeError("manifest must be an array of paths");
+    }
+    let base = options.base ?? defaultBase();
+    if (base && !base.endsWith("/")) base += "/";
+    return framework.Bundle.register(name, base, manifest, {}, options.main ?? true);
+  }
+  function defaultBase() {
+    const document2 = globalThis.document;
+    if (!document2) return "";
+    const script = document2.currentScript;
+    return new URL(".", script?.src || document2.baseURI).href;
+  }
+  function unloadedCatalogs() {
+    const bundle = framework.Bundle.main();
+    if (!bundle) return [];
+    return bundle.manifest.filter((path) => path.endsWith(".html") && bundle.loadedPath(path) == null).map((path) => bundle.loadResource(path.replace(/\.html$/, ""), "html"));
+  }
+  var starting = false;
   function start(options = {}) {
     const { Application } = framework;
     if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
@@ -8341,18 +8501,32 @@
     if (ApplicationClass !== Application && !registered2.has(ApplicationClass)) {
       throw new Error("Register the application class before starting it");
     }
+    if (starting) throw new Error("A Swill application is already running");
     const application = new ApplicationClass();
     if (options.development) application.development = true;
-    application.launch(root);
-    root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
-      if (!event.persisted) application.terminate();
-    });
+    const launch = () => {
+      starting = false;
+      application.launch(root);
+      root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
+        if (!event.persisted) application.terminate();
+      });
+    };
+    const catalogs = unloadedCatalogs();
+    if (catalogs.length === 0) {
+      launch();
+    } else {
+      starting = true;
+      Promise.all(catalogs).then(launch, (error) => {
+        starting = false;
+        console.error("Swill could not load the application's templates", error);
+      });
+    }
     return application;
   }
   function install2(meta2) {
     return framework.Runtime.install(meta2);
   }
-  function browserAPI(definitions, Runtime2, names2 = {}, roots = []) {
+  function browserAPI(definitions, Runtime, names2 = {}, roots = []) {
     const classes2 = {};
     for (const [name, identifier] of Object.entries(names2)) {
       const klass = definitions[identifier];
@@ -8365,16 +8539,18 @@
       if (typeof value !== "function") classes2[name] = Object.freeze(value);
     }
     framework = {
-      Runtime: Runtime2,
+      Runtime,
       Application: definitions.Swill__Application,
+      Bundle: definitions.Swill__Bundle,
+      publicNames: Object.fromEntries(Object.entries(names2).filter(([, identifier]) => definitions[identifier]).map(([name, identifier]) => [`Swill::${name.replaceAll(".", "::")}`, definitions[identifier]])),
       roots: new Set(roots.map((name) => definitions[names2[name]]).filter(Boolean))
     };
-    return Object.freeze({ ...definitions, Runtime: Runtime2, install: install2, ...classes2, register, start });
+    return Object.freeze({ ...definitions, Runtime, install: install2, ...classes2, register, registerBundle, start });
   }
 
   // build/ui/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
+  globalThis.Swill = browserAPI(framework_exports, UIRuntime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
   {
     const script = typeof document === "undefined" ? null : document.currentScript;
     const base = script && script.src ? new URL(".", script.src).href : "";

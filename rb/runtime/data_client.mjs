@@ -71,10 +71,10 @@ export function connectData() {
     next.binaryType = "arraybuffer";
     next.addEventListener("open", () => {
       if (connection !== attempt) return;
-      sendRaw(attempt, {type: "HELLO", protocol_version: 2, schema_hash: configuration.schemaHash})
+      sendRaw(attempt, {type: "HELLO", protocol_version: 3, schema_hash: configuration.schemaHash})
         .then(message => {
           if (connection !== attempt) return;
-          if (message.type !== "WELCOME" || message.protocol_version !== 2 || message.schema_hash !== configuration.schemaHash) {
+          if (message.type !== "WELCOME" || message.protocol_version !== 3 || message.schema_hash !== configuration.schemaHash) {
             throw remoteError({code: "schema_mismatch", message: "The application has changed. Reload to continue."});
           }
           if (actorScope !== null && actorScope !== message.actor_scope) {
@@ -184,19 +184,18 @@ export function dataTime(value) {
  * @param {Date} value
  * @returns {string}
  */
-export function dataTimeIso(value) {
+export function dataTimeISO(value) {
   return value.toISOString();
 }
 
 /**
- * Returns the date the ISO 8601 string `value` represents.
+ * Returns the instant the ISO 8601 string `value` represents, retaining
+ * microseconds that JavaScript Date would discard.
  *
  * @param {string} value
- * @returns {Date}
+ * @returns {import("./data_values.mjs").Instant}
  */
-export function dataTimeFromIso(value) {
-  return new Date(value);
-}
+export {dataTimeFromISO} from "./data_values.mjs";
 
 /**
  * Returns whether `value` is a plain record: an object that is not an array, a

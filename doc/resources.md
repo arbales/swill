@@ -41,6 +41,9 @@ carries no file contents beyond what the build embeds (see
 a page one line each in the manifest. Resources are served from wherever the
 script is, a CDN included; assign `base_url` to serve them from elsewhere.
 
+A page without a build registers its bundle with `Swill.registerBundle`;
+see [Plain JavaScript](plain_javascript.md#themes-and-resources).
+
 `Bundle.main` is the application's bundle and `Bundle.framework` the
 framework's. `Bundle.named` finds either by name.
 

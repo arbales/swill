@@ -81,6 +81,9 @@ export function conforms(value, type) {
       return typeof value === "number";
     case "T::Boolean":
       return typeof value === "boolean";
+    case "Date": case "DateTime": case "Time": case "BigDecimal": case "TimeOfDay":
+    case "Interval": case "Swill::Distant::RangeValue":
+      return value?.[Symbol.for("swill.data.type")] === (type === "Swill::Distant::RangeValue" ? "RangeValue" : type);
     default:
   }
 

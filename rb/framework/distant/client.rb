@@ -341,6 +341,17 @@ module Swill
             distant = T.cast(value, Object)
             return {"$ref" => [distant.class.data_model_name, distant.id.to_s]}
           end
+          case Runtime.data_value_type(value)
+          when "Time" then return {"$time" => Runtime.data_value_payload(value)}
+          when "Date" then return {"$date" => Runtime.data_value_payload(value)}
+          when "DateTime" then return {"$datetime" => Runtime.data_value_payload(value)}
+          when "BigDecimal" then return {"$decimal" => Runtime.data_value_payload(value)}
+          when "TimeOfDay" then return {"$time_of_day" => Runtime.data_value_payload(value)}
+          when "RangeValue"
+            parts = T.cast(Runtime.data_value_payload(value), T::Array[T.untyped])
+            return {"$range" => [parts[0], parts[1], encode_value(parts[2]), encode_value(parts[3]), parts[4], parts[5]]}
+          when "Interval" then return {"$interval" => Runtime.data_value_payload(value)}
+          end
           return {"$time" => Runtime.data_time_iso(value)} if Runtime.data_time(value)
           if value.is_a?(Array)
             return T.cast(value, T::Array[T.untyped]).map { |item| encode_value(item) }
@@ -380,7 +391,19 @@ module Swill
                              use_preferred ? preferred : nil)
           end
           return Runtime.data_time_from_iso(record["$time"].to_s) if record.size == 1 && record.key?("$time")
-          return record["$date"] if record.size == 1 && record.key?("$date")
+          return Runtime.data_date_from_iso(record["$date"].to_s) if record.size == 1 && record.key?("$date")
+          return Runtime.data_date_time_from_iso(record["$datetime"].to_s) if record.size == 1 && record.key?("$datetime")
+          return Runtime.data_decimal_from_string(record["$decimal"].to_s) if record.size == 1 && record.key?("$decimal")
+          return Runtime.data_time_of_day_from_iso(record["$time_of_day"].to_s) if record.size == 1 && record.key?("$time_of_day")
+          if record.size == 1 && record.key?("$range")
+            parts = T.cast(record["$range"], T::Array[T.untyped])
+            return Runtime.data_range(parts[0], parts[1], decode_value(parts[2], response_generation),
+                                      decode_value(parts[3], response_generation), parts[4], parts[5])
+          end
+          if record.size == 1 && record.key?("$interval")
+            parts = T.cast(record["$interval"], T::Array[T.untyped])
+            return Runtime.data_interval(parts[0], parts[1], parts[2])
+          end
           if record.size == 1 && record.key?("$value")
             tagged = T.cast(record["$value"], T::Array[T.untyped])
             klass = Runtime.resolve(tagged[0].to_s)

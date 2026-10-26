@@ -199,28 +199,28 @@ try {
     document.querySelector(".file-index").getBoundingClientRect().height]`);
   const [width, height] = await sizes();
   await drag(".width-handle", 120, 0);
-  await drag("[data-resizes=file-index]", 0, 60);
+  await drag(".resizer:has(.class-toggle)", 0, 60);
   const [widened, taller] = await sizes();
   assert.ok(Math.abs(widened - (width + 120)) <= 4, `the pane widened from ${width} to ${widened}`);
   assert.ok(Math.abs(taller - (height + 60)) <= 4, `the file index grew from ${height} to ${taller}`);
 
-  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "true", "resizing does not collapse the section");
+  assert.equal(await evaluate(`document.querySelector(".class-toggle").getAttribute("aria-expanded")`), "true", "resizing does not collapse the section");
 
-  for (const name of ["file-index", "method-index"]) {
-    const headerTop = await evaluate(`document.querySelector('[data-section="${name}"]').getBoundingClientRect().top`);
-    await drag(`[data-section="${name}"]`, 0, 0);
-    assert.equal(await evaluate(`document.querySelector(".${name}").getBoundingClientRect().height`), 0);
-    if (name === "file-index") {
-      assert.equal(await evaluate(`document.querySelector('[data-section="file-index"]').getBoundingClientRect().top`), headerTop, "the top section collapses upward into its heading");
+  for (const name of ["file", "method"]) {
+    const headerTop = await evaluate(`document.querySelector(".${name}-toggle").getBoundingClientRect().top`);
+    await drag(`.${name}-toggle`, 0, 0);
+    assert.equal(await evaluate(`document.querySelector(".${name}-index").getBoundingClientRect().height`), 0);
+    if (name === "file") {
+      assert.equal(await evaluate(`document.querySelector(".file-toggle").getBoundingClientRect().top`), headerTop, "the top section collapses upward into its heading");
     } else {
       assert.equal(await evaluate(`(() => {
-        const header = document.querySelector('[data-section="method-index"]').closest("header");
+        const header = document.querySelector(".method-toggle").closest("header");
         return header.getBoundingClientRect().bottom === document.querySelector(".navigator").getBoundingClientRect().bottom;
       })()`), true, "the bottom section collapses downward to the foot of the sidebar");
     }
-    await evaluate(`document.querySelector('[data-section="${name}"]').focus()`);
+    await evaluate(`document.querySelector(".${name}-toggle").focus()`);
     await press(" ", "Space", 32, " ");
-    assert.equal(await evaluate(`document.querySelector('[data-section="${name}"]').getAttribute("aria-expanded")`), "true", "Space reopens a focused section");
+    assert.equal(await evaluate(`document.querySelector(".${name}-toggle").getAttribute("aria-expanded")`), "true", "Space reopens a focused section");
   }
   assert.equal(await evaluate(`[...document.querySelectorAll(".navigator .pane-header:not(.search)")].every(header => getComputedStyle(header).borderTopWidth === "1px")`), true);
   assert.equal(await evaluate(`getComputedStyle(document.querySelector(".search")).borderTopWidth`), "0px");
@@ -232,9 +232,9 @@ try {
   await new Promise(resolve => setTimeout(resolve, 100));
   const scrolled = await scrollPositions();
   assert.ok(scrolled.every(position => position > 0), "all three indexes scroll");
-  await drag('[data-section="class-index"]', 0, 0);
+  await drag(".class-toggle", 0, 0);
   assert.equal(await evaluate(`document.querySelector(".class-index").getBoundingClientRect().height`), 0);
-  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "false");
+  assert.equal(await evaluate(`document.querySelector(".class-toggle").getAttribute("aria-expanded")`), "false");
 
   // The sizes carry to the next page.
   await call("Page.navigate", {url: pathToFileURL(resolve(root, "rdoc/Swill/View.html")).href});
@@ -242,11 +242,11 @@ try {
   await loaded();
   const [kept, keptHeight] = await sizes();
   assert.ok(Math.abs(kept - widened) <= 1 && Math.abs(keptHeight - taller) <= 1, "the layout is remembered");
-  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "false", "collapsed sections stay closed across pages");
-  await evaluate(`document.querySelector('[data-section="class-index"]').focus()`);
+  assert.equal(await evaluate(`document.querySelector(".class-toggle").getAttribute("aria-expanded")`), "false", "collapsed sections stay closed across pages");
+  await evaluate(`document.querySelector(".class-toggle").focus()`);
   await press("Enter", "Enter", 13, "\r");
   await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(await evaluate(`document.querySelector('[data-section="class-index"]').getAttribute("aria-expanded")`), "true", "Enter opens a focused section");
+  assert.equal(await evaluate(`document.querySelector(".class-toggle").getAttribute("aria-expanded")`), "true", "Enter opens a focused section");
   assert.deepEqual(await scrollPositions(), scrolled, "each index restores its scroll position");
 
   await press("~", "Backquote", 192, "~");

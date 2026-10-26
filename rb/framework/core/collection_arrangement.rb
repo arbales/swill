@@ -230,6 +230,9 @@ module Swill
       return 0 if left.nil? && right.nil?
       return 1 if left.nil?
       return -1 if right.nil?
+      if Runtime.data_value_type(left) == "BigDecimal" && Runtime.data_value_type(right) == "BigDecimal"
+        return Runtime.compare_decimal(left, right)
+      end
       return left - right if Runtime.is_number(left) && Runtime.is_number(right)
       if Runtime.is_boolean(left) && Runtime.is_boolean(right)
         return (left ? 1 : 0) - (right ? 1 : 0)

@@ -23,6 +23,18 @@
     }
     return false;
   }
+  function aliasJavaScriptNames(klass) {
+    const known = metadata.get(klass);
+    if (!known || known.aliased) return;
+    for (const kind of ["properties", "methods"]) {
+      const map = known[kind];
+      for (const [name, descriptor] of [...map]) {
+        const js = descriptor.js?.replace(/=$/, "");
+        if (js && js !== name && !map.has(js)) map.set(js, descriptor);
+      }
+    }
+    known.aliased = true;
+  }
   function installMetadata(klass, properties, methods, restorations2 = []) {
     const parent = Object.getPrototypeOf(klass);
     metadata.set(klass, {
@@ -60,6 +72,10 @@
   function isEqual(left, right) {
     if (left === right) return true;
     if (left == null && right == null) return true;
+    const valueType = left?.[/* @__PURE__ */ Symbol.for("swill.data.type")];
+    if (valueType && valueType === right?.[/* @__PURE__ */ Symbol.for("swill.data.type")]) {
+      return left.equals(right);
+    }
     return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => isEqual(value, right[index]));
   }
   function isPlainObject(value) {
@@ -392,7 +408,7 @@
       throw new Error(`Unknown observable property: ${name}`);
     }
     if (descriptor.computed) computedValue(object, descriptor);
-    const set = listeners(object, name, kind);
+    const set = listeners(object, descriptor.name, kind);
     set.add(callback);
     return () => set.delete(callback);
   }
@@ -740,11 +756,18 @@
     return null;
   }
   function resolve(name) {
+    if (!classes.has(name) && name.includes(".") && !name.includes("::")) name = name.replaceAll(".", "::");
+    if (!classes.has(name) && publicNames.has(name)) return publicNames.get(name);
     if (!classes.has(name)) {
       throw new Error(`Unknown class: ${name}`);
     }
     return classes.get(name);
   }
+  function aliasInstalledJavaScriptNames(names2 = {}) {
+    for (const klass of classes.values()) aliasJavaScriptNames(klass);
+    for (const [name, klass] of Object.entries(names2)) publicNames.set(name, klass);
+  }
+  var publicNames = /* @__PURE__ */ new Map();
   function classIsA(name, ancestor) {
     const klass = resolve(name);
     const parent = resolve(ancestor);
@@ -1084,6 +1107,14 @@
         return typeof value === "number";
       case "T::Boolean":
         return typeof value === "boolean";
+      case "Date":
+      case "DateTime":
+      case "Time":
+      case "BigDecimal":
+      case "TimeOfDay":
+      case "Interval":
+      case "Swill::Distant::RangeValue":
+        return value?.[/* @__PURE__ */ Symbol.for("swill.data.type")] === (type === "Swill::Distant::RangeValue" ? "RangeValue" : type);
       default:
     }
     if (type === "Array" || type.startsWith("T::Array[")) return Array.isArray(value);
@@ -1135,7 +1166,7 @@
       warningObservers.delete(callback);
     };
   }
-  var Runtime = {
+  var UIRuntime = {
     // Classes
     install,
     include,
@@ -1147,6 +1178,7 @@
     resolve,
     classIsA,
     nameOf,
+    aliasInstalledJavaScriptNames,
     // Values
     isTruthy,
     logicalAnd,
@@ -1471,6 +1503,183 @@
     return value;
   }
 
+  // rb/runtime/data_values.mjs
+  var brand = /* @__PURE__ */ Symbol.for("swill.data.type");
+  function checkDate(value) {
+    if (!/^\d{4}-\d\d-\d\d$/.test(value)) throw new TypeError(`Invalid date: ${value}`);
+    const [year, month, day] = value.split("-").map(Number);
+    const date = /* @__PURE__ */ new Date(0);
+    date.setUTCFullYear(year, month - 1, day);
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      throw new TypeError(`Invalid date: ${value}`);
+    }
+    return [year, month, day];
+  }
+  var CalendarDate = class _CalendarDate {
+    constructor(iso) {
+      const [year, month, day] = checkDate(iso);
+      this.iso = iso;
+      this.year = year;
+      this.month = month;
+      this.day = day;
+      Object.defineProperty(this, brand, { value: "Date" });
+      Object.freeze(this);
+    }
+    iso8601() {
+      return this.iso;
+    }
+    equals(other) {
+      return other instanceof _CalendarDate && this.iso === other.iso;
+    }
+    toString() {
+      return this.iso;
+    }
+    valueOf() {
+      return this.year * 1e4 + this.month * 100 + this.day;
+    }
+  };
+  var Instant = class _Instant {
+    constructor(iso, type = "DateTime") {
+      if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)$/.test(iso)) {
+        throw new TypeError(`Invalid timestamp: ${iso}`);
+      }
+      const millis = Date.parse(iso);
+      if (!Number.isFinite(millis)) throw new TypeError(`Invalid timestamp: ${iso}`);
+      const micros = BigInt(millis) * 1000n + BigInt((iso.match(/\.(\d+)/)?.[1] ?? "").padEnd(6, "0").slice(3, 6) || "0");
+      const fraction = (micros % 1000000n + 1000000n) % 1000000n;
+      this.iso = new Date(millis).toISOString().replace(/\.\d{3}Z$/, `.${String(fraction).padStart(6, "0")}+00:00`);
+      this.micros = micros;
+      Object.defineProperty(this, brand, { value: type });
+      Object.freeze(this);
+    }
+    iso8601() {
+      return this.iso;
+    }
+    toISOString() {
+      return this.iso.replace(/(\.\d{3})000\+00:00$/, "$1Z").replace(/\+00:00$/, "Z");
+    }
+    equals(other) {
+      return other instanceof _Instant && this.micros === other.micros;
+    }
+    toString() {
+      return this.iso;
+    }
+    valueOf() {
+      return Number(this.micros / 1000n);
+    }
+  };
+  function decimalParts(text) {
+    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(String(text));
+    if (!match) throw new TypeError(`Invalid decimal: ${text}`);
+    const fraction = match[3] ?? "";
+    const coefficient = BigInt(`${match[1]}${match[2]}${fraction}`);
+    return [coefficient, fraction.length];
+  }
+  var Decimal = class _Decimal {
+    constructor(text) {
+      [this.coefficient, this.scale] = decimalParts(text);
+      Object.defineProperty(this, brand, { value: "BigDecimal" });
+      Object.freeze(this);
+    }
+    toString() {
+      let digits = (this.coefficient < 0n ? -this.coefficient : this.coefficient).toString();
+      if (this.scale) digits = digits.padStart(this.scale + 1, "0").slice(0, -this.scale) + "." + digits.padStart(this.scale + 1, "0").slice(-this.scale);
+      return (this.coefficient < 0n ? "-" : "") + digits;
+    }
+    // Implicit Number conversion would silently round exact database numerics.
+    [Symbol.toPrimitive](hint) {
+      if (hint === "string") return this.toString();
+      throw new TypeError("BigDecimal requires explicit conversion or exact comparison");
+    }
+    equals(other) {
+      return other instanceof _Decimal && compareDecimal(this, other) === 0;
+    }
+  };
+  function compareDecimal(left, right) {
+    const scale = Math.max(left.scale, right.scale);
+    const a = left.coefficient * 10n ** BigInt(scale - left.scale);
+    const b = right.coefficient * 10n ** BigInt(scale - right.scale);
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  var TimeOfDay = class _TimeOfDay {
+    constructor(iso) {
+      if (!/^\d\d:\d\d:\d\d(?:\.\d{1,6})?$/.test(iso)) throw new TypeError(`Invalid time of day: ${iso}`);
+      this.iso = iso;
+      Object.defineProperty(this, brand, { value: "TimeOfDay" });
+      Object.freeze(this);
+    }
+    toString() {
+      return this.iso;
+    }
+    equals(other) {
+      return other instanceof _TimeOfDay && this.iso === other.iso;
+    }
+  };
+  var DataRange = class _DataRange {
+    constructor(dbType, empty, first, last, excludeFirst, excludeLast) {
+      Object.assign(this, { dbType, empty, first, last, excludeFirst, excludeLast });
+      Object.defineProperty(this, brand, { value: "RangeValue" });
+      Object.freeze(this);
+    }
+    equals(other) {
+      return other instanceof _DataRange && this.dbType === other.dbType && this.empty === other.empty && this.excludeFirst === other.excludeFirst && this.excludeLast === other.excludeLast && (this.first?.equals?.(other.first) ?? this.first === other.first) && (this.last?.equals?.(other.last) ?? this.last === other.last);
+    }
+  };
+  var DataInterval = class _DataInterval {
+    constructor(months, days, microseconds) {
+      Object.assign(this, { months, days, microseconds: String(microseconds) });
+      Object.defineProperty(this, brand, { value: "Interval" });
+      Object.freeze(this);
+    }
+    equals(other) {
+      return other instanceof _DataInterval && this.months === other.months && this.days === other.days && this.microseconds === other.microseconds;
+    }
+  };
+  function dataValueType(value) {
+    return value?.[brand] ?? null;
+  }
+  function dataValuePayload(value) {
+    switch (dataValueType(value)) {
+      case "Date":
+      case "DateTime":
+      case "Time":
+      case "TimeOfDay":
+      case "BigDecimal":
+        return value.toString();
+      case "RangeValue":
+        return [value.dbType, value.empty, value.first, value.last, value.excludeFirst, value.excludeLast];
+      case "Interval":
+        return [value.months, value.days, value.microseconds];
+      default:
+        return null;
+    }
+  }
+  function dataDateFromISO(value) {
+    return new CalendarDate(value);
+  }
+  function dataDateISO(value) {
+    if (!(value instanceof CalendarDate)) throw new TypeError("Expected a calendar date");
+    return value.iso8601();
+  }
+  function dataDateTimeFromISO(value) {
+    return new Instant(value);
+  }
+  function dataTimeFromISO(value) {
+    return new Instant(value, "Time");
+  }
+  function dataDecimalFromString(value) {
+    return new Decimal(value);
+  }
+  function dataTimeOfDayFromISO(value) {
+    return new TimeOfDay(value);
+  }
+  function dataRange(dbType, empty, first, last, excludeFirst, excludeLast) {
+    return new DataRange(dbType, empty, first, last, excludeFirst, excludeLast);
+  }
+  function dataInterval(months, days, microseconds) {
+    return new DataInterval(months, days, microseconds);
+  }
+
   // rb/runtime/data_client.mjs
   var HANDSHAKE_TIMEOUT = 1e4;
   var configuration2 = null;
@@ -1534,9 +1743,9 @@
       next.binaryType = "arraybuffer";
       next.addEventListener("open", () => {
         if (connection !== attempt) return;
-        sendRaw(attempt, { type: "HELLO", protocol_version: 2, schema_hash: configuration2.schemaHash }).then((message) => {
+        sendRaw(attempt, { type: "HELLO", protocol_version: 3, schema_hash: configuration2.schemaHash }).then((message) => {
           if (connection !== attempt) return;
-          if (message.type !== "WELCOME" || message.protocol_version !== 2 || message.schema_hash !== configuration2.schemaHash) {
+          if (message.type !== "WELCOME" || message.protocol_version !== 3 || message.schema_hash !== configuration2.schemaHash) {
             throw remoteError({ code: "schema_mismatch", message: "The application has changed. Reload to continue." });
           }
           if (actorScope !== null && actorScope !== message.actor_scope) {
@@ -1623,11 +1832,8 @@
   function dataTime(value) {
     return value instanceof Date;
   }
-  function dataTimeIso(value) {
+  function dataTimeISO(value) {
     return value.toISOString();
-  }
-  function dataTimeFromIso(value) {
-    return new Date(value);
   }
   function dataRecord(value) {
     if (value == null || typeof value !== "object" || Array.isArray(value) || value instanceof Date) {
@@ -1638,8 +1844,8 @@
   }
 
   // rb/runtime/runtime.mjs
-  var Runtime2 = {
-    ...Runtime,
+  var Runtime = {
+    ...UIRuntime,
     // Remote data
     configureData,
     closeData,
@@ -1648,9 +1854,19 @@
     dataConnected,
     dataRequest,
     dataTime,
-    dataTimeIso,
-    dataTimeFromIso,
-    dataRecord
+    dataTimeISO,
+    dataTimeFromISO,
+    dataRecord,
+    dataValueType,
+    dataValuePayload,
+    dataDateFromISO,
+    dataDateISO,
+    dataDateTimeFromISO,
+    dataDecimalFromString,
+    dataTimeOfDayFromISO,
+    dataRange,
+    dataInterval,
+    compareDecimal
   };
 
   // build/framework.mjs
@@ -1688,6 +1904,7 @@
     Swill__Controller__List: () => Swill__Controller__List,
     Swill__Controller__SortableList: () => Swill__Controller__SortableList,
     Swill__DOM: () => Swill__DOM,
+    Swill__DateTransformer: () => Swill__DateTransformer,
     Swill__DevelopmentMonitor: () => Swill__DevelopmentMonitor,
     Swill__Distant__Client: () => Swill__Distant__Client,
     Swill__Distant__Fields: () => Swill__Distant__Fields,
@@ -1749,7 +1966,7 @@
       // sorbet-runtime will not wrap a method whose optional parameter comes
       // first, so this signature is static only.
       observeWithObject(object, name, callback) {
-        return this.retain(Runtime2.observe(
+        return this.retain(Runtime.observe(
           object == null ? this : object,
           name,
           callback
@@ -1760,21 +1977,21 @@
       // observation, a notification, a DOM listener, a binding's release.
       // Answers the disposer.
       retain(disposer) {
-        return Runtime2.retain(this, disposer);
+        return Runtime.retain(this, disposer);
       }
       // Gives up a disposer ahead of `dealloc`.
       release(disposer) {
-        return Runtime2.release(this, disposer);
+        return Runtime.release(this, disposer);
       }
       // Releases everything retained and leaves the observation graph. End of
       // life for the object.
       dealloc() {
-        return Runtime2.dealloc(this);
+        return Runtime.dealloc(this);
       }
       // Leaves the observation graph without ending: stored values are kept and
       // computed properties resubscribe on the next read.
       disconnect() {
-        return Runtime2.disconnect(this);
+        return Runtime.disconnect(this);
       }
       // Runs before a write lands, answering the value to store. Override it to
       // coerce or to reject the write by raising.
@@ -1827,7 +2044,7 @@
       if (include_root) callback(root, false);
       return Swill__DOM.eachChild(root, (child) => {
         let view = child.__swill_view__;
-        return Runtime2.isTruthy(child.hasAttribute("controller") || view && view.isOwnsContent()) ? callback(
+        return Runtime.isTruthy(child.hasAttribute("controller") || view && view.isOwnsContent()) ? callback(
           child,
           true
         ) : Swill__DOM.eachOwned(child, true, callback);
@@ -1843,7 +2060,7 @@
       }
       ;
       if (tag === "SELECT") {
-        return Runtime2.logicalAnd(
+        return Runtime.logicalAnd(
           key !== "Enter" && key !== "Escape",
           () => key !== "Tab"
         );
@@ -1871,17 +2088,17 @@
         case "password":
           return !["Enter", "Escape", "Tab", "ArrowUp", "ArrowDown"].includes(key);
         default:
-          return Runtime2.logicalAnd(
+          return Runtime.logicalAnd(
             key !== "Enter" && key !== "Escape",
             () => key !== "Tab"
           );
       }
     }
     static ownedMatching(root, selector) {
-      let found = Runtime2.cast([], "T::Array[Element]");
+      let found = Runtime.cast([], "T::Array[Element]");
       Swill__DOM.eachOwned(root, true, (element, _controller_root) => {
-        if (Runtime2.isTruthy((element === root || !element.hasAttribute("controller")) && element.matches(selector))) {
-          return Runtime2.append(found, element);
+        if (Runtime.isTruthy((element === root || !element.hasAttribute("controller")) && element.matches(selector))) {
+          return Runtime.append(found, element);
         }
       });
       return found;
@@ -1895,14 +2112,14 @@
   Swill__DOM.ownedMatching = Swill__DOM_Functions.ownedMatching;
   var Swill__Swell = class _Swill__Swell extends Swill__Object {
     static $index(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [{ name: "element", kind: "req" }],
         keywords: [],
         keywordRest: null,
         block: "block"
       });
-      let element = Runtime2.argument(__swill_bound, "element");
-      let block = Runtime2.argument(__swill_bound, "block");
+      let element = Runtime.argument(__swill_bound, "element");
+      let block = Runtime.argument(__swill_bound, "block");
       let dom = new this(element);
       if (block) block(dom);
       return dom;
@@ -1956,7 +2173,7 @@
       } else {
         this._element.setAttribute(
           name,
-          value === true ? "" : Runtime2.send(value, "to_s")
+          value === true ? "" : Runtime.send(value, "to_s")
         );
       }
       ;
@@ -1984,7 +2201,7 @@
     aria(name, value) {
       return this.attr(
         `aria-${name}`,
-        value == null ? null : Runtime2.send(value, "to_s")
+        value == null ? null : Runtime.send(value, "to_s")
       );
     }
     // Sets `data-name` to the string form of `value` and returns the wrapper.
@@ -1993,7 +2210,7 @@
     data(name, value) {
       return this.attr(
         `data-${name}`,
-        value == null ? null : Runtime2.send(value, "to_s")
+        value == null ? null : Runtime.send(value, "to_s")
       );
     }
     // Returns the value of `aria-name`, or nil when absent. `name` is the
@@ -2027,7 +2244,7 @@
     // returns the wrapper. Text is displayed literally; nil clears the
     // contents. See `#text_content` and `#empty`.
     text(value) {
-      this._element.textContent = Runtime2.send(value, "to_s");
+      this._element.textContent = Runtime.send(value, "to_s");
       return this;
     }
     // Returns the element's text content, or an empty string when it has
@@ -2094,7 +2311,7 @@
     // Retain the returned callable on the controller or view that owns the
     // listener so it is removed when that owner unloads.
     listen(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "type", kind: "req" },
           { name: "handler", kind: "req" }
@@ -2103,10 +2320,10 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let type = Runtime2.argument(__swill_bound, "type");
-      let handler = Runtime2.argument(__swill_bound, "handler");
-      let capture = Runtime2.argument(__swill_bound, "capture");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(capture))) capture = false;
+      let type = Runtime.argument(__swill_bound, "type");
+      let handler = Runtime.argument(__swill_bound, "handler");
+      let capture = Runtime.argument(__swill_bound, "capture");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(capture))) capture = false;
       this._element.addEventListener(type, handler, capture);
       return () => this._element.removeEventListener(type, handler, capture);
     }
@@ -2139,15 +2356,15 @@
     static default() {
       let center = this._default;
       if (center) return center;
-      this._default = Runtime2.cast(
+      this._default = Runtime.cast(
         new _Swill__NotificationCenter(),
         "T.nilable(Swill::NotificationCenter)"
       );
-      return Runtime2.must(this._default);
+      return Runtime.must(this._default);
     }
     constructor() {
       super();
-      this._observers = Runtime2.cast(
+      this._observers = Runtime.cast(
         {},
         "T::Hash[String, T::Array[T.proc.params(notification:Notification).void]]"
       );
@@ -2159,11 +2376,11 @@
         this._observers[name] = list;
       }
       ;
-      Runtime2.append(list, callback);
+      Runtime.append(list, callback);
       return () => {
         let current = this._observers[name];
         if (current) {
-          return this._observers[name] = current.filter((candidate) => !Runtime2.isEqual(candidate, callback));
+          return this._observers[name] = current.filter((candidate) => !Runtime.isEqual(candidate, callback));
         }
       };
     }
@@ -2180,29 +2397,29 @@
     static default() {
       let wire = this._default;
       if (wire) return wire;
-      this._default = Runtime2.cast(
+      this._default = Runtime.cast(
         new _Swill__Wire(),
         "T.nilable(Swill::Wire)"
       );
-      return Runtime2.must(this._default);
+      return Runtime.must(this._default);
     }
     async getJSON(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [{ name: "url", kind: "req" }],
         keywords: [{ name: "params", kind: "key" }],
         keywordRest: null,
         block: "__swill_block"
       });
-      let url = Runtime2.argument(__swill_bound, "url");
-      let params = Runtime2.argument(__swill_bound, "params");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(params))) params = {};
+      let url = Runtime.argument(__swill_bound, "url");
+      let params = Runtime.argument(__swill_bound, "params");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(params))) params = {};
       return await this.request(
         "GET",
         _Swill__Wire.urlWithParams(url, params)
       );
     }
     async requestJSON(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "method", kind: "req" },
           { name: "url", kind: "req" }
@@ -2211,17 +2428,17 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let method = Runtime2.argument(__swill_bound, "method");
-      let url = Runtime2.argument(__swill_bound, "url");
-      let body = Runtime2.argument(__swill_bound, "body");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(body))) body = null;
-      return await this.request(method, url, Runtime2.keywordArguments({
+      let method = Runtime.argument(__swill_bound, "method");
+      let url = Runtime.argument(__swill_bound, "url");
+      let body = Runtime.argument(__swill_bound, "body");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(body))) body = null;
+      return await this.request(method, url, Runtime.keywordArguments({
         body,
         content_type: "application/vnd.api+json"
       }));
     }
     async requestFormJSON(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "method", kind: "req" },
           { name: "url", kind: "req" }
@@ -2230,16 +2447,16 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let method = Runtime2.argument(__swill_bound, "method");
-      let url = Runtime2.argument(__swill_bound, "url");
-      let body = Runtime2.argument(__swill_bound, "body");
-      return await this.request(method, url, Runtime2.keywordArguments({
+      let method = Runtime.argument(__swill_bound, "method");
+      let url = Runtime.argument(__swill_bound, "url");
+      let body = Runtime.argument(__swill_bound, "body");
+      return await this.request(method, url, Runtime.keywordArguments({
         body: _Swill__Wire.encodeParams(body),
         content_type: "application/x-www-form-urlencoded"
       }));
     }
     async request(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "method", kind: "req" },
           { name: "url", kind: "req" }
@@ -2251,21 +2468,21 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let method = Runtime2.argument(__swill_bound, "method");
-      let url = Runtime2.argument(__swill_bound, "url");
-      let body = Runtime2.argument(__swill_bound, "body");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(body))) body = null;
-      let content_type = Runtime2.argument(__swill_bound, "content_type");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(content_type))) {
+      let method = Runtime.argument(__swill_bound, "method");
+      let url = Runtime.argument(__swill_bound, "url");
+      let body = Runtime.argument(__swill_bound, "body");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(body))) body = null;
+      let content_type = Runtime.argument(__swill_bound, "content_type");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(content_type))) {
         content_type = null;
       }
       ;
       let request_url = this.resolveURL(url);
-      let headers = Runtime2.cast(
+      let headers = Runtime.cast(
         { Accept: "application/vnd.api+json, application/json" },
         "T::Hash[String, String]"
       );
-      let init = Runtime2.cast(
+      let init = Runtime.cast(
         { method, headers },
         "T::Hash[String, T.untyped]"
       );
@@ -2284,7 +2501,7 @@
     }
     resolveURL(url) {
       let prefix = this.baseURL;
-      if (Runtime2.isEmpty(prefix) || url.startsWith("http://") || url.startsWith("https://")) {
+      if (Runtime.isEmpty(prefix) || url.startsWith("http://") || url.startsWith("https://")) {
         return url;
       }
       ;
@@ -2292,7 +2509,7 @@
     }
     static urlWithParams(url, params) {
       let query = this.encodeParams(params);
-      if (Runtime2.isEmpty(query)) return url;
+      if (Runtime.isEmpty(query)) return url;
       let separator = url.includes("?") ? "&" : "?";
       return `${url}${separator}${query}`;
     }
@@ -2318,15 +2535,16 @@
     static registry() {
       let known = this._registry;
       if (known) return known;
-      this._registry = Runtime2.cast(
+      this._registry = Runtime.cast(
         {
           string: new _Swill__ValueTransformer(),
           number: new Swill__NumberTransformer(),
-          boolean: new Swill__BooleanTransformer()
+          boolean: new Swill__BooleanTransformer(),
+          date: new Swill__DateTransformer()
         },
         "T.nilable(T::Hash[String, ValueTransformer])"
       );
-      return Runtime2.must(this._registry);
+      return Runtime.must(this._registry);
     }
     // The text shown for a value; nil shows as nothing.
     format(value) {
@@ -2339,16 +2557,24 @@
   };
   var Swill__NumberTransformer = class extends Swill__ValueTransformer {
     parse(text) {
-      let stripped = Runtime2.strip(text);
-      return Runtime2.isEmpty(stripped) ? null : Runtime2.toFloat(stripped);
+      let stripped = Runtime.strip(text);
+      return Runtime.isEmpty(stripped) ? null : Runtime.toFloat(stripped);
     }
   };
   var Swill__BooleanTransformer = class extends Swill__ValueTransformer {
     format(value) {
-      return Runtime2.isTruthy(value) ? "true" : "false";
+      return Runtime.isTruthy(value) ? "true" : "false";
     }
     parse(text) {
       return text === "true" || text === "1" || text === "on";
+    }
+  };
+  var Swill__DateTransformer = class extends Swill__ValueTransformer {
+    format(value) {
+      return value == null ? "" : Runtime.dataDateISO(value);
+    }
+    parse(text) {
+      return Runtime.isEmpty(text) ? null : Runtime.dataDateFromISO(text);
     }
   };
   var Swill__BindingDestination = class extends Object {
@@ -2387,24 +2613,24 @@
     static forElement(element) {
       let tag = element.tagName;
       if (tag === "INPUT") {
-        if (element.type === "checkbox") return Runtime2.must(this.shared().checkbox);
-        return Runtime2.must(this.shared().field);
+        if (element.type === "checkbox") return Runtime.must(this.shared().checkbox);
+        return Runtime.must(this.shared().field);
       }
       ;
-      if (tag === "TEXTAREA") return Runtime2.must(this.shared().field);
-      if (tag === "SELECT") return Runtime2.must(this.shared().select);
-      return Runtime2.must(this.shared().text);
+      if (tag === "TEXTAREA") return Runtime.must(this.shared().field);
+      if (tag === "SELECT") return Runtime.must(this.shared().select);
+      return Runtime.must(this.shared().text);
     }
     static elementProperty() {
-      return Runtime2.must(this.shared().property);
+      return Runtime.must(this.shared().property);
     }
     static objectProperty() {
-      return Runtime2.must(this.shared().object);
+      return Runtime.must(this.shared().object);
     }
     static shared() {
       let known = this._shared;
       if (known) return known;
-      this._shared = Runtime2.cast(
+      this._shared = Runtime.cast(
         {
           text: new Swill__BindingDestination__Text(),
           field: new Swill__BindingDestination__Field(),
@@ -2415,7 +2641,7 @@
         },
         "T.nilable(T::Hash[String, BindingDestination])"
       );
-      return Runtime2.must(this._shared);
+      return Runtime.must(this._shared);
     }
   };
   var Swill__BindingDestination__Text = class extends Swill__BindingDestination {
@@ -2455,7 +2681,7 @@
   };
   var Swill__BindingDestination__Checkbox = class extends Swill__BindingDestination__Field {
     write(receiver, binding, value) {
-      return receiver.checked = Runtime2.isTruthy(value);
+      return receiver.checked = Runtime.isTruthy(value);
     }
     read(receiver, binding) {
       return receiver.checked;
@@ -2472,9 +2698,9 @@
   };
   var Swill__BindingDestination__ElementProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
-      let property = Runtime2.must(binding);
+      let property = Runtime.must(binding);
       if (property.startsWith("data-") || property.startsWith("aria-")) {
-        if (Runtime2.isTruthy(value == null || value === "" || value === false && property.startsWith("data-"))) {
+        if (Runtime.isTruthy(value == null || value === "" || value === false && property.startsWith("data-"))) {
           receiver.removeAttribute(property);
         } else {
           receiver.setAttribute(property, value);
@@ -2483,13 +2709,13 @@
         return;
       }
       ;
-      if (Runtime2.isTruthy((property === "href" || property === "src") && value == null)) {
+      if (Runtime.isTruthy((property === "href" || property === "src") && value == null)) {
         receiver.removeAttribute(property);
         receiver[property] = "";
         return;
       }
       ;
-      return receiver[property] = this.isBooleanProperty(property) ? Runtime2.isTruthy(value) : value;
+      return receiver[property] = this.isBooleanProperty(property) ? Runtime.isTruthy(value) : value;
     }
     isBooleanProperty(property) {
       switch (property) {
@@ -2514,10 +2740,10 @@
   };
   var Swill__BindingDestination__ObjectProperty = class extends Swill__BindingDestination {
     write(receiver, binding, value) {
-      return Runtime2.write(receiver, Runtime2.must(binding), value);
+      return Runtime.write(receiver, Runtime.must(binding), value);
     }
     read(receiver, binding) {
-      return Runtime2.read(receiver, Runtime2.must(binding));
+      return Runtime.read(receiver, Runtime.must(binding));
     }
     isTwoWay(receiver, binding) {
       return true;
@@ -2527,9 +2753,9 @@
       return null;
     }
     listen(receiver, binding, callback) {
-      return Runtime2.observe(
+      return Runtime.observe(
         receiver,
-        Runtime2.must(binding),
+        Runtime.must(binding),
         (value) => callback(value)
       );
     }
@@ -2538,21 +2764,21 @@
     static establish(destination, receiver, binding, object, key_path, transformer, placeholder, one_way) {
       let transforms = transformer != null && destination.isTransforms();
       let two_way = !one_way && destination.isTwoWay(receiver, binding);
-      if (Runtime2.isTruthy(two_way)) Runtime2.assertWritablePath(object, key_path);
+      if (Runtime.isTruthy(two_way)) Runtime.assertWritablePath(object, key_path);
       let push = (_value) => {
-        let value = Runtime2.readPath(object, key_path);
-        value = Runtime2.isTruthy(transforms) ? Runtime2.must(transformer).format(value) : (() => {
+        let value = Runtime.readPath(object, key_path);
+        value = Runtime.isTruthy(transforms) ? Runtime.must(transformer).format(value) : (() => {
           return value == null ? placeholder : value;
         })();
         return destination.write(receiver, binding, value);
       };
       push(null);
-      let release_push = Runtime2.observePath(object, key_path, push);
-      if (!Runtime2.isTruthy(two_way)) return release_push;
-      let release_pull = destination.listen(receiver, binding, (value) => Runtime2.writePath(
+      let release_push = Runtime.observePath(object, key_path, push);
+      if (!Runtime.isTruthy(two_way)) return release_push;
+      let release_pull = destination.listen(receiver, binding, (value) => Runtime.writePath(
         object,
         key_path,
-        Runtime2.isTruthy(transforms) ? Runtime2.must(transformer).parse(value) : value
+        Runtime.isTruthy(transforms) ? Runtime.must(transformer).parse(value) : value
       ));
       return () => {
         release_push();
@@ -2569,7 +2795,7 @@
       // markup, and raises when no transformer has that name. A binding already
       // established under this name is released first.
       bind(...__swill_arguments) {
-        let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+        let __swill_bound = Runtime.bindArguments(__swill_arguments, {
           positional: [{ name: "binding", kind: "req" }],
           keywords: [
             { name: "to", kind: "keyreq" },
@@ -2580,22 +2806,22 @@
           keywordRest: null,
           block: "__swill_block"
         });
-        let binding = Runtime2.argument(__swill_bound, "binding");
-        let to = Runtime2.argument(__swill_bound, "to");
-        let key_path = Runtime2.argument(__swill_bound, "key_path");
-        let null_placeholder = Runtime2.argument(
+        let binding = Runtime.argument(__swill_bound, "binding");
+        let to = Runtime.argument(__swill_bound, "to");
+        let key_path = Runtime.argument(__swill_bound, "key_path");
+        let null_placeholder = Runtime.argument(
           __swill_bound,
           "null_placeholder"
         );
-        if (Runtime2.isTruthy(Runtime2.isOmittedArgument(null_placeholder))) {
+        if (Runtime.isTruthy(Runtime.isOmittedArgument(null_placeholder))) {
           null_placeholder = null;
         }
         ;
-        let transform = Runtime2.argument(__swill_bound, "transform");
-        if (Runtime2.isTruthy(Runtime2.isOmittedArgument(transform))) transform = null;
+        let transform = Runtime.argument(__swill_bound, "transform");
+        if (Runtime.isTruthy(Runtime.isOmittedArgument(transform))) transform = null;
         this.unbind(binding);
         let transformer = transform != null ? Swill__ValueTransformer.named(transform) : null;
-        if (Runtime2.isTruthy(transform != null ? !transformer : transform)) {
+        if (Runtime.isTruthy(transform != null ? !transformer : transform)) {
           throw new Error(`unknown transform ${transform}`);
         }
         ;
@@ -2615,9 +2841,9 @@
       // object.
       unbind(binding) {
         let dispose2 = this.objectBindings()[binding];
-        if (!Runtime2.isTruthy(dispose2)) return this;
+        if (!Runtime.isTruthy(dispose2)) return this;
         dispose2();
-        Runtime2.deleteKey(this.objectBindings(), binding);
+        Runtime.deleteKey(this.objectBindings(), binding);
         return this;
       }
       // Releases every binding on the object and returns it. A controller
@@ -2678,17 +2904,17 @@
       // ascending order; an empty array when nothing is selected.
       // :section: Arranging Content
       coercePropertyValue(name, value, previous) {
-        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        if (Runtime.isTruthy(Runtime.logicalAnd(
           name === "content" && value != null,
           () => this.arrayController
         ))) throw new Error("Use either content or array_controller, not both");
-        if (Runtime2.isTruthy(name === "array_controller" && value)) {
+        if (Runtime.isTruthy(name === "array_controller" && value)) {
           if (this.content != null) {
             throw new Error("Use either content or array_controller, not both");
           }
           ;
-          let cursor = Runtime2.cast(
-            Runtime2.cast(value, "T.nilable(Swill::ArrayController)"),
+          let cursor = Runtime.cast(
+            Runtime.cast(value, "T.nilable(Swill::ArrayController)"),
             "T.nilable(Swill::ArrayController)"
           );
           while (cursor) {
@@ -2711,29 +2937,29 @@
         let controller = this.arrayController;
         if (controller) return controller.arrangedObjects;
         let source = this.content;
-        if (this.isCollection(source)) source = Runtime2.send(source, "records");
-        let objects = Runtime2.cast(
-          Runtime2.cast(
-            Runtime2.logicalOr(source, () => []),
+        if (this.isCollection(source)) source = Runtime.send(source, "records");
+        let objects = Runtime.cast(
+          Runtime.cast(
+            Runtime.logicalOr(source, () => []),
             "T::Array[T.untyped]"
           ),
           "T::Array[T.untyped]"
         );
         let options = this.arrangementOptions;
-        let leading = Runtime2.isEqual(options.source, this.content) ? Runtime2.cast(
-          Runtime2.logicalOr(options.leading, () => []),
+        let leading = Runtime.isEqual(options.source, this.content) ? Runtime.cast(
+          Runtime.logicalOr(options.leading, () => []),
           "T::Array[T.untyped]"
         ) : [];
         leading = leading.filter((object) => this.includesObject(object));
-        objects = objects.filter((object) => Runtime2.isTruthy(!leading.includes(object) && this.includesObject(object)));
-        let key = Runtime2.cast(options.key, "T.nilable(String)");
+        objects = objects.filter((object) => Runtime.isTruthy(!leading.includes(object) && this.includesObject(object)));
+        let key = Runtime.cast(options.key, "T.nilable(String)");
         if (key != null) {
           let direction = options.direction === "descending" ? -1 : 1;
-          let values = Runtime2.cast(
-            objects.map((object) => [Runtime2.read(object, key), object]),
+          let values = Runtime.cast(
+            objects.map((object) => [Runtime.read(object, key), object]),
             "T::Array[T::Array[T.untyped]]"
           );
-          values = Runtime2.sortWith(
+          values = Runtime.sortWith(
             values,
             (left, right) => this.compareSortValues(left[0], right[0]) * direction
           );
@@ -2758,9 +2984,9 @@
         };
       }
       isCollection(objects) {
-        return Runtime2.logicalAnd(
+        return Runtime.logicalAnd(
           objects != null && !Array.isArray(objects),
-          () => Runtime2.respondsTo(objects, "records")
+          () => Runtime.respondsTo(objects, "records")
         );
       }
       // Places `object` ahead of the arranged content, whether or not the
@@ -2790,38 +3016,42 @@
         }
         ;
         let source = this.content;
-        let records = this.isCollection(source) ? Runtime2.send(
+        let records = this.isCollection(source) ? Runtime.send(
           source,
           "records"
         ) : source;
-        let values = Runtime2.cast(
-          Runtime2.logicalOr(records, () => []),
+        let values = Runtime.cast(
+          Runtime.logicalOr(records, () => []),
           "T::Array[T.untyped]"
-        ).map((object) => Runtime2.isEqual(object, original) ? replacement : object);
-        return this.isCollection(source) ? Runtime2.invoke(
+        ).map((object) => Runtime.isEqual(object, original) ? replacement : object);
+        return this.isCollection(source) ? Runtime.invoke(
           source,
           "replace",
           values
         ) : this.content = values;
       }
       compareSortValues(left, right) {
-        if (Runtime2.isTruthy(left == null && right == null)) return 0;
+        if (Runtime.isTruthy(left == null && right == null)) return 0;
         if (left == null) return 1;
         if (right == null) return -1;
-        if (Runtime2.isTruthy(Runtime2.logicalAnd(
-          Runtime2.isNumber(left),
-          () => Runtime2.isNumber(right)
-        ))) return left - right;
-        if (Runtime2.isTruthy(Runtime2.logicalAnd(
-          Runtime2.isBoolean(left),
-          () => Runtime2.isBoolean(right)
-        ))) {
-          return (Runtime2.isTruthy(left) ? 1 : 0) - (Runtime2.isTruthy(right) ? 1 : 0);
+        if (Runtime.isTruthy(Runtime.dataValueType(left) === "BigDecimal" && Runtime.dataValueType(right) === "BigDecimal")) {
+          return Runtime.compareDecimal(left, right);
         }
         ;
-        return Runtime2.compareText(
-          Runtime2.send(left, "to_s"),
-          Runtime2.send(right, "to_s")
+        if (Runtime.isTruthy(Runtime.logicalAnd(
+          Runtime.isNumber(left),
+          () => Runtime.isNumber(right)
+        ))) return left - right;
+        if (Runtime.isTruthy(Runtime.logicalAnd(
+          Runtime.isBoolean(left),
+          () => Runtime.isBoolean(right)
+        ))) {
+          return (Runtime.isTruthy(left) ? 1 : 0) - (Runtime.isTruthy(right) ? 1 : 0);
+        }
+        ;
+        return Runtime.compareText(
+          Runtime.send(left, "to_s"),
+          Runtime.send(right, "to_s")
         );
       }
       // :section: Sorting
@@ -2843,7 +3073,7 @@
       // Sorts by `key`: descending when `key` is already the sort key in
       // ascending order, ascending otherwise. A sort header's action.
       toggleSort(key) {
-        let direction = Runtime2.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
+        let direction = Runtime.isTruthy(this.sortKey === key && this.sortDirection === "ascending") ? "descending" : "ascending";
         return this.sort(key, direction);
       }
       // Sorts by `key` in the current direction; the writer of `sort_key`.
@@ -2860,18 +3090,18 @@
         let controller = this.arrayController;
         if (controller) return controller.selectedObjects;
         let objects = this.arrangedObjects;
-        let requested = Runtime2.cast(
-          Runtime2.logicalOr(this.selectionState.objects, () => []),
+        let requested = Runtime.cast(
+          Runtime.logicalOr(this.selectionState.objects, () => []),
           "T::Array[T.untyped]"
         );
         let selected = requested.filter((object) => objects.includes(object));
-        if (Runtime2.isEmpty(selected)) {
-          let identifier = Runtime2.cast(
-            Runtime2.logicalOr(this.selectionState.id, () => null),
+        if (Runtime.isEmpty(selected)) {
+          let identifier = Runtime.cast(
+            Runtime.logicalOr(this.selectionState.id, () => null),
             "T.nilable(String)"
           );
           let found = identifier != null ? objects.find((object) => this.identifierFor(object) === identifier) : null;
-          if (Runtime2.isTruthy(found)) selected = [found];
+          if (Runtime.isTruthy(found)) selected = [found];
         }
         ;
         return selected;
@@ -2900,10 +3130,10 @@
       // the current selection. An index outside the content is ignored.
       selectIndexes(indexes) {
         let arranged = this.arrangedObjects;
-        let objects = Runtime2.cast([], "T::Array[T.untyped]");
+        let objects = Runtime.cast([], "T::Array[T.untyped]");
         indexes.forEach((index) => {
-          if (Runtime2.isTruthy(index >= 0 && index < arranged.length)) {
-            Runtime2.append(objects, arranged[index]);
+          if (Runtime.isTruthy(index >= 0 && index < arranged.length)) {
+            Runtime.append(objects, arranged[index]);
           }
         });
         return this.selectedObjects = objects;
@@ -2919,7 +3149,7 @@
       // Selects the first arranged object when nothing is selected and there
       // is one.
       selectFirstIfNothingSelected() {
-        if (Runtime2.isTruthy(Runtime2.isEmpty(this.selectedObjects) && !Runtime2.isEmpty(this.arrangedObjects))) {
+        if (Runtime.isTruthy(Runtime.isEmpty(this.selectedObjects) && !Runtime.isEmpty(this.arrangedObjects))) {
           return this.selectIndexes([0]);
         }
       }
@@ -2927,21 +3157,21 @@
       // the arranged content.
       objectAt(index) {
         let objects = this.arrangedObjects;
-        return Runtime2.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
+        return Runtime.isTruthy(index >= 0 && index < objects.length) ? objects[index] : null;
       }
       // Returns `object`'s `id` as a string, or nil when `object` is nil, has
       // no `id`, or its id is nil.
       identifierFor(object) {
-        if (!Runtime2.isTruthy(object)) return null;
-        if (!Runtime2.isTruthy(Runtime2.respondsTo(object, "id"))) return null;
-        let value = Runtime2.send(object, "id");
+        if (!Runtime.isTruthy(object)) return null;
+        if (!Runtime.isTruthy(Runtime.respondsTo(object, "id"))) return null;
+        let value = Runtime.send(object, "id");
         if (value == null) return null;
-        return Runtime2.send(value, "to_s");
+        return Runtime.send(value, "to_s");
       }
       // Returns the arranged object whose id is `identifier`, or nil when none
       // has it or `identifier` is nil or empty.
       objectWithId(identifier) {
-        if (identifier == null || Runtime2.isEmpty(identifier)) return null;
+        if (identifier == null || Runtime.isEmpty(identifier)) return null;
         return this.arrangedObjects.find((object) => this.identifierFor(object) === identifier);
       }
       currentSelection() {
@@ -2960,7 +3190,7 @@
   }
   var Swill__ArrayController = class extends Swill__Object {
   };
-  var Swill__Responder = class extends Swill__Object {
+  var Swill__Responder = class _Swill__Responder extends Swill__Object {
     // The next link in the chain, or nil at the end of it.
     nextResponder() {
       return null;
@@ -2970,13 +3200,13 @@
     performAction(name, sender, event) {
       let target = this.actionTarget(name);
       if (!target) throw new Error(`Unhandled action: ${name}`);
-      return Runtime2.performAction(target, name, sender, event);
+      return Runtime.performAction(target, name, sender, event);
     }
     // TODO: It's unclear to me that this is the right place to handle this bubbling.
     // The responder that would handle +name+, or nil.
     actionTarget(name) {
-      if (Runtime2.isTruthy(Runtime2.respondsTo(this, name))) return this;
-      return Runtime2.nilable(this.nextResponder()?.actionTarget(name));
+      if (Runtime.isTruthy(Runtime.respondsTo(this, name))) return this;
+      return Runtime.nilable(this.nextResponder()?.actionTarget(name));
     }
     // Whether this responder will take focus. False here; a controller
     // accepts when its region holds something focusable.
@@ -3004,38 +3234,73 @@
       return true;
     }
     // Translates a key into a command and sends it to this responder, as
-    // Cocoa's interpretKeyEvents: does. A key the focused element handles
-    // itself, such as typing in a field, stops here. A key held with Control,
-    // Command or Option, or one no command names, passes to the next
-    // responder as it is. An override sees the raw key before any of this.
+    // Cocoa's interpretKeyEvents: does. A command something in the chain
+    // takes is the key's whole effect, so the browser's own is prevented; one
+    // that reaches the end of the chain untaken leaves the key to the
+    // browser. A key the focused element handles itself, such as typing in a
+    // field, stops here. A key held with Control, Command or Option, or one no
+    // command names, passes to the next responder as it is. An override sees
+    // the raw key before any of this.
     keyDown(event) {
       if (event.isComposing) return;
       if (!event.ctrlKey && !event.metaKey && !event.altKey) {
         if (Swill__DOM.isHandlesKey(event)) return;
-        switch (event.key) {
-          case "Escape":
-            return this.cancelOperation(event);
-          case "Enter":
-            return this.insertNewline(event);
-          case "Tab":
-            return event.shiftKey ? this.insertBacktab(event) : this.insertTab(event);
-          case "ArrowUp":
-            return this.moveUp(event);
-          case "ArrowDown":
-            return this.moveDown(event);
-          case "ArrowLeft":
-            return this.moveLeft(event);
-          case "ArrowRight":
-            return this.moveRight(event);
-          case "Home":
-            return this.moveToBeginningOfDocument(event);
-          case "End":
-            return this.moveToEndOfDocument(event);
+        if (this.commandFor(event)) {
+          if (!_Swill__Responder.isDeclined(event)) event.preventDefault();
+          return;
         }
       }
       ;
       let target = this.nextResponder();
       if (target) return target.keyDown(event);
+    }
+    // Sends the command +event+'s key names, answering whether there is one.
+    commandFor(event) {
+      switch (event.key) {
+        case "Escape":
+          this.cancelOperation(event);
+          break;
+        case "Enter":
+          this.insertNewline(event);
+          break;
+        case "Tab":
+          if (event.shiftKey) {
+            this.insertBacktab(event);
+          } else {
+            this.insertTab(event);
+          }
+          ;
+          break;
+        case "ArrowUp":
+          this.moveUp(event);
+          break;
+        case "ArrowDown":
+          this.moveDown(event);
+          break;
+        case "ArrowLeft":
+          this.moveLeft(event);
+          break;
+        case "ArrowRight":
+          this.moveRight(event);
+          break;
+        case "Home":
+          this.moveToBeginningOfDocument(event);
+          break;
+        case "End":
+          this.moveToEndOfDocument(event);
+          break;
+        default:
+          return false;
+      }
+      ;
+      return true;
+    }
+    static decline(event) {
+      this._declined = event;
+      return this._declined;
+    }
+    static isDeclined(event) {
+      return this._declined === event;
     }
     // Passes to the next responder.
     keyUp(event) {
@@ -3045,56 +3310,56 @@
     // :section: Commands
     // What keys mean. Each passes to the next responder, so implementing one
     // takes that key for this responder's region, and calling super declines
-    // it.
+    // it. A command taken prevents the browser's handling of its key.
     // Escape. Dismiss what is open.
     cancelOperation(event) {
       let target = this.nextResponder();
-      if (target) return target.cancelOperation(event);
+      return target ? target.cancelOperation(event) : _Swill__Responder.decline(event);
     }
     // Enter. Commit what is being edited.
     insertNewline(event) {
       let target = this.nextResponder();
-      if (target) return target.insertNewline(event);
+      return target ? target.insertNewline(event) : _Swill__Responder.decline(event);
     }
-    // Tab. Unless something prevents it, the browser then moves focus on.
+    // Tab. The application moves through the key view loop.
     insertTab(event) {
       let target = this.nextResponder();
-      if (target) return target.insertTab(event);
+      return target ? target.insertTab(event) : _Swill__Responder.decline(event);
     }
     // Shift-Tab.
     insertBacktab(event) {
       let target = this.nextResponder();
-      if (target) return target.insertBacktab(event);
+      return target ? target.insertBacktab(event) : _Swill__Responder.decline(event);
     }
     // Up arrow.
     moveUp(event) {
       let target = this.nextResponder();
-      if (target) return target.moveUp(event);
+      return target ? target.moveUp(event) : _Swill__Responder.decline(event);
     }
     // Down arrow.
     moveDown(event) {
       let target = this.nextResponder();
-      if (target) return target.moveDown(event);
+      return target ? target.moveDown(event) : _Swill__Responder.decline(event);
     }
     // Left arrow.
     moveLeft(event) {
       let target = this.nextResponder();
-      if (target) return target.moveLeft(event);
+      return target ? target.moveLeft(event) : _Swill__Responder.decline(event);
     }
     // Right arrow.
     moveRight(event) {
       let target = this.nextResponder();
-      if (target) return target.moveRight(event);
+      return target ? target.moveRight(event) : _Swill__Responder.decline(event);
     }
     // Home.
     moveToBeginningOfDocument(event) {
       let target = this.nextResponder();
-      if (target) return target.moveToBeginningOfDocument(event);
+      return target ? target.moveToBeginningOfDocument(event) : _Swill__Responder.decline(event);
     }
     // End.
     moveToEndOfDocument(event) {
       let target = this.nextResponder();
-      if (target) return target.moveToEndOfDocument(event);
+      return target ? target.moveToEndOfDocument(event) : _Swill__Responder.decline(event);
     }
   };
   function Swill__OutletOwner(Superclass) {
@@ -3121,12 +3386,12 @@
     static register(name, base_url, manifest, embedded, main) {
       let bundle = new _Swill__Bundle(name, base_url, manifest, embedded);
       let bundles = this._bundles || {};
-      this._bundles = Runtime2.cast(
+      this._bundles = Runtime.cast(
         bundles,
         "T.nilable(T::Hash[String, Bundle])"
       );
       bundles[name] = bundle;
-      if (main) this._main = Runtime2.cast(bundle, "T.nilable(Swill::Bundle)");
+      if (main) this._main = Runtime.cast(bundle, "T.nilable(Swill::Bundle)");
       return bundle;
     }
     static main() {
@@ -3140,7 +3405,7 @@
       return bundles ? bundles[name] : null;
     }
     static searchOrder() {
-      return Runtime2.uniq(Runtime2.compact([this.main(), this.framework()]));
+      return Runtime.uniq(Runtime.compact([this.main(), this.framework()]));
     }
     // Creates a bundle; a bundle's script calls Bundle.register instead.
     // +embedded+ holds contents already loaded, by path.
@@ -3149,15 +3414,15 @@
       this._name = name;
       this._base_url = base_url;
       this._manifest = manifest;
-      this._contents = Runtime2.cast(
+      this._contents = Runtime.cast(
         Object.assign({}, embedded),
         "T::Hash[String, String]"
       );
-      this._stems = Runtime2.cast({}, "T::Hash[String, T::Array[String]]");
+      this._stems = Runtime.cast({}, "T::Hash[String, T::Array[String]]");
       manifest.forEach((path) => {
         let stem = _Swill__Bundle.stem(path);
         let paths = this._stems[stem];
-        return paths ? Runtime2.append(paths, path) : this._stems[stem] = [path];
+        return paths ? Runtime.append(paths, path) : this._stems[stem] = [path];
       });
     }
     // The bundle's name, which is also its folder under `resources/`.
@@ -3187,15 +3452,15 @@
       }
       ;
       let paths = this._stems[name] || [];
-      if (Runtime2.send(paths, "length") > 1) {
-        throw new Error(`Ambiguous resource ${name} in bundle ${this._name}: ${Runtime2.invoke(
+      if (Runtime.send(paths, "length") > 1) {
+        throw new Error(`Ambiguous resource ${name} in bundle ${this._name}: ${Runtime.invoke(
           paths,
           "join",
           ", "
         )}`);
       }
       ;
-      return Runtime2.send(paths, "first");
+      return Runtime.send(paths, "first");
     }
     // The URL of a resource, or nil when the bundle has none. See
     // #path_for_resource.
@@ -3209,7 +3474,7 @@
     }
     // The URL of the resource at +path+ in the manifest.
     urlForPath(path) {
-      let encoded = Runtime2.split(path, "/").map((segment) => encodeURIComponent(segment)).join("/");
+      let encoded = Runtime.split(path, "/").map((segment) => encodeURIComponent(segment)).join("/");
       return `${this._base_url}resources/${encodeURIComponent(this._name)}/${encoded}`;
     }
     async loadResource(name, extension) {
@@ -3218,7 +3483,7 @@
         throw new Error(`No resource ${name} in bundle ${this._name}`);
       }
       ;
-      let loaded = Runtime2.fetch(this._contents, path, null);
+      let loaded = Runtime.fetch(this._contents, path, null);
       if (loaded != null) return loaded;
       let response = await fetch(this.urlForPath(path));
       if (!response.ok) {
@@ -3233,11 +3498,11 @@
     // otherwise. See #load_resource.
     loadedResourceWithExtension(name, extension) {
       let path = this.pathForResourceWithExtension(name, extension);
-      return path != null ? Runtime2.fetch(this._contents, path, null) : null;
+      return path != null ? Runtime.fetch(this._contents, path, null) : null;
     }
     // The loaded text of the resource at +path+, or nil.
     loadedPath(path) {
-      return Runtime2.fetch(this._contents, path, null);
+      return Runtime.fetch(this._contents, path, null);
     }
     // Links the stylesheet +name+ into +document+ once, and answers a promise
     // that settles as it loads. Pages usually link their stylesheets
@@ -3265,10 +3530,10 @@
       return loaded;
     }
     static stem(path) {
-      let segments2 = Runtime2.split(path, "/");
-      let file = Runtime2.must(segments2.pop());
-      let parts = Runtime2.split(file, ".");
-      let name = Runtime2.isTruthy(parts.length > 1 && !Runtime2.isEmpty(Runtime2.must(parts[0]))) ? parts.slice(
+      let segments2 = Runtime.split(path, "/");
+      let file = Runtime.must(segments2.pop());
+      let parts = Runtime.split(file, ".");
+      let name = Runtime.isTruthy(parts.length > 1 && !Runtime.isEmpty(Runtime.must(parts[0]))) ? parts.slice(
         0,
         parts.length - 1
       ).join(".") : file;
@@ -3310,10 +3575,10 @@
   }
   var Swill__Templates_Functions = class extends Object {
     static named(name, document2) {
-      let unloaded = Runtime2.cast([], "T::Array[String]");
+      let unloaded = Runtime.cast([], "T::Array[String]");
       let found = null;
       Swill__Bundle.searchOrder().forEach((bundle) => bundle.manifest.filter((path) => path.endsWith(".html")).forEach((path) => {
-        if (Runtime2.isTruthy(found)) return;
+        if (Runtime.isTruthy(found)) return;
         let source = bundle.loadedPath(path);
         if (source != null) {
           found = Swill__Templates.find(
@@ -3322,11 +3587,11 @@
           );
           return found;
         } else {
-          return Runtime2.append(unloaded, `${bundle.name}/${path}`);
+          return Runtime.append(unloaded, `${bundle.name}/${path}`);
         }
       }));
       if (found) return found;
-      let hint = Runtime2.isEmpty(unloaded) ? "" : ` (not loaded yet: ${unloaded.join(", ")}; await Bundle#load_resource first)`;
+      let hint = Runtime.isEmpty(unloaded) ? "" : ` (not loaded yet: ${unloaded.join(", ")}; await Bundle#load_resource first)`;
       return (() => {
         throw new Error(`Unknown control template: ${name}${hint}`);
       })();
@@ -3352,7 +3617,7 @@
       let templates = catalog.content.children;
       let index = 0;
       while (index < templates.length) {
-        let template = Runtime2.must(templates[index]);
+        let template = Runtime.must(templates[index]);
         if (template.getAttribute("name") === name) return template;
         index++;
       }
@@ -3369,8 +3634,8 @@
     }
     static named(name) {
       let urls = Swill__Bundle.searchOrder().flatMap((bundle) => _Swill__Image.extensions().map((extension) => bundle.urlForResourceWithExtension(name, extension)));
-      let url = Runtime2.compact(urls)[0];
-      return Runtime2.isTruthy(url) ? new _Swill__Image(url) : null;
+      let url = Runtime.compact(urls)[0];
+      return Runtime.isTruthy(url) ? new _Swill__Image(url) : null;
     }
     // An image at +url+, a path or URL as an `<img src>` would take it.
     constructor(url) {
@@ -3389,11 +3654,11 @@
     // holds at most one view; `View.of` finds it.
     constructor(element) {
       super();
-      this._owns_content = Runtime2.cast(false, "T::Boolean");
+      this._owns_content = Runtime.cast(false, "T::Boolean");
       this._element = element;
-      this._controller = Runtime2.cast(null, "T.nilable(Swill::Controller)");
-      this._superview = Runtime2.cast(null, "T.nilable(Swill::View)");
-      this._subviews = Runtime2.cast([], "T::Array[View]");
+      this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
+      this._superview = Runtime.cast(null, "T.nilable(Swill::View)");
+      this._subviews = Runtime.cast([], "T::Array[View]");
       element.__swill_view__ = this;
     }
     // Template internals have their own connections, but stay in the view tree.
@@ -3446,16 +3711,16 @@
     owner() {
       let own = this._controller;
       if (own) return own;
-      return Runtime2.nilable(this._superview?.owner());
+      return Runtime.nilable(this._superview?.owner());
     }
     // Adopts `child` as a subview, releasing it from any previous superview,
     // and returns it. Adoption changes the view tree only; it does not move
     // or awaken elements.
     adoptSubview(child) {
       let previous = child.superview;
-      Runtime2.nilable(previous?.releaseSubview(child));
+      Runtime.nilable(previous?.releaseSubview(child));
       child.assignSuperview(this);
-      Runtime2.append(this._subviews, child);
+      Runtime.append(this._subviews, child);
       return child;
     }
     // Releases `child` from this view's subviews, leaving it with no superview.
@@ -3466,7 +3731,7 @@
     // Releases this view from its superview, if it has one.
     removeFromSuperview() {
       let superview = this._superview;
-      return Runtime2.nilable(superview?.releaseSubview(this));
+      return Runtime.nilable(superview?.releaseSubview(this));
     }
     // Set by adopt_subview and release_subview, which keep both sides consistent.
     assignSuperview(superview) {
@@ -3478,7 +3743,7 @@
     }
     static controllerFor(element) {
       let view = _Swill__View.of(element);
-      return Runtime2.nilable(view?.controllerValue());
+      return Runtime.nilable(view?.controllerValue());
     }
     // Returns whether this view's element carries the attribute `name`.
     hasAttribute(name) {
@@ -3539,7 +3804,7 @@
     // a callable that removes it. A controller retains the callable so the
     // listener is removed when it unloads.
     listen(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "type", kind: "req" },
           { name: "handler", kind: "req" }
@@ -3548,10 +3813,10 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let type = Runtime2.argument(__swill_bound, "type");
-      let handler = Runtime2.argument(__swill_bound, "handler");
-      let capture = Runtime2.argument(__swill_bound, "capture");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(capture))) capture = false;
+      let type = Runtime.argument(__swill_bound, "type");
+      let handler = Runtime.argument(__swill_bound, "handler");
+      let capture = Runtime.argument(__swill_bound, "capture");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(capture))) capture = false;
       this._element.addEventListener(type, handler, capture);
       return () => this._element.removeEventListener(type, handler, capture);
     }
@@ -3598,9 +3863,9 @@
     // follows.
     blurElementWithNextResponder(next_responder) {
       let active = this._element.ownerDocument.activeElement;
-      if (!Runtime2.isTruthy(active && this._element.contains(active))) return;
+      if (!Runtime.isTruthy(active && this._element.contains(active))) return;
       let region = next_responder ? next_responder.focusRegion() : null;
-      if (!Runtime2.isTruthy(region && region.contains(active))) return active.blur();
+      if (!Runtime.isTruthy(region && region.contains(active))) return active.blur();
     }
     // Returns the controller rooted at this view, or else its superview. The
     // chain leaves the view tree at the first controller it meets.
@@ -3635,7 +3900,7 @@
     // a window's view is updated as the window opens.
     updateAccessibility() {
       let header = this._element.firstElementChild;
-      if (!Runtime2.isTruthy(header && header.classList.contains("window-title"))) {
+      if (!Runtime.isTruthy(header && header.classList.contains("window-title"))) {
         return;
       }
       ;
@@ -3677,11 +3942,11 @@
     // See `#delegate`.
     resignFirstResponder(next_responder) {
       let current = this.delegate;
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         current,
-        () => Runtime2.respondsTo(current, "control_should_resign_first_responder")
+        () => Runtime.respondsTo(current, "control_should_resign_first_responder")
       ))) {
-        if (!Runtime2.isTruthy(Runtime2.invoke(
+        if (!Runtime.isTruthy(Runtime.invoke(
           current,
           "control_should_resign_first_responder",
           this,
@@ -3713,8 +3978,8 @@
       let input = this.inputElement();
       if (!input) return;
       let initial = input.value;
-      if (Runtime2.isTruthy(Runtime2.isEmpty(initial) && input.hasAttribute("value"))) {
-        initial = Runtime2.stringify(input.getAttribute("value"));
+      if (Runtime.isTruthy(Runtime.isEmpty(initial) && input.hasAttribute("value"))) {
+        initial = Runtime.stringify(input.getAttribute("value"));
       }
       ;
       this.value = initial;
@@ -3726,7 +3991,7 @@
     // An override should call `super` to preserve the display update.
     valueDidChange(_previous, value) {
       let input = this.inputElement();
-      if (Runtime2.isTruthy(input && input.value !== value)) {
+      if (Runtime.isTruthy(input && input.value !== value)) {
         return input.value = value;
       }
     }
@@ -3734,7 +3999,7 @@
     // Events from other elements leave the value unchanged.
     inputDidChange(event) {
       let input = this.inputElement();
-      if (Runtime2.isTruthy(input && event.target === input)) {
+      if (Runtime.isTruthy(input && event.target === input)) {
         return this.value = input.value;
       }
     }
@@ -3759,7 +4024,7 @@
       this.value = found;
     }
     coercePropertyValue(name, value, previous) {
-      if (!Runtime2.isTruthy(name === "value" && Runtime2.conforms(
+      if (!Runtime.isTruthy(name === "value" && Runtime.conforms(
         value,
         "String"
       ))) return super.coercePropertyValue(name, value, previous);
@@ -3802,8 +4067,8 @@
       super(element);
       this._template_option_count = element.children.length;
       let initial = element.value;
-      if (Runtime2.isTruthy(Runtime2.isEmpty(initial) && element.hasAttribute("value"))) {
-        initial = Runtime2.stringify(element.getAttribute("value"));
+      if (Runtime.isTruthy(Runtime.isEmpty(initial) && element.hasAttribute("value"))) {
+        initial = Runtime.stringify(element.getAttribute("value"));
       }
       ;
       this.value = initial;
@@ -3876,10 +4141,10 @@
     // The popup is initially closed.
     constructor(element) {
       super(element);
-      this._open = Runtime2.cast(false, "T::Boolean");
+      this._open = Runtime.cast(false, "T::Boolean");
       this._document_pointer_down = (event) => this.documentPointerDown(event);
       this.installChrome();
-      let choices = Runtime2.must(this.popup).element;
+      let choices = Runtime.must(this.popup).element;
       let handler = (event) => this.optionClicked(event);
       this.retain(Swill__Swell.$index(choices).listen("click", handler));
       this.renderOptions();
@@ -3970,18 +4235,18 @@
     // An icon name adds the class "icon-name". A nil description or icon hides
     // its corresponding element.
     renderOptions() {
-      let container = Runtime2.must(this.popup).element;
+      let container = Runtime.must(this.popup).element;
       container.replaceChildren();
       this.options.forEach((option) => {
-        let row = this.cloneTemplate(Runtime2.must(this.optionTemplate));
+        let row = this.cloneTemplate(Runtime.must(this.optionTemplate));
         Swill__Swell.$index(row).data("value", this.optionValue(option)).toggleClassWithOn(
           "has-icon",
           option.icon != null
         );
         let icon_name = option.icon;
-        let icon_element = Runtime2.must(row.querySelector(".custom-select-icon"));
+        let icon_element = Runtime.must(row.querySelector(".custom-select-icon"));
         icon_element.hidden = icon_name == null;
-        if (Runtime2.isTruthy(icon_name)) {
+        if (Runtime.isTruthy(icon_name)) {
           icon_element.classList.add(`icon-${icon_name}`);
         }
         ;
@@ -3999,8 +4264,8 @@
     // Clicks outside an option leave the value unchanged. See `#choose`.
     optionClicked(event) {
       let row = event.target.closest(".custom-select-option");
-      if (Runtime2.isTruthy(row && Runtime2.must(this.popup).element.contains(row))) {
-        return this.choose(Runtime2.must(Swill__Swell.$index(row).dataValue("value")));
+      if (Runtime.isTruthy(row && Runtime.must(this.popup).element.contains(row))) {
+        return this.choose(Runtime.must(Swill__Swell.$index(row).dataValue("value")));
       }
     }
     // Returns the first option whose string value equals `value`, or nil
@@ -4013,23 +4278,23 @@
     syncButton() {
       let option = this.selectedOption();
       let icon_name = option ? option.icon : null;
-      Runtime2.must(this.icon).element.setAttribute(
+      Runtime.must(this.icon).element.setAttribute(
         "class",
-        Runtime2.isTruthy(icon_name) ? `custom-select-trigger-icon icon-${icon_name}` : "custom-select-trigger-icon"
+        Runtime.isTruthy(icon_name) ? `custom-select-trigger-icon icon-${icon_name}` : "custom-select-trigger-icon"
       );
-      Runtime2.must(this.icon).element.hidden = icon_name == null;
-      Runtime2.must(this.button).element.classList.toggle(
+      Runtime.must(this.icon).element.hidden = icon_name == null;
+      Runtime.must(this.button).element.classList.toggle(
         "has-icon",
         icon_name != null
       );
-      return Runtime2.must(this.label).element.textContent = option ? Runtime2.send(
+      return Runtime.must(this.label).element.textContent = option ? Runtime.send(
         option.label,
         "to_s"
       ) : "";
     }
     // Marks the option row matching `value` with the `selected` class.
     syncSelectedOption() {
-      Runtime2.must(this.popup).element.querySelectorAll(".custom-select-option").forEach((row) => {
+      Runtime.must(this.popup).element.querySelectorAll(".custom-select-option").forEach((row) => {
         let dom = Swill__Swell.$index(row);
         return dom.toggleClassWithOn(
           "selected",
@@ -4046,15 +4311,15 @@
         "haspopup",
         "listbox"
       ).aria("expanded", this._open);
-      Swill__Swell.$index(Runtime2.must(this.button).element).aria(
+      Swill__Swell.$index(Runtime.must(this.button).element).aria(
         "expanded",
         this._open
       );
-      Swill__Swell.$index(Runtime2.must(this.icon).element).aria(
+      Swill__Swell.$index(Runtime.must(this.icon).element).aria(
         "hidden",
         true
       );
-      let list = Runtime2.must(this.popup).element;
+      let list = Runtime.must(this.popup).element;
       list.setAttribute("role", "listbox");
       return list.querySelectorAll(".custom-select-option").forEach((row) => {
         let dom = Swill__Swell.$index(row);
@@ -4085,7 +4350,7 @@
     applyOpen(open) {
       this._open = open;
       Swill__Swell.$index(this._element).toggleClassWithOn("open", open);
-      Swill__Swell.$index(Runtime2.must(this.popup).element).prop(
+      Swill__Swell.$index(Runtime.must(this.popup).element).prop(
         "hidden",
         !open
       );
@@ -4103,16 +4368,16 @@
     // wrapping at either end. Chooses the first option when no value matches,
     // and does nothing when there are no options. See `#choose`.
     moveSelection(delta) {
-      if (Runtime2.isEmpty(this.options)) return;
+      if (Runtime.isEmpty(this.options)) return;
       let current = -1;
       this.options.forEach((option, index2) => {
         if (this.optionValue(option) === this.value) current = index2;
       });
-      let index = current < 0 ? 0 : Runtime2.modulo(
+      let index = current < 0 ? 0 : Runtime.modulo(
         current + delta,
         this.options.length
       );
-      return this.choose(this.optionValue(Runtime2.must(this.options[index])));
+      return this.choose(this.optionValue(Runtime.must(this.options[index])));
     }
     // Closes the popup and assigns `next_value`. If the value changes,
     // dispatches bubbling input and change events. Accepts a string even when
@@ -4128,7 +4393,7 @@
     // Returns the string form of the option's "value" entry, or an empty
     // string when it is nil.
     optionValue(option) {
-      return Runtime2.send(option.value, "to_s");
+      return Runtime.send(option.value, "to_s");
     }
   };
   var Swill__Control__Segmented = class extends Swill__Control {
@@ -4177,14 +4442,14 @@
     // state. If focus was inside the buttons, moves it to the selected button
     // or the first button when no option matches.
     renderOptions() {
-      let container = Runtime2.must(this.segments).element;
+      let container = Runtime.must(this.segments).element;
       let focused = container.contains(this._element.ownerDocument.activeElement);
       container.replaceChildren();
       this.options.forEach((option) => {
-        let button = this.cloneTemplate(Runtime2.must(this.segmentTemplate));
+        let button = this.cloneTemplate(Runtime.must(this.segmentTemplate));
         Swill__Swell.$index(button).text(option.label).data(
           "value",
-          Runtime2.send(option.value, "to_s")
+          Runtime.send(option.value, "to_s")
         );
         return container.appendChild(button);
       });
@@ -4195,17 +4460,17 @@
     // disabled state, and its tabindex. The selected button, or the first when
     // no option matches, gets tabindex zero when enabled.
     syncSelection() {
-      let buttons = Runtime2.must(this.segments).element.children;
-      let selected = this.options.find((option) => Runtime2.send(option.value, "to_s") === this.value);
+      let buttons = Runtime.must(this.segments).element.children;
+      let selected = this.options.find((option) => Runtime.send(option.value, "to_s") === this.value);
       let index = 0;
       while (index < buttons.length) {
-        let button = Runtime2.must(buttons[index]);
+        let button = Runtime.must(buttons[index]);
         let dom = Swill__Swell.$index(button);
         let checked = dom.dataValue("value") === this.value;
         dom.toggleClassWithOn("checked", checked);
         button.setAttribute(
           "tabindex",
-          Runtime2.isTruthy(!this.disabled && (checked || !selected && index === 0)) ? "0" : "-1"
+          Runtime.isTruthy(!this.disabled && (checked || !selected && index === 0)) ? "0" : "-1"
         );
         button.disabled = this.disabled;
         index++;
@@ -4220,10 +4485,10 @@
         "disabled",
         this.disabled
       );
-      let buttons = Runtime2.must(this.segments).element.children;
+      let buttons = Runtime.must(this.segments).element.children;
       let index = 0;
       while (index < buttons.length) {
-        let button = Runtime2.must(buttons[index]);
+        let button = Runtime.must(buttons[index]);
         Swill__Swell.$index(button).attr("role", "radio").aria(
           "checked",
           button.classList.contains("checked")
@@ -4237,8 +4502,8 @@
     // Clicks outside a radio button leave the value unchanged. See `#choose`.
     segmentClicked(event) {
       let button = event.target.closest(".segmented-option");
-      if (Runtime2.isTruthy(button && this._element.contains(button))) {
-        return this.choose(Runtime2.must(Swill__Swell.$index(button).dataValue("value")));
+      if (Runtime.isTruthy(button && this._element.contains(button))) {
+        return this.choose(Runtime.must(Swill__Swell.$index(button).dataValue("value")));
       }
     }
     // Left and Right move focus to the previous and next segment, wrapping at
@@ -4265,30 +4530,30 @@
       if (!this.isMovable()) return super.moveToEndOfDocument(event);
       return this.focusSegmentAt(
         event,
-        Runtime2.must(this.segments).element.children.length - 1
+        Runtime.must(this.segments).element.children.length - 1
       );
     }
     // Whether the arrows, Home and End move among the segments: the control
     // is enabled and has some.
     isMovable() {
-      return !this.disabled && Runtime2.must(this.segments).element.children.length > 0;
+      return !this.disabled && Runtime.must(this.segments).element.children.length > 0;
     }
     // Moves focus +delta+ segments from the focused one, or from the
     // chosen one when focus is elsewhere, wrapping.
     focusAdjacent(event, delta) {
-      let buttons = Runtime2.must(this.segments).element.children;
+      let buttons = Runtime.must(this.segments).element.children;
       let active = this._element.ownerDocument.activeElement;
-      let current = Runtime2.cast(-1, "Integer");
-      let chosen = Runtime2.cast(0, "Integer");
+      let current = Runtime.cast(-1, "Integer");
+      let chosen = Runtime.cast(0, "Integer");
       let index = 0;
       while (index < buttons.length) {
-        let button = Runtime2.must(buttons[index]);
+        let button = Runtime.must(buttons[index]);
         if (button === active) current = index;
         if (button.classList.contains("checked")) chosen = index;
         index++;
       }
       ;
-      return this.focusSegmentAt(event, Runtime2.modulo(
+      return this.focusSegmentAt(event, Runtime.modulo(
         (current < 0 ? chosen : current) + delta,
         buttons.length
       ));
@@ -4296,27 +4561,27 @@
     // Focuses the segment at +index+ and gives it the control's tab stop,
     // leaving the choice alone.
     focusSegmentAt(event, index) {
-      let buttons = Runtime2.must(this.segments).element.children;
+      let buttons = Runtime.must(this.segments).element.children;
       event.preventDefault();
       let position = 0;
       while (position < buttons.length) {
-        Runtime2.must(buttons[position]).setAttribute(
+        Runtime.must(buttons[position]).setAttribute(
           "tabindex",
           position === index ? "0" : "-1"
         );
         position++;
       }
       ;
-      return Swill__DOM.focus(Runtime2.must(buttons[index]));
+      return Swill__DOM.focus(Runtime.must(buttons[index]));
     }
     // Returns the button with tabindex zero, or nil when no button has a tab
     // stop. See `#focus_selection`.
     firstFocusableElement() {
-      return Runtime2.must(this.segments).element.querySelector('[tabindex="0"]');
+      return Runtime.must(this.segments).element.querySelector('[tabindex="0"]');
     }
     // Returns whether the control is enabled and has at least one option.
     acceptsFirstResponder() {
-      return !this.disabled && !Runtime2.isEmpty(this.options);
+      return !this.disabled && !Runtime.isEmpty(this.options);
     }
     // Focuses the button returned by `#first_focusable_element` without
     // scrolling. Does nothing when there is no such button.
@@ -4376,12 +4641,12 @@
     // Returns the controller that owns the containing region, or nil for a
     // root controller.
     parent() {
-      return Runtime2.nilable(this._view.superview?.owner());
+      return Runtime.nilable(this._view.superview?.owner());
     }
     // Returns the controllers rooted directly within this region, in document
     // order; an empty array when there are none.
     childControllers() {
-      let found = Runtime2.cast([], "T::Array[Controller]");
+      let found = Runtime.cast([], "T::Array[Controller]");
       this.collectChildControllers(this._view, found);
       return found;
     }
@@ -4501,7 +4766,7 @@
     collectChildControllers(view, found) {
       return view.subviews.forEach((subview) => {
         let controller = subview.controllerValue();
-        return controller ? Runtime2.append(found, controller) : this.collectChildControllers(
+        return controller ? Runtime.append(found, controller) : this.collectChildControllers(
           subview,
           found
         );
@@ -4517,16 +4782,16 @@
     static establish(controller) {
       let root = controller.view.element;
       let prefix = controller.bindingRoot();
-      let disposers = Runtime2.cast([], "T::Array[T.proc.void]");
+      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
       this.propertiesIn(controller, prefix, root, disposers);
       this.regionIn(controller, prefix, root, disposers);
       controller.retain(this.releasing(disposers));
       return controller;
     }
     static establishIn(element, object) {
-      let disposers = Runtime2.cast([], "T::Array[T.proc.void]");
+      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
       if (element.hasAttribute("bind")) {
-        Runtime2.append(disposers, this.connect(object, element, null));
+        Runtime.append(disposers, this.connect(object, element, null));
       }
       ;
       if (!element.hasAttribute("controller")) {
@@ -4542,7 +4807,7 @@
         false,
         (child, _controller_root) => {
           if (child.hasAttribute("bind")) {
-            Runtime2.append(disposers, this.connect(object, child, prefix));
+            Runtime.append(disposers, this.connect(object, child, prefix));
           }
           ;
           if (!child.hasAttribute("controller")) {
@@ -4554,13 +4819,13 @@
     static propertiesIn(object, prefix, element, disposers) {
       return element.getAttributeNames().forEach((name) => {
         if (!name.startsWith("bind-")) return;
-        let property = Runtime2.must(Runtime2.slice(name, 5, name.length));
-        return Runtime2.append(disposers, this.connectProperty(
+        let property = Runtime.must(Runtime.slice(name, 5, name.length));
+        return Runtime.append(disposers, this.connectProperty(
           object,
           prefix,
           element,
           property,
-          Runtime2.must(element.getAttribute(name))
+          Runtime.must(element.getAttribute(name))
         ));
       });
     }
@@ -4569,8 +4834,8 @@
     }
     static resolvePath(prefix, path) {
       if (path[0] === "@") {
-        return Runtime2.logicalOr(
-          Runtime2.slice(path, 1, path.length),
+        return Runtime.logicalOr(
+          Runtime.slice(path, 1, path.length),
           () => ""
         );
       }
@@ -4588,7 +4853,7 @@
     static connect(object, element, prefix) {
       let path = this.resolvePath(
         prefix,
-        Runtime2.must(element.getAttribute("bind"))
+        Runtime.must(element.getAttribute("bind"))
       );
       let transformer = this.transformerFor(element);
       let view = element.__swill_view__;
@@ -4597,7 +4862,7 @@
       if (view instanceof Swill__Control) {
         return this.connectControl(
           object,
-          Runtime2.cast(view, "Swill::Control"),
+          Runtime.cast(view, "Swill::Control"),
           path,
           transformer
         );
@@ -4678,7 +4943,7 @@
       return controller;
     }
     static establishIn(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "element", kind: "req" },
           { name: "controller", kind: "req" }
@@ -4687,14 +4952,14 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let element = Runtime2.argument(__swill_bound, "element");
-      let controller = Runtime2.argument(__swill_bound, "controller");
-      let include_root = Runtime2.argument(__swill_bound, "include_root");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(include_root))) {
+      let element = Runtime.argument(__swill_bound, "element");
+      let controller = Runtime.argument(__swill_bound, "controller");
+      let include_root = Runtime.argument(__swill_bound, "include_root");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(include_root))) {
         include_root = true;
       }
       ;
-      let disposers = Swill__DOM.ownedMatching(element, "[data-action]").map((target) => Runtime2.isTruthy(target === element && !include_root) ? () => null : this.connect(
+      let disposers = Swill__DOM.ownedMatching(element, "[data-action]").map((target) => Runtime.isTruthy(target === element && !include_root) ? () => null : this.connect(
         target,
         controller
       ));
@@ -4704,12 +4969,12 @@
       let event_name, action_name;
       if (element.__swill_action__) return () => null;
       let attribute = element.getAttribute("data-action");
-      let specification = attribute != null ? Runtime2.strip(attribute) : "";
-      if (Runtime2.isEmpty(specification)) return () => null;
+      let specification = attribute != null ? Runtime.strip(attribute) : "";
+      if (Runtime.isEmpty(specification)) return () => null;
       if (specification.includes(":")) {
-        let parts = Runtime2.split(specification, ":");
-        event_name = Runtime2.must(parts[0]);
-        action_name = Runtime2.must(parts[1]);
+        let parts = Runtime.split(specification, ":");
+        event_name = Runtime.must(parts[0]);
+        action_name = Runtime.must(parts[1]);
       } else {
         event_name = "click";
         action_name = specification;
@@ -4734,17 +4999,17 @@
   }
   var Swill__Connections__Outlets_Functions = class extends Object {
     static establish(controller, root) {
-      let declared = Runtime2.cast(
-        Runtime2.outlets(controller),
+      let declared = Runtime.cast(
+        Runtime.outlets(controller),
         "T::Array[T.untyped]"
       );
-      if (Runtime2.isEmpty(declared)) return controller;
-      let by_name = Runtime2.cast({}, "T::Hash[String, T.untyped]");
-      declared.forEach((descriptor) => by_name[Runtime2.send(descriptor, "name")] = descriptor);
-      let connected = Runtime2.cast({}, "T::Hash[String, Element]");
+      if (Runtime.isEmpty(declared)) return controller;
+      let by_name = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      declared.forEach((descriptor) => by_name[Runtime.send(descriptor, "name")] = descriptor);
+      let connected = Runtime.cast({}, "T::Hash[String, Element]");
       this.candidates(root).forEach((element) => {
-        let name = Runtime2.must(element.getAttribute("outlet"));
-        if (!Runtime2.isTruthy(by_name[name])) {
+        let name = Runtime.must(element.getAttribute("outlet"));
+        if (!Runtime.isTruthy(by_name[name])) {
           throw new Error(this.undeclared(
             controller,
             name,
@@ -4759,15 +5024,15 @@
         }
         ;
         connected[name] = element;
-        return Runtime2.write(
+        return Runtime.write(
           controller,
           name,
           this.valueFor(controller, by_name[name], element)
         );
       });
       declared.forEach((descriptor) => {
-        let name = Runtime2.send(descriptor, "name");
-        if (Runtime2.isTruthy(!Runtime2.isTruthy(Runtime2.send(
+        let name = Runtime.send(descriptor, "name");
+        if (Runtime.isTruthy(!Runtime.isTruthy(Runtime.send(
           descriptor,
           "optional"
         )) && !connected[name])) {
@@ -4786,11 +5051,11 @@
       let owner = this.ownerName(controller);
       let message = `Undeclared outlet ${name} on ${owner}: ${this.describe(element)} names an outlet ${owner} does not declare`;
       let similar = this.similarNames(name, declared);
-      if (!Runtime2.isEmpty(similar)) {
+      if (!Runtime.isEmpty(similar)) {
         message += `. Did you mean ${similar.join(" or ")}?`;
       }
       ;
-      let known = Runtime2.isEmpty(declared) ? "none" : declared.join(", ");
+      let known = Runtime.isEmpty(declared) ? "none" : declared.join(", ");
       return `${message} Its outlets: ${known}. Declare it with \`outlet :${name}, type: ...\`, or remove the attribute`;
     }
     static unresolved(controller, name, root) {
@@ -4805,20 +5070,20 @@
       return `${message}. Add the attribute to an element ${owner} owns, or declare the outlet \`optional: true\``;
     }
     static ownerName(controller) {
-      return Runtime2.logicalOr(
-        Runtime2.cast(Runtime2.nameOf(controller), "T.nilable(String)"),
+      return Runtime.logicalOr(
+        Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
         () => "the application"
       );
     }
     static describe(element) {
       let attributes = ["controller", "klass", "outlet", "id"].filter((name) => element.hasAttribute(name)).map((name) => ` ${name}="${element.getAttribute(name)}"`);
-      return `<${Runtime2.downcase(element.tagName)}${attributes.join("")}>`;
+      return `<${Runtime.downcase(element.tagName)}${attributes.join("")}>`;
     }
     static regionOwner(element, root) {
       let current = element.parentElement;
       while (current && current !== root) {
         let view = current.__swill_view__;
-        if (Runtime2.isTruthy(current.hasAttribute("controller") || view && view.isOwnsContent())) {
+        if (Runtime.isTruthy(current.hasAttribute("controller") || view && view.isOwnsContent())) {
           return `${this.describe(current)}'s region`;
         }
         ;
@@ -4828,32 +5093,32 @@
       return "another region";
     }
     static similarNames(name, declared) {
-      let folded = Runtime2.split(Runtime2.downcase(name), "_").join("");
+      let folded = Runtime.split(Runtime.downcase(name), "_").join("");
       let limit = name.length > 3 ? 2 : 1;
-      return declared.filter((candidate) => Runtime2.split(Runtime2.downcase(candidate), "_").join("") === folded || this.editDistance(
+      return declared.filter((candidate) => Runtime.split(Runtime.downcase(candidate), "_").join("") === folded || this.editDistance(
         name,
         candidate
       ) <= limit);
     }
     static editDistance(a, b) {
-      let previous = Runtime2.cast([], "T::Array[Integer]");
+      let previous = Runtime.cast([], "T::Array[Integer]");
       let column = 0;
       while (column <= b.length) {
-        Runtime2.append(previous, column);
+        Runtime.append(previous, column);
         column++;
       }
       ;
       let row = 1;
       while (row <= a.length) {
-        let current = Runtime2.cast([row], "T::Array[Integer]");
+        let current = Runtime.cast([row], "T::Array[Integer]");
         column = 1;
         while (column <= b.length) {
-          let cost = Runtime2.isEqual(a[row - 1], b[column - 1]) ? 0 : 1;
-          let deletion = Runtime2.must(previous[column]) + 1;
-          let insertion = Runtime2.must(current[column - 1]) + 1;
-          let substitution = Runtime2.must(previous[column - 1]) + cost;
+          let cost = Runtime.isEqual(a[row - 1], b[column - 1]) ? 0 : 1;
+          let deletion = Runtime.must(previous[column]) + 1;
+          let insertion = Runtime.must(current[column - 1]) + 1;
+          let substitution = Runtime.must(previous[column - 1]) + cost;
           let nearer = deletion < insertion ? deletion : insertion;
-          Runtime2.append(
+          Runtime.append(
             current,
             nearer < substitution ? nearer : substitution
           );
@@ -4864,27 +5129,27 @@
         row++;
       }
       ;
-      return Runtime2.must(previous[b.length]);
+      return Runtime.must(previous[b.length]);
     }
     static candidates(root) {
-      let found = Runtime2.cast([], "T::Array[Element]");
+      let found = Runtime.cast([], "T::Array[Element]");
       Swill__DOM.eachOwned(root, false, (element, _controller_root) => {
-        if (element.hasAttribute("outlet")) return Runtime2.append(found, element);
+        if (element.hasAttribute("outlet")) return Runtime.append(found, element);
       });
       return found;
     }
     static valueFor(controller, descriptor, element) {
-      let name = Runtime2.send(descriptor, "name");
+      let name = Runtime.send(descriptor, "name");
       let value = this.materialize(controller, name, element);
-      let typed = Runtime2.logicalAnd(
-        Runtime2.send(descriptor, "type"),
-        () => Runtime2.send(descriptor, "type") !== "T.untyped"
+      let typed = Runtime.logicalAnd(
+        Runtime.send(descriptor, "type"),
+        () => Runtime.send(descriptor, "type") !== "T.untyped"
       );
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(typed, () => !Runtime2.isTruthy(Runtime2.conforms(
+      if (Runtime.isTruthy(Runtime.logicalAnd(typed, () => !Runtime.isTruthy(Runtime.conforms(
         value,
-        Runtime2.send(descriptor, "type")
+        Runtime.send(descriptor, "type")
       ))))) {
-        throw new Error(`Outlet ${name} expects ${Runtime2.send(
+        throw new Error(`Outlet ${name} expects ${Runtime.send(
           descriptor,
           "type"
         )}`);
@@ -4893,7 +5158,7 @@
       return value;
     }
     static materialize(controller, name, element) {
-      if (Runtime2.isTruthy(element.tagName === "SCRIPT" && element.type === "application/json")) {
+      if (Runtime.isTruthy(element.tagName === "SCRIPT" && element.type === "application/json")) {
         return this.decode(controller, name, element);
       }
       ;
@@ -4904,10 +5169,10 @@
       return owner ? owner : view;
     }
     static decode(controller, name, element) {
-      let text = Runtime2.strip(element.textContent);
+      let text = Runtime.strip(element.textContent);
       return controller.decodeOutletData(
         name,
-        Runtime2.isEmpty(text) ? null : JSON.parse(text)
+        Runtime.isEmpty(text) ? null : JSON.parse(text)
       );
     }
   };
@@ -4936,47 +5201,47 @@
     }
     static awaken(root) {
       let controllers = this.prepare(root);
-      Runtime2.reverse(controllers).forEach((controller) => this.load(controller));
+      Runtime.reverse(controllers).forEach((controller) => this.load(controller));
       return controllers;
     }
     static prepare(root) {
-      let controllers = Runtime2.cast([], "T::Array[Controller]");
+      let controllers = Runtime.cast([], "T::Array[Controller]");
       this.walk(root, this.nearestView(root.parentElement), controllers);
       return controllers;
     }
     static awakenOwned(root, owner) {
-      let controllers = Runtime2.cast([], "T::Array[Controller]");
+      let controllers = Runtime.cast([], "T::Array[Controller]");
       Swill__DOM.eachChild(
         root,
         (child) => this.walk(child, owner, controllers)
       );
       Swill__Connections__Outlets.establish(owner, root);
-      let disposers = Runtime2.cast([], "T::Array[T.proc.void]");
+      let disposers = Runtime.cast([], "T::Array[T.proc.void]");
       Swill__Connections__Bindings.regionIn(owner, null, root, disposers);
       owner.retain(Swill__Connections__Bindings.releasing(disposers));
       owner.retain(Swill__Connections__Actions.establishIn(
         root,
         owner,
-        Runtime2.keywordArguments({ include_root: false })
+        Runtime.keywordArguments({ include_root: false })
       ));
-      Runtime2.reverse(controllers).forEach((controller) => this.load(controller));
+      Runtime.reverse(controllers).forEach((controller) => this.load(controller));
       return this.finish(controllers);
     }
     static finish(controllers) {
-      Runtime2.reverse(controllers).forEach((controller) => controller.controllerDidLoad());
-      Runtime2.reverse(controllers).forEach((controller) => controller.viewWillAppear());
-      return Runtime2.reverse(controllers).forEach((controller) => controller.viewDidAppear());
+      Runtime.reverse(controllers).forEach((controller) => controller.controllerDidLoad());
+      Runtime.reverse(controllers).forEach((controller) => controller.viewWillAppear());
+      return Runtime.reverse(controllers).forEach((controller) => controller.viewDidAppear());
     }
     static load(controller) {
       let root = controller.view.element;
       Swill__Connections__Outlets.establish(controller, root);
       controller.viewDidLoad();
-      let added = Runtime2.cast([], "T::Array[Controller]");
+      let added = Runtime.cast([], "T::Array[Controller]");
       Swill__DOM.eachChild(
         root,
         (child) => this.walk(child, controller.view, added)
       );
-      Runtime2.reverse(added).forEach((child) => this.load(child));
+      Runtime.reverse(added).forEach((child) => this.load(child));
       this.finish(added);
       Swill__Connections__Bindings.establish(controller);
       Swill__Connections__Actions.establish(controller);
@@ -4985,23 +5250,23 @@
     static walk(element, owner, controllers) {
       let view = element.__swill_view__;
       if (element.hasAttribute("klass")) this.classify(element);
-      if (Runtime2.isTruthy(!view && this.isManaged(element))) {
+      if (Runtime.isTruthy(!view && this.isManaged(element))) {
         view = this.createView(element);
       }
       ;
       if (view) {
-        if (Runtime2.isTruthy(owner && !view.superview)) owner.adoptSubview(view);
-        if (Runtime2.isTruthy(element.hasAttribute("controller") && !view.controllerValue())) {
-          let controller = Runtime2.cast(
-            new (Runtime2.resolve(Runtime2.must(element.getAttribute("controller"))))(),
+        if (Runtime.isTruthy(owner && !view.superview)) owner.adoptSubview(view);
+        if (Runtime.isTruthy(element.hasAttribute("controller") && !view.controllerValue())) {
+          let controller = Runtime.cast(
+            new (Runtime.resolve(Runtime.must(element.getAttribute("controller"))))(),
             "Swill::Controller"
           );
           controller.attach(element);
-          Runtime2.append(controllers, controller);
+          Runtime.append(controllers, controller);
         }
       }
       ;
-      if (Runtime2.isTruthy(view && view.isOwnsContent())) return;
+      if (Runtime.isTruthy(view && view.isOwnsContent())) return;
       let next_owner = view || owner;
       return Swill__DOM.eachChild(
         element,
@@ -5009,15 +5274,15 @@
       );
     }
     static classify(element) {
-      let name = Runtime2.must(element.getAttribute("klass"));
-      if (Runtime2.isTruthy(Runtime2.classIsA(name, "Swill::Controller"))) {
+      let name = Runtime.must(element.getAttribute("klass"));
+      if (Runtime.isTruthy(Runtime.classIsA(name, "Swill::Controller"))) {
         if (element.hasAttribute("controller")) {
           throw new Error(`${name} conflicts with controller on the same element`);
         }
         ;
         element.removeAttribute("klass");
         return element.setAttribute("controller", name);
-      } else if (!Runtime2.isTruthy(Runtime2.classIsA(name, "Swill::View"))) {
+      } else if (!Runtime.isTruthy(Runtime.classIsA(name, "Swill::View"))) {
         return (() => {
           throw new Error(`${name} is not a Swill::View or Swill::Controller`);
         })();
@@ -5034,7 +5299,7 @@
     static createView(element) {
       let name = element.getAttribute("klass");
       if (name == null) return new Swill__View(element);
-      let view = new (Runtime2.resolve(name))(element);
+      let view = new (Runtime.resolve(name))(element);
       if (!(view instanceof Swill__View)) {
         throw new Error(`${name} is not a Swill::View`);
       }
@@ -5042,14 +5307,14 @@
       return view;
     }
     static controllersWithin(node) {
-      let found = Runtime2.cast([], "T::Array[Controller]");
+      let found = Runtime.cast([], "T::Array[Controller]");
       this.collectControllers(node, found);
       return found;
     }
     static collectControllers(element, found) {
       let view = element.__swill_view__;
       let controller = view ? view.controllerValue() : null;
-      if (controller) Runtime2.append(found, controller);
+      if (controller) Runtime.append(found, controller);
       return Swill__DOM.eachChild(
         element,
         (child) => this.collectControllers(child, found)
@@ -5091,22 +5356,22 @@
       super();
       this._browser = browser;
       this._suspended = false;
-      this._on_change = Runtime2.cast(
+      this._on_change = Runtime.cast(
         null,
         "T.nilable(T.proc.params(event:Event).void)"
       );
     }
     isAvailable() {
       let browser = this._browser;
-      return Runtime2.logicalAnd(
+      return Runtime.logicalAnd(
         browser != null && browser.location != null,
         () => browser.history != null
       );
     }
     params() {
-      let found = Runtime2.cast({}, "T::Hash[String, String]");
+      let found = Runtime.cast({}, "T::Hash[String, String]");
       let browser = this._browser;
-      if (!Runtime2.isTruthy(browser && this.isAvailable())) return found;
+      if (!Runtime.isTruthy(browser && this.isAvailable())) return found;
       let search = new URLSearchParams(browser.location.hash.replace(
         /^#/m,
         ""
@@ -5117,7 +5382,7 @@
     // :push adds a history entry, :replace rewrites the current one, :none is
     // a no-op. Writes are also dropped while fragment state is being applied.
     write(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "key", kind: "req" },
           { name: "value", kind: "req" }
@@ -5126,12 +5391,12 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let key = Runtime2.argument(__swill_bound, "key");
-      let value = Runtime2.argument(__swill_bound, "value");
-      let history = Runtime2.argument(__swill_bound, "history");
+      let key = Runtime.argument(__swill_bound, "key");
+      let value = Runtime.argument(__swill_bound, "value");
+      let history = Runtime.argument(__swill_bound, "history");
       if (history === "none" || this._suspended) return;
       let browser = this._browser;
-      if (!Runtime2.isTruthy(browser && this.isAvailable())) return;
+      if (!Runtime.isTruthy(browser && this.isAvailable())) return;
       let location = browser.location;
       let search = new URLSearchParams(location.hash.replace(/^#/m, ""));
       if (value == null) {
@@ -5141,7 +5406,7 @@
       }
       ;
       let query = search.toString();
-      let next_url = location.pathname + location.search + (Runtime2.isEmpty(query) ? "" : "#" + query);
+      let next_url = location.pathname + location.search + (Runtime.isEmpty(query) ? "" : "#" + query);
       if (next_url === location.pathname + location.search + location.hash) return;
       return history === "push" ? browser.history.pushState(
         null,
@@ -5152,22 +5417,22 @@
     // Run a block with writes suppressed, so observers fired by applying
     // fragment values do not write back mid-application.
     suspended(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(
+      let __swill_bound = Runtime.bindArguments(
         __swill_arguments,
         { positional: [], keywords: [], keywordRest: null, block: "block" }
       );
-      let block = Runtime2.argument(__swill_bound, "block");
+      let block = Runtime.argument(__swill_bound, "block");
       let _implicitBlockYield = block;
       this._suspended = true;
       try {
-        return Runtime2.yieldBlock(_implicitBlockYield);
+        return Runtime.yieldBlock(_implicitBlockYield);
       } finally {
         this._suspended = false;
       }
     }
     startObserving(callback) {
       let browser = this._browser;
-      if (!Runtime2.isTruthy(browser && this.isAvailable())) return;
+      if (!Runtime.isTruthy(browser && this.isAvailable())) return;
       let on_change = (_event) => callback();
       this._on_change = on_change;
       browser.addEventListener("popstate", on_change);
@@ -5176,7 +5441,7 @@
     stopObserving() {
       let on_change = this._on_change;
       let browser = this._browser;
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(on_change, () => browser))) return;
+      if (!Runtime.isTruthy(Runtime.logicalAnd(on_change, () => browser))) return;
       browser.removeEventListener("popstate", on_change);
       browser.removeEventListener("hashchange", on_change);
       this._on_change = null;
@@ -5185,7 +5450,7 @@
   };
   var Swill__Window = class extends Swill__Object {
     constructor(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "name", kind: "req" },
           { name: "root", kind: "req" }
@@ -5194,26 +5459,26 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let name = Runtime2.argument(__swill_bound, "name");
-      let root = Runtime2.argument(__swill_bound, "root");
-      let modal = Runtime2.argument(__swill_bound, "modal");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(modal))) modal = false;
+      let name = Runtime.argument(__swill_bound, "name");
+      let root = Runtime.argument(__swill_bound, "root");
+      let modal = Runtime.argument(__swill_bound, "modal");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(modal))) modal = false;
       super();
       this._name = name;
       this._root = root;
       this._modal = modal;
-      this._controller = Runtime2.cast(null, "T.nilable(Swill::Controller)");
-      this._content_name = Runtime2.cast(null, "T.nilable(String)");
-      this._first_responder = Runtime2.cast(
+      this._controller = Runtime.cast(null, "T.nilable(Swill::Controller)");
+      this._content_name = Runtime.cast(null, "T.nilable(String)");
+      this._first_responder = Runtime.cast(
         null,
         "T.nilable(Swill::Responder)"
       );
       this._focused_element = null;
-      this._restoration_disposers = Runtime2.cast(
+      this._restoration_disposers = Runtime.cast(
         [],
         "T::Array[T.proc.void]"
       );
-      this._restoration_keys = Runtime2.cast([], "T::Array[String]");
+      this._restoration_keys = Runtime.cast([], "T::Array[String]");
       this._resolve_closed = null;
       this._closed = new Promise((resolve2, _reject) => {
         this._resolve_closed = resolve2;
@@ -5228,8 +5493,8 @@
       return `${this._name}.${key}`;
     }
     addRestoration(disposer, key) {
-      Runtime2.append(this._restoration_disposers, disposer);
-      return Runtime2.append(this._restoration_keys, key);
+      Runtime.append(this._restoration_disposers, disposer);
+      return Runtime.append(this._restoration_keys, key);
     }
     // Release the current restoration subscriptions; returns the scoped keys
     // they covered so a caller can prune ones the next controller will not own.
@@ -5288,9 +5553,9 @@
     // `tabindex="-1"`, not hidden or inert, and not inside one of the
     // +excluded+ roots (other windows the page holds).
     keyViews(excluded) {
-      let views = Runtime2.cast([], "T::Array[Element]");
+      let views = Runtime.cast([], "T::Array[Element]");
       this._root.querySelectorAll("button, input, select, textarea, [tabindex]").forEach((element) => {
-        if (this.isKeyView(element, excluded)) return Runtime2.append(views, element);
+        if (this.isKeyView(element, excluded)) return Runtime.append(views, element);
       });
       return views;
     }
@@ -5317,7 +5582,7 @@
     firstKeyView(selector, excluded) {
       let found = null;
       this._root.querySelectorAll(selector).forEach((element) => {
-        if (Runtime2.isTruthy(found == null && this.isKeyView(
+        if (Runtime.isTruthy(found == null && this.isKeyView(
           element,
           excluded
         ))) {
@@ -5374,7 +5639,7 @@
       return this._running != null;
     }
     static launched(application) {
-      this._running = Runtime2.cast(
+      this._running = Runtime.cast(
         application,
         "T.nilable(Swill::Application)"
       );
@@ -5389,36 +5654,36 @@
     // Creates the application. Call #launch to start it.
     constructor() {
       super();
-      this._windows = Runtime2.cast([], "T::Array[Window]");
-      this._controllers = Runtime2.cast([], "T::Array[Controller]");
-      this._templates = Runtime2.cast({}, "T::Hash[String, Element]");
-      this._captured = Runtime2.cast({}, "T::Hash[String, Element]");
-      this._page = Runtime2.cast(null, "T.nilable(Swill::Window)");
-      this._key_windows = Runtime2.cast([], "T::Array[Window]");
-      this._changing_windows = Runtime2.cast(false, "T::Boolean");
-      this._posted_first_responder = Runtime2.cast(
+      this._windows = Runtime.cast([], "T::Array[Window]");
+      this._controllers = Runtime.cast([], "T::Array[Controller]");
+      this._templates = Runtime.cast({}, "T::Hash[String, Element]");
+      this._captured = Runtime.cast({}, "T::Hash[String, Element]");
+      this._page = Runtime.cast(null, "T.nilable(Swill::Window)");
+      this._key_windows = Runtime.cast([], "T::Array[Window]");
+      this._changing_windows = Runtime.cast(false, "T::Boolean");
+      this._posted_first_responder = Runtime.cast(
         null,
         "T.nilable(Swill::Responder)"
       );
       this._observer = null;
-      this._unrestored = Runtime2.cast([], "T::Array[String]");
-      this._unrestorable_paths = Runtime2.cast([], "T::Array[String]");
-      this._problems = Runtime2.cast(
+      this._unrestored = Runtime.cast([], "T::Array[String]");
+      this._unrestorable_paths = Runtime.cast([], "T::Array[String]");
+      this._problems = Runtime.cast(
         null,
         "T.nilable(Swill::ProblemReporter)"
       );
-      this._development_monitor = Runtime2.cast(
+      this._development_monitor = Runtime.cast(
         null,
         "T.nilable(Swill::DevelopmentMonitor)"
       );
-      this._connection_state = Runtime2.cast("idle", "String");
-      this._reconnect = Runtime2.cast(null, "T.nilable(T.proc.void)");
+      this._connection_state = Runtime.cast("idle", "String");
+      this._reconnect = Runtime.cast(null, "T.nilable(T.proc.void)");
       this._on_online = (_event) => {
         if (this._connection_state === "disconnected") {
           return this._reconnect?.call(null);
         }
       };
-      this._window_titles = Runtime2.cast(0, "Integer");
+      this._window_titles = Runtime.cast(0, "Integer");
     }
     // The theme the page is drawn in: the name of one of the framework's
     // stylesheets, such as linear or bioplastic. The page links its theme as
@@ -5431,7 +5696,7 @@
     // setting this before launch. False by default. See ProblemReporter.
     // Code in an in_development block runs only while this is true.
     developmentDidChange(_previous, development2) {
-      return Runtime2.setDevelopment(development2);
+      return Runtime.setDevelopment(development2);
     }
     // Starts the application at +root+: awakens the markup beneath it,
     // restores window content from the URL fragment, and begins watching for
@@ -5465,13 +5730,14 @@
       this.prepareWindowContainers();
       this._controllers = Swill__Awakening.prepare(root);
       Swill__Connections__Outlets.establish(this, root);
-      Runtime2.reverse(this._controllers).forEach((controller) => Swill__Awakening.load(controller));
+      Runtime.reverse(this._controllers).forEach((controller) => Swill__Awakening.load(controller));
       this.registerWindowContainers();
       this.restoreLaunchedWindows();
       this.warnUnrestored(this._controllers);
       Swill__Awakening.finish(this._controllers);
       this._fragments.startObserving(() => this.applyFragment());
       this.watch(root);
+      this.adoptFocus(root);
       this.applicationDidLaunch();
       Swill__NotificationCenter.default().post(
         "application_did_launch",
@@ -5488,16 +5754,16 @@
     connectionChanged(state2, detail, retry_action) {
       this._connection_state = state2;
       this._reconnect = retry_action;
-      return Runtime2.nilable(this._problems?.connectionChanged(state2, detail, retry_action));
+      return Runtime.nilable(this._problems?.connectionChanged(state2, detail, retry_action));
     }
     // Reports a recoverable operation problem, including in production.
     reportProblem(message, detail) {
-      return Runtime2.nilable(this._problems?.report("Warning", message, detail));
+      return Runtime.nilable(this._problems?.report("Warning", message, detail));
     }
     // The browser window the application runs in, for what only it offers:
     // a prompt, printing.
     browser() {
-      return Runtime2.must(this.root.ownerDocument.defaultView);
+      return Runtime.must(this.root.ownerDocument.defaultView);
     }
     // Every controller awakened at launch, in document order.
     get controllers() {
@@ -5509,16 +5775,16 @@
     }
     // Idempotent: a page may see more than one pagehide before it is unloaded.
     terminate() {
-      if (!Runtime2.isTruthy(_Swill__Application.isRunning() && _Swill__Application.shared() === this)) {
+      if (!Runtime.isTruthy(_Swill__Application.isRunning() && _Swill__Application.shared() === this)) {
         return;
       }
       ;
       this.applicationWillTerminate();
       this.root.ownerDocument.defaultView?.removeEventListener("online", this._on_online);
       this._reconnect = null;
-      Runtime2.nilable(this._development_monitor?.stop());
+      Runtime.nilable(this._development_monitor?.stop());
       this._development_monitor = null;
-      Runtime2.nilable(this._problems?.stop());
+      Runtime.nilable(this._problems?.stop());
       this._problems = null;
       Swill__NotificationCenter.default().post(
         "application_will_terminate",
@@ -5530,7 +5796,7 @@
       if (observer) observer.disconnect();
       this._windows.forEach((window) => this.releaseWindow(window));
       this._windows = [];
-      this._controllers.forEach((controller) => Runtime2.send(controller, "unload"));
+      this._controllers.forEach((controller) => Runtime.send(controller, "unload"));
       Swill__Awakening.detach(this._root);
       this._controllers = [];
       this._root.removeEventListener("focusin", this._on_focus, true);
@@ -5540,7 +5806,7 @@
       this.assignFirstResponder(null);
       this._key_windows = [];
       this._page = null;
-      Runtime2.setDevelopment(false);
+      Runtime.setDevelopment(false);
       return _Swill__Application.terminated(this);
     }
     // The application is running and its markup is awake.
@@ -5559,7 +5825,7 @@
     // history is :push for navigation, :replace to rewrite the entry, or :none
     // when the fragment itself asked for the content (Back/Forward).
     loadWindowContent(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "window_name", kind: "req" },
           { name: "content_name", kind: "req" }
@@ -5568,10 +5834,10 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let window_name = Runtime2.argument(__swill_bound, "window_name");
-      let content_name = Runtime2.argument(__swill_bound, "content_name");
-      let history = Runtime2.argument(__swill_bound, "history");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(history))) history = "push";
+      let window_name = Runtime.argument(__swill_bound, "window_name");
+      let content_name = Runtime.argument(__swill_bound, "content_name");
+      let history = Runtime.argument(__swill_bound, "history");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(history))) history = "push";
       let window = this.windowNamed(window_name);
       if (!window) throw new Error(`No window container: ${window_name}`);
       let container = window.root;
@@ -5588,9 +5854,9 @@
       this._fragments.write(
         window.name,
         content_name,
-        Runtime2.keywordArguments({ history })
+        Runtime.keywordArguments({ history })
       );
-      this.restoreWindowState(window, Runtime2.keywordArguments({
+      this.restoreWindowState(window, Runtime.keywordArguments({
         prune_stale: history !== "none",
         write_content: history !== "none"
       }));
@@ -5612,15 +5878,15 @@
     // first responder; see Window#initial_focus_element. Dismiss it with
     // dismiss(controller); the window's closed promise resolves then.
     showWindow(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [{ name: "name", kind: "req" }],
         keywords: [{ name: "into", kind: "key" }],
         keywordRest: null,
         block: "__swill_block"
       });
-      let name = Runtime2.argument(__swill_bound, "name");
-      let into = Runtime2.argument(__swill_bound, "into");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(into))) into = this._root;
+      let name = Runtime.argument(__swill_bound, "name");
+      let into = Runtime.argument(__swill_bound, "into");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
       let node = this.cloneWindowContent(name);
       into.appendChild(node);
       let window = this.beginWindow(name, node, false);
@@ -5642,7 +5908,7 @@
     // it is shown modally: the rest of the page is inert until it is
     // dismissed, and the keyboard stays inside it.
     presentWindow(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
           { name: "controller", kind: "req" },
           { name: "name", kind: "req" }
@@ -5651,12 +5917,12 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let controller = Runtime2.argument(__swill_bound, "controller");
-      let name = Runtime2.argument(__swill_bound, "name");
-      let into = Runtime2.argument(__swill_bound, "into");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(into))) into = this._root;
-      let modal = Runtime2.argument(__swill_bound, "modal");
-      if (Runtime2.isTruthy(Runtime2.isOmittedArgument(modal))) modal = false;
+      let controller = Runtime.argument(__swill_bound, "controller");
+      let name = Runtime.argument(__swill_bound, "name");
+      let into = Runtime.argument(__swill_bound, "into");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(into))) into = this._root;
+      let modal = Runtime.argument(__swill_bound, "modal");
+      if (Runtime.isTruthy(Runtime.isOmittedArgument(modal))) modal = false;
       let node = controller.view.element;
       if (node.isConnected) throw new Error(`Window is already presented: ${name}`);
       into.appendChild(node);
@@ -5673,13 +5939,13 @@
     // content that takes the keyboard as it loads takes it in this window,
     // not the page.
     beginWindow(name, node, modal) {
-      let window = new Swill__Window(name, node, Runtime2.keywordArguments({ modal }));
-      Runtime2.append(this._key_windows, window);
+      let window = new Swill__Window(name, node, Runtime.keywordArguments({ modal }));
+      Runtime.append(this._key_windows, window);
       return window;
     }
     openWindow(window, controller, controllers) {
       let node = window.root;
-      if (Runtime2.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
+      if (Runtime.isTruthy(node.tagName === "DIALOG" && node.classList.contains("window"))) {
         this._window_titles++;
         window.showTitle(
           `swill-window-title-${this._window_titles}`,
@@ -5690,7 +5956,7 @@
       controller.view.updateAccessibility();
       window.assignContent(window.name, controller);
       if (node.tagName === "DIALOG") {
-        this.changingWindows(Runtime2.blockArgument(() => {
+        this.changingWindows(Runtime.blockArgument(() => {
           if (window.isModal()) {
             node.showModal();
             return node.addEventListener(
@@ -5704,10 +5970,10 @@
         node.getBoundingClientRect();
       }
       ;
-      Runtime2.append(this._windows, window);
+      Runtime.append(this._windows, window);
       this.restoreWindowState(
         window,
-        Runtime2.keywordArguments({ prune_stale: false, write_content: false })
+        Runtime.keywordArguments({ prune_stale: false, write_content: false })
       );
       this.warnUnrestored(controllers);
       Swill__Awakening.finish(controllers);
@@ -5728,7 +5994,7 @@
       }
       ;
       this.postFirstResponderChange();
-      if (globalThis.__SWILL_DEV__ !== false && Runtime2.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
         return this.verifyFocus("a window opened");
       }
     }
@@ -5745,11 +6011,11 @@
     // by a dialog's focusing steps or its return of focus on closing, is not
     // the user's; the framework places the keyboard itself afterward.
     changingWindows(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(
+      let __swill_bound = Runtime.bindArguments(
         __swill_arguments,
         { positional: [], keywords: [], keywordRest: null, block: "block" }
       );
-      let block = Runtime2.argument(__swill_bound, "block");
+      let block = Runtime.argument(__swill_bound, "block");
       this._changing_windows = true;
       try {
         return block();
@@ -5764,18 +6030,18 @@
     adoptTheme(document2) {
       let link = this.themeLink(document2);
       if (!link) return;
-      let file = Runtime2.stringify(Runtime2.split(
-        Runtime2.must(Runtime2.split(
-          Runtime2.must(link.getAttribute("href")),
+      let file = Runtime.stringify(Runtime.split(
+        Runtime.must(Runtime.split(
+          Runtime.must(link.getAttribute("href")),
           "?"
         )[0]),
         "/"
       ).at(-1));
-      return this.theme = Runtime2.split(file, ".")[0];
+      return this.theme = Runtime.split(file, ".")[0];
     }
     themeDidChange(_previous, theme) {
       let root = this._root;
-      if (!Runtime2.isTruthy(theme != null ? root : theme)) return;
+      if (!Runtime.isTruthy(theme != null ? root : theme)) return;
       let link = this.themeLink(root.ownerDocument);
       if (!link) return;
       let framework2 = Swill__Bundle.framework();
@@ -5784,7 +6050,7 @@
         "css"
       ) : null;
       if (url == null) throw new Error(`Unknown theme: ${theme}`);
-      let current = Runtime2.stringify(link.getAttribute("href"));
+      let current = Runtime.stringify(link.getAttribute("href"));
       if (current.endsWith(`/${theme}.css`) || current === `${theme}.css`) return;
       return link.setAttribute("href", url);
     }
@@ -5793,22 +6059,22 @@
     // per class, naming the paths. A class that is some window's content as
     // well is declaring for that use, so it is not warned about.
     warnUnrestored(controllers) {
-      let contents = Runtime2.compact(this._windows.map((window) => Runtime2.send(window, "controller"))).map((content) => Runtime2.nameOf(content));
+      let contents = Runtime.compact(this._windows.map((window) => Runtime.send(window, "controller"))).map((content) => Runtime.nameOf(content));
       return controllers.forEach((controller) => {
-        if (this._windows.some((window) => Runtime2.send(window, "controller") === controller)) return;
-        let declarations2 = Runtime2.cast(
-          Runtime2.restorations(controller),
+        if (this._windows.some((window) => Runtime.send(window, "controller") === controller)) return;
+        let declarations2 = Runtime.cast(
+          Runtime.restorations(controller),
           "T::Array[T.untyped]"
         );
-        if (Runtime2.isEmpty(declarations2)) return;
-        let name = Runtime2.logicalOr(
-          Runtime2.cast(Runtime2.nameOf(controller), "T.nilable(String)"),
+        if (Runtime.isEmpty(declarations2)) return;
+        let name = Runtime.logicalOr(
+          Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
           () => "a controller"
         );
         if (contents.includes(name) || this._unrestored.includes(name)) return;
-        Runtime2.append(this._unrestored, name);
-        let paths = declarations2.map((declaration) => Runtime2.send(declaration, "path")).join(", ");
-        return Runtime2.warn(`${`${name} declares restorable ${paths}, but only a window's content controller is restored; `}declare it there as a path through this controller`);
+        Runtime.append(this._unrestored, name);
+        let paths = declarations2.map((declaration) => Runtime.send(declaration, "path")).join(", ");
+        return Runtime.warn(`${`${name} declares restorable ${paths}, but only a window's content controller is restored; `}declare it there as a path through this controller`);
       });
     }
     // Closes the window +controller+ belongs to. The window that was key
@@ -5819,7 +6085,7 @@
       if (!window) return false;
       this._windows = this._windows.filter((candidate) => candidate !== window);
       this._key_windows = this._key_windows.filter((candidate) => candidate !== window);
-      this.changingWindows(Runtime2.blockArgument(() => window.dismiss()));
+      this.changingWindows(Runtime.blockArgument(() => window.dismiss()));
       this.refocusKeyWindow();
       return true;
     }
@@ -5832,16 +6098,16 @@
       let owner = this.responderElement(responder);
       let window = this.keyWindow();
       let last = window ? window.focusedElement : null;
-      let element = Runtime2.isTruthy(Runtime2.logicalAnd(
-        Runtime2.logicalAnd(last && owner, () => owner.contains(last)),
+      let element = Runtime.isTruthy(Runtime.logicalAnd(
+        Runtime.logicalAnd(last && owner, () => owner.contains(last)),
         () => this._root.contains(last)
       )) ? last : responder.keyElement();
-      if (Runtime2.isTruthy(element && this._root.contains(element))) {
+      if (Runtime.isTruthy(element && this._root.contains(element))) {
         this.focusInWindow(element);
       }
       ;
       this.postFirstResponderChange();
-      if (globalThis.__SWILL_DEV__ !== false && Runtime2.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
         return this.verifyFocus("a window closed");
       }
     }
@@ -5891,13 +6157,13 @@
     // (focus_left), and when its region is torn down
     // (release_first_responder).
     makeFirstResponder(responder) {
-      if (Runtime2.isTruthy(responder && !responder.acceptsFirstResponder())) {
+      if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
         return false;
       }
       ;
       let window = responder ? this.windowOf(responder) : this.keyWindow();
       if (!window) return false;
-      let current = Runtime2.cast(
+      let current = Runtime.cast(
         window.firstResponder || this,
         "Swill::Responder"
       );
@@ -5906,12 +6172,12 @@
       window.firstResponder = null;
       if (window !== this.keyWindow()) {
         window.firstResponder = responder;
-      } else if (Runtime2.isTruthy(responder && responder.becomeFirstResponder())) {
+      } else if (Runtime.isTruthy(responder && responder.becomeFirstResponder())) {
         if (window.firstResponder == null) window.firstResponder = responder;
       }
       ;
       this.postFirstResponderChange();
-      if (globalThis.__SWILL_DEV__ !== false && Runtime2.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
         this.verifyFocus("make_first_responder");
       }
       ;
@@ -5946,8 +6212,8 @@
     // A responder's class, and for a view or controller the element it is
     // rooted at, as the development focus checks name it.
     describeResponder(responder) {
-      let name = Runtime2.logicalOr(
-        Runtime2.cast(Runtime2.nameOf(responder), "T.nilable(String)"),
+      let name = Runtime.logicalOr(
+        Runtime.cast(Runtime.nameOf(responder), "T.nilable(String)"),
         () => "a responder"
       );
       let element = this.responderElement(responder);
@@ -5962,19 +6228,28 @@
     // The innermost window holding +element+: a presented window whose root
     // contains it, else the page.
     windowHolding(element) {
-      return Runtime2.reverse(this.keyWindows()).find((window) => window.root.contains(element));
+      return Runtime.reverse(this.keyWindows()).find((window) => window.root.contains(element));
     }
     // The roots of the presented windows other than +window+. The page's
     // root holds them all, but their controls are not the page's key views.
     excludedRoots(window) {
-      return this.keyWindows().filter((other) => Runtime2.isTruthy(other !== window && other !== this._page)).map((__swill_item) => __swill_item.root);
+      return this.keyWindows().filter((other) => Runtime.isTruthy(other !== window && other !== this._page)).map((__swill_item) => __swill_item.root);
     }
     keyDownInWindow(event) {
-      if (globalThis.__SWILL_DEV__ !== false && Runtime2.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
         this.verifyFocus("a key");
       }
       ;
       return this.firstResponder().keyDown(event);
+    }
+    // Focus the browser gave before launch, as to an `autofocus` field,
+    // makes its responder first, as later focus does.
+    adoptFocus(root) {
+      let active = root.ownerDocument.activeElement;
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        active && active !== root,
+        () => root.contains(active)
+      ))) return this.syncFirstResponder(active, null);
     }
     // In development, checks that the keyboard is where the first responder
     // says: focus outside the page is fine (the first responder waits for
@@ -5985,8 +6260,8 @@
     verifyFocus(moment) {
       let window = this.keyWindow();
       let active = this._root.ownerDocument.activeElement;
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
-        Runtime2.logicalAnd(
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
+        Runtime.logicalAnd(
           window && active,
           () => this._root.contains(active)
         ),
@@ -5994,16 +6269,16 @@
       ))) return;
       let responder = this.firstResponder();
       let owner = this.responderElement(responder);
-      let problem = this.windowHolding(active) !== window ? `focus is in another window than the key window ${this.windowLabel(window)}` : Runtime2.isTruthy(responder !== this && !this.isAttached(responder)) ? "the first responder is no longer in the page" : Runtime2.isTruthy(responder !== this && !responder.acceptsFirstResponder()) ? "the first responder does not accept being first responder" : Runtime2.isTruthy(owner && !owner.contains(active)) ? "the focused element is outside the first responder" : null;
-      if (!Runtime2.isTruthy(problem)) return;
+      let problem = this.windowHolding(active) !== window ? `focus is in another window than the key window ${this.windowLabel(window)}` : Runtime.isTruthy(responder !== this && !this.isAttached(responder)) ? "the first responder is no longer in the page" : Runtime.isTruthy(responder !== this && !responder.acceptsFirstResponder()) ? "the first responder does not accept being first responder" : Runtime.isTruthy(owner && !owner.contains(active)) ? "the focused element is outside the first responder" : null;
+      if (!Runtime.isTruthy(problem)) return;
       let focused = this.describeElement(active);
-      return Runtime2.warn(`Focus check after ${moment}: ${problem}. First responder: ${this.describeResponder(responder)}; focused: ${focused}.`);
+      return Runtime.warn(`Focus check after ${moment}: ${problem}. First responder: ${this.describeResponder(responder)}; focused: ${focused}.`);
     }
     windowLabel(window) {
       return window === this._page ? "(the page)" : `"${window.name}"`;
     }
     describeElement(element) {
-      let tag = Runtime2.downcase(element.tagName);
+      let tag = Runtime.downcase(element.tagName);
       ["outlet", "controller", "klass", "data-action", "class"].forEach((attribute) => {
         let value = element.getAttribute(attribute);
         if (value != null) {
@@ -6017,12 +6292,12 @@
       if (this._changing_windows) return;
       let target = event.target;
       let window = this.windowHolding(target);
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         window && window !== this._page,
         () => window.root === target
       ))) {
         let previous = event.relatedTarget;
-        let back = Runtime2.isTruthy(Runtime2.logicalAnd(
+        let back = Runtime.isTruthy(Runtime.logicalAnd(
           previous && previous !== target,
           () => target.contains(previous)
         )) ? previous : null;
@@ -6059,10 +6334,10 @@
       let window = this.keyWindow();
       if (!window) return false;
       let views = window.keyViews(this.excludedRoots(window));
-      if (Runtime2.isEmpty(views)) return false;
+      if (Runtime.isEmpty(views)) return false;
       event.preventDefault();
-      let found = Runtime2.indexOf(views, event.target);
-      let index = Runtime2.cast(
+      let found = Runtime.indexOf(views, event.target);
+      let index = Runtime.cast(
         found != null ? found : (() => {
           return delta > 0 ? -1 : 0;
         })(),
@@ -6070,8 +6345,8 @@
       );
       let attempts = 0;
       while (attempts < views.length) {
-        index = Runtime2.modulo(index + delta, views.length);
-        let candidate = Runtime2.must(views[index]);
+        index = Runtime.modulo(index + delta, views.length);
+        let candidate = Runtime.must(views[index]);
         Swill__DOM.focusRevealing(candidate);
         if (candidate.ownerDocument.activeElement === candidate) return true;
         attempts++;
@@ -6095,12 +6370,12 @@
       ;
       window.focusedElement = target;
       let responder = this.responderFor(target);
-      let current = Runtime2.cast(
+      let current = Runtime.cast(
         window.firstResponder || this,
         "Swill::Responder"
       );
       if (responder === current) return;
-      if (Runtime2.isTruthy(responder && !responder.acceptsFirstResponder())) {
+      if (Runtime.isTruthy(responder && !responder.acceptsFirstResponder())) {
         if (this.responderElement(current)) {
           this.restoreFocus(current, previous);
         } else {
@@ -6116,7 +6391,7 @@
       }
       ;
       this.assignWindowFirstResponder(window, responder);
-      if (globalThis.__SWILL_DEV__ !== false && Runtime2.isDevelopment()) {
+      if (globalThis.__SWILL_DEV__ !== false && Runtime.isDevelopment()) {
         return this.verifyFocus("focus moved");
       }
     }
@@ -6125,7 +6400,7 @@
     // in the page) leaves it alone, as Cocoa does, so keys still reach it
     // when focus returns.
     focusLeft(destination) {
-      if (Runtime2.isTruthy(destination && !this._root.contains(destination))) {
+      if (Runtime.isTruthy(destination && !this._root.contains(destination))) {
         return this.assignFirstResponder(null);
       }
     }
@@ -6135,7 +6410,7 @@
       this.keyWindows().forEach((window) => {
         let responder = window.firstResponder;
         let owner = responder ? this.responderElement(responder) : null;
-        if (Runtime2.isTruthy(owner && (owner === element || element.contains(owner)))) {
+        if (Runtime.isTruthy(owner && (owner === element || element.contains(owner)))) {
           return window.firstResponder = null;
         }
       });
@@ -6155,7 +6430,7 @@
     restoreFocus(responder, previous) {
       let owner = this.responderElement(responder);
       if (!owner) return;
-      let target = Runtime2.isTruthy(previous && owner.contains(previous)) ? previous : responder.keyElement();
+      let target = Runtime.isTruthy(previous && owner.contains(previous)) ? previous : responder.keyElement();
       if (target) return Swill__DOM.focus(target);
     }
     // ---- window templates, containers, and content ----
@@ -6163,7 +6438,7 @@
     // under the root. Templates are inert; content is cloned from them.
     scanTemplates() {
       return this._root.querySelectorAll("template[name]").forEach((template) => {
-        let name = Runtime2.must(template.getAttribute("name"));
+        let name = Runtime.must(template.getAttribute("name"));
         if (template.getAttribute("for") === "window" || template.parentElement === this._root) {
           return this._templates[name] = template;
         }
@@ -6186,9 +6461,9 @@
       return node.cloneNode(true);
     }
     windowContainers() {
-      let found = Runtime2.cast([], "T::Array[Element]");
-      if (this._root.hasAttribute("window")) Runtime2.append(found, this._root);
-      this._root.querySelectorAll("[window]").forEach((container) => Runtime2.append(found, container));
+      let found = Runtime.cast([], "T::Array[Element]");
+      if (this._root.hasAttribute("window")) Runtime.append(found, this._root);
+      this._root.querySelectorAll("[window]").forEach((container) => Runtime.append(found, container));
       return found;
     }
     // Before awakening: capture pre-rendered content under the container's
@@ -6197,13 +6472,13 @@
     prepareWindowContainers() {
       let params = this._fragments.params();
       return this.windowContainers().forEach((container) => {
-        let window_name = Runtime2.must(container.getAttribute("window"));
-        let default_name = Runtime2.logicalOr(
+        let window_name = Runtime.must(container.getAttribute("window"));
+        let default_name = Runtime.logicalOr(
           container.getAttribute("name"),
           () => window_name
         );
         let first = container.firstElementChild;
-        if (Runtime2.isTruthy(first && !this._captured[default_name])) {
+        if (Runtime.isTruthy(first && !this._captured[default_name])) {
           this._captured[default_name] = first.cloneNode(true);
         }
         ;
@@ -6212,7 +6487,7 @@
           default_name,
           params[window_name]
         );
-        if (Runtime2.isTruthy(first && content_name === default_name)) return;
+        if (Runtime.isTruthy(first && content_name === default_name)) return;
         container.replaceChildren();
         container.appendChild(this.cloneWindowContent(content_name));
         return container.setAttribute("name", content_name);
@@ -6223,17 +6498,17 @@
     requestedContent(window_name, default_name, requested) {
       if (requested == null || requested === default_name) return default_name;
       if (this.isWindowContent(requested)) return requested;
-      Runtime2.warn(`window "${window_name}" requested unknown content "${requested}"`);
+      Runtime.warn(`window "${window_name}" requested unknown content "${requested}"`);
       return default_name;
     }
     registerWindowContainers() {
       return this.windowContainers().forEach((container) => {
-        let window = new Swill__Window(Runtime2.must(container.getAttribute("window")), container);
+        let window = new Swill__Window(Runtime.must(container.getAttribute("window")), container);
         window.assignContent(
           container.getAttribute("name"),
           this.topControllerIn(container)
         );
-        return Runtime2.append(this._windows, window);
+        return Runtime.append(this._windows, window);
       });
     }
     // The first controller inside the container whose parent is outside it.
@@ -6282,7 +6557,7 @@
     // phase and before controller_did_load, so restored values are in place
     // for it.
     restoreWindowState(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [{ name: "window", kind: "req" }],
         keywords: [
           { name: "prune_stale", kind: "keyreq" },
@@ -6291,22 +6566,22 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let window = Runtime2.argument(__swill_bound, "window");
-      let prune_stale = Runtime2.argument(__swill_bound, "prune_stale");
-      let write_content = Runtime2.argument(__swill_bound, "write_content");
+      let window = Runtime.argument(__swill_bound, "window");
+      let prune_stale = Runtime.argument(__swill_bound, "prune_stale");
+      let write_content = Runtime.argument(__swill_bound, "write_content");
       let stale = window.disposeRestoration();
       let controller = window.controller;
-      let declarations2 = Runtime2.cast(
-        controller ? Runtime2.restorations(controller) : [],
+      let declarations2 = Runtime.cast(
+        controller ? Runtime.restorations(controller) : [],
         "T::Array[T.untyped]"
       );
-      let keys = declarations2.map((declaration) => window.scopedKey(Runtime2.send(declaration, "key")));
+      let keys = declarations2.map((declaration) => window.scopedKey(Runtime.send(declaration, "key")));
       let content = window.contentName;
-      if (Runtime2.isTruthy(write_content && content)) {
+      if (Runtime.isTruthy(write_content && content)) {
         this._fragments.write(
           window.name,
           content,
-          Runtime2.keywordArguments({ history: "replace" })
+          Runtime.keywordArguments({ history: "replace" })
         );
       }
       ;
@@ -6316,7 +6591,7 @@
             this._fragments.write(
               key,
               null,
-              Runtime2.keywordArguments({ history: "replace" })
+              Runtime.keywordArguments({ history: "replace" })
             );
           }
         });
@@ -6325,76 +6600,76 @@
       if (!controller) return;
       let params = this._fragments.params();
       let applied = 0;
-      let unrestorable = Runtime2.cast([], "T::Array[String]");
-      this._fragments.suspended(Runtime2.blockArgument(() => declarations2.forEach((declaration) => {
-        let key = window.scopedKey(Runtime2.send(declaration, "key"));
+      let unrestorable = Runtime.cast([], "T::Array[String]");
+      this._fragments.suspended(Runtime.blockArgument(() => declarations2.forEach((declaration) => {
+        let key = window.scopedKey(Runtime.send(declaration, "key"));
         let text = params[key];
         if (text == null) return;
         let value = this.decodeFragmentValue(
-          Runtime2.send(declaration, "type"),
+          Runtime.send(declaration, "type"),
           text
         );
         if (value == null) return;
         return this.restorePath(
           controller,
-          Runtime2.send(declaration, "path"),
+          Runtime.send(declaration, "path"),
           value
-        ) ? ++applied : Runtime2.append(unrestorable, key);
+        ) ? ++applied : Runtime.append(unrestorable, key);
       })));
       unrestorable.forEach((key) => this._fragments.write(
         key,
         null,
-        Runtime2.keywordArguments({ history: "replace" })
+        Runtime.keywordArguments({ history: "replace" })
       ));
-      if (!Runtime2.isEmpty(declarations2)) {
+      if (!Runtime.isEmpty(declarations2)) {
         controller.controllerDidRestore(applied > 0);
       }
       ;
       return declarations2.forEach((declaration) => {
-        let disposer = Runtime2.observePath(
+        let disposer = Runtime.observePath(
           controller,
-          Runtime2.send(declaration, "path"),
+          Runtime.send(declaration, "path"),
           (_value) => this.writeWindowState(window)
         );
         return window.addRestoration(
           disposer,
-          window.scopedKey(Runtime2.send(declaration, "key"))
+          window.scopedKey(Runtime.send(declaration, "key"))
         );
       });
     }
     restoreLaunchedWindows() {
       return this._windows.forEach((window) => this.restoreWindowState(
         window,
-        Runtime2.keywordArguments({ prune_stale: false, write_content: true })
+        Runtime.keywordArguments({ prune_stale: false, write_content: true })
       ));
     }
     // Push the controller's current restorable state into the fragment.
     writeWindowState(window) {
       let controller = window.controller;
       if (!controller) return;
-      return Runtime2.cast(
-        Runtime2.restorations(controller),
+      return Runtime.cast(
+        Runtime.restorations(controller),
         "T::Array[T.untyped]"
       ).forEach((declaration) => {
-        let path = Runtime2.send(declaration, "path");
+        let path = Runtime.send(declaration, "path");
         let value = this.isWritablePath(controller, path) ? this.encodeFragmentValue(
           controller,
-          Runtime2.readPath(controller, path),
+          Runtime.readPath(controller, path),
           path
         ) : null;
         return this._fragments.write(
-          window.scopedKey(Runtime2.send(declaration, "key")),
+          window.scopedKey(Runtime.send(declaration, "key")),
           value,
-          Runtime2.keywordArguments({ history: "replace" })
+          Runtime.keywordArguments({ history: "replace" })
         );
       });
     }
     // Typed URL leaves; nil rejects invalid values.
     decodeFragmentValue(type, text) {
       if (type === "Integer" || type === "T.nilable(Integer)") {
-        let stripped = Runtime2.strip(text);
-        if (!Runtime2.isTruthy(/^[+-]?\d/.test(stripped))) return null;
-        return Runtime2.toInteger(stripped);
+        let stripped = Runtime.strip(text);
+        if (!Runtime.isTruthy(/^[+-]?\d/.test(stripped))) return null;
+        return Runtime.toInteger(stripped);
       }
       ;
       if (type === "T::Boolean" || type === "T.nilable(T::Boolean)") {
@@ -6410,8 +6685,8 @@
     // with a warning, rather than written as text that cannot be restored.
     encodeFragmentValue(controller, value, path) {
       if (value == null || value === "") return null;
-      if (Runtime2.conforms(value, "String")) return value;
-      if (Runtime2.conforms(value, "Integer") || Runtime2.conforms(
+      if (Runtime.conforms(value, "String")) return value;
+      if (Runtime.conforms(value, "Integer") || Runtime.conforms(
         value,
         "Float"
       ) || value === true || value === false) return `${value}`;
@@ -6426,7 +6701,7 @@
     // cannot take it, so the rest of the window's state still restores.
     restorePath(controller, path, value) {
       try {
-        Runtime2.writePath(controller, path, value);
+        Runtime.writePath(controller, path, value);
         return true;
       } catch (error) {
         this.warnUnrestorable(controller, path, error.message);
@@ -6437,7 +6712,7 @@
     // through an owner that is missing for now still counts as writable.
     isWritablePath(controller, path) {
       try {
-        Runtime2.assertWritablePath(controller, path);
+        Runtime.assertWritablePath(controller, path);
         return true;
       } catch (error) {
         this.warnUnrestorable(controller, path, error.message);
@@ -6446,13 +6721,13 @@
     }
     // Warns once per class and path.
     warnUnrestorable(controller, path, reason) {
-      let name = Runtime2.logicalOr(
-        Runtime2.cast(Runtime2.nameOf(controller), "T.nilable(String)"),
+      let name = Runtime.logicalOr(
+        Runtime.cast(Runtime.nameOf(controller), "T.nilable(String)"),
         () => "a controller"
       );
       if (this._unrestorable_paths.includes(`${name} ${path}`)) return;
-      Runtime2.append(this._unrestorable_paths, `${name} ${path}`);
-      return Runtime2.warn(`${name}: restorable ${path} is left out of the URL: ${reason}`);
+      Runtime.append(this._unrestorable_paths, `${name} ${path}`);
+      return Runtime.warn(`${name}: restorable ${path} is left out of the URL: ${reason}`);
     }
     // Back/Forward: a container whose fragment names other known content loads
     // it without touching history; otherwise its state is reapplied.
@@ -6463,16 +6738,16 @@
     applyFragmentTo(window, params) {
       if (!window.isContainer()) return;
       let requested = params[window.name];
-      if (Runtime2.isTruthy(requested != null && requested !== window.contentName)) {
+      if (Runtime.isTruthy(requested != null && requested !== window.contentName)) {
         return this.isWindowContent(requested) ? this.loadWindowContent(
           window.name,
           requested,
-          Runtime2.keywordArguments({ history: "none" })
-        ) : Runtime2.warn(`window "${window.name}" requested unknown content "${requested}"`);
+          Runtime.keywordArguments({ history: "none" })
+        ) : Runtime.warn(`window "${window.name}" requested unknown content "${requested}"`);
       } else {
         return this.restoreWindowState(
           window,
-          Runtime2.keywordArguments({ prune_stale: false, write_content: false })
+          Runtime.keywordArguments({ prune_stale: false, write_content: false })
         );
       }
     }
@@ -6480,7 +6755,7 @@
     // observer wires added subtrees and detaches removed ones. Explicit wiring
     // before the observer runs is harmless, since both are idempotent.
     watch(root) {
-      if (!Runtime2.isTruthy(typeof MutationObserver !== "undefined")) return;
+      if (!Runtime.isTruthy(typeof MutationObserver !== "undefined")) return;
       let observer = new MutationObserver((records, _observer) => records.forEach((record2) => {
         record2.removedNodes.forEach((node) => {
           if (node.nodeType === 1) return Swill__Awakening.detach(node);
@@ -6508,8 +6783,8 @@
     launch(document2) {
       let element = document2.querySelector("[application]");
       if (!element) return null;
-      let failure = Runtime2.cast(
-        Runtime2.buildFailure(),
+      let failure = Runtime.cast(
+        Runtime.buildFailure(),
         "T.nilable(String)"
       );
       if (failure != null) {
@@ -6518,12 +6793,12 @@
       }
       ;
       if (Swill__Application.isRunning()) return Swill__Application.shared();
-      let application = Runtime2.cast(
-        new (Runtime2.resolve(Runtime2.must(element.getAttribute("application"))))(),
+      let application = Runtime.cast(
+        new (Runtime.resolve(Runtime.must(element.getAttribute("application"))))(),
         "Swill::Application"
       );
       application.launch(element);
-      Runtime2.must(document2.defaultView).addEventListener(
+      Runtime.must(document2.defaultView).addEventListener(
         "pagehide",
         (event) => {
           if (!event.persisted) return application.terminate();
@@ -6536,13 +6811,13 @@
     // error is shown as an alert is, without one, in +root+, the element that
     // names the application.
     showBuildFailure(root, message) {
-      let dialog = Runtime2.must(Swill__Templates.named(
+      let dialog = Runtime.must(Swill__Templates.named(
         "alert",
         root.ownerDocument
       ).content.firstElementChild).cloneNode(true);
       let alert = Swill__Swell.$index(dialog);
       alert.findBang("h2").text("The application failed to build");
-      Swill__Swell.$index(Runtime2.must(alert.findBang(".alert-text").element.querySelector("p"))).text(message);
+      Swill__Swell.$index(Runtime.must(alert.findBang(".alert-text").element.querySelector("p"))).text(message);
       let stop = Swill__Image.named("Stop");
       if (stop) alert.findBang("img").attr("src", stop.url);
       alert.findBang(".actions").remove();
@@ -6553,12 +6828,12 @@
   var Swill__Controller__List = class extends Swill__Controller {
     // bind accepts either content or an explicit arrangement owner.
     setRepresentedObject(objects) {
-      if (Runtime2.isEqual(this.representedObject, objects)) return;
+      if (Runtime.isEqual(this.representedObject, objects)) return;
       this._setting_content = true;
       try {
         if (objects instanceof Swill__ArrayController) {
           this.content = null;
-          this.arrayController = Runtime2.cast(
+          this.arrayController = Runtime.cast(
             objects,
             "Swill::ArrayController"
           );
@@ -6583,7 +6858,7 @@
       let target = this.nextResponder();
       let handler = target ? target.actionTarget("activate_selection") : null;
       if (handler) {
-        return Runtime2.performAction(
+        return Runtime.performAction(
           handler,
           "activate_selection",
           this,
@@ -6601,7 +6876,7 @@
     // way an action handler learns which row its sender sits in.
     rowFor(element) {
       let row = this.containerView().childContaining(element);
-      let index = row ? Runtime2.indexOf(this.rowElements(), row) : null;
+      let index = row ? Runtime.indexOf(this.rowElements(), row) : null;
       return index == null ? -1 : index;
     }
     // ---- lifecycle ----
@@ -6624,7 +6899,7 @@
     }
     arrangedObjectsDidChange(_previous, _objects) {
       this._selection_anchor = null;
-      if (Runtime2.isTruthy(this._awakened && !this._setting_content)) {
+      if (Runtime.isTruthy(this._awakened && !this._setting_content)) {
         return this.renderAll();
       }
     }
@@ -6644,7 +6919,7 @@
       if (total === 0) return super.moveDown(event);
       event.preventDefault();
       let indexes = this.currentIndexes();
-      let current = Runtime2.isEmpty(indexes) ? -1 : Runtime2.must(indexes[0]);
+      let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
       let index = current < 0 ? 0 : current + 1;
       if (index > total - 1) index = total - 1;
       this.selectIndexes([index]);
@@ -6657,7 +6932,7 @@
       if (this.arrangedObjects.length === 0) return super.moveUp(event);
       event.preventDefault();
       let indexes = this.currentIndexes();
-      let current = Runtime2.isEmpty(indexes) ? -1 : Runtime2.must(indexes[0]);
+      let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
       if (current <= 0) {
         return this.cancelOperation(event);
       } else {
@@ -6668,7 +6943,7 @@
     }
     // Enter activates the selection when there is one.
     insertNewline(event) {
-      if (!Runtime2.isEmpty(this.currentSelection())) {
+      if (!Runtime.isEmpty(this.currentSelection())) {
         event.preventDefault();
         return this.activateSelection();
       } else {
@@ -6678,7 +6953,7 @@
     // ---- rows ----
     // Where rows mount.
     container() {
-      return Runtime2.nilable(this.rows?.element) || this._view.element;
+      return Runtime.nilable(this.rows?.element) || this._view.element;
     }
     containerView() {
       let mount = this.rows;
@@ -6687,10 +6962,10 @@
     // Rows in order: the container's children other than templates and
     // whatever row_element? rejects.
     rowElements() {
-      let found = Runtime2.cast([], "T::Array[Element]");
+      let found = Runtime.cast([], "T::Array[Element]");
       Swill__DOM.eachChild(this.container(), (child) => {
-        if (Runtime2.isTruthy(child.tagName !== "TEMPLATE" && this.isRowElement(child))) {
-          return Runtime2.append(found, child);
+        if (Runtime.isTruthy(child.tagName !== "TEMPLATE" && this.isRowElement(child))) {
+          return Runtime.append(found, child);
         }
       });
       return found;
@@ -6710,7 +6985,7 @@
         this._view.element,
         'template[for="row"]'
       );
-      return Runtime2.isEmpty(found) ? null : found[0];
+      return Runtime.isEmpty(found) ? null : found[0];
     }
     // The element for item. Clones the row template; override to build rows
     // in code. Bindings, actions, selection, and configure_row still apply.
@@ -6777,7 +7052,7 @@
       let indexes = this.currentIndexes();
       let elements = this.rowElements();
       elements.forEach((element, index) => this.containerView().markSelected(element, indexes.includes(index)));
-      let first = Runtime2.isEmpty(indexes) ? null : elements[Runtime2.must(indexes[0])];
+      let first = Runtime.isEmpty(indexes) ? null : elements[Runtime.must(indexes[0])];
       if (first) return this.containerView().reveal(first);
     }
     // ---- mouse: click selects, shift-click extends, double-click activates ----
@@ -6789,7 +7064,7 @@
       let stop_click = this._view.listen(
         "click",
         (event) => this.rowClicked(event),
-        Runtime2.keywordArguments({ capture: true })
+        Runtime.keywordArguments({ capture: true })
       );
       let stop_double_click = this._view.listen(
         "dblclick",
@@ -6807,7 +7082,7 @@
     // Shift-click extends the selection; suppress the browser's text
     // selection sweep across rows.
     rowMouseDown(event) {
-      if (!Runtime2.isTruthy(this.allowsMultipleSelection && event.shiftKey)) return;
+      if (!Runtime.isTruthy(this.allowsMultipleSelection && event.shiftKey)) return;
       if (this.rowFor(event.target) < 0) return;
       event.preventDefault();
       return this._view.clearTextSelection();
@@ -6816,7 +7091,7 @@
       let index = this.rowFor(event.target);
       if (index < 0) return;
       let anchor = this._selection_anchor;
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         this.allowsMultipleSelection && event.shiftKey,
         () => anchor != null
       ))) {
@@ -6837,10 +7112,10 @@
     selectRange(anchor, index) {
       let low = anchor < index ? anchor : index;
       let high = anchor < index ? index : anchor;
-      let indexes = Runtime2.cast([], "T::Array[Integer]");
+      let indexes = Runtime.cast([], "T::Array[Integer]");
       let current = low;
       while (current <= high) {
-        Runtime2.append(indexes, current);
+        Runtime.append(indexes, current);
         current++;
       }
       ;
@@ -6887,7 +7162,7 @@
     insertNewline(event) {
       event.preventDefault();
       let host = this.editingHost();
-      return Runtime2.isTruthy(host) ? Runtime2.invoke(
+      return Runtime.isTruthy(host) ? Runtime.invoke(
         host,
         "end_editing",
         true
@@ -6895,7 +7170,7 @@
     }
     cancelOperation(event) {
       let host = this.editingHost();
-      return Runtime2.isTruthy(host) ? Runtime2.invoke(
+      return Runtime.isTruthy(host) ? Runtime.invoke(
         host,
         "end_editing",
         false
@@ -6909,9 +7184,9 @@
     // host means the editor is already released.
     allowResignationTo(responder) {
       let element = responder ? responder.focusRegion() : null;
-      if (Runtime2.isTruthy(element && this._view.contains(element))) return true;
+      if (Runtime.isTruthy(element && this._view.contains(element))) return true;
       let host = this.editingHost();
-      return Runtime2.isTruthy(host) ? Runtime2.invoke(
+      return Runtime.isTruthy(host) ? Runtime.invoke(
         host,
         "editor_should_end_editing",
         this
@@ -6925,7 +7200,7 @@
     // The parent, when it hosts inline editing.
     editingHost() {
       let owner = this.parent();
-      return Runtime2.isTruthy(owner && Runtime2.respondsTo(
+      return Runtime.isTruthy(owner && Runtime.respondsTo(
         owner,
         "editor_should_end_editing"
       )) ? owner : null;
@@ -6952,7 +7227,7 @@
     // Activation edits the selected row instead of telling the owner.
     activateSelection() {
       let indexes = this.currentIndexes();
-      return Runtime2.isEmpty(indexes) ? super.activateSelection() : this.beginEditing(Runtime2.must(indexes[0]));
+      return Runtime.isEmpty(indexes) ? super.activateSelection() : this.beginEditing(Runtime.must(indexes[0]));
     }
     isEditing() {
       return this._edit != null;
@@ -6966,12 +7241,12 @@
     // refused commit keeps that editor.
     beginEditing(index) {
       let original = this.objectAt(index);
-      if (!Runtime2.isTruthy(original)) return false;
-      if (Runtime2.isTruthy(this.isEditing() && !this.endEditing(true))) return false;
-      let copy = Runtime2.isTruthy(Runtime2.respondsTo(original, "draft")) ? Runtime2.send(
+      if (!Runtime.isTruthy(original)) return false;
+      if (Runtime.isTruthy(this.isEditing() && !this.endEditing(true))) return false;
+      let copy = Runtime.isTruthy(Runtime.respondsTo(original, "draft")) ? Runtime.send(
         original,
         "draft"
-      ) : Runtime2.send(original, "dup");
+      ) : Runtime.send(original, "dup");
       return this.openEditor(index, original, copy);
     }
     // False only when a commit was refused; the editor then stays open.
@@ -6982,7 +7257,7 @@
         if (!edit.editor.commitEditing()) return false;
         let copy = this.editedObject;
         let error = this.validationError(copy);
-        if (Runtime2.isTruthy(error)) {
+        if (Runtime.isTruthy(error)) {
           this.editingDidFailValidation(error);
           return false;
         }
@@ -7033,7 +7308,7 @@
     }
     // A new collection ends an edit without committing: its row is gone.
     representedObjectDidChange(previous, objects) {
-      this._edit_generation = Runtime2.logicalOr(
+      this._edit_generation = Runtime.logicalOr(
         this._edit_generation,
         () => 0
       ) + 1;
@@ -7059,31 +7334,31 @@
       try {
         await original.applyDraft(copy);
       } catch (error) {
-        if (!Runtime2.isTruthy(this._awakened && Runtime2.isEqual(
+        if (!Runtime.isTruthy(this._awakened && Runtime.isEqual(
           generation,
           this._edit_generation
         ))) return;
         this.editingDidFailSave(error);
-        let index2 = Runtime2.indexOf(this.arrangedObjects, original);
+        let index2 = Runtime.indexOf(this.arrangedObjects, original);
         if (index2 != null) this.openEditor(index2, original, copy);
         return;
       }
       ;
-      if (!Runtime2.isTruthy(this._awakened && Runtime2.isEqual(
+      if (!Runtime.isTruthy(this._awakened && Runtime.isEqual(
         generation,
         this._edit_generation
       ))) {
         return;
       }
       ;
-      let index = Runtime2.indexOf(this.arrangedObjects, original);
+      let index = Runtime.indexOf(this.arrangedObjects, original);
       if (index != null) return this.finishEdit(index, original);
     }
     // A model takes its draft back and stays the row's object; a plain object
     // is replaced by the copy in a new collection. Returns the final object.
     applyEdit(copy, original, _index) {
-      if (Runtime2.isTruthy(Runtime2.respondsTo(original, "apply_draft"))) {
-        Runtime2.invoke(original, "apply_draft", copy);
+      if (Runtime.isTruthy(Runtime.respondsTo(original, "apply_draft"))) {
+        Runtime.invoke(original, "apply_draft", copy);
         return original;
       }
       ;
@@ -7094,11 +7369,11 @@
     // ran when the draft was written; a model's own validate, when it has
     // one, is asked here.
     validationError(object) {
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
         object,
-        () => Runtime2.respondsTo(object, "validate")
+        () => Runtime.respondsTo(object, "validate")
       ))) return null;
-      return Runtime2.send(object, "validate");
+      return Runtime.send(object, "validate");
     }
     // Whether a focus-out commit should proceed. Override to confirm.
     confirmEdit(_copy, _original) {
@@ -7106,19 +7381,19 @@
     }
     // Dirty tracking decides for a model; a plain copy counts as changed.
     editedObjectHasChanges(copy, _original) {
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
         copy,
-        () => Runtime2.respondsTo(copy, "dirty?")
+        () => Runtime.respondsTo(copy, "dirty?")
       ))) return true;
-      return Runtime2.send(copy, "dirty?") === true;
+      return Runtime.send(copy, "dirty?") === true;
     }
     // Override to show the error; the editor stays open.
     editingDidFailValidation(error) {
-      return Runtime2.warn(`Edit refused: ${Runtime2.send(error, "message")}`);
+      return Runtime.warn(`Edit refused: ${Runtime.send(error, "message")}`);
     }
     // Override to present a persistence error. The same draft is remounted.
     editingDidFailSave(error) {
-      return Runtime2.warn(`Edit did not save: ${Runtime2.send(
+      return Runtime.warn(`Edit did not save: ${Runtime.send(
         error,
         "message"
       )}`);
@@ -7135,14 +7410,14 @@
         this._view.element,
         'template[for="editor"]'
       );
-      return Runtime2.isEmpty(found) ? null : found[0];
+      return Runtime.isEmpty(found) ? null : found[0];
     }
     // Mount an editor after the row, bind it to the copy, and give it the
     // keyboard.
     openEditor(index, original, copy) {
       let row = this.rowElements()[index];
       if (!row) return false;
-      this._edit_generation = Runtime2.logicalOr(
+      this._edit_generation = Runtime.logicalOr(
         this._edit_generation,
         () => 0
       ) + 1;
@@ -7153,11 +7428,11 @@
       let editor = this.awakenEditor(node);
       editor.bind(
         "represented_object",
-        Runtime2.keywordArguments({ to: this, key_path: "edited_object" })
+        Runtime.keywordArguments({ to: this, key_path: "edited_object" })
       );
       editor.view.subviews.forEach((subview) => {
         if (subview instanceof Swill__Control) {
-          Runtime2.cast(subview, "Swill::Control").delegate = editor;
+          Runtime.cast(subview, "Swill::Control").delegate = editor;
         }
       });
       this._edit = new Swill__RowEdit(editor, index, original);
@@ -7179,7 +7454,7 @@
       Swill__Awakening.instantiate(node);
       let editor = Swill__View.controllerFor(node);
       if (editor instanceof Swill__Controller__InlineEditor) {
-        return Runtime2.cast(editor, "Swill::Controller::InlineEditor");
+        return Runtime.cast(editor, "Swill::Controller::InlineEditor");
       }
       ;
       Swill__Awakening.detach(node);
@@ -7201,7 +7476,7 @@
     }
     // Select the final object and give the list the keyboard back.
     finishEdit(_index, final) {
-      if (Runtime2.isTruthy(final)) this.selectObject(final);
+      if (Runtime.isTruthy(final)) this.selectObject(final);
       return this.application().makeFirstResponder(this);
     }
   };
@@ -7215,24 +7490,24 @@
     // buttons, then #run it.
     constructor() {
       super();
-      this._button_titles = Runtime2.cast([], "T::Array[String]");
-      this._choice = Runtime2.cast(null, "T.nilable(String)");
+      this._button_titles = Runtime.cast([], "T::Array[String]");
+      this._choice = Runtime.cast(null, "T.nilable(String)");
     }
     // Adds a button titled +title+ after those already added. An alert with
     // none shows OK.
     addButton(title) {
-      return Runtime2.append(this._button_titles, title);
+      return Runtime.append(this._button_titles, title);
     }
     async run() {
       let document2 = this.application().root.ownerDocument;
       let template = Swill__Templates.named("alert", document2);
-      let dialog = Runtime2.must(template.content.firstElementChild).cloneNode(true);
+      let dialog = Runtime.must(template.content.firstElementChild).cloneNode(true);
       this.attach(dialog);
       if (this.title == null) this.title = document2.title;
       let window = this.application().presentWindow(
         this,
         "alert",
-        Runtime2.keywordArguments({ modal: true })
+        Runtime.keywordArguments({ modal: true })
       );
       await window.closed;
       return this._choice;
@@ -7255,8 +7530,8 @@
     // each sends choose.
     viewDidLoad() {
       let actions = Swill__Swell.$index(this.view.element).findBang(".actions");
-      return (Runtime2.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((label, index) => {
-        let button = Swill__Swell.$index(this.view.cloneTemplate(Runtime2.must(this.buttonTemplate))).text(label);
+      return (Runtime.isEmpty(this._button_titles) ? ["OK"] : this._button_titles).forEach((label, index) => {
+        let button = Swill__Swell.$index(this.view.cloneTemplate(Runtime.must(this.buttonTemplate))).text(label);
         if (index === 0) button.addClass("default");
         return actions.append(button.element);
       });
@@ -7268,8 +7543,8 @@
     static REFRESH_TITLE = "Refresh";
     constructor() {
       super();
-      this._retry_action = Runtime2.cast(null, "T.nilable(T.proc.void)");
-      this._required = Runtime2.cast(false, "T::Boolean");
+      this._retry_action = Runtime.cast(null, "T.nilable(T.proc.void)");
+      this._required = Runtime.cast(false, "T::Boolean");
     }
     set retryAction(retry_action) {
       this._retry_action = retry_action;
@@ -7281,7 +7556,7 @@
     }
     choose(sender) {
       let action = this._retry_action;
-      if (Runtime2.isTruthy(sender.textContent === _Swill__SystemAlert.RETRY_TITLE && action)) {
+      if (Runtime.isTruthy(sender.textContent === _Swill__SystemAlert.RETRY_TITLE && action)) {
         return action();
       } else if ([
         _Swill__SystemAlert.RELOAD_TITLE,
@@ -7301,11 +7576,11 @@
       super();
       this._document = document2;
       this._reporter = reporter;
-      this._endpoint = Runtime2.cast("", "String");
-      this._loaded_revision = Runtime2.cast("", "String");
-      this._timer = Runtime2.cast(null, "T.nilable(Integer)");
+      this._endpoint = Runtime.cast("", "String");
+      this._loaded_revision = Runtime.cast("", "String");
+      this._timer = Runtime.cast(null, "T.nilable(Integer)");
       this._request = null;
-      this._stopped = Runtime2.cast(true, "T::Boolean");
+      this._stopped = Runtime.cast(true, "T::Boolean");
       this._on_visibility = (_event) => {
         if (this._document.visibilityState === "visible") return this.poll();
       };
@@ -7313,9 +7588,9 @@
     start() {
       let metadata2 = this._document.querySelector('meta[name="swill-development"]');
       if (!metadata2) return;
-      this._endpoint = Runtime2.stringify(metadata2.getAttribute("data-endpoint"));
-      this._loaded_revision = Runtime2.stringify(metadata2.getAttribute("content"));
-      if (Runtime2.isEmpty(this._endpoint)) return;
+      this._endpoint = Runtime.stringify(metadata2.getAttribute("data-endpoint"));
+      this._loaded_revision = Runtime.stringify(metadata2.getAttribute("content"));
+      if (Runtime.isEmpty(this._endpoint)) return;
       this._stopped = false;
       this._document.addEventListener(
         "visibilitychange",
@@ -7339,7 +7614,7 @@
       return !this._stopped;
     }
     async poll() {
-      if (Runtime2.isTruthy(this._stopped || this._request)) {
+      if (Runtime.isTruthy(this._stopped || this._request)) {
         return;
       }
       ;
@@ -7357,15 +7632,15 @@
           { cache: "no-store", signal: request.signal }
         );
         if (response.ok) {
-          state2 = Runtime2.cast(
+          state2 = Runtime.cast(
             await response.json(),
             "T::Hash[String, T.untyped]"
           );
-          revision = Runtime2.send(state2.revision, "to_s");
-          if (Runtime2.isTruthy(Runtime2.logicalAnd(
-            Runtime2.logicalAnd(
+          revision = Runtime.send(state2.revision, "to_s");
+          if (Runtime.isTruthy(Runtime.logicalAnd(
+            Runtime.logicalAnd(
               this.isRunning() && state2.ready === true,
-              () => !Runtime2.send(revision, "empty?")
+              () => !Runtime.send(revision, "empty?")
             ),
             () => revision !== this._loaded_revision
           ))) return this._reporter.revisionChanged(revision);
@@ -7395,19 +7670,19 @@
     constructor(window) {
       super();
       this._window = window;
-      this._pending = Runtime2.cast([], "T::Array[T::Hash[Symbol, String]]");
-      this._current = Runtime2.cast(null, "T.nilable(String)");
-      this._active = Runtime2.cast(null, "T.nilable(Swill::SystemAlert)");
+      this._pending = Runtime.cast([], "T::Array[T::Hash[Symbol, String]]");
+      this._current = Runtime.cast(null, "T.nilable(String)");
+      this._active = Runtime.cast(null, "T.nilable(Swill::SystemAlert)");
       this._kind = "";
       this._state = "idle";
       this._stopped = false;
-      this._retry = Runtime2.cast(null, "T.nilable(T.proc.void)");
+      this._retry = Runtime.cast(null, "T.nilable(T.proc.void)");
       this._revision = "";
       this._dismissed = false;
       this._acknowledged_revision = "";
       this._on_error = (event) => this.reportError(event);
       this._on_rejection = (event) => this.reportRejection(event);
-      this._stop_warnings = Runtime2.cast(null, "T.nilable(T.proc.void)");
+      this._stop_warnings = Runtime.cast(null, "T.nilable(T.proc.void)");
     }
     // Starts reporting uncaught errors, rejected promises and warnings.
     start() {
@@ -7417,7 +7692,7 @@
         window.addEventListener("unhandledrejection", this._on_rejection);
       }
       ;
-      this._stop_warnings = Runtime2.observeWarnings((message) => this.report("Warning", message, ""));
+      this._stop_warnings = Runtime.observeWarnings((message) => this.report("Warning", message, ""));
       return this._stop_warnings;
     }
     // Stops reporting and closes any notice before application teardown.
@@ -7433,13 +7708,13 @@
       this._stop_warnings = null;
       this._pending = [];
       this._stopped = true;
-      return Runtime2.nilable(this._active?.finish(null));
+      return Runtime.nilable(this._active?.finish(null));
     }
     reportError(event) {
       let error = event.error;
       let message = error == null ? event.message : _Swill__ProblemReporter.messageOf(error);
       let origin = error == null ? "" : _Swill__ProblemReporter.originOf(error);
-      if (Runtime2.isTruthy(Runtime2.isEmpty(origin) && !Runtime2.isEmpty(event.filename))) {
+      if (Runtime.isTruthy(Runtime.isEmpty(origin) && !Runtime.isEmpty(event.filename))) {
         origin = `at ${event.filename}:${event.lineno}:${event.colno}`;
       }
       ;
@@ -7447,12 +7722,12 @@
     }
     reportRejection(event) {
       let reason = event.reason;
-      if (Runtime2.isTruthy(reason instanceof Error && [
+      if (Runtime.isTruthy(reason instanceof Error && [
         "connection_lost",
         "schema_mismatch",
         "actor_scope_changed",
         "outcome_unknown"
-      ].includes(Runtime2.stringify(reason.code)))) {
+      ].includes(Runtime.stringify(reason.code)))) {
         return;
       }
       ;
@@ -7465,7 +7740,7 @@
     // Queues a problem, showing it now when no alert is showing.
     report(icon, message, detail) {
       if (this._stopped || this._current === message || this._pending.some((problem) => problem.message === message)) return;
-      Runtime2.append(this._pending, { kind: "", icon, message, detail });
+      Runtime.append(this._pending, { kind: "", icon, message, detail });
       if (this._current == null) return this.showNext();
     }
     // These notices are available in production, independent of error reporting.
@@ -7499,7 +7774,7 @@
     enqueueNotice(kind, message, detail) {
       if (this._stopped || this._kind === kind || this._pending.some((item) => item.kind === kind)) return;
       let icon = kind === _Swill__ProblemReporter.CONNECTION ? "NetworkLost" : "Warning";
-      Runtime2.prepend(this._pending, { kind, icon, message, detail });
+      Runtime.prepend(this._pending, { kind, icon, message, detail });
       if (this._current == null) return this.showNext();
     }
     async showNext() {
@@ -7508,33 +7783,33 @@
       }
       ;
       let first = this._pending[0];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         first && first.kind === _Swill__ProblemReporter.REVISION,
         () => ["disconnected", "connecting"].includes(this._state)
       ))) return;
       let problem = this._pending.shift();
       if (!problem) return;
-      this._current = Runtime2.fetch(problem, "message");
-      this._kind = Runtime2.fetch(problem, "kind");
+      this._current = Runtime.fetch(problem, "message");
+      this._kind = Runtime.fetch(problem, "kind");
       let kind = this._kind;
       try {
         let alert = new Swill__SystemAlert();
         alert.retryAction = kind === _Swill__ProblemReporter.CONNECTION ? this._retry : null;
         alert.required = kind === _Swill__ProblemReporter.RELOAD;
         this._active = alert;
-        alert.icon = Runtime2.fetch(problem, "icon");
-        alert.title = Runtime2.isEmpty(kind) ? (() => {
+        alert.icon = Runtime.fetch(problem, "icon");
+        alert.title = Runtime.isEmpty(kind) ? (() => {
           return alert.icon === "Stop" ? "Error" : "Warning";
         })() : "Application";
-        alert.messageText = Runtime2.fetch(problem, "message");
-        alert.informativeText = Runtime2.fetch(problem, "detail");
+        alert.messageText = Runtime.fetch(problem, "message");
+        alert.informativeText = Runtime.fetch(problem, "detail");
         this.buttonTitles(kind).forEach((label) => alert.addButton(label));
         await alert.run();
-        if (Runtime2.isTruthy(kind === _Swill__ProblemReporter.CONNECTION && [
+        if (Runtime.isTruthy(kind === _Swill__ProblemReporter.CONNECTION && [
           "disconnected",
           "connecting"
         ].includes(this._state))) this._dismissed = true;
-        if (Runtime2.isTruthy(kind === _Swill__ProblemReporter.REVISION && [
+        if (Runtime.isTruthy(kind === _Swill__ProblemReporter.REVISION && [
           "idle",
           "connected"
         ].includes(this._state))) this._acknowledged_revision = this._revision;
@@ -7546,7 +7821,7 @@
         this._active = null;
       }
       ;
-      if (!Runtime2.isEmpty(this._pending)) return this.showNext();
+      if (!Runtime.isEmpty(this._pending)) return this.showNext();
     }
     connectionRestored() {
       this._dismissed = false;
@@ -7554,7 +7829,7 @@
       if ([
         _Swill__ProblemReporter.CONNECTION,
         _Swill__ProblemReporter.RELOAD
-      ].includes(this._kind)) Runtime2.nilable(this._active?.finish(null));
+      ].includes(this._kind)) Runtime.nilable(this._active?.finish(null));
       if (this._current == null) return this.showNext();
     }
     requireReload(detail) {
@@ -7568,18 +7843,18 @@
         detail
       );
       if (this._kind !== _Swill__ProblemReporter.RELOAD) {
-        return Runtime2.nilable(this._active?.finish(null));
+        return Runtime.nilable(this._active?.finish(null));
       }
     }
     connectionLost() {
       if (this._kind === _Swill__ProblemReporter.REVISION) {
-        Runtime2.append(this._pending, {
+        Runtime.append(this._pending, {
           kind: _Swill__ProblemReporter.REVISION,
           icon: "Warning",
           message: _Swill__ProblemReporter.REVISION_MESSAGE,
           detail: _Swill__ProblemReporter.REVISION_DETAIL
         });
-        Runtime2.nilable(this._active?.finish(null));
+        Runtime.nilable(this._active?.finish(null));
       }
       ;
       return this.enqueueNotice(
@@ -7602,23 +7877,23 @@
     }
     static messageOf(value) {
       if (value instanceof Error) return value.message;
-      return Runtime2.send(value, "to_s");
+      return Runtime.send(value, "to_s");
     }
     static originOf(value) {
       if (!(value instanceof Error)) return "";
-      let stack = Runtime2.logicalOr(value.stack, () => "");
-      let found = Runtime2.split(stack, "\n").find((line) => Runtime2.isTruthy(/:\d+:\d+\)?$/m.test(Runtime2.strip(line))));
+      let stack = Runtime.logicalOr(value.stack, () => "");
+      let found = Runtime.split(stack, "\n").find((line) => Runtime.isTruthy(/:\d+:\d+\)?$/m.test(Runtime.strip(line))));
       if (found == null) return "";
-      let frame = Runtime2.cast(Runtime2.strip(found), "String");
+      let frame = Runtime.cast(Runtime.strip(found), "String");
       if (frame.startsWith("at ")) return frame;
-      let parts = Runtime2.cast(
-        Runtime2.split(frame, "@"),
+      let parts = Runtime.cast(
+        Runtime.split(frame, "@"),
         "T::Array[String]"
       );
       if (parts.length < 2) return `at ${frame}`;
-      let $function = Runtime2.must(parts[0]);
+      let $function = Runtime.must(parts[0]);
       let location = parts.slice(1).join("@");
-      return Runtime2.isEmpty($function) ? `at ${location}` : `at ${$function} (${location})`;
+      return Runtime.isEmpty($function) ? `at ${location}` : `at ${$function} (${location})`;
     }
   };
   function Swill__Model__Attributes(Superclass) {
@@ -7634,27 +7909,27 @@
         return this.collectSelectedAttributes(null);
       }
       collectSelectedAttributes(only) {
-        let selected = only ? Runtime2.cast(only, "T::Array[T.untyped]").map((name) => Runtime2.send(name, "to_s")) : null;
-        let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
+        let selected = only ? Runtime.cast(only, "T::Array[T.untyped]").map((name) => Runtime.send(name, "to_s")) : null;
+        let result = Runtime.cast({}, "T::Hash[T.untyped, T.untyped]");
         Object.entries(this.constructor.modelAttributes()).forEach(([name, descriptor]) => {
-          let declared_name = Runtime2.cast(name, "String");
-          let declared = Runtime2.cast(descriptor, "T::Hash[String, T.untyped]");
-          if (Runtime2.isTruthy(selected && !selected.includes(declared_name))) return;
-          return result[declared.key] = Runtime2.read(this, declared_name);
+          let declared_name = Runtime.cast(name, "String");
+          let declared = Runtime.cast(descriptor, "T::Hash[String, T.untyped]");
+          if (Runtime.isTruthy(selected && !selected.includes(declared_name))) return;
+          return result[declared.key] = Runtime.read(this, declared_name);
         });
         return result;
       }
       applyAttributes(source) {
-        let values = Runtime2.cast(source, "T::Hash[T.untyped, T.untyped]");
+        let values = Runtime.cast(source, "T::Hash[T.untyped, T.untyped]");
         Object.entries(this.constructor.modelAttributes()).forEach(([name, descriptor]) => {
-          let declared_name = Runtime2.cast(name, "String");
-          let declared = Runtime2.cast(descriptor, "T::Hash[String, T.untyped]");
-          let key = Runtime2.cast(declared.key, "String");
+          let declared_name = Runtime.cast(name, "String");
+          let declared = Runtime.cast(descriptor, "T::Hash[String, T.untyped]");
+          let key = Runtime.cast(declared.key, "String");
           let candidates = [key, key, declared_name, declared_name];
           let found = candidates.find((candidate) => Object.hasOwn(values, candidate));
-          if (!Runtime2.isTruthy(found)) return;
+          if (!Runtime.isTruthy(found)) return;
           let value = this.appliedAttributeValue(declared, values[found]);
-          return Runtime2.write(this, declared_name, value);
+          return Runtime.write(this, declared_name, value);
         });
         return this;
       }
@@ -7664,24 +7939,24 @@
         value = super.coercePropertyValue(name, value, previous);
         if (!Object.hasOwn(this.constructor.modelAttributes(), name)) return value;
         let validator = `validate_${name}`;
-        if (!Runtime2.isTruthy(Runtime2.respondsTo(this, validator))) return value;
-        if (!Runtime2.isTruthy(Runtime2.methodAccepts(this, validator, 2))) {
+        if (!Runtime.isTruthy(Runtime.respondsTo(this, validator))) return value;
+        if (!Runtime.isTruthy(Runtime.methodAccepts(this, validator, 2))) {
           throw new Error(`Validator must take a value and a previous value: ${validator}`);
         }
         ;
-        return Runtime2.invoke(this, validator, value, previous);
+        return Runtime.invoke(this, validator, value, previous);
       }
       propertyWillChange(name, previous, value) {
         return super.propertyWillChange(name, previous, value);
       }
       appliedAttributeValue(descriptor, value) {
         if (value != null) return value;
-        let type = Runtime2.cast(descriptor.type, "String");
+        let type = Runtime.cast(descriptor.type, "String");
         if (type === "T.untyped" || type === "NilClass" || type.startsWith("T.nilable(")) {
           return value;
         }
         ;
-        return Runtime2.duplicate(descriptor.default);
+        return Runtime.duplicate(descriptor.default);
       }
     }
     return Swill__Model__Attributes_Layer;
@@ -7689,10 +7964,10 @@
   function Swill__Model__Attributes_ClassMethods(Superclass) {
     class Swill__Model__Attributes_ClassMethods_Layer extends Object {
       fromAttributes(source) {
-        return Runtime2.invoke(new this(), "apply_attributes", source);
+        return Runtime.invoke(new this(), "apply_attributes", source);
       }
       modelAttributes() {
-        return Runtime2.inheritableRegistry(this, "modelAttributes", "hash");
+        return Runtime.inheritableRegistry(this, "modelAttributes", "hash");
       }
     }
     Object.setPrototypeOf(Swill__Model__Attributes_ClassMethods_Layer.prototype, Superclass);
@@ -7715,7 +7990,7 @@
       // Server, codec, and draft application is clean; only user mutation
       // through setters marks attributes dirty.
       applyAttributes(source) {
-        this._dirty_suspensions = Runtime2.logicalOr(
+        this._dirty_suspensions = Runtime.logicalOr(
           this._dirty_suspensions,
           () => 0
         ) + 1;
@@ -7729,8 +8004,8 @@
       }
       propertyWillChange(name, previous, value) {
         super.propertyWillChange(name, previous, value);
-        if (Runtime2.logicalOr(this._dirty_suspensions, () => 0) > 0) return;
-        let attributes = Runtime2.cast(
+        if (Runtime.logicalOr(this._dirty_suspensions, () => 0) > 0) return;
+        let attributes = Runtime.cast(
           this.constructor.modelAttributes(),
           "T::Hash[String, T.untyped]"
         );
@@ -7741,8 +8016,8 @@
         let baseline = this._dirty_baseline ||= {};
         let names2 = this.dirtyAttributes;
         if (names2.includes(name)) {
-          if (Runtime2.isEqual(baseline[name], value)) {
-            return this.dirtyAttributes = names2.filter((candidate) => !Runtime2.isEqual(candidate, name));
+          if (Runtime.isEqual(baseline[name], value)) {
+            return this.dirtyAttributes = names2.filter((candidate) => !Runtime.isEqual(candidate, name));
           }
         } else {
           baseline[name] = previous;
@@ -7759,7 +8034,7 @@
       // and `draft_of?` names this object. The copy is clean.
       draft() {
         let copy = new this.constructor();
-        Runtime2.invoke(copy, "apply_attributes", this.collectAttributes());
+        Runtime.invoke(copy, "apply_attributes", this.collectAttributes());
         copy.draftOriginal = this;
         return copy;
       }
@@ -7769,20 +8044,20 @@
       // draft was written. Raises when `copy` was not drafted from this
       // object.
       applyDraft(copy) {
-        if (!Runtime2.isTruthy(Runtime2.invoke(copy, "draft_of?", this))) {
+        if (!Runtime.isTruthy(Runtime.invoke(copy, "draft_of?", this))) {
           throw new Error("apply_draft requires a draft made from this object");
         }
         ;
-        this.applyAttributes(Runtime2.send(copy, "collect_attributes"));
+        this.applyAttributes(Runtime.send(copy, "collect_attributes"));
         return this;
       }
       // Whether this object is a draft made by `draft`.
       isDraft() {
-        return !!Runtime2.isTruthy(this._draft_original);
+        return !!Runtime.isTruthy(this._draft_original);
       }
       // Whether this object is a draft made from `original`.
       isDraftOf(original) {
-        return Runtime2.isEqual(this._draft_original, original);
+        return Runtime.isEqual(this._draft_original, original);
       }
       // Records `original` as the object this copy was drafted from. `draft`
       // sets it on the copy it makes; protected so that a subclass's own
@@ -7806,7 +8081,7 @@
   function Swill__Model__Associations_ClassMethods(Superclass) {
     class Swill__Model__Associations_ClassMethods_Layer extends Object {
       modelAssociations() {
-        return Runtime2.inheritableRegistry(this, "modelAssociations", "hash");
+        return Runtime.inheritableRegistry(this, "modelAssociations", "hash");
       }
     }
     Object.setPrototypeOf(Swill__Model__Associations_ClassMethods_Layer.prototype, Superclass);
@@ -7815,7 +8090,7 @@
   var Swill__Model__Store = class extends Swill__Object {
     constructor() {
       super();
-      this._instances = Runtime2.cast({}, "T::Hash[String, Resource]");
+      this._instances = Runtime.cast({}, "T::Hash[String, Resource]");
     }
     get(id) {
       return Object.hasOwn(this._instances, id) ? this._instances[id] : null;
@@ -7827,7 +8102,7 @@
       let id = instance.id;
       if (id == null) throw new Error("Store#put requires an id");
       let existing = this._instances[id];
-      if (Runtime2.isTruthy(existing && existing !== instance)) {
+      if (Runtime.isTruthy(existing && existing !== instance)) {
         existing.applyAttributes(instance.collectAttributes());
         return existing;
       }
@@ -7836,7 +8111,7 @@
       return instance;
     }
     remove(id) {
-      return Runtime2.deleteKey(this._instances, id);
+      return Runtime.deleteKey(this._instances, id);
     }
     clear() {
       this._instances = {};
@@ -7854,7 +8129,7 @@
   function Swill__Model__Identity_ClassMethods(Superclass) {
     class Swill__Model__Identity_ClassMethods_Layer extends Object {
       store() {
-        return Runtime2.identityStore(this);
+        return Runtime.identityStore(this);
       }
       get(id) {
         return this.store().get(id);
@@ -7875,13 +8150,13 @@
         return this.store().values();
       }
       endpoint(...values) {
-        return Runtime2.classSetting(this, "endpoint", values);
+        return Runtime.classSetting(this, "endpoint", values);
       }
       resourceType(...values) {
-        return Runtime2.classSetting(this, "resource_type", values);
+        return Runtime.classSetting(this, "resource_type", values);
       }
       codec(...values) {
-        return Runtime2.classSetting(this, "codec", values);
+        return Runtime.classSetting(this, "codec", values);
       }
     }
     Object.setPrototypeOf(Swill__Model__Identity_ClassMethods_Layer.prototype, Superclass);
@@ -7905,7 +8180,7 @@
       return this.records.length;
     }
     isEmpty() {
-      return Runtime2.isEmpty(this.records);
+      return Runtime.isEmpty(this.records);
     }
     isLoaded() {
       return this.loaded;
@@ -7943,23 +8218,23 @@
     associationState(state2) {
       let owner = this._association_owner;
       if (!owner) return null;
-      return Runtime2.read(owner, `${this._association_name}_${state2}`);
+      return Runtime.read(owner, `${this._association_name}_${state2}`);
     }
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
       let owner = this._association_owner;
-      if (Runtime2.isTruthy(owner && name === "records")) {
+      if (Runtime.isTruthy(owner && name === "records")) {
         return owner.propertyWillAccess(this._association_name);
       }
     }
     constructor() {
       super();
-      this._applying_membership = Runtime2.cast(false, "T::Boolean");
-      this._association_owner = Runtime2.cast(
+      this._applying_membership = Runtime.cast(false, "T::Boolean");
+      this._association_owner = Runtime.cast(
         null,
         "T.nilable(Swill::Distant::Object)"
       );
-      this._association_name = Runtime2.cast("", "String");
+      this._association_name = Runtime.cast("", "String");
       Object.freeze(this.records);
     }
     // Raises: association membership is read-only and changes through a
@@ -7970,7 +8245,7 @@
       })();
     }
     coercePropertyValue(name, value, previous) {
-      if (Runtime2.isTruthy(name === "records" && !this._applying_membership)) {
+      if (Runtime.isTruthy(name === "records" && !this._applying_membership)) {
         throw new Error("Association membership is read-only; use a server operation");
       }
       ;
@@ -7992,11 +8267,11 @@
   var Swill__Model__Association = class extends Swill__Object {
     constructor(descriptor) {
       super();
-      this._name = Runtime2.cast(descriptor.name, "String");
-      this._key = Runtime2.cast(descriptor.key, "String");
-      this._kind = Runtime2.cast(descriptor.kind, "String");
-      this._type = Runtime2.cast(descriptor.type, "String");
-      this._url = Runtime2.cast(descriptor.url, "T.nilable(String)");
+      this._name = Runtime.cast(descriptor.name, "String");
+      this._key = Runtime.cast(descriptor.key, "String");
+      this._kind = Runtime.cast(descriptor.kind, "String");
+      this._type = Runtime.cast(descriptor.type, "String");
+      this._url = Runtime.cast(descriptor.url, "T.nilable(String)");
     }
     get name() {
       return this._name;
@@ -8010,12 +8285,12 @@
     // The declared class, by its installed name: an association may name a
     // class defined later, so the descriptor carries the name.
     modelClass() {
-      return Runtime2.resolve(this._type);
+      return Runtime.resolve(this._type);
     }
     // Where an owner's related records are: the declared pattern with the
     // owner's id, or the owner's own URL followed by the key.
     urlFor(owner) {
-      let id = Runtime2.must(owner.id);
+      let id = Runtime.must(owner.id);
       let pattern = this._url;
       if (pattern != null) return pattern.replace(":id", encodeURIComponent(id));
       return `${owner.constructor.resourceURL(id)}/${this._key}`;
@@ -8039,7 +8314,7 @@
     }
     static attributesOf(model, dirty_only) {
       let attributes = dirty_only ? model.collectDirtyAttributes() : model.collectAttributes();
-      Runtime2.deleteKey(attributes, "id");
+      Runtime.deleteKey(attributes, "id");
       return attributes;
     }
   };
@@ -8048,13 +8323,13 @@
       if (payload == null) return null;
       return this.materialize(
         model_class,
-        Runtime2.cast(payload, "T::Hash[String, T.untyped]")
+        Runtime.cast(payload, "T::Hash[String, T.untyped]")
       );
     }
     static parseMany(model_class, payload) {
-      return Runtime2.cast(payload, "T::Array[T.untyped]").map((item) => this.materialize(
+      return Runtime.cast(payload, "T::Array[T.untyped]").map((item) => this.materialize(
         model_class,
-        Runtime2.cast(item, "T::Hash[String, T.untyped]")
+        Runtime.cast(item, "T::Hash[String, T.untyped]")
       ));
     }
     static serialize(model, dirty_only) {
@@ -8072,28 +8347,28 @@
   };
   var Swill__Model__JSONAPI = class extends Swill__Model__Codec {
     static parseOne(model_class, payload) {
-      let document2 = Runtime2.cast(payload, "T::Hash[String, T.untyped]");
+      let document2 = Runtime.cast(payload, "T::Hash[String, T.untyped]");
       let data = document2.data;
       if (Array.isArray(data)) {
         throw new Error("expected a single JSON:API resource");
       }
       ;
       this.pool(document2);
-      return data == null ? null : this.pooled(Runtime2.cast(
+      return data == null ? null : this.pooled(Runtime.cast(
         data,
         "T::Hash[String, T.untyped]"
       ));
     }
     static parseMany(model_class, payload) {
-      let document2 = Runtime2.cast(payload, "T::Hash[String, T.untyped]");
+      let document2 = Runtime.cast(payload, "T::Hash[String, T.untyped]");
       let data = document2.data;
       if (!Array.isArray(data)) throw new Error("expected a JSON:API collection");
       this.pool(document2);
-      return Runtime2.compact(this.resourcesIn(data).map((resource) => this.pooled(resource)));
+      return Runtime.compact(this.resourcesIn(data).map((resource) => this.pooled(resource)));
     }
     static serialize(model, dirty_only) {
       let attributes = Swill__Model__Codec.attributesOf(model, dirty_only);
-      let resource = Runtime2.cast(
+      let resource = Runtime.cast(
         { type: model.constructor.resourceType(), attributes },
         "T::Hash[String, T.untyped]"
       );
@@ -8109,30 +8384,30 @@
     static resourcesIn(value) {
       if (value == null) return [];
       if (Array.isArray(value)) {
-        return Runtime2.cast(value, "T::Array[T::Hash[String, T.untyped]]");
+        return Runtime.cast(value, "T::Array[T::Hash[String, T.untyped]]");
       }
       ;
-      return [Runtime2.cast(value, "T::Hash[String, T.untyped]")];
+      return [Runtime.cast(value, "T::Hash[String, T.untyped]")];
     }
     static materialize(resource) {
       let raw_type = resource.type;
       let type = `${raw_type}`;
       let model_class = Swill__Model__Resource.classForType(type);
       if (!model_class) {
-        Runtime2.warn(`no model class declares resource_type ${type}`);
+        Runtime.warn(`no model class declares resource_type ${type}`);
         return null;
       }
       ;
       let raw_id = resource.id;
       if (raw_id == null) {
-        Runtime2.warn(`a JSON:API resource of type ${type} has no id`);
+        Runtime.warn(`a JSON:API resource of type ${type} has no id`);
         return null;
       }
       ;
       let id = `${raw_id}`;
       let instance = model_class.get(id) || new model_class();
       let attributes = resource.attributes;
-      if (Runtime2.isTruthy(attributes)) instance.applyAttributes(attributes);
+      if (Runtime.isTruthy(attributes)) instance.applyAttributes(attributes);
       instance.applyAttributes({ id });
       return model_class.put(instance);
     }
@@ -8140,20 +8415,20 @@
       let raw_type = resource.type;
       let model_class = Swill__Model__Resource.classForType(`${raw_type}`);
       let id = resource.id;
-      if (!Runtime2.isTruthy(model_class && id != null)) return null;
+      if (!Runtime.isTruthy(model_class && id != null)) return null;
       return model_class.get(`${id}`);
     }
     static hydrate(resource) {
       let instance = this.pooled(resource);
       let linkages = resource.relationships;
-      if (!Runtime2.isTruthy(instance && linkages)) return;
+      if (!Runtime.isTruthy(instance && linkages)) return;
       return instance.associations().forEach((association) => {
         let related, related_one;
-        let linkage = Runtime2.logicalOr(
+        let linkage = Runtime.logicalOr(
           linkages[association.key],
           () => linkages[association.name]
         );
-        if (!Runtime2.isTruthy(linkage)) return;
+        if (!Runtime.isTruthy(linkage)) return;
         let data = linkage.data;
         if (association.isMany()) {
           if (!Array.isArray(data)) return;
@@ -8163,7 +8438,7 @@
         } else if (data == null) {
           return instance.assignAssociation(association.name, null);
         } else if (!Array.isArray(data)) {
-          related_one = this.pooled(Runtime2.cast(
+          related_one = this.pooled(Runtime.cast(
             data,
             "T::Hash[String, T.untyped]"
           ));
@@ -8193,7 +8468,7 @@
       try {
         this.records = this._model_class.parseMany(await Swill__Wire.default().getJSON(
           this._url,
-          Runtime2.keywordArguments({ params: this._params })
+          Runtime.keywordArguments({ params: this._params })
         ));
       } catch (failure) {
         this.error = failure.message;
@@ -8209,16 +8484,16 @@
     // flight.
     constructor() {
       super();
-      this._association_requests = Runtime2.cast(
+      this._association_requests = Runtime.cast(
         {},
         "T::Hash[String, T.untyped]"
       );
     }
     static classForType(type) {
-      return Runtime2.classWithSetting("resource_type", type);
+      return Runtime.classWithSetting("resource_type", type);
     }
     static activeCodec() {
-      return Runtime2.logicalOr(this.codec(), () => Swill__Model__JSONAPI);
+      return Runtime.logicalOr(this.codec(), () => Swill__Model__JSONAPI);
     }
     static parseOne(payload) {
       return this.activeCodec().parseOne(this, payload);
@@ -8233,7 +8508,7 @@
     }
     static endpointURL() {
       let url = this.endpoint();
-      if (!Runtime2.isTruthy(url)) throw new Error("no endpoint declared");
+      if (!Runtime.isTruthy(url)) throw new Error("no endpoint declared");
       return `${url}`;
     }
     static resourceURL(id) {
@@ -8259,7 +8534,7 @@
     static async fetchAll(url, params) {
       return this.parseMany(await Swill__Wire.default().getJSON(
         url,
-        Runtime2.keywordArguments({ params })
+        Runtime.keywordArguments({ params })
       ));
     }
     static dataset(url, params) {
@@ -8277,21 +8552,21 @@
       let problem = this.validate();
       if (problem != null) throw new Error(`${problem}`);
       let creating = this.id == null;
-      if (Runtime2.isTruthy(!creating && !this.isDirty)) return this;
+      if (Runtime.isTruthy(!creating && !this.isDirty)) return this;
       let method = creating ? "POST" : "PATCH";
-      let url = creating ? this.constructor.endpointURL() : this.constructor.resourceURL(Runtime2.must(this.id));
+      let url = creating ? this.constructor.endpointURL() : this.constructor.resourceURL(Runtime.must(this.id));
       let response = await Swill__Wire.default().requestJSON(
         method,
         url,
-        Runtime2.keywordArguments({ body: this.serialize(!creating) })
+        Runtime.keywordArguments({ body: this.serialize(!creating) })
       );
       let persisted = this.constructor.parseOne(response);
       if (!persisted) throw new Error(`${method} ${url} returned no record`);
       this.id = persisted.id;
       this.applyAttributes(persisted.collectAttributes());
       this.markCleanBang();
-      if (Runtime2.isTruthy(creating && persisted !== this)) {
-        this.constructor.remove(Runtime2.must(this.id));
+      if (Runtime.isTruthy(creating && persisted !== this)) {
+        this.constructor.remove(Runtime.must(this.id));
       }
       ;
       this.constructor.put(this);
@@ -8321,7 +8596,7 @@
     // Returns an `Association` for each association this class declares,
     // in declaration order.
     associations() {
-      let descriptors = Runtime2.cast(
+      let descriptors = Runtime.cast(
         Object.values(this.constructor.modelAssociations()),
         "T::Array[T::Hash[String, T.untyped]]"
       );
@@ -8331,32 +8606,32 @@
     // declares no such association.
     association(name) {
       let descriptor = this.constructor.modelAssociations()[name];
-      if (!Runtime2.isTruthy(descriptor)) {
+      if (!Runtime.isTruthy(descriptor)) {
         throw new Error(`${name} is not an association`);
       }
       ;
-      return new Swill__Model__Association(Runtime2.cast(
+      return new Swill__Model__Association(Runtime.cast(
         descriptor,
         "T::Hash[String, T.untyped]"
       ));
     }
     // Returns whether the association `name` holds a loaded value.
     isAssociationLoaded(name) {
-      return Runtime2.read(this, `${name}_loaded`) === true;
+      return Runtime.read(this, `${name}_loaded`) === true;
     }
     // Sets the association `name` to `value` as though it had loaded:
     // marks it loaded and clears its error. No request is sent.
     assignAssociation(name, value) {
-      Runtime2.write(this, name, value);
-      Runtime2.write(this, `${name}_error`, null);
-      return Runtime2.write(this, `${name}_loaded`, true);
+      Runtime.write(this, name, value);
+      Runtime.write(this, `${name}_error`, null);
+      return Runtime.write(this, `${name}_loaded`, true);
     }
     async loadAssociation(name) {
-      if (this.isAssociationLoaded(name)) return Runtime2.read(this, name);
+      if (this.isAssociationLoaded(name)) return Runtime.read(this, name);
       let pending = this._association_requests[name];
-      if (Runtime2.isTruthy(pending)) {
+      if (Runtime.isTruthy(pending)) {
         await pending;
-        return Runtime2.read(this, name);
+        return Runtime.read(this, name);
       }
       ;
       return await this.reloadAssociation(name);
@@ -8364,28 +8639,28 @@
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
       if (this.id == null) return;
-      if (!Runtime2.isTruthy(this.constructor.modelAssociations()[name])) return;
+      if (!Runtime.isTruthy(this.constructor.modelAssociations()[name])) return;
       if (this.isAssociationLoaded(name)) return;
-      if (Runtime2.read(this, `${name}_loading`) === true) return;
-      if (Runtime2.read(this, `${name}_error`) != null) return;
+      if (Runtime.read(this, `${name}_loading`) === true) return;
+      if (Runtime.read(this, `${name}_error`) != null) return;
       return this.loadAssociationInBackground(name);
     }
     async loadAssociationInBackground(name) {
       try {
         return await this.loadAssociation(name);
       } catch (failure) {
-        return Runtime2.warn(`${name} did not load: ${failure.message}`);
+        return Runtime.warn(`${name} did not load: ${failure.message}`);
       }
     }
     async reloadAssociation(name) {
       let pending = this._association_requests[name];
-      if (Runtime2.isTruthy(pending)) {
+      if (Runtime.isTruthy(pending)) {
         await pending;
-        return Runtime2.read(this, name);
+        return Runtime.read(this, name);
       }
       ;
-      Runtime2.write(this, `${name}_loading`, true);
-      Runtime2.write(this, `${name}_error`, null);
+      Runtime.write(this, `${name}_loading`, true);
+      Runtime.write(this, `${name}_error`, null);
       let request = null;
       try {
         let descriptor = this.association(name);
@@ -8396,17 +8671,17 @@
         let value = descriptor.isMany() ? model_class.parseMany(payload) : model_class.parseOne(payload);
         this.assignAssociation(name, value);
       } catch (failure) {
-        Runtime2.write(this, `${name}_error`, failure.message);
+        Runtime.write(this, `${name}_error`, failure.message);
         throw new Error(`${failure.message}`);
       } finally {
-        if (Runtime2.isEqual(this._association_requests[name], request)) {
-          Runtime2.deleteKey(this._association_requests, name);
+        if (Runtime.isEqual(this._association_requests[name], request)) {
+          Runtime.deleteKey(this._association_requests, name);
         }
         ;
-        Runtime2.write(this, `${name}_loading`, false);
+        Runtime.write(this, `${name}_loading`, false);
       }
       ;
-      return Runtime2.read(this, name);
+      return Runtime.read(this, name);
     }
   };
   function Swill__Distant__Fields(Superclass) {
@@ -8417,10 +8692,10 @@
   function Swill__Distant__Fields_ClassMethods(Superclass) {
     class Swill__Distant__Fields_ClassMethods_Layer extends Object {
       dataFields() {
-        return Runtime2.inheritableRegistry(this, "dataFields", "hash");
+        return Runtime.inheritableRegistry(this, "dataFields", "hash");
       }
       dataModelName(...values) {
-        return Runtime2.classSetting(this, "data_model_name", values);
+        return Runtime.classSetting(this, "data_model_name", values);
       }
     }
     Object.setPrototypeOf(Swill__Distant__Fields_ClassMethods_Layer.prototype, Superclass);
@@ -8434,11 +8709,11 @@
     // `AssociationCollection` for each to-many association.
     constructor() {
       super();
-      this._data_generations = Runtime2.cast(
+      this._data_generations = Runtime.cast(
         {},
         "T::Hash[String, T::Hash[String, Integer]]"
       );
-      this._data_controllers = Runtime2.cast(
+      this._data_controllers = Runtime.cast(
         {},
         "T::Hash[String, ArrayController]"
       );
@@ -8446,7 +8721,7 @@
         if (descriptor.kind !== "many") return;
         let collection = new Swill__Model__AssociationCollection();
         collection.attachAssociation(this, name);
-        return Runtime2.write(this, `data_${name}`, collection);
+        return Runtime.write(this, `data_${name}`, collection);
       });
     }
     // :section: Field State
@@ -8472,7 +8747,7 @@
     // when its last request succeeded or none was made. Reads
     // `<name>_error`.
     fieldError(name) {
-      return Runtime2.cast(
+      return Runtime.cast(
         this.readDataState(name, "error"),
         "T.nilable(String)"
       );
@@ -8490,7 +8765,7 @@
       let existing = this._data_controllers[name];
       if (existing) return existing;
       let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
         descriptor,
         () => descriptor.kind === "many"
       ))) throw new Error(`Unknown to-many association ${name}`);
@@ -8500,7 +8775,7 @@
       this.retain(() => {
         controller.content = null;
         controller.dealloc();
-        return Runtime2.deleteKey(this._data_controllers, name);
+        return Runtime.deleteKey(this._data_controllers, name);
       });
       return controller;
     }
@@ -8543,9 +8818,9 @@
       }
       ;
       let attributes = this.collectDirtyAttributes();
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         this.id,
-        () => Runtime2.isEmpty(attributes)
+        () => Runtime.isEmpty(attributes)
       ))) return this;
       if (this.id != null) {
         await Swill__Distant__Client.default().update(this, attributes);
@@ -8563,7 +8838,7 @@
       }
       ;
       let attributes = copy.collectDirtyAttributes();
-      if (Runtime2.isEmpty(attributes)) return this;
+      if (Runtime.isEmpty(attributes)) return this;
       await Swill__Distant__Client.default().update(this, attributes);
       copy.markCleanBang();
       return this;
@@ -8597,11 +8872,11 @@
       let copy = new this.constructor();
       copy.applyDataField("id", this.id, 0, true);
       Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (!Runtime2.isTruthy(descriptor.kind === "field" && this.readDataState(
+        if (!Runtime.isTruthy(descriptor.kind === "field" && this.readDataState(
           name,
           "loaded"
         ) === true)) return;
-        return copy.applyDataField(name, Runtime2.read(this, name), 0, true);
+        return copy.applyDataField(name, Runtime.read(this, name), 0, true);
       });
       copy.markCleanBang();
       copy.draftOriginal = this;
@@ -8641,25 +8916,25 @@
     applyDataField(name, value, generation, overwrite_dirty) {
       let descriptor;
       let generations = this.dataGeneration(name);
-      if (generation < Runtime2.must(generations.applied)) return;
+      if (generation < Runtime.must(generations.applied)) return;
       generations.applied = generation;
-      if (!Runtime2.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
+      if (!Runtime.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
         descriptor = this.constructor.dataFields()[name];
-        if (Runtime2.isTruthy(Runtime2.logicalAnd(
+        if (Runtime.isTruthy(Runtime.logicalAnd(
           descriptor,
           () => descriptor.kind === "many"
         ))) {
-          this.dataCollection(name).applyMembership(Runtime2.cast(
-            Runtime2.logicalOr(value, () => []),
+          this.dataCollection(name).applyMembership(Runtime.cast(
+            Runtime.logicalOr(value, () => []),
             "T::Array[T.untyped]"
           ));
-        } else if (Runtime2.isTruthy(Runtime2.logicalOr(
-          Runtime2.logicalAnd(descriptor, () => descriptor.kind === "field"),
+        } else if (Runtime.isTruthy(Runtime.logicalOr(
+          Runtime.logicalAnd(descriptor, () => descriptor.kind === "field"),
           () => name === "id"
         ))) {
           this.applyAttributes({ [name]: value });
         } else {
-          Runtime2.write(this, `data_${name}`, value);
+          Runtime.write(this, `data_${name}`, value);
         }
       }
       ;
@@ -8673,12 +8948,12 @@
     // read.
     invalidateDataField(name, generation) {
       let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
         descriptor,
         () => descriptor.kind !== "field"
       ))) return;
       let generations = this.dataGeneration(name);
-      if (generation < Runtime2.must(generations.applied)) return;
+      if (generation < Runtime.must(generations.applied)) return;
       generations.applied = generation;
       this.writeDataState(name, "stale", true);
       this.writeDataState(name, "loading", false);
@@ -8690,13 +8965,13 @@
     // The client refreshes an invalidated association only when this is
     // true; otherwise the next read requests it.
     dataFieldObserved(name) {
-      if (Runtime2.isTruthy(Runtime2.observed(this, name))) return true;
+      if (Runtime.isTruthy(Runtime.observed(this, name))) return true;
       let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (!Runtime.isTruthy(Runtime.logicalAnd(
         descriptor,
         () => descriptor.kind === "many"
       ))) return false;
-      return Runtime2.observed(this.dataCollection(name), "records");
+      return Runtime.observed(this.dataCollection(name), "records");
     }
     // Records that a request of `generation` for the field `name` was sent,
     // so that `fail_data_field` can ignore the failure of an older one.
@@ -8708,11 +8983,11 @@
     // the field is already loading, or is loaded and not stale — unless
     // `reload` is true, which always requests.
     beginDataFieldLoad(name, reload) {
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         !reload && this.readDataState(name, "loaded") === true,
         () => this.readDataState(name, "stale") !== true
       ))) return false;
-      if (Runtime2.isTruthy(!reload && this.readDataState(name, "loading") === true)) {
+      if (Runtime.isTruthy(!reload && this.readDataState(name, "loading") === true)) {
         return false;
       }
       ;
@@ -8727,8 +9002,8 @@
     // since moved on.
     failDataFieldWithGeneration(name, message, generation) {
       let generations = this.dataGeneration(name);
-      if (Runtime2.isTruthy(generation != null ? (() => {
-        return generation < Runtime2.must(generations.applied) || generation < Runtime2.must(generations.requested);
+      if (Runtime.isTruthy(generation != null ? (() => {
+        return generation < Runtime.must(generations.applied) || generation < Runtime.must(generations.requested);
       })() : generation)) return;
       this.writeDataState(name, "loading", false);
       return this.writeDataState(name, "error", message);
@@ -8766,26 +9041,26 @@
     // which declares no such property.
     writeDataState(name, state2, value) {
       let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(descriptor)) return;
-      if (Runtime2.isTruthy(state2 === "stale" && descriptor.kind === "field")) return;
-      return Runtime2.write(this, `${name}_${state2}`, value);
+      if (!Runtime.isTruthy(descriptor)) return;
+      if (Runtime.isTruthy(state2 === "stale" && descriptor.kind === "field")) return;
+      return Runtime.write(this, `${name}_${state2}`, value);
     }
     // Reads the state property `<name>_<state>`; nil where
     // `write_data_state` would write nothing.
     readDataState(name, state2) {
       let descriptor = this.constructor.dataFields()[name];
-      if (!Runtime2.isTruthy(descriptor)) return null;
-      if (Runtime2.isTruthy(state2 === "stale" && descriptor.kind === "field")) {
+      if (!Runtime.isTruthy(descriptor)) return null;
+      if (Runtime.isTruthy(state2 === "stale" && descriptor.kind === "field")) {
         return null;
       }
       ;
-      return Runtime2.read(this, `${name}_${state2}`);
+      return Runtime.read(this, `${name}_${state2}`);
     }
     // The stable collection of the to-many association `name`, held by
     // its stored `data_<name>` property.
     dataCollection(name) {
-      return Runtime2.cast(
-        Runtime2.read(this, `data_${name}`),
+      return Runtime.cast(
+        Runtime.read(this, `data_${name}`),
         "Swill::Model::AssociationCollection"
       );
     }
@@ -8814,7 +9089,7 @@
       return this._default ||= new this();
     }
     static configure(...__swill_arguments) {
-      let __swill_bound = Runtime2.bindArguments(__swill_arguments, {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [],
         keywords: [
           { name: "url", kind: "keyreq" },
@@ -8823,40 +9098,40 @@
         keywordRest: null,
         block: "__swill_block"
       });
-      let url = Runtime2.argument(__swill_bound, "url");
-      let schema_hash = Runtime2.argument(__swill_bound, "schema_hash");
+      let url = Runtime.argument(__swill_bound, "url");
+      let schema_hash = Runtime.argument(__swill_bound, "schema_hash");
       this.default();
-      return Runtime2.configureData(url, schema_hash);
+      return Runtime.configureData(url, schema_hash);
     }
     // Creates the identity store and observes the transport. Transient loss
     // leaves local objects intact; only an intentional reset forgets them.
     constructor() {
       super();
-      this._stores = Runtime2.cast(
+      this._stores = Runtime.cast(
         {},
         "T::Hash[String, T::Hash[String, T.untyped]]"
       );
-      this._tombstones = Runtime2.cast(
+      this._tombstones = Runtime.cast(
         {},
         "T::Hash[String, T::Hash[String, T.untyped]]"
       );
-      this._queued_demands = Runtime2.cast({}, "T::Hash[String, T.untyped]");
-      this._demand_scheduled = Runtime2.cast(false, "T::Boolean");
-      this._actor_scope = Runtime2.cast(null, "T.nilable(String)");
-      this._generation = Runtime2.cast(0, "Integer");
-      this._active_generations = Runtime2.cast([], "T::Array[Integer]");
-      this._retry_timer = Runtime2.cast(null, "T.nilable(Integer)");
-      this._retry_attempt = Runtime2.cast(0, "Integer");
-      this._connection_detail = Runtime2.cast("", "String");
+      this._queued_demands = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      this._demand_scheduled = Runtime.cast(false, "T::Boolean");
+      this._actor_scope = Runtime.cast(null, "T.nilable(String)");
+      this._generation = Runtime.cast(0, "Integer");
+      this._active_generations = Runtime.cast([], "T::Array[Integer]");
+      this._retry_timer = Runtime.cast(null, "T.nilable(Integer)");
+      this._retry_attempt = Runtime.cast(0, "Integer");
+      this._connection_detail = Runtime.cast("", "String");
       Swill__NotificationCenter.default().addObserver(
         "application_did_launch",
         (_note) => this.presentConnection()
       );
       Swill__NotificationCenter.default().addObserver(
         "application_will_terminate",
-        (_note) => Runtime2.closeData()
+        (_note) => Runtime.closeData()
       );
-      Runtime2.registerDataLifecycle(
+      Runtime.registerDataLifecycle(
         () => this.reset(),
         () => this.connectionOpened(),
         (state2, detail) => this.connectionChanged(state2, detail)
@@ -8869,7 +9144,7 @@
       ;
       this.cancelRetry();
       try {
-        await Runtime2.connectData();
+        await Runtime.connectData();
         return true;
       } catch (_error) {
         return false;
@@ -8881,16 +9156,16 @@
       this._connection_detail = detail;
       if (state2 === "connected" || state2 === "idle") this._retry_attempt = 0;
       if (state2 === "disconnected") {
-        let delays = Runtime2.cast(
+        let delays = Runtime.cast(
           _Swill__Distant__Client.RETRY_DELAYS,
           "T::Array[Integer]"
         );
-        let delay = Runtime2.must(delays[Runtime2.min([
+        let delay = Runtime.must(delays[Runtime.min([
           this._retry_attempt,
           delays.length - 1
         ])]);
         this._retry_attempt++;
-        let jittered = Runtime2.cast(
+        let jittered = Runtime.cast(
           delay * (1 - _Swill__Distant__Client.RETRY_JITTER + Math.random() * _Swill__Distant__Client.RETRY_JITTER * 2),
           "Float"
         );
@@ -8985,20 +9260,20 @@
     }
     async delete(object) {
       let model = object.constructor.dataModelName();
-      let id = Runtime2.stringify(object.id);
+      let id = Runtime.stringify(object.id);
       let [_value, removed_generation] = await this.requestWithGeneration(
         "DELETE",
         { model, id },
         null,
         true
       );
-      Runtime2.deleteKey(this.modelStore(model), id);
+      Runtime.deleteKey(this.modelStore(model), id);
       this.modelTombstones(model)[id] = {
         object,
         generation: removed_generation
       };
       object.deleted = true;
-      Runtime2.deleteKey(this._queued_demands, `${model}:${id}`);
+      Runtime.deleteKey(this._queued_demands, `${model}:${id}`);
       object.dealloc();
       this.pruneTombstones();
       return object;
@@ -9017,20 +9292,20 @@
       let model = object.constructor.dataModelName();
       let key = `${model}:${object.id}`;
       let item = this._queued_demands[key];
-      if (!Runtime2.isTruthy(item)) {
+      if (!Runtime.isTruthy(item)) {
         item = { object, fields: [] };
         this._queued_demands[key] = item;
       }
       ;
-      let fields = Runtime2.cast(item.fields, "T::Array[String]");
-      if (!fields.includes(name)) Runtime2.append(fields, name);
+      let fields = Runtime.cast(item.fields, "T::Array[String]");
+      if (!fields.includes(name)) Runtime.append(fields, name);
       return this.scheduleDemands();
     }
     async loadField(object, name, reload) {
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
-        !reload && Runtime2.read(object, `${name}_loaded`) === true,
-        () => Runtime2.read(object, `${name}_stale`) !== true
-      ))) return Runtime2.read(object, name);
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        !reload && Runtime.read(object, `${name}_loaded`) === true,
+        () => Runtime.read(object, `${name}_stale`) !== true
+      ))) return Runtime.read(object, name);
       object.beginDataFieldLoad(name, true);
       await this.request(
         "GET",
@@ -9038,7 +9313,7 @@
         null,
         false
       );
-      return Runtime2.read(object, name);
+      return Runtime.read(object, name);
     }
     // :section: Called by the Runtime
     // The connection's lifecycle, as the runtime reports it.
@@ -9049,9 +9324,9 @@
     // scope: another actor's records are another identity.
     reset() {
       Object.entries(this._stores).forEach(([_model, store]) => {
-        let typed_store = Runtime2.cast(store, "T::Hash[String, T.untyped]");
+        let typed_store = Runtime.cast(store, "T::Hash[String, T.untyped]");
         return Object.entries(typed_store).forEach(([_id, object]) => {
-          let distant = Runtime2.cast(object, "Swill::Distant::Object");
+          let distant = Runtime.cast(object, "Swill::Distant::Object");
           distant.resetDataFields();
           return distant.dealloc();
         });
@@ -9065,7 +9340,7 @@
     // Sends the demands queued while the connection was down. The runtime
     // calls this when the connection opens.
     connectionOpened() {
-      if (!Runtime2.isEmpty(this._queued_demands)) return this.scheduleDemands();
+      if (!Runtime.isEmpty(this._queued_demands)) return this.scheduleDemands();
     }
     // The body of a `QUERY`, `RESOLVE` or `COMMAND` message: the model
     // and remote method named, with the arguments encoded for the wire.
@@ -9082,20 +9357,20 @@
     // value itself otherwise.
     wrapResult(value, result_kind) {
       if (result_kind !== "result_set") return value;
-      return new Swill__Model__ResultSet().replace(Runtime2.cast(
+      return new Swill__Model__ResultSet().replace(Runtime.cast(
         value,
         "T::Array[T.untyped]"
       ));
     }
     // Positional arguments for the wire, an omitted optional dropped.
     encodeArguments(values) {
-      return values.filter((value) => !Runtime2.isTruthy(Runtime2.isOmittedArgument(value))).map((value) => this.encodeValue(value));
+      return values.filter((value) => !Runtime.isTruthy(Runtime.isOmittedArgument(value))).map((value) => this.encodeValue(value));
     }
     // Keyword arguments for the wire, an omitted optional dropped.
     encodeKeywords(values) {
-      let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
+      let result = Runtime.cast({}, "T::Hash[T.untyped, T.untyped]");
       Object.entries(values).forEach(([name, value]) => {
-        if (!Runtime2.isTruthy(Runtime2.isOmittedArgument(value))) {
+        if (!Runtime.isTruthy(Runtime.isOmittedArgument(value))) {
           result[name] = this.encodeValue(value);
         }
       });
@@ -9105,28 +9380,57 @@
     // `$ref` of its model and id, a time as an ISO `$time`, and arrays
     // and records element by element. Anything else is sent as it is.
     encodeValue(value) {
-      if (Runtime2.isTruthy(value instanceof Swill__Distant__Object && Runtime2.send(
+      if (Runtime.isTruthy(value instanceof Swill__Distant__Object && Runtime.send(
         value,
         "id"
       ))) {
-        let distant = Runtime2.cast(value, "Swill::Distant::Object");
+        let distant = Runtime.cast(value, "Swill::Distant::Object");
         return { $ref: [
           distant.constructor.dataModelName(),
-          Runtime2.stringify(distant.id)
+          Runtime.stringify(distant.id)
         ] };
       }
       ;
-      if (Runtime2.isTruthy(Runtime2.dataTime(value))) {
-        return { $time: Runtime2.dataTimeIso(value) };
+      let parts;
+      switch (Runtime.dataValueType(value)) {
+        case "Time":
+          return { $time: Runtime.dataValuePayload(value) };
+        case "Date":
+          return { $date: Runtime.dataValuePayload(value) };
+        case "DateTime":
+          return { $datetime: Runtime.dataValuePayload(value) };
+        case "BigDecimal":
+          return { $decimal: Runtime.dataValuePayload(value) };
+        case "TimeOfDay":
+          return { $time_of_day: Runtime.dataValuePayload(value) };
+        case "RangeValue":
+          parts = Runtime.cast(
+            Runtime.dataValuePayload(value),
+            "T::Array[T.untyped]"
+          );
+          return { $range: [
+            parts[0],
+            parts[1],
+            this.encodeValue(parts[2]),
+            this.encodeValue(parts[3]),
+            parts[4],
+            parts[5]
+          ] };
+        case "Interval":
+          return { $interval: Runtime.dataValuePayload(value) };
+      }
+      ;
+      if (Runtime.isTruthy(Runtime.dataTime(value))) {
+        return { $time: Runtime.dataTimeISO(value) };
       }
       ;
       if (Array.isArray(value)) {
-        return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.encodeValue(item));
+        return Runtime.cast(value, "T::Array[T.untyped]").map((item) => this.encodeValue(item));
       }
       ;
-      if (Runtime2.isTruthy(Runtime2.dataRecord(value))) {
-        let result = Runtime2.cast({}, "T::Hash[T.untyped, T.untyped]");
-        Object.entries(Runtime2.cast(value, "T::Hash[T.untyped, T.untyped]")).forEach(([name, item]) => result[name] = this.encodeValue(item));
+      if (Runtime.isTruthy(Runtime.dataRecord(value))) {
+        let result = Runtime.cast({}, "T::Hash[T.untyped, T.untyped]");
+        Object.entries(Runtime.cast(value, "T::Hash[T.untyped, T.untyped]")).forEach(([name, item]) => result[name] = this.encodeValue(item));
         return result;
       }
       ;
@@ -9141,56 +9445,110 @@
     // `response_generation` is the generation a new object's id is applied
     // under, so a tombstone of a newer deletion is not brought back.
     decodeValueWithPreferred(value, response_generation, preferred) {
+      let parts;
       if (Array.isArray(value)) {
-        return Runtime2.cast(value, "T::Array[T.untyped]").map((item) => this.decodeValueWithPreferred(item, response_generation, preferred));
+        return Runtime.cast(value, "T::Array[T.untyped]").map((item) => this.decodeValueWithPreferred(item, response_generation, preferred));
       }
       ;
-      if (!Runtime2.isTruthy(Runtime2.dataRecord(value))) return value;
-      let record2 = Runtime2.cast(value, "T::Hash[String, T.untyped]");
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+      if (!Runtime.isTruthy(Runtime.dataRecord(value))) return value;
+      let record2 = Runtime.cast(value, "T::Hash[String, T.untyped]");
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
         record2,
         "$ref"
       ))) {
-        let reference = Runtime2.cast(record2["$ref"], "T::Array[T.untyped]");
-        let use_preferred = Runtime2.logicalAnd(
-          preferred && Runtime2.isEqual(
+        let reference = Runtime.cast(record2["$ref"], "T::Array[T.untyped]");
+        let use_preferred = Runtime.logicalAnd(
+          preferred && Runtime.isEqual(
             preferred.constructor.dataModelName(),
             reference[0]
           ),
           () => preferred.id == null
         );
         return this.canonicalWithPreferred(
-          Runtime2.send(reference[0], "to_s"),
-          Runtime2.send(reference[1], "to_s"),
+          Runtime.send(reference[0], "to_s"),
+          Runtime.send(reference[1], "to_s"),
           response_generation,
-          Runtime2.isTruthy(use_preferred) ? preferred : null
+          Runtime.isTruthy(use_preferred) ? preferred : null
         );
       }
       ;
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
         record2,
         "$time"
-      ))) return Runtime2.dataTimeFromIso(Runtime2.send(record2["$time"], "to_s"));
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+      ))) return Runtime.dataTimeFromISO(Runtime.send(record2["$time"], "to_s"));
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
         record2,
         "$date"
-      ))) return record2["$date"];
-      if (Runtime2.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+      ))) return Runtime.dataDateFromISO(Runtime.send(record2["$date"], "to_s"));
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$datetime"
+      ))) {
+        return Runtime.dataDateTimeFromISO(Runtime.send(
+          record2["$datetime"],
+          "to_s"
+        ));
+      }
+      ;
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$decimal"
+      ))) {
+        return Runtime.dataDecimalFromString(Runtime.send(
+          record2["$decimal"],
+          "to_s"
+        ));
+      }
+      ;
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$time_of_day"
+      ))) {
+        return Runtime.dataTimeOfDayFromISO(Runtime.send(
+          record2["$time_of_day"],
+          "to_s"
+        ));
+      }
+      ;
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$range"
+      ))) {
+        parts = Runtime.cast(record2["$range"], "T::Array[T.untyped]");
+        return Runtime.dataRange(
+          parts[0],
+          parts[1],
+          this.decodeValue(parts[2], response_generation),
+          this.decodeValue(parts[3], response_generation),
+          parts[4],
+          parts[5]
+        );
+      }
+      ;
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
+        record2,
+        "$interval"
+      ))) {
+        parts = Runtime.cast(record2["$interval"], "T::Array[T.untyped]");
+        return Runtime.dataInterval(parts[0], parts[1], parts[2]);
+      }
+      ;
+      if (Runtime.isTruthy(Object.keys(record2).length === 1 && Object.hasOwn(
         record2,
         "$value"
       ))) {
-        let tagged = Runtime2.cast(record2["$value"], "T::Array[T.untyped]");
-        let klass = Runtime2.resolve(Runtime2.send(tagged[0], "to_s"));
-        let attributes = Runtime2.cast(
+        let tagged = Runtime.cast(record2["$value"], "T::Array[T.untyped]");
+        let klass = Runtime.resolve(Runtime.send(tagged[0], "to_s"));
+        let attributes = Runtime.cast(
           this.decodeValue(tagged[1], response_generation),
           "T::Hash[String, T.untyped]"
         );
         let object = new klass();
-        Object.entries(attributes).forEach(([name, item]) => Runtime2.write(object, name, item));
+        Object.entries(attributes).forEach(([name, item]) => Runtime.write(object, name, item));
         return object;
       }
       ;
-      let result = Runtime2.cast({}, "T::Hash[String, T.untyped]");
+      let result = Runtime.cast({}, "T::Hash[String, T.untyped]");
       Object.entries(record2).forEach(([name, item]) => result[name] = this.decodeValueWithPreferred(
         item,
         response_generation,
@@ -9206,21 +9564,21 @@
     canonicalWithPreferred(model, id, response_generation, preferred) {
       let store = this.modelStore(model);
       let existing = store[id];
-      if (Runtime2.isTruthy(existing)) {
-        return Runtime2.cast(existing, "Swill::Distant::Object");
+      if (Runtime.isTruthy(existing)) {
+        return Runtime.cast(existing, "Swill::Distant::Object");
       }
       ;
       let removed = this.modelTombstones(model)[id];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         removed,
         () => response_generation <= removed.generation
-      ))) return Runtime2.cast(removed.object, "Swill::Distant::Object");
-      if (Runtime2.isTruthy(removed)) {
-        Runtime2.deleteKey(this.modelTombstones(model), id);
+      ))) return Runtime.cast(removed.object, "Swill::Distant::Object");
+      if (Runtime.isTruthy(removed)) {
+        Runtime.deleteKey(this.modelTombstones(model), id);
       }
       ;
-      let object = preferred || new (Runtime2.resolve(model))();
-      Runtime2.invoke(
+      let object = preferred || new (Runtime.resolve(model))();
+      Runtime.invoke(
         object,
         "apply_data_field",
         "id",
@@ -9238,11 +9596,11 @@
     // says whether the patch replaces a dirty field: true for the
     // application's own writes, false for what arrives alongside a query.
     applyPatch(patch, preferred, overwrite_dirty) {
-      let model = Runtime2.send(patch.model, "to_s");
-      let id = Runtime2.send(patch.id, "to_s");
-      let patch_generation = Runtime2.cast(patch.generation, "Integer");
-      let use_preferred = Runtime2.logicalAnd(
-        preferred && Runtime2.isEqual(
+      let model = Runtime.send(patch.model, "to_s");
+      let id = Runtime.send(patch.id, "to_s");
+      let patch_generation = Runtime.cast(patch.generation, "Integer");
+      let use_preferred = Runtime.logicalAnd(
+        preferred && Runtime.isEqual(
           preferred.constructor.dataModelName(),
           model
         ),
@@ -9252,15 +9610,15 @@
         model,
         id,
         patch_generation,
-        Runtime2.isTruthy(use_preferred) ? preferred : null
+        Runtime.isTruthy(use_preferred) ? preferred : null
       );
       let removed = this.modelTombstones(model)[id];
-      if (Runtime2.isTruthy(Runtime2.logicalAnd(
+      if (Runtime.isTruthy(Runtime.logicalAnd(
         removed,
         () => patch_generation <= removed.generation
       ))) return object;
-      let fields = Runtime2.cast(
-        Runtime2.logicalOr(patch.fields, () => ({})),
+      let fields = Runtime.cast(
+        Runtime.logicalOr(patch.fields, () => ({})),
         "T::Hash[String, T.untyped]"
       );
       Object.entries(fields).forEach(([name, encoded]) => {
@@ -9279,31 +9637,31 @@
     // object the client does not hold, or has deleted, does nothing: it
     // never creates an object.
     applyInvalidation(effect) {
-      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
+      let object = this.modelStore(Runtime.send(effect.model, "to_s"))[Runtime.send(
         effect.id,
         "to_s"
       )];
-      if (!Runtime2.isTruthy(object)) return;
-      let distant = Runtime2.cast(object, "Swill::Distant::Object");
+      if (!Runtime.isTruthy(object)) return;
+      let distant = Runtime.cast(object, "Swill::Distant::Object");
       if (distant.isDeleted) return;
-      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => distant.invalidateDataField(
+      return Runtime.cast(effect.fields, "T::Array[String]").forEach((name) => distant.invalidateDataField(
         name,
-        Runtime2.cast(effect.generation, "Integer")
+        Runtime.cast(effect.generation, "Integer")
       ));
     }
     // Demands each field an invalidation left stale that something
     // observes (`Object#data_field_observed`), so a bound view refreshes
     // without a read; an unobserved stale field waits for its next read.
     refreshObserved(effect) {
-      let object = this.modelStore(Runtime2.send(effect.model, "to_s"))[Runtime2.send(
+      let object = this.modelStore(Runtime.send(effect.model, "to_s"))[Runtime.send(
         effect.id,
         "to_s"
       )];
-      if (!Runtime2.isTruthy(object)) return;
-      let distant = Runtime2.cast(object, "Swill::Distant::Object");
+      if (!Runtime.isTruthy(object)) return;
+      let distant = Runtime.cast(object, "Swill::Distant::Object");
       if (distant.isDeleted) return;
-      return Runtime2.cast(effect.fields, "T::Array[String]").forEach((name) => {
-        if (Runtime2.isTruthy(Runtime2.read(distant, `${name}_stale`) === true && distant.dataFieldObserved(name))) {
+      return Runtime.cast(effect.fields, "T::Array[String]").forEach((name) => {
+        if (Runtime.isTruthy(Runtime.read(distant, `${name}_stale`) === true && distant.dataFieldObserved(name))) {
           this.demand(distant, name);
         }
       });
@@ -9313,13 +9671,13 @@
     // — and returns its decoded value. Patches follow invalidations so a
     // patch carrying the invalidated field satisfies it without a request.
     applyEnvelope(message, response_generation, preferred, overwrite_dirty) {
-      let invalidations = Runtime2.cast(
-        Runtime2.logicalOr(message.invalidations, () => []),
+      let invalidations = Runtime.cast(
+        Runtime.logicalOr(message.invalidations, () => []),
         "T::Array[T::Hash[String, T.untyped]]"
       );
       invalidations.forEach((effect) => this.applyInvalidation(effect));
-      let patches = Runtime2.cast(
-        Runtime2.logicalOr(message.patches, () => []),
+      let patches = Runtime.cast(
+        Runtime.logicalOr(message.patches, () => []),
         "T::Array[T::Hash[String, T.untyped]]"
       );
       patches.forEach((patch) => this.applyPatch(patch, preferred, overwrite_dirty));
@@ -9342,7 +9700,7 @@
     async requestWithGeneration(type, contents, preferred, overwrite_dirty) {
       this._generation++;
       let operation_generation = this._generation;
-      Runtime2.append(this._active_generations, operation_generation);
+      Runtime.append(this._active_generations, operation_generation);
       let payload = Object.assign(
         {},
         contents,
@@ -9353,11 +9711,11 @@
       }
       ;
       try {
-        let raw = await Runtime2.dataRequest(type, payload);
-        let received = Runtime2.cast(raw, "T::Hash[String, T.untyped]");
-        let scope = Runtime2.send(received.actor_scope, "to_s");
+        let raw = await Runtime.dataRequest(type, payload);
+        let received = Runtime.cast(raw, "T::Hash[String, T.untyped]");
+        let scope = Runtime.send(received.actor_scope, "to_s");
         this._actor_scope = scope;
-        let message = Runtime2.cast(
+        let message = Runtime.cast(
           received.message,
           "T::Hash[String, T.untyped]"
         );
@@ -9372,7 +9730,7 @@
         ];
       } catch (error) {
         if (error instanceof Error) {
-          if (Runtime2.isTruthy(error.code === "outcome_unknown" && Swill__Application.isRunning())) {
+          if (Runtime.isTruthy(error.code === "outcome_unknown" && Swill__Application.isRunning())) {
             Swill__Application.shared().reportProblem(
               "Operation outcome unknown",
               error.message
@@ -9400,17 +9758,17 @@
     // (`Object#fail_data_field`). An object the client no longer holds is
     // skipped.
     updateDemandState(contents, generation, error) {
-      return Runtime2.cast(
+      return Runtime.cast(
         contents.demands,
         "T::Array[T::Hash[String, T.untyped]]"
       ).forEach((item) => {
-        let object = this.modelStore(Runtime2.send(item.model, "to_s"))[Runtime2.send(
+        let object = this.modelStore(Runtime.send(item.model, "to_s"))[Runtime.send(
           item.id,
           "to_s"
         )];
-        if (!Runtime2.isTruthy(object)) return;
-        let distant = Runtime2.cast(object, "Swill::Distant::Object");
-        return Runtime2.cast(item.fields, "T::Array[String]").forEach((name) => error != null ? distant.failDataFieldWithGeneration(
+        if (!Runtime.isTruthy(object)) return;
+        let distant = Runtime.cast(object, "Swill::Distant::Object");
+        return Runtime.cast(item.fields, "T::Array[String]").forEach((name) => error != null ? distant.failDataFieldWithGeneration(
           name,
           error,
           generation
@@ -9430,23 +9788,23 @@
     // flight: no response can arrive that predates it. Runs after every
     // response and every deletion.
     pruneTombstones() {
-      let oldest = Runtime2.logicalOr(
-        Runtime2.min(this._active_generations),
+      let oldest = Runtime.logicalOr(
+        Runtime.min(this._active_generations),
         () => this._generation + 1
       );
       Object.entries(this._tombstones).forEach(([_model, removed_objects]) => {
-        let typed_removed = Runtime2.cast(
+        let typed_removed = Runtime.cast(
           removed_objects,
           "T::Hash[String, T.untyped]"
         );
         return Object.keys(typed_removed).forEach((id) => {
           let removed = typed_removed[id];
-          if (removed.generation < oldest) return Runtime2.deleteKey(typed_removed, id);
+          if (removed.generation < oldest) return Runtime.deleteKey(typed_removed, id);
         });
       });
       return Object.keys(this._tombstones).forEach((model) => {
-        if (Runtime2.isEmpty(Runtime2.must(this._tombstones[model]))) {
-          Runtime2.deleteKey(this._tombstones, model);
+        if (Runtime.isEmpty(Runtime.must(this._tombstones[model]))) {
+          Runtime.deleteKey(this._tombstones, model);
         }
       });
     }
@@ -9471,32 +9829,32 @@
       this._demand_scheduled = false;
       let batch = Object.values(this._queued_demands);
       this._queued_demands = {};
-      if (Runtime2.isEmpty(batch)) return;
+      if (Runtime.isEmpty(batch)) return;
       let demands = batch.map((item) => this.demandHash(
-        Runtime2.cast(item.object, "Swill::Distant::Object"),
-        Runtime2.cast(item.fields, "T::Array[String]")
+        Runtime.cast(item.object, "Swill::Distant::Object"),
+        Runtime.cast(item.fields, "T::Array[String]")
       ));
       try {
         return await this.request("GET", { demands }, null, false);
       } catch (error) {
         if (this.connectionState === "disconnected" || this.connectionState === "connecting") {
           batch.forEach((item) => {
-            let object = Runtime2.cast(item.object, "Swill::Distant::Object");
-            let fields = Runtime2.cast(item.fields, "T::Array[String]");
+            let object = Runtime.cast(item.object, "Swill::Distant::Object");
+            let fields = Runtime.cast(item.fields, "T::Array[String]");
             let key = `${object.constructor.dataModelName()}:${object.id}`;
             let queued = this._queued_demands[key] ||= {
               object,
               fields: []
             };
-            let target = Runtime2.cast(queued.fields, "T::Array[String]");
+            let target = Runtime.cast(queued.fields, "T::Array[String]");
             return fields.forEach((name) => {
-              if (!target.includes(name)) Runtime2.append(target, name);
+              if (!target.includes(name)) Runtime.append(target, name);
             });
           });
         }
         ;
         if (this.connectionState === "connected") {
-          return Runtime2.warn(`data did not load: ${error.message}`);
+          return Runtime.warn(`data did not load: ${error.message}`);
         }
       }
     }
@@ -10043,6 +10401,18 @@
           }
         }
       },
+      "Swill::DateTransformer": {
+        constructor: Swill__DateTransformer,
+        properties: {},
+        methods: {
+          "format": {
+            "arity": 1
+          },
+          "parse": {
+            "arity": 1
+          }
+        }
+      },
       "Swill::BindingDestination": {
         constructor: Swill__BindingDestination,
         properties: {},
@@ -10230,8 +10600,8 @@
             writer: "changeSortKey",
             compute: function compute_sortKey() {
               let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime2.cast(
-                Runtime2.logicalOr(this.arrangementOptions.key, () => null),
+              return controller ? controller.sortKey : Runtime.cast(
+                Runtime.logicalOr(this.arrangementOptions.key, () => null),
                 "T.nilable(String)"
               );
             }
@@ -10243,8 +10613,8 @@
             writer: "changeSortDirection",
             compute: function compute_sortDirection() {
               let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime2.cast(
-                Runtime2.logicalOr(
+              return controller ? controller.sortDirection : Runtime.cast(
+                Runtime.logicalOr(
                   this.arrangementOptions.direction,
                   () => "ascending"
                 ),
@@ -10285,8 +10655,8 @@
             writer: "selectIdentifier",
             compute: function compute_selectedObjectId() {
               let controller = this.arrayController;
-              return controller ? controller.selectedObjectId : Runtime2.cast(
-                Runtime2.logicalOr(this.selectionState.id, () => null),
+              return controller ? controller.selectedObjectId : Runtime.cast(
+                Runtime.logicalOr(this.selectionState.id, () => null),
                 "T.nilable(String)"
               );
             }
@@ -10296,7 +10666,7 @@
             type: "T.untyped",
             attribute: false,
             compute: function compute_selectedObject() {
-              return Runtime2.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+              return Runtime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
             }
           },
           "selected_indexes": {
@@ -10305,9 +10675,9 @@
             attribute: false,
             compute: function compute_selectedIndexes() {
               let selected = this.selectedObjects;
-              let indexes = Runtime2.cast([], "T::Array[Integer]");
+              let indexes = Runtime.cast([], "T::Array[Integer]");
               this.arrangedObjects.forEach((object, index) => {
-                if (selected.includes(object)) Runtime2.append(indexes, index);
+                if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
             }
@@ -10354,6 +10724,10 @@
           "key_down": {
             "arity": 1,
             "js": "keyDown"
+          },
+          "command_for": {
+            "arity": 1,
+            "js": "commandFor"
           },
           "key_up": {
             "arity": 1,
@@ -11493,6 +11867,10 @@
             "arity": 1,
             "js": "keyDownInWindow"
           },
+          "adopt_focus": {
+            "arity": 1,
+            "js": "adoptFocus"
+          },
           "verify_focus": {
             "arity": 1,
             "js": "verifyFocus"
@@ -11718,8 +12096,8 @@
             writer: "changeSortKey",
             compute: function compute_sortKey2() {
               let controller = this.arrayController;
-              return controller ? controller.sortKey : Runtime2.cast(
-                Runtime2.logicalOr(this.arrangementOptions.key, () => null),
+              return controller ? controller.sortKey : Runtime.cast(
+                Runtime.logicalOr(this.arrangementOptions.key, () => null),
                 "T.nilable(String)"
               );
             }
@@ -11731,8 +12109,8 @@
             writer: "changeSortDirection",
             compute: function compute_sortDirection2() {
               let controller = this.arrayController;
-              return controller ? controller.sortDirection : Runtime2.cast(
-                Runtime2.logicalOr(
+              return controller ? controller.sortDirection : Runtime.cast(
+                Runtime.logicalOr(
                   this.arrangementOptions.direction,
                   () => "ascending"
                 ),
@@ -11773,8 +12151,8 @@
             writer: "selectIdentifier",
             compute: function compute_selectedObjectId2() {
               let controller = this.arrayController;
-              return controller ? controller.selectedObjectId : Runtime2.cast(
-                Runtime2.logicalOr(this.selectionState.id, () => null),
+              return controller ? controller.selectedObjectId : Runtime.cast(
+                Runtime.logicalOr(this.selectionState.id, () => null),
                 "T.nilable(String)"
               );
             }
@@ -11784,7 +12162,7 @@
             type: "T.untyped",
             attribute: false,
             compute: function compute_selectedObject2() {
-              return Runtime2.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
+              return Runtime.isEmpty(this.selectedObjects) ? null : this.selectedObjects[0];
             }
           },
           "selected_indexes": {
@@ -11793,9 +12171,9 @@
             attribute: false,
             compute: function compute_selectedIndexes2() {
               let selected = this.selectedObjects;
-              let indexes = Runtime2.cast([], "T::Array[Integer]");
+              let indexes = Runtime.cast([], "T::Array[Integer]");
               this.arrangedObjects.forEach((object, index) => {
-                if (selected.includes(object)) Runtime2.append(indexes, index);
+                if (selected.includes(object)) Runtime.append(indexes, index);
               });
               return indexes;
             }
@@ -12391,7 +12769,7 @@
             type: "T::Boolean",
             attribute: false,
             compute: function compute_isDirty() {
-              return !Runtime2.isEmpty(this.dirtyAttributes);
+              return !Runtime.isEmpty(this.dirtyAttributes);
             }
           }
         },
@@ -12523,7 +12901,7 @@
             type: "T.nilable(String)",
             attribute: false,
             compute: function computeError() {
-              return Runtime2.cast(
+              return Runtime.cast(
                 this.associationState("error"),
                 "T.nilable(String)"
               );
@@ -13020,7 +13398,7 @@
   };
 
   // build/framework.mjs
-  Runtime2.install(meta);
+  Runtime.install(meta);
 
   // rb/runtime/browser_api.mjs
   var registered2 = /* @__PURE__ */ new WeakSet();
@@ -13087,6 +13465,16 @@
       properties[name] = { compute: descriptor.get };
       names2.add(name);
     }
+    for (const [name, descriptor] of Object.entries(prototypeDescriptors)) {
+      if (name === "constructor" || typeof descriptor.value !== "function" || names2.has(name)) continue;
+      methods[name] = { arity: descriptor.value.length, js: name };
+      const changed = /^(.+)DidChange$/.exec(name)?.[1];
+      if (changed) {
+        for (const property of /* @__PURE__ */ new Set([changed, snakeCase(changed)])) {
+          methods[`${property}_did_change`] ??= { arity: descriptor.value.length, js: name };
+        }
+      }
+    }
     const actions = ownDeclaration(klass, "actions", []);
     if (!Array.isArray(actions)) throw new TypeError("static actions must be an array");
     const actionNames = /* @__PURE__ */ new Set();
@@ -13099,10 +13487,23 @@
         throw new TypeError(`Missing action method: ${name}`);
       }
       if (descriptor.value.length > 2) throw new TypeError(`Action ${name} accepts more than two arguments`);
-      methods[name] = { arity: descriptor.value.length };
       actionNames.add(name);
     }
-    return { properties, methods };
+    return { properties, methods, restorations: restorationsFor(klass, declared) };
+  }
+  var snakeCase = (name) => name.replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+  function restorationsFor(klass, declared) {
+    const restorable = ownDeclaration(klass, "restorable", []);
+    const entries = Array.isArray(restorable) ? restorable.map((path) => [path, path]) : (assertDescriptorMap(restorable, "restorable"), Object.entries(restorable));
+    return entries.map(([path, key]) => {
+      if (typeof path !== "string" || !path || typeof key !== "string" || !key) {
+        throw new TypeError("Restorable paths and keys must be non-empty strings");
+      }
+      const sample = declared[path.split(".")[0]]?.default;
+      const value = typeof sample === "function" ? void 0 : sample;
+      const type = typeof value === "number" ? "Integer" : typeof value === "boolean" ? "T::Boolean" : "String";
+      return { path, key, type };
+    });
   }
   var framework = null;
   function register(name, klass) {
@@ -13110,6 +13511,7 @@
       klass = name;
       name = klass?.name;
     }
+    if (typeof name === "string" && name.includes(".") && !name.includes("::")) name = name.replaceAll(".", "::");
     if (typeof klass !== "function" || !klass.prototype) throw new TypeError("Swill.register requires a class");
     if (typeof name !== "string" || name.trim().length === 0) {
       throw new TypeError("Registered classes need a name");
@@ -13119,11 +13521,36 @@
     if (!framework.roots.has(parent) && !registered2.has(parent)) {
       throw new Error(`Register the parent class before ${name}`);
     }
-    const { properties, methods } = declarationsFor(klass);
-    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods } } });
+    const { properties, methods, restorations: restorations2 } = declarationsFor(klass);
+    framework.Runtime.aliasInstalledJavaScriptNames(framework.publicNames);
+    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods, restorations: restorations2 } } });
     registered2.add(klass);
     return klass;
   }
+  function registerBundle(name, options = {}) {
+    if (typeof name !== "string" || name.trim().length === 0) throw new TypeError("Bundles need a name");
+    if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.registerBundle options must be an object");
+    assertKeys(options, ["base", "manifest", "main"], "registerBundle");
+    const manifest = options.manifest ?? [];
+    if (!Array.isArray(manifest) || manifest.some((path) => typeof path !== "string")) {
+      throw new TypeError("manifest must be an array of paths");
+    }
+    let base = options.base ?? defaultBase();
+    if (base && !base.endsWith("/")) base += "/";
+    return framework.Bundle.register(name, base, manifest, {}, options.main ?? true);
+  }
+  function defaultBase() {
+    const document2 = globalThis.document;
+    if (!document2) return "";
+    const script = document2.currentScript;
+    return new URL(".", script?.src || document2.baseURI).href;
+  }
+  function unloadedCatalogs() {
+    const bundle = framework.Bundle.main();
+    if (!bundle) return [];
+    return bundle.manifest.filter((path) => path.endsWith(".html") && bundle.loadedPath(path) == null).map((path) => bundle.loadResource(path.replace(/\.html$/, ""), "html"));
+  }
+  var starting = false;
   function start(options = {}) {
     const { Application } = framework;
     if (!isObject(options) || Array.isArray(options)) throw new TypeError("Swill.start options must be an object");
@@ -13138,18 +13565,32 @@
     if (ApplicationClass !== Application && !registered2.has(ApplicationClass)) {
       throw new Error("Register the application class before starting it");
     }
+    if (starting) throw new Error("A Swill application is already running");
     const application = new ApplicationClass();
     if (options.development) application.development = true;
-    application.launch(root);
-    root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
-      if (!event.persisted) application.terminate();
-    });
+    const launch = () => {
+      starting = false;
+      application.launch(root);
+      root.ownerDocument?.defaultView?.addEventListener("pagehide", (event) => {
+        if (!event.persisted) application.terminate();
+      });
+    };
+    const catalogs = unloadedCatalogs();
+    if (catalogs.length === 0) {
+      launch();
+    } else {
+      starting = true;
+      Promise.all(catalogs).then(launch, (error) => {
+        starting = false;
+        console.error("Swill could not load the application's templates", error);
+      });
+    }
     return application;
   }
   function install2(meta2) {
     return framework.Runtime.install(meta2);
   }
-  function browserAPI(definitions, Runtime3, names2 = {}, roots = []) {
+  function browserAPI(definitions, Runtime2, names2 = {}, roots = []) {
     const classes2 = {};
     for (const [name, identifier] of Object.entries(names2)) {
       const klass = definitions[identifier];
@@ -13162,16 +13603,18 @@
       if (typeof value !== "function") classes2[name] = Object.freeze(value);
     }
     framework = {
-      Runtime: Runtime3,
+      Runtime: Runtime2,
       Application: definitions.Swill__Application,
+      Bundle: definitions.Swill__Bundle,
+      publicNames: Object.fromEntries(Object.entries(names2).filter(([, identifier]) => definitions[identifier]).map(([name, identifier]) => [`Swill::${name.replaceAll(".", "::")}`, definitions[identifier]])),
       roots: new Set(roots.map((name) => definitions[names2[name]]).filter(Boolean))
     };
-    return Object.freeze({ ...definitions, Runtime: Runtime3, install: install2, ...classes2, register, start });
+    return Object.freeze({ ...definitions, Runtime: Runtime2, install: install2, ...classes2, register, registerBundle, start });
   }
 
   // build/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime2, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
+  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
   {
     const script = typeof document === "undefined" ? null : document.currentScript;
     const base = script && script.src ? new URL(".", script.src).href : "";

@@ -2059,8 +2059,8 @@ test("a responder that takes insert_tab keeps Tab", () => {
   field.focus();
   const event = pressKey(field, "Tab");
   assert.deepEqual(seen, ["Tab"]);
-  assert.equal(event.defaultPrevented, false);
-  assert.equal(body.ownerDocument.activeElement, other, "the browser's own Tab then moves on");
+  assert.equal(event.defaultPrevented, true, "a command taken is the key's whole effect");
+  assert.equal(body.ownerDocument.activeElement, field);
 });
 
 test("Enter that nothing takes presses the key window's default button", () => {
@@ -3880,4 +3880,18 @@ test("development polling compares embedded revision, skips hidden pages and fai
     monitor.stop();
     delete context.setTimeout; delete context.clearTimeout; delete context.AbortController; delete context.fetch;
   }
+});
+
+test("focus the browser gave before launch makes its responder first", () => {
+  const field = element("input", {type: "search"});
+  const region = element("div", {controller: "Swill::Controller"}, [field]);
+  const body = element("body", {}, [region]);
+  const document = element("#document", {}, [body]);
+  document.defaultView = new Browser();
+  field.focus();
+  const application = new (Runtime.resolve("Swill::Application"))();
+  application.launch(body);
+  const [controller] = application.controllers;
+  assert.equal(application.firstResponder(), controller, "an autofocused field's controller takes the keys");
+  application.terminate();
 });

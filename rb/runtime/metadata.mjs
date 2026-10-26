@@ -21,6 +21,29 @@ export function hasInstalledMetadata(klass) {
   return false;
 }
 
+/**
+ * Adds each property and method's JavaScript spelling as a second key beside
+ * its Ruby name, so a plain JavaScript page may write `selectedObject` and
+ * `sortBy` where Ruby writes `selected_object` and `sort_by`. Only a page
+ * that registers JavaScript classes does this, once per class; a key a class
+ * already uses keeps its own meaning.
+ *
+ * @param {Function} klass An installed class.
+ * @returns {void}
+ */
+export function aliasJavaScriptNames(klass) {
+  const known = metadata.get(klass);
+  if (!known || known.aliased) return;
+  for (const kind of ["properties", "methods"]) {
+    const map = known[kind];
+    for (const [name, descriptor] of [...map]) {
+      const js = descriptor.js?.replace(/=$/, "");
+      if (js && js !== name && !map.has(js)) map.set(js, descriptor);
+    }
+  }
+  known.aliased = true;
+}
+
 export function installMetadata(klass, properties, methods, restorations = []) {
   const parent = Object.getPrototypeOf(klass);
   metadata.set(klass, {

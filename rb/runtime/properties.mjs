@@ -57,7 +57,9 @@ export function subscribe(object, name, callback, kind, target = null) {
 
   if (descriptor.computed) computedValue(object, descriptor);
 
-  const set = listeners(object, name, kind);
+  // Listeners are kept under the property's own name, which a JavaScript
+  // spelling of it (selectedObject for selected_object) resolves to.
+  const set = listeners(object, descriptor.name, kind);
   set.add(callback);
 
   return () => set.delete(callback);

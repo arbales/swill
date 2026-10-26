@@ -161,6 +161,37 @@ module Swill
     sig { params(value: T.untyped).returns(T::Boolean) }
     def self.data_record(value); end
 
+    sig { params(value: T.untyped).returns(T.nilable(String)) }
+    def self.data_value_type(value); end
+
+    sig { params(value: T.untyped).returns(T.untyped) }
+    def self.data_value_payload(value); end
+
+    sig { params(value: String).returns(T.untyped) }
+    def self.data_date_from_iso(value); end
+
+    sig { params(value: T.untyped).returns(String) }
+    def self.data_date_iso(value); end
+
+    sig { params(value: String).returns(T.untyped) }
+    def self.data_date_time_from_iso(value); end
+
+    sig { params(value: String).returns(T.untyped) }
+    def self.data_decimal_from_string(value); end
+
+    sig { params(value: String).returns(T.untyped) }
+    def self.data_time_of_day_from_iso(value); end
+
+    sig { params(name: T.untyped, empty: T.untyped, first: T.untyped, last: T.untyped,
+                 exclude_first: T.untyped, exclude_last: T.untyped).returns(T.untyped) }
+    def self.data_range(name, empty, first, last, exclude_first, exclude_last); end
+
+    sig { params(months: T.untyped, days: T.untyped, micros: T.untyped).returns(T.untyped) }
+    def self.data_interval(months, days, micros); end
+
+    sig { params(left: T.untyped, right: T.untyped).returns(Integer) }
+    def self.compare_decimal(left, right); end
+
     # Declaration-time helpers. These run while a class body is evaluated on
     # MRI and are never compiled into the browser.
     sig { params(type: T.untyped).returns(T.untyped) }

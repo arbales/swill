@@ -28,7 +28,8 @@ module Swill
       @registry = T.let({
         "string" => ValueTransformer.new,
         "number" => NumberTransformer.new,
-        "boolean" => BooleanTransformer.new
+        "boolean" => BooleanTransformer.new,
+        "date" => DateTransformer.new
       }, T.nilable(T::Hash[String, ValueTransformer]))
       T.must(@registry)
     end
@@ -64,6 +65,20 @@ module Swill
     sig { params(text: String).returns(T.untyped) }
     def parse(text)
       text == "true" || text == "1" || text == "on"
+    end
+  end
+
+  # An HTML date control edits a calendar date, never a timestamp. The model
+  # keeps a Date; only the control's value is ISO text.
+  class DateTransformer < ValueTransformer
+    sig { override.params(value: T.untyped).returns(String) }
+    def format(value)
+      value == nil ? "" : Runtime.data_date_iso(value)
+    end
+
+    sig { override.params(text: String).returns(T.untyped) }
+    def parse(text)
+      text.empty? ? nil : Runtime.data_date_from_iso(text)
     end
   end
 end

@@ -493,7 +493,9 @@ try {
   await evaluate(`new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
     const poll = () => {
-      if (document.querySelector("h1")?.textContent === "Hello Ada" && window.application) resolve(true);
+      if (document.querySelector("h1")?.textContent === "Hello Ada" && window.application &&
+          getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() &&
+          window.application.theme === "linear") resolve(true);
       else if (Date.now() > deadline) reject(new Error("JavaScript application did not start"));
       else setTimeout(poll, 20);
     };
@@ -520,6 +522,7 @@ try {
   })()`), ["Hello Grace", "Hello ", ""]);
   await evaluate(`window.dispatchEvent(new Event("pagehide"))`);
   assert.equal(await evaluate(`Swill.Application.isRunning()`), false);
+
   assert.deepEqual(exceptions, []);
   console.log("Chrome: compiled Ruby and no-build JavaScript applications passed.");
 } catch (error) {

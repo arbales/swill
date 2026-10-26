@@ -19,6 +19,7 @@ import {
   classWithSetting,
   identityStore,
   resolve,
+  aliasInstalledJavaScriptNames,
   classIsA,
   nameOf
 } from "./install.mjs";
@@ -122,10 +123,11 @@ export function observeWarnings(callback) {
   return () => { warningObservers.delete(callback); };
 }
 
-export const Runtime = {
+export const UIRuntime = {
   // Classes
   install, include, installClass,
   inheritableRegistry, classSetting, classWithSetting, identityStore, resolve, classIsA, nameOf,
+  aliasInstalledJavaScriptNames,
 
   // Values
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
@@ -161,3 +163,6 @@ export const Runtime = {
   // Reporting
   warn, observeWarnings, reportBuildFailure, buildFailure, isDevelopment, setDevelopment
 };
+
+// Generated UI-only modules import Runtime; the full bundle extends this base.
+export {UIRuntime as Runtime};

@@ -161,6 +161,9 @@ a { color: var(--link); text-decoration: none; }
   min-height: 3.5em;
   overflow-y: auto;
   overflow-x: hidden;
+  /* A remembered position is the one the reader left; the browser does not
+     adjust it as the font loads. */
+  overflow-anchor: none;
 }
 /* Dragging the right edge sets the pane's width; dragging a header sets
    the height of the index above it. Both are remembered across pages. */
@@ -174,7 +177,7 @@ a { color: var(--link); text-decoration: none; }
   cursor: col-resize;
   touch-action: none;
 }
-.navigator [data-resizes] { cursor: row-resize; user-select: none; touch-action: none; }
+.navigator .resizer { cursor: row-resize; user-select: none; touch-action: none; }
 
 .navigator .file-index { max-height: 20vh; }
 .navigator .class-index { max-height: 35vh; }
@@ -213,15 +216,16 @@ a { color: var(--link); text-decoration: none; }
 }
 .section-toggle::after { content: "▴"; color: var(--half-grey); }
 .section-toggle[aria-expanded="false"]::after { content: "▾"; }
-.section-toggle[data-section="method-index"]::after { content: "▾"; }
-.section-toggle[data-section="method-index"][aria-expanded="false"]::after { content: "▴"; }
+.method-toggle::after { content: "▾"; }
+.method-toggle[aria-expanded="false"]::after { content: "▴"; }
 .section-toggle:focus-visible { outline: 1px solid var(--link); outline-offset: 2px; }
-.navigator .index[data-collapsed] { display: none; }
-.navigator:has(.method-index[data-collapsed]) .class-index {
+/* A closed section's index follows its heading, hidden. */
+.navigator .pane-header:has([aria-expanded="false"]) + .index { display: none; }
+.navigator:has(.method-toggle[aria-expanded="false"]) .class-index {
   flex: 1 1 0;
   max-height: none;
 }
-.navigator .pane-header:has([data-section="method-index"][aria-expanded="false"]) {
+.navigator .pane-header:has(.method-toggle[aria-expanded="false"]) {
   margin-top: auto;
 }
 .search { padding: 8px; border-bottom: 0; }

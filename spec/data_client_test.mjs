@@ -5,9 +5,25 @@ import {pack, unpack} from "../rb/runtime/message_pack.mjs";
 import {
   Swill__Distant__Object as DistantBase,
   Swill__Distant__Client as Client,
+  Swill__DateTransformer as DateTransformer,
   Swill__Model__Collection as Collection,
   Swill__Model__ResultSet as ResultSet
 } from "../build/framework.mjs";
+
+test("compiled client and date transformer use the runtime's date methods", () => {
+  const client = Client.default();
+  const date = client.decodeValue({$date: "2026-09-23"}, 0);
+  assert.equal(Runtime.dataValueType(date), "Date");
+  assert.deepEqual(client.encodeValue(date), {$date: "2026-09-23"});
+  const transformer = new DateTransformer();
+  assert.equal(transformer.format(date), "2026-09-23");
+  assert.equal(Runtime.dataValueType(transformer.parse("2026-09-24")), "Date");
+  assert.equal(Runtime.dataValueType(client.decodeValue({$datetime: "2026-09-23T04:00:00.123456Z"}, 0)), "DateTime");
+  const time = client.decodeValue({$time: "2026-09-23T04:00:00.123456Z"}, 0);
+  assert.equal(Runtime.dataValueType(time), "Time");
+  assert.deepEqual(client.encodeValue(time), {$time: "2026-09-23T04:00:00.123456+00:00"});
+  assert.equal(Runtime.dataValueType(client.decodeValue({$time_of_day: "12:34:56.123456"}, 0)), "TimeOfDay");
+});
 
 test("MessagePack preserves safe 64-bit integers and inert map keys", () => {
   const value = {large: 2 ** 40, negative: -(2 ** 40), ["__proto__"]: "data"};
@@ -115,7 +131,7 @@ class FakeWebSocket {
     this.requests.push(request);
     let response;
     if (request.type === "HELLO") {
-      response = {type: "WELCOME", protocol_version: 2, schema_hash: "schema",
+      response = {type: "WELCOME", protocol_version: 3, schema_hash: "schema",
         actor_scope: FakeWebSocket.actorScope};
     } else if (request.type === "QUERY") {
       if (this.holdNextQuery) {

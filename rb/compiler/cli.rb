@@ -1,6 +1,7 @@
 # typed: false
 # frozen_string_literal: true
 
+require "json"
 require "optparse"
 require_relative "build"
 require_relative "project"
@@ -17,6 +18,7 @@ module Swill
           swill build [ENTRY] [--out FILE] [--minify] [--with-framework] [--show-errors]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill new NAME [--data]
+          swill manifest DIR
           swill dev [--port N] [--no-server] [--once] [--interval S] [--project FILE]
           swill build --project swill.yml
           swill watch --project swill.yml
@@ -76,6 +78,7 @@ module Swill
         arguments = parser.parse(rest)
         return dev(options) if command == "dev"
         return scaffold(arguments, options) if command == "new"
+        return manifest(arguments) if command == "manifest"
         project = options[:project]
         project ||= "swill.yml" if %w[build watch].include?(command) && arguments.empty? && File.file?("swill.yml")
         if project
@@ -188,6 +191,16 @@ module Swill
         written = scaffold.write
         puts "swill: wrote #{written.length} files into #{name}"
         puts "swill: cd #{name} && bundle install && bundle exec swill dev"
+        0
+      end
+
+      # `swill manifest DIR`: the paths under a bundle's resources folder, as
+      # the JSON array `Swill.registerBundle` takes for a page without a build.
+      def manifest(arguments)
+        directory = arguments.first
+        raise OptionParser::ParseError, "manifest expects the DIR of a bundle's resources" unless directory && arguments.length == 1
+        raise CompileError, "#{directory} is not a directory" unless File.directory?(directory)
+        puts JSON.generate(Resources.manifest(directory).paths)
         0
       end
 

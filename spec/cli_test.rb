@@ -1,3 +1,4 @@
+require "json"
 require "minitest/autorun"
 require "open3"
 require "tmpdir"
@@ -91,6 +92,21 @@ class CLITest < Minitest::Test
       _stdout, stderr, status = swill("types", File.join(dir, "app"))
       assert status.success?, stderr
       assert_equal "--dir=.\n", File.read(File.join(sorbet, "config"))
+    end
+  end
+
+  def test_manifest_lists_a_bundles_resources_for_a_page_without_a_build
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "icons"))
+      File.write(File.join(dir, "Poster.png"), "")
+      File.write(File.join(dir, "icons/Star.svg"), "")
+      File.write(File.join(dir, ".DS_Store"), "")
+      stdout, stderr, status = swill("manifest", dir)
+      assert status.success?, stderr
+      assert_equal ["Poster.png", "icons/Star.svg"], JSON.parse(stdout)
+      _, stderr, status = swill("manifest", File.join(dir, "missing"))
+      refute status.success?
+      assert_includes stderr, "is not a directory"
     end
   end
 

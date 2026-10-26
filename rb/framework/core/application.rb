@@ -120,6 +120,7 @@ module Swill
       Awakening.finish(@controllers)
       @fragments.start_observing(->() { apply_fragment })
       watch(root)
+      adopt_focus(root)
       application_did_launch
       NotificationCenter.default.post("application_did_launch", self, nil)
       monitor = DevelopmentMonitor.new(root.ownerDocument, problems)
@@ -580,6 +581,14 @@ module Swill
     def key_down_in_window(event) # :nodoc:
       in_development { verify_focus("a key") }
       first_responder.key_down(event)
+    end
+
+    # Focus the browser gave before launch, as to an `autofocus` field,
+    # makes its responder first, as later focus does.
+    sig { params(root: Element).void }
+    def adopt_focus(root) # :nodoc:
+      active = root.ownerDocument.activeElement
+      sync_first_responder(active, nil) if active && active != root && root.contains(active)
     end
 
     # In development, checks that the keyboard is where the first responder

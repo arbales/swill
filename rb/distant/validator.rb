@@ -125,6 +125,9 @@ module Swill
         when "union" then members.any? { |member| matches?(value, member) }
         when "enum" then members.any? { |member| value.to_s == member["name"] }
         when "array", "result_set" then collection?(value) && value.all? { |item| matches?(item, members.fetch(0)) }
+        when "json" then json?(value)
+        when "range" then defined?(Sequel::Postgres::PGRange) && value.is_a?(Sequel::Postgres::PGRange) &&
+          (value.empty? || [value.begin, value.end].all? { |bound| bound.nil? || matches?(bound, members.fetch(0)) })
         when "model", "model_ref", "value" then value && value.class.name == (type["name"] || members.dig(0, "name"))
         when "primitive" then primitive?(value, type.fetch("name"))
         else false
@@ -134,7 +137,10 @@ module Swill
       # Returns true when `value` is an Array or, with Sequel loaded, a
       # `Sequel::Dataset`.
       def collection?(value)
-        value.is_a?(Array) || (defined?(Sequel::Dataset) && value.is_a?(Sequel::Dataset))
+        value.is_a?(Array) ||
+          (defined?(Sequel::Dataset) && value.is_a?(Sequel::Dataset)) ||
+          (defined?(Sequel::Postgres::PGArray) && value.is_a?(Sequel::Postgres::PGArray)) ||
+          (defined?(Sequel::Postgres::PGMultiRange) && value.is_a?(Sequel::Postgres::PGMultiRange))
       end
 
       # Returns true when `value` is of the primitive `name`: `Boolean`
@@ -145,12 +151,25 @@ module Swill
         case name
         when "Boolean" then [true, false].include?(value)
         when "Float" then value.is_a?(Numeric)
-        when "Time" then value.is_a?(Time) || value.is_a?(DateTime)
-        when "Date" then value.is_a?(Date)
+        when "Time" then value.is_a?(Time) && !(defined?(Sequel::SQLTime) && value.is_a?(Sequel::SQLTime))
+        when "Date" then value.instance_of?(Date)
+        when "DateTime" then value.is_a?(DateTime)
+        when "TimeOfDay" then defined?(Sequel::SQLTime) && value.is_a?(Sequel::SQLTime)
+        when "Interval" then defined?(ActiveSupport::Duration) && value.is_a?(ActiveSupport::Duration)
+        when "BigDecimal" then value.is_a?(BigDecimal)
         else value.is_a?(::Object.const_get(name))
         end
       rescue NameError
         false
+      end
+
+      def json?(value)
+        case value
+        when NilClass, String, TrueClass, FalseClass, Integer, Float then true
+        when Array then value.all? { |item| json?(item) }
+        when Hash then value.keys.all? { |key| key.is_a?(String) } && value.values.all? { |item| json?(item) }
+        else false
+        end
       end
 
       # Returns the name of `type` for an error message, or its kind when it

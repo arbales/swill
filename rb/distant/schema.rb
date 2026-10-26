@@ -28,12 +28,12 @@ module Swill
     #
     # See [Server Data](rdoc-ref:doc/server_data.md).
     class Schema
-      # The protocol primitive for each Sequel column type. A column type not
-      # listed is reflected as `dynamic`.
+      # The protocol primitive for scalar Sequel column types. PostgreSQL
+      # arrays, ranges and JSON use their database type as well.
       SEQUEL_TYPES = {
-        integer: "Integer", float: "Float", decimal: "Float",
+        integer: "Integer", float: "Float", decimal: "BigDecimal",
         string: "String", boolean: "Boolean", date: "Date",
-        datetime: "Time", time: "Time"
+        datetime: "Time", time: "TimeOfDay", uuid: "String", enum: "String"
       }.freeze
 
       # :section: Discovering Models
@@ -167,10 +167,67 @@ module Swill
           descriptor = klass.db_schema[name]
           explicit ||= previous_type(klass, field) unless descriptor
           raise ArgumentError, "unknown client field #{klass.name}.#{field}" unless descriptor || explicit
-          type = explicit || Types.parse(SEQUEL_TYPES.fetch(descriptor[:type], "T.untyped"))
+          type = explicit || reflected_type(klass, field, descriptor)
           type = Type.new("optional", members: [type]) if descriptor && descriptor[:allow_null] && !explicit
           [field, { "name" => field, "type" => type.to_h }]
         end
+      end
+
+      # A database type the protocol cannot faithfully carry is an interface
+      # error, not a dynamic field whose values fail later at the wire.
+      def reflected_type(klass, field, descriptor)
+        kind = descriptor[:type]
+        db_type = descriptor[:db_type].to_s.downcase
+        case kind
+        when :datetime
+          if klass.db.database_type == :postgres &&
+             db_type.match?(/\Atimestamp(?:\(\d+\))?(?: without time zone)?\z/) &&
+             (!defined?(Sequel) || Sequel.database_timezone != :utc)
+            raise ArgumentError, "#{klass.name}.#{field} needs Sequel.database_timezone = :utc or an explicit type for #{db_type}"
+          end
+          return Types.parse(defined?(Sequel) && Sequel.datetime_class == DateTime ? "DateTime" : "Time")
+        when :json, :jsonb then return Type.new("json")
+        when :array
+          element = db_type.delete_suffix("[]")
+          unless db_type.end_with?("[]")
+            raise ArgumentError, "unsupported client field #{klass.name}.#{field}: #{db_type}"
+          end
+          return Type.new("array", members: [database_element_type(klass, field, element)])
+        when :range then return database_element_type(klass, field, db_type)
+        when :multirange
+          base = db_type.sub(/multirange\z/, "range")
+          return Type.new("array", members: [database_element_type(klass, field, base)])
+        when :interval then return Types.parse("Interval")
+        end
+        return Types.parse(SEQUEL_TYPES.fetch(kind)) if SEQUEL_TYPES.key?(kind)
+        raise ArgumentError, "unsupported client field #{klass.name}.#{field}: #{db_type} (#{kind}); declare an explicit type"
+      end
+
+      def database_element_type(klass, field, db_type)
+        base = db_type.sub(/\A(?:character varying|varchar)\b.*/, "varchar")
+        name = case base
+        when /\A(?:smallint|integer|bigint|int2|int4|int8)\z/ then "Integer"
+        when /\A(?:real|double precision|float4|float8)\z/ then "Float"
+        when /\A(?:numeric|decimal)(?:\(.*\))?\z/ then "BigDecimal"
+        when /\A(?:text|varchar|character|char|uuid|citext)\z/ then "String"
+        when /\A(?:boolean|bool)\z/ then "Boolean"
+        when "date" then "Date"
+        when /\Atimestamp.*with time zone\z/ then "DateTime"
+        when /\Atimestamp.*without time zone\z/
+          raise ArgumentError, "#{klass.name}.#{field} needs Sequel.database_timezone = :utc" unless Sequel.database_timezone == :utc
+          "DateTime"
+        when "time", "time without time zone" then "TimeOfDay"
+        when "interval" then "Interval"
+        end
+        return Types.parse(name) if name
+        return Type.new("json") if %w[json jsonb].include?(base)
+        if %w[int4range int8range numrange daterange tsrange tstzrange].include?(base)
+          raise ArgumentError, "#{klass.name}.#{field} needs Sequel.database_timezone = :utc" if base == "tsrange" && Sequel.database_timezone != :utc
+          subtype = {"int4range" => "Integer", "int8range" => "Integer", "numrange" => "BigDecimal",
+                     "daterange" => "Date", "tsrange" => "DateTime", "tstzrange" => "DateTime"}.fetch(base)
+          return Type.new("range", members: [Types.parse(subtype)])
+        end
+        raise ArgumentError, "unsupported client field #{klass.name}.#{field}: #{db_type}; declare an explicit type"
       end
 
       # Gives `klass` a reader and writer for each field and writable field it
