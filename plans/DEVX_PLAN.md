@@ -254,17 +254,6 @@ real example and a guide.
   test` runs `tsc --noEmit` on it when `tsc` is on the PATH. Lowest priority
   in the workstream.
 
-- **`Swill__*` on the global.** They cannot go away: every compiled
-  application links against them through `build/framework.external.mjs`,
-  which reads `globalThis.Swill.Swill__X`. The question is only whether they
-  are advertised. Making them non-enumerable changes nothing that runs (a
-  compiled app, or a JavaScript author already reaching for
-  `Swill.Swill__Controller`, keeps working) and removes them from
-  autocomplete, `Object.keys` and console listings, which is where a new
-  author would otherwise pick one up. Do it: one `defineProperty` loop in
-  `browserAPI`, the friendly names documented as the API, and the browser test
-  asserting `Object.keys(Swill)` has none. Small, and it can wait until the
-  rest of the workstream.
 - **Tests.** `spec/runtime_test.mjs` for the names, `nameDidChange`, methods
   reached from `data-action`, `restorable`, typed coercion, and
   `registerBundle` feeding `Image.named`; `spec/browser_test.mjs` for the
@@ -357,7 +346,7 @@ save, cancel, dismiss); a status channel (`Application#post_status`); a typed
    enum field's members as `<FIELD>_VALUES`. Movies deleted its `Sequel.mock`
    block and column listing, its duplicated enum lists, and its old dev
    tooling.
-4. Workstream 3's names, `register`, hiding, theme and example, then
+4. Workstream 3's names, `register`, theme and example, then
    `swill.d.ts` and the guide; Workstream 6, so the guide has a URL. **Done:** names
    and `register`: every method reachable, `xDidChange` hooks, `static
    restorable`, dotted class names, and JavaScript spellings of framework
@@ -370,7 +359,15 @@ save, cancel, dismiss); a status channel (`Application#post_status`); a typed
    `queryDidChange`); a separate example was cut; markup resolves the framework's
    JavaScript class names (`Swill.List`); launch adopts focus the browser
    gave before it, as to an `autofocus` field.
-5. Workstream 4.
+5. Workstream 6. **Done, until the first tag:** `rake release` writes
+   `tmp/release/swill-<VERSION>.zip` (both builds, minified, maps,
+   `resources/swill/`, `LICENSE`, a README with the page skeleton and the
+   CDN URLs), checking `VERSION`, `version.rb` and `TAG`;
+   `.github/workflows/release.yml` builds it on a `v*` tag with the pinned
+   esbuild, fails when `rb/dist` differs from the fresh build, and creates
+   the GitHub release. The version is 0.0.2, and the guide and README give
+   jsDelivr URLs at `v0.0.2`. `swill.d.ts` is not in the zip until it exists.
+6. Workstream 4.
 
 ## Risks
 

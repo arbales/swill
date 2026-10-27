@@ -47,7 +47,7 @@ module SwillDoc
     def runtime_groups
       groups = []
       %w[runtime_ui runtime].each do |name|
-        body = File.read(File.join(RUNTIME, "#{name}.mjs"))[/^export const Runtime = \{\n(.*?)^\};/m, 1]
+        body = File.read(File.join(RUNTIME, "#{name}.mjs"))[/^export const (?:UI)?Runtime = \{\n(.*?)^\};/m, 1]
         body.each_line do |line|
           next if line.include?("...")
           if (title = line[%r{\A\s*//\s*(.+?)\s*\z}, 1])

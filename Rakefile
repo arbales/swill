@@ -147,6 +147,38 @@ task optimize: :build do
   end
 end
 
+# The files a release carries from rb/dist: the two framework builds, each
+# minified, with their maps.
+RELEASE_SCRIPTS = %w[swill swill-ui].flat_map do |name|
+  ["#{name}.js", "#{name}.js.map", "#{name}.min.js", "#{name}.min.js.map"]
+end.freeze
+
+desc "Write tmp/release/swill-VERSION.zip for a GitHub release (TAG=vX.Y.Z checks the tag)"
+task release: :optimize do
+  Dir.chdir(ROOT) do
+    require "erb"
+    require_relative "rb/compiler/version"
+    version = File.read("VERSION").strip
+    unless version == Swill::Ruby2JS::VERSION
+      abort "VERSION is #{version}, but rb/compiler/version.rb says #{Swill::Ruby2JS::VERSION}"
+    end
+    tag = ENV["TAG"]
+    abort "The tag #{tag} does not name version #{version}" if tag && tag != "v#{version}"
+    name = "swill-#{version}"
+    directory = "tmp/release/#{name}"
+    FileUtils.rm_rf(["tmp/release/#{name}", "tmp/release/#{name}.zip"])
+    FileUtils.mkdir_p("#{directory}/resources")
+    RELEASE_SCRIPTS.each { |file| FileUtils.cp("rb/dist/#{file}", directory) }
+    FileUtils.cp_r("rb/dist/resources/swill", "#{directory}/resources/")
+    FileUtils.cp("LICENSE", directory)
+    cdn = "https://cdn.jsdelivr.net/gh/arbales/swill@v#{version}/rb/dist"
+    readme = ERB.new(File.read("rakelib/release/README.md.erb")).result_with_hash(version: version, cdn: cdn)
+    File.write("#{directory}/README.md", readme)
+    Dir.chdir("tmp/release") { sh "zip", "-qr", "#{name}.zip", name }
+    puts "release: tmp/release/#{name}.zip"
+  end
+end
+
 desc "Exercise the example in headless Chrome (set CHROME_BIN outside macOS)"
 task browser: :build do
   Dir.chdir(ROOT) do
@@ -175,7 +207,7 @@ RDOC_OPTS = [
 # gets documented. Internals drop out of the count as they are marked :nodoc:.
 # Declared properties and outlets count as they do on the class page, and
 # protected methods count with public ones; private methods do not appear.
-DOC_COVERAGE_BASELINE = 171
+DOC_COVERAGE_BASELINE = 165
 
 desc "Report undocumented public framework API (fails if it grew)"
 task :doc_coverage do

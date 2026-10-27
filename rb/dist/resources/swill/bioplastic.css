@@ -662,11 +662,12 @@ h3 {
   color: var(--bright);
 }
 
-.header [data-column][data-sort-state="asc"]::after {
+/* SortableList marks its sorted header cell. */
+.sorted-ascending::after {
   content: " ▲";
 }
 
-.header [data-column][data-sort-state="desc"]::after {
+.sorted-descending::after {
   content: " ▼";
 }
 

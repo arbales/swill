@@ -57,12 +57,16 @@ module Swill
       keys
     end
 
+    # The window's name: what `window=` gives a container, and empty for the
+    # page.
     sig { returns(String) }
     attr_reader :name
 
+    # The element the window's content is in.
     sig { returns(Element) }
     attr_reader :root
 
+    # The controller the window holds as its content, or nil.
     sig { returns(T.nilable(Controller)) }
     attr_reader :controller
 
@@ -72,6 +76,7 @@ module Swill
       @modal
     end
 
+    # The name of the template the content came from, or nil.
     sig { returns(T.nilable(String)) }
     attr_reader :content_name
 
@@ -157,6 +162,7 @@ module Swill
       @root.hasAttribute("window")
     end
 
+    # Whether +candidate+ is the window's content or inside it.
     sig { params(candidate: Controller).returns(T::Boolean) }
     def contains_controller?(candidate)
       candidate == @controller || @root.contains(candidate.view.element)

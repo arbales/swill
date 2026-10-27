@@ -9,10 +9,21 @@ registered class may declare is [Plain JavaScript](plain_javascript.md).
 
 Swill is two scripts and a folder: `swill.js`, the whole framework;
 `swill-ui.js`, the same without models, remote data and the richer controls;
-and `resources/swill/`, the framework's themes, images and templates. All
-three are in the gem's `rb/dist/`. Serve them together, keeping
-`resources/swill/` beside the script, since the framework finds its own
-resources beside wherever its script was served from.
+and `resources/swill/`, the framework's themes, images and templates. The
+framework finds its own resources beside wherever its script was served
+from, so they stay together. There are three ways to get them:
+
+- **From jsDelivr**, pinned to a release's tag:
+
+  ```html
+  <link rel="stylesheet" data-swill-theme href="https://cdn.jsdelivr.net/gh/arbales/swill@v0.0.2/rb/dist/resources/swill/linear.css">
+  <script src="https://cdn.jsdelivr.net/gh/arbales/swill@v0.0.2/rb/dist/swill.js"></script>
+  ```
+
+- **From a release's zip**, `swill-<version>.zip` on
+  [GitHub Releases](https://github.com/arbales/swill/releases), to serve
+  yourself.
+- **From the gem's `rb/dist/`**, the same files.
 
 | Build | Carries | Leaves out |
 | --- | --- | --- |

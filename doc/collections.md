@@ -55,16 +55,20 @@ is not the current key sorts ascending, and the current key reverses its
 direction. Override `sort_key_for` when the column name lives elsewhere than
 `data-column`.
 
-`sort_states` maps the sorted column to its direction in `aria-sort`
-vocabulary, so a header binds `bind-aria-sort="@sort_states.name"` and reads
-`ascending` or `descending` while `name` is the sort key and nil otherwise.
+The list marks the sorted header cell itself: it carries the
+`sorted-ascending` or `sorted-descending` class, which the themes draw as an
+arrow, and the others carry neither. Style a header by those classes; the
+markup names only the column and the action:
 
 ```html
 <thead><tr>
-  <th data-column="name" data-action="sort_by"
-      bind-aria-sort="@sort_states.name">Name</th>
+  <th data-column="name" data-action="sort_by">Name</th>
 </tr></thead>
 ```
+
+`sort_states` maps the sort key to its direction, `ascending` or
+`descending`, for a binding that wants it elsewhere; it is an empty hash when
+the list is unsorted.
 
 Selection is by identity, so a reorder keeps it.
 
@@ -127,8 +131,7 @@ The table binds directly to an association:
 ```html
 <table controller="MembersTable" bind="mailing_list.members">
   <thead><tr>
-    <th data-column="name" data-action="sort_by"
-        bind-aria-sort="@sort_states.name">Name</th>
+    <th data-column="name" data-action="sort_by">Name</th>
   </tr></thead>
   <tbody outlet="rows">
     <template for="row"><tr><td bind="name"></td></tr></template>

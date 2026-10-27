@@ -8,6 +8,8 @@ module Swill
   class URLFragment
     extend T::Sig
 
+    # A fragment read from and written to +browser+'s location; nil, or a
+    # window without a location and history, makes it inert.
     sig { params(browser: T.nilable(DOMWindow)).void }
     def initialize(browser)
       super()
@@ -16,12 +18,15 @@ module Swill
       @on_change = T.let(nil, T.nilable(T.proc.params(event: Event).void))
     end
 
+    # Whether there is a location and history to read and write.
     sig { returns(T::Boolean) }
     def available?
       browser = @browser
       browser != nil && browser.location != nil && browser.history != nil
     end
 
+    # The fragment's params, by key; an empty hash when there are none or
+    # the fragment is inert.
     sig { returns(T::Hash[String, String]) }
     def params
       found = T.let({}, T::Hash[String, String])
@@ -68,6 +73,8 @@ module Swill
       end
     end
 
+    # Calls +callback+ when the browser changes the fragment: back, forward,
+    # or a new hash. Writes through #write do not call it.
     sig { params(callback: T.proc.void).void }
     def start_observing(callback)
       browser = @browser
@@ -78,6 +85,7 @@ module Swill
       browser.addEventListener("hashchange", on_change)
     end
 
+    # Stops calling the callback #start_observing gave.
     sig { void }
     def stop_observing
       on_change = @on_change

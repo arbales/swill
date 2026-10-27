@@ -163,6 +163,8 @@ module Swill
         false
       end
 
+      # Returns true when `value` is plain JSON: nil, a string, a boolean,
+      # an integer or float, or an array or string-keyed hash of them.
       def json?(value)
         case value
         when NilClass, String, TrueClass, FalseClass, Integer, Float then true

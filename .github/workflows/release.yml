@@ -1,0 +1,37 @@
+name: Release
+
+# A v* tag publishes that version: the zip on a GitHub release, and rb/dist
+# at the tag, which jsDelivr serves.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # The esbuild the committed bundles are built with; another version
+      # writes other bytes.
+      - run: |
+          curl -fsSL https://esbuild.github.io/dl/v0.28.2 | sh
+          sudo mv esbuild /usr/local/bin/
+      - run: bundle exec rake release
+        env:
+          TAG: ${{ github.ref_name }}
+      # The CDN serves the committed rb/dist, so it must be what the tag's
+      # sources build.
+      - run: git diff --exit-code --stat -- rb/dist
+      - run: gh release create "$TAG" "tmp/release/swill-${TAG#v}.zip" --title "Swill ${TAG#v}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}

@@ -1,0 +1,49 @@
+# Swill <%= version %>
+
+The Swill framework for a page with no build step.
+
+| File | What it is |
+| --- | --- |
+| `swill.js` | The whole framework |
+| `swill-ui.js` | The framework without models, remote data and the richer controls |
+| `*.min.js` | The same, minified, without development checks |
+| `*.map` | Source maps |
+| `resources/swill/` | The framework's themes, images and templates |
+
+Serve these files together, keeping `resources/swill/` beside the
+script: the framework finds its resources beside wherever its script was
+served from.
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" data-swill-theme href="resources/swill/linear.css">
+</head>
+<body>
+  <main controller="Hello">
+    <h1 bind="greeting"></h1>
+    <label>Name <input bind="name" autofocus></label>
+  </main>
+  <script src="swill.js"></script>
+  <script>
+    class Hello extends Swill.Controller {
+      static properties = {name: {default: "world"}};
+      get greeting() { return `Hello, ${this.name}!`; }
+    }
+    Swill.register(Hello);
+    Swill.start();
+  </script>
+</body>
+</html>
+```
+
+The same files are served from jsDelivr at this release's tag:
+
+```html
+<link rel="stylesheet" data-swill-theme href="<%= cdn %>/resources/swill/linear.css">
+<script src="<%= cdn %>/swill.js"></script>
+```
+
+Getting started: https://github.com/arbales/swill/blob/v<%= version %>/doc/javascript_getting_started.md

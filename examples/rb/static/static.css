@@ -73,11 +73,11 @@
   cursor: pointer;
 }
 
-.people-table [aria-sort="asc"]::after {
+.people-table .sorted-ascending::after {
   content: " \2191";
 }
 
-.people-table [aria-sort="desc"]::after {
+.people-table .sorted-descending::after {
   content: " \2193";
 }
 

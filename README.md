@@ -25,7 +25,7 @@ What you need depends on what you are doing:
 
 | To | You need |
 | --- | --- |
-| Use Swill from plain JavaScript | Nothing: load `swill.js` |
+| Use Swill from plain JavaScript | Nothing: load `swill.js` from jsDelivr (`https://cdn.jsdelivr.net/gh/arbales/swill@v0.0.2/rb/dist/swill.js`) or a [release's zip](https://github.com/arbales/swill/releases); see [Getting Swill](doc/javascript_getting_started.md#getting-swill) |
 | Build an application written in Ruby | Ruby 3.2+, Bundler, and `esbuild` |
 | Serve it with `Swill::Server` | Rack, which the gem depends on; see [Serving](doc/serving.md) |
 | Serve Distant Objects | Sequel, and `falcon` with `async-websocket` for the WebSocket; neither is a dependency of the gem |

@@ -38,8 +38,8 @@ bundle exec swill watch frontend            # rebuild as the sources change
 
 The entry file's `require_relative` lines name the sources in order, as they
 would on MRI; the compiler treats those lines as inert. The page loads
-`swill.js` (from a CDN, or the copy `--with-framework` places beside the
-output) before `app.js`, and names its application with
+`swill.js` (from jsDelivr, as in [Getting Swill](javascript_getting_started.md#getting-swill),
+or the copy `--with-framework` places beside the output) before `app.js`, and names its application with
 `<body application="...">`. The framework launches the named application on
 `DOMContentLoaded` and terminates it on a `pagehide` whose `persisted` flag is
 false; a persisted `pagehide` means the page may return from the back-forward
@@ -194,7 +194,7 @@ To build and install it by hand instead:
 
 ```sh
 gem build swill.gemspec
-gem install ./swill-0.0.1.gem
+gem install ./swill-0.0.2.gem
 ```
 
 The framework's interface is compiled from its sources on demand; it costs

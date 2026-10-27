@@ -74,8 +74,8 @@ module Swill
         controller ? controller.sort_direction : T.cast(arrangement_options["direction"] || "ascending", String)
       end
 
-      # The sort key mapped to its direction, for `bind-aria-sort`; an empty
-      # hash when unsorted.
+      # The sort key mapped to its direction; an empty hash when unsorted.
+      # SortableList marks its sorted header cell from it.
       base.property :sort_states, type: T::Hash[String, String] do
         key = sort_key
         key ? { key => sort_direction } : {}

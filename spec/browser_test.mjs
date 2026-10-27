@@ -235,24 +235,27 @@ try {
     ["Ada", "Grace"], "3", [false, false], "Hello Hopper"
   ]);
   // Header cells sort the list through the sort_by action; the sort is
-  // written to the fragment, aria-sort follows the sorted column, and the
+  // written to the fragment, the list marks the sorted column (its class,
+  // and aria-sort, which no markup writes), and the
   // selection follows its object through the reorder.
   assert.deepEqual(await evaluate(`(() => {
     const list = document.querySelector("section[controller='Demo::PeopleList']");
     const rows = () => Array.from(list.querySelectorAll("tbody tr"));
     const names = () => rows().map(row => row.children[0].textContent);
-    const headers = () => Array.from(list.querySelectorAll("th")).slice(0, 2).map(th => th.getAttribute("aria-sort"));
+    const headers = () => Array.from(list.querySelectorAll("th")).slice(0, 2).map(th =>
+      [...th.classList].find(name => name.startsWith("sorted-")) ?? th.getAttribute("aria-sort"));
+    const aria = () => Array.from(list.querySelectorAll("th")).slice(0, 2).map(th => th.getAttribute("aria-sort"));
     rows()[0].children[0].click();
     const results = [names(), headers()];
     list.querySelector("th[data-column=role]").click();
-    results.push(names(), headers(), rows().map(row => row.classList.contains("selected")), location.hash);
+    results.push(names(), headers(), aria(), rows().map(row => row.classList.contains("selected")), location.hash);
     list.querySelector("th[data-column=role]").click();
     results.push(names(), headers(), location.hash);
     return results;
   })()`), [
     ["Ada", "Grace"], [null, null],
-    ["Grace", "Ada"], [null, "ascending"], [false, true], "#main=farewell&main.n=0&people.selected=1&people.dir=ascending&people.sort=role",
-    ["Ada", "Grace"], [null, "descending"], "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
+    ["Grace", "Ada"], [null, "sorted-ascending"], [null, "ascending"], [false, true], "#main=farewell&main.n=0&people.selected=1&people.dir=ascending&people.sort=role",
+    ["Ada", "Grace"], [null, "sorted-descending"], "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
   ]);
   // Enter on the selected row opens the inline editor after it; typing
   // edits a draft, Enter commits it into the person and the row, and Escape

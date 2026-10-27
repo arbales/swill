@@ -25,3 +25,9 @@ These are discarded directions, not a list of work merely deferred.
   composition step.** `CollectionArrangement` and optional `ArrayController`
   now own those responsibilities. Editing composition remains open in
   [the framework plan](FRAMEWORK_PLAN.md).
+- **Hiding `Swill__*` on the global (October 2026).** Compiled applications
+  link against the generated identifiers through
+  `build/framework.external.mjs`, so they stay; the plan was only to make them
+  non-enumerable so autocomplete and `Object.keys(Swill)` show the JavaScript
+  names alone. Dropped from [the developer-experience plan](DEVX_PLAN.md) for
+  now; nothing that runs depends on it.
