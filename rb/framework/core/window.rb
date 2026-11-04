@@ -31,8 +31,8 @@ module Swill
 
     # ---- fragment restoration ----
     #
-    # The window's own fragment param is its bare name (main=farewell); its
-    # controller's state params are scoped under it (main.n=3).
+    # Internal keys stay flat: main selects content and main.n names state.
+    # URLFragment groups these as main=farewell,n=3 when writing the URL.
 
     sig { params(key: String).returns(String) }
     def scoped_key(key)

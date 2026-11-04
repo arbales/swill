@@ -2190,31 +2190,134 @@ test("detach tears down a removed subtree and terminate releases windows", () =>
 
 // ---- URL restoration ----
 
+
+test("grouped fragments round-trip strings, arrays, paths and named content", () => {
+  const Fragment = Runtime.resolve("Swill::URLFragment");
+  const fragment = new Fragment(null);
+  const values = {
+    "toolbar.modes": ["a", "b"], "toolbar.theme": "linear",
+    "main.view": "all", "main.s": "44", "main.mult": ["1", "2", "9"]
+  };
+  const encoded = fragment.serialize(values);
+  assert.equal(encoded, "main.mult=(1,2,9),s=44,view=all;toolbar.modes=(a,b),theme=linear");
+  assert.deepEqual(plain(fragment.parse(encoded)), values);
+  assert.equal(fragment.serialize({a: "home", "a.n": "3", "a-b.q": "x"}),
+    "a=home,n=3;a-b.q=x", "window names sharing a prefix still form one group each");
+  const special = {
+    main: "movies", "main.list.selection": ["", "a,b", "(x)", "''", "%2C", "雪 🌙"],
+    "main.q": "a+b & c=d; (Alien), 100% # / ?", "main.empty": "", "main.none": [],
+    ".page": "home", "other.q": "trailing (('", "constructor.q": "safe"
+  };
+  assert.deepEqual(plain(fragment.parse(fragment.serialize(special))), special);
+  assert.equal(fragment.encodeValue([""]), "('')");
+  assert.equal(fragment.encodeValue([]), "()");
+  assert.equal(fragment.encodeValue("(1,2)"), "%281%2C2%29");
+  assert.deepEqual(plain(fragment.parse("main=welcome,n=3;other.q=star")),
+    {main: "welcome", "main.n": "3", "other.q": "star"});
+  assert.deepEqual(plain(fragment.parse("main.q=Star+Wars")), {"main.q": "Star+Wars"});
+  assert.deepEqual(plain(fragment.parse("main.q=Star+Wars&other.q=a%2Cb&main.literal=%281%2C2%29")),
+    {}, "query-style fragments are not supported");
+  assert.deepEqual(plain(fragment.parse("main.q=a%26b;toolbar.mode=owner")),
+    {"main.q": "a&b", "toolbar.mode": "owner"}, "escaped ampersands remain data");
+});
+
+test("malformed fragment groups and values do not prevent other windows restoring", () => {
+  const fragment = new (Runtime.resolve("Swill::URLFragment"))(null);
+  for (const malformed of ["main.ids=(1,(2))", "main.ids=(1,2", "main.ids=1)",
+    "main.ids=(a,)", "main.q=%", "main.q=%FF", "main=(x)"]) {
+    assert.deepEqual(plain(fragment.parse(malformed + ";toolbar.mode=owner")),
+      {"toolbar.mode": "owner"}, malformed);
+  }
+  assert.deepEqual(plain(fragment.parse("main.q=%GG,s=44")), {"main.s": "44"});
+  assert.deepEqual(plain(fragment.parse("main.q=first,q=last")), {"main.q": "last"});
+});
+
+test("fragment writes batch state and respect history and suspension", () => {
+  const browser = new Browser("#main.q=Star%20Wars,s=44");
+  const fragment = new (Runtime.resolve("Swill::URLFragment"))(browser);
+  const replace = Runtime.keywordArguments({history: "replace"});
+  fragment.write("main.s", "44", replace);
+  assert.equal(browser.location.hash, "#main.q=Star%20Wars,s=44", "unchanged state is not rewritten");
+  fragment.writeValues({"main.q": "Star Trek", "main.ids": ["1", "9"]}, replace);
+  assert.equal(browser.location.hash, "#main.ids=(1,9),q=Star%20Trek,s=44");
+  assert.equal(browser.entries.length, 1);
+  fragment.write("main.s", "9", Runtime.keywordArguments({history: "push"}));
+  assert.equal(browser.entries.length, 2);
+  browser.back();
+  assert.equal(fragment.params()["main.s"], "44");
+  fragment.suspended(Runtime.blockArgument(() => fragment.write("main.s", "2", replace)));
+  assert.equal(fragment.params()["main.s"], "44");
+  fragment.write("main.s", "2", Runtime.keywordArguments({history: "none"}));
+  assert.equal(fragment.params()["main.s"], "44");
+  fragment.write("main.s", null, replace);
+  assert.equal(browser.location.hash, "#main.ids=(1,9),q=Star%20Trek");
+});
+
+test("restoration uses declared array element types and preserves explicit empty values", () => {
+  class ArrayState extends Runtime.resolve("Swill::Controller") {}
+  Runtime.installClass(ArrayState, "Test::ArrayState", [
+    {name: "ids", js: "ids", type: "T::Array[Integer]", defaultValue: () => []},
+    {name: "labels", js: "labels", type: "T::Array[String]", defaultValue: () => ["default"]},
+    {name: "flags", js: "flags", type: "T::Array[T::Boolean]", defaultValue: () => []},
+    {name: "weights", js: "weights", type: "T.nilable(T::Array[Float])", defaultValue: () => null},
+    {name: "query", js: "query", type: "String", defaultValue: () => "default"}
+  ], [], {}, [
+    {path: "ids", key: "ids", type: "T::Array[Integer]"},
+    {path: "labels", key: "labels", type: "T::Array[String]"},
+    {path: "flags", key: "flags", type: "T::Array[T::Boolean]"},
+    {path: "weights", key: "weights", type: "T.nilable(T::Array[Float])"},
+    {path: "query", key: "q", type: "String"}
+  ]);
+  const body = element("body", {application: "Demo::Application"}, [
+    element("section", {window: "main"}, [element("article", {controller: "Test::ArrayState"})])
+  ]);
+  const document = element("#document", {}, [body]);
+  document.readyState = "complete";
+  const browser = document.defaultView = new Browser("#main.ids=(1,2,9),labels=(a,''),flags=(true,false),weights=(1.5,-2e1),q=");
+  const application = new Launcher().launch(document);
+  const controller = application.windowNamed("main").controller;
+  assert.deepEqual(plain([controller.ids, controller.labels, controller.flags, controller.weights, controller.query]),
+    [[1, 2, 9], ["a", ""], [true, false], [1.5, -20], ""]);
+  controller.ids = [9, 2];
+  assert.equal(browser.location.hash, "#main.flags=(true,false),ids=(9,2),labels=(a,''),q=,weights=(1.5,-20)");
+  browser.navigate("#main.ids=(),labels=(),flags=(),weights=(),q=");
+  assert.deepEqual(plain([controller.ids, controller.labels, controller.flags, controller.weights]), [[], [], [], []]);
+  browser.navigate("#main.ids=(1,bad),flags=(true,maybe),weights=(1,1e999)");
+  assert.deepEqual(plain([controller.ids, controller.flags, controller.weights]), [[], [], []], "invalid arrays apply no partial values");
+  browser.navigate("#main.ids=1,labels=scalar");
+  assert.deepEqual(plain([controller.ids, controller.labels]), [[], []], "scalar text cannot replace array state");
+  browser.navigate("#main.ids=(7),labels=(returned)");
+  assert.deepEqual(plain([controller.ids, controller.labels]), [[7], ["returned"]]);
+  assert.equal(controller.query, "", "omitted properties retain their current values");
+  controller.weights = null;
+  assert.ok(!browser.location.hash.includes("weights="));
+});
+
 test("window content and restorable state round-trip through the fragment", () => {
-  const f = windowedPage("#main=farewell&main.n=3&main.junk=x");
+  const f = windowedPage("#main=farewell,junk=x,n=3");
   const [, , badge] = f.application.controllers;
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "the fragment chose the content at launch");
   assert.equal(badge.count, 3, "an Integer path decoded its value");
   assert.equal(badge.restored, true, "controller_did_restore saw the applied value");
-  assert.equal(f.browser.location.hash, "#main=farewell&main.n=3&main.junk=x", "launch only reads");
+  assert.equal(f.browser.location.hash, "#main=farewell,junk=x,n=3", "launch only reads");
   badge.count = 4;
-  assert.equal(f.browser.location.hash, "#main=farewell&main.n=4&main.junk=x", "state changes replace the fragment value");
+  assert.equal(f.browser.location.hash, "#main=farewell,junk=x,n=4", "state changes replace the fragment value");
   assert.equal(f.browser.entries.length, 1, "state changes add no history entries");
   const welcomeBadge = f.application.loadWindowContent("main", "welcome");
-  assert.equal(f.browser.location.hash, "#main=welcome&main.n=4&main.junk=x", "navigation pushes the content; a key the new controller shares carries over");
+  assert.equal(f.browser.location.hash, "#main=welcome,junk=x,n=4", "navigation pushes the content; a key the new controller shares carries over");
   assert.equal(f.browser.entries.length, 2);
   assert.equal(welcomeBadge.count, 4, "the carried value was applied to the new controller");
   assert.equal(welcomeBadge.restored, true);
   welcomeBadge.count = 9;
-  assert.equal(f.browser.location.hash, "#main=welcome&main.n=9&main.junk=x");
+  assert.equal(f.browser.location.hash, "#main=welcome,junk=x,n=9");
   badge.count = 5;
-  assert.equal(f.browser.location.hash, "#main=welcome&main.n=9&main.junk=x", "the replaced controller no longer writes");
+  assert.equal(f.browser.location.hash, "#main=welcome,junk=x,n=9", "the replaced controller no longer writes");
   f.browser.back();
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "Back restores the content");
   const restoredBadge = f.application.windowNamed("main").controller;
   assert.equal(restoredBadge.count, 4, "Back restores the state that was in that entry");
   assert.equal(f.browser.entries.length, 1, "Back/Forward routing writes no history");
-  f.browser.navigate("#main=farewell&main.n=oops");
+  f.browser.navigate("#main=farewell,n=oops");
   assert.equal(f.application.windowNamed("main").controller.count, 4, "a value that is not an Integer is ignored");
   f.browser.navigate("#main=missing");
   assert.equal(f.mainWindow.getAttribute("name"), "farewell", "unknown content is reported and ignored");
@@ -2243,16 +2346,16 @@ test("a restorable value the URL cannot hold is left out of it, with one warning
     ]);
     const document = element("#document", {}, [body]);
     document.readyState = "complete";
-    document.defaultView = new Browser("#main=stubborn&main.n=3&main.l=other");
+    document.defaultView = new Browser("#main=stubborn,l=other,n=3");
     const application = new Launcher().launch(document);
     const controller = application.windowNamed("main").controller;
     const hash = () => document.defaultView.location.hash;
     assert.equal(controller.count, 3, "the rest of the window's state restores");
-    assert.equal(hash(), "#main=stubborn&main.n=3", "the key that could not be restored leaves the fragment");
+    assert.equal(hash(), "#main=stubborn,n=3", "the key that could not be restored leaves the fragment");
     controller.chosen = "Dark City";
-    assert.equal(hash(), "#main=stubborn&main.n=3&main.c=Dark+City");
+    assert.equal(hash(), "#main=stubborn,c=Dark%20City,n=3");
     controller.chosen = {title: "Dark City"};
-    assert.equal(hash(), "#main=stubborn&main.n=3", "an object is left out rather than written as [object Object]");
+    assert.equal(hash(), "#main=stubborn,n=3", "an object is left out rather than written as [object Object]");
     controller.chosen = {title: "Solaris"};
     application.terminate();
   } finally {
@@ -2260,12 +2363,12 @@ test("a restorable value the URL cannot hold is left out of it, with one warning
   }
   assert.deepEqual(warnings.filter(message => message.includes("left out")), [
     "[Swill] Test::Stubborn: restorable label is left out of the URL: Read-only binding: label",
-    "[Swill] Test::Stubborn: restorable chosen is left out of the URL: its value cannot be written to the URL; restore a string, number or boolean"
+    "[Swill] Test::Stubborn: restorable chosen is left out of the URL: its value cannot be written to the URL; restore a string, finite number, boolean or flat array"
   ], "each path warns once");
 });
 
 test("restoration state is scoped per window and pruned when content changes", () => {
-  const f = windowedPage("#side=side&side.n=2");
+  const f = windowedPage("#side=side,n=2");
   const sideBadge = f.application.windowNamed("side").controller;
   assert.equal(sideBadge.count, 2);
   const mainBadge = f.application.windowNamed("main").controller;
@@ -2575,13 +2678,13 @@ test("a list's selection restores by id from the fragment and follows it afterwa
   assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, true, false]);
   assert.equal(f.browser.location.hash, "#people.selected=2");
   f.rowsOf()[0].children[0].click();
-  assert.equal(f.browser.location.hash, "#people.selected=1&people.dir=ascending",
+  assert.equal(f.browser.location.hash, "#people.dir=ascending,selected=1",
     "a new selection replaces the fragment value; every restorable value is written, defaults included");
   f.controller.selectedObjectId = "3";
   assert.equal(f.controller.selectedObject, linus, "writing the id selects");
   f.controller.selectedObjectId = "9";
   assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId, f.browser.location.hash],
-    [[], "9", "#people.selected=9&people.dir=ascending"], "an unknown id clears the selection and stays wanted");
+    [[], "9", "#people.dir=ascending,selected=9"], "an unknown id clears the selection and stays wanted");
   const late = new SpecialPerson();
   late.id = "9";
   late.name = "Nine";
@@ -2633,13 +2736,13 @@ test("a sortable list orders rows by a column, flips on repeat, and keeps the se
 });
 
 test("a sortable list restores its sort from the fragment and writes changes back", () => {
-  const f = peoplePage("#people.sort=role&people.dir=descending");
+  const f = peoplePage("#people.dir=descending,sort=role");
   const names = () => f.rowsOf().map(row => row.children[0].textContent);
   assert.deepEqual(names(), ["Linus", "Ada", "Grace"], "the fragment chose the column and direction");
   assert.equal(f.roleHeader.getAttribute("aria-sort"), "descending");
-  assert.equal(f.browser.location.hash, "#people.sort=role&people.dir=descending");
+  assert.equal(f.browser.location.hash, "#people.dir=descending,sort=role");
   f.nameHeader.click();
-  assert.equal(f.browser.location.hash, "#people.sort=name&people.dir=ascending", "the sort replaces the fragment values");
+  assert.equal(f.browser.location.hash, "#people.dir=ascending,sort=name", "the sort replaces the fragment values");
   assert.equal(f.browser.entries.length, 1, "sorting adds no history entries");
 });
 

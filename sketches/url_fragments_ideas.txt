@@ -1,6 +1,56 @@
+Chosen direction:
+#main.view=all,s=44,mult=(1,2,9);toolbar.modes=(a,b),theme=linear
+
+; separates window groups.
+The first . in each group separates its window name from its properties.
+, separates properties outside parentheses, and array elements inside them.
+() encloses an array; brackets are not used.
+Property keys can still contain dotted paths.
+
+Encode individual names and values, leaving structural punctuation literal.
+Escape delimiters within values, including literal parentheses as %28 and %29.
+encodeURIComponent alone leaves parentheses unescaped, so the codec must handle
+those explicitly. Parse structure before percent-decoding individual values.
+Array element types come from restoration declarations, not guessed from text.
+
+Adopted in URLFragment and controller restoration:
+- Empty string: q=; empty array: ids=(); one empty string: labels=('').
+- Nil is omitted. Missing keys continue to leave existing properties unchanged.
+- Named window content: main=welcome,n=3. Inline windows omit the content name.
+- Only grouped URLs are supported; ampersand-separated query URLs are ignored.
+- Spaces use %20; + is a literal plus sign.
+- Sort window/property names for stable output; write a window's state together.
+- Restore flat arrays using declared String, Integer, Float or Boolean elements.
+- Ignore malformed values/groups; reject an invalid array as a whole.
+
+Current behavior and examples are documented in doc/lifecycle.md.
+
+Earlier explorations:
+
 /ruby#main.show=all&main.selection=36&main.v=all&main.s=31
 /ruby#main(show=all,selection=36)&other(v=all,s=31)
 /ruby#main[show=all,selection=36],other[sort=down]
 /ruby#show=all,selection=36;other[sort=down,filter=watched]
 /ruby#main:show=all,selection=36;other:sort=down,filter=watched
 /ruby#[main:show=all,selection=36][other:sort=down,filter=watched]
+
+http://localhost:9292/
+main:view=all&s=44&toolbar:mode=owner&theme=linear
+main(view=all,s=44)toolbar(mode=owner,theme=linear)
+[main,view=all,s=44][toolbar:mode=owner,theme=linear]
+
+original:
+#main.view=all&toolbar.mode=owner&toolbar.theme=linear&main.s=44
+
+proposed:
+#main[view=all,s=44]toolbar[mode=owner,theme=linear]
+#main.view=all,s=44;toolbar.mode=owner,theme=linear
+
+/#main=movies,view=all,s=44;toolbar.mode=owner
+/movies?view=all,s=44;toolbar.mode=owner
+/movies/44?view=all;toolbar.mode=owner
+
+alternative:
+/#main=movies&view=all&s=44&toolbar.mode=owner&toolbar.foo=bar
+/movies?view=all&s=44&toolbar.mode=owner&foo=bar
+/movies/44?view=all&toolbar.mode=owner&foo=bar

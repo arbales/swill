@@ -2430,11 +2430,13 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
         restorable "person.age", key: :age
         restorable :flag
         restorable "data.deep"
+        property :ids, type: T::Array[Integer], default: []
+        restorable :ids
       end
     RUBY
     js = compiler.javascript(runtime: "../rb/runtime/runtime.mjs")
-    assert_includes js, 'restorations: [{ path: "query", key: "q", type: "String" }, { path: "person.age", key: "age", type: "Integer" }, { path: "flag", key: "flag", type: "T::Boolean" }, { path: "data.deep", key: "data.deep", type: null }]'
-    assert_equal [["q", "String"], ["age", "Integer"], ["flag", "T::Boolean"], ["data.deep", nil]], execute(js + <<~JS)
+    assert_includes js, 'restorations: [{ path: "query", key: "q", type: "String" }, { path: "person.age", key: "age", type: "Integer" }, { path: "flag", key: "flag", type: "T::Boolean" }, { path: "data.deep", key: "data.deep", type: null }, { path: "ids", key: "ids", type: "T::Array[Integer]" }]'
+    assert_equal [["q", "String"], ["age", "Integer"], ["flag", "T::Boolean"], ["data.deep", nil], ["ids", "T::Array[Integer]"]], execute(js + <<~JS)
       const host = new (Runtime.resolve("Host"))();
       console.log(JSON.stringify(Runtime.restorations(host).map(r => [r.key, r.type])));
     JS

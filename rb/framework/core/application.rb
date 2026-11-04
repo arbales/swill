@@ -838,9 +838,10 @@ module Swill
 
     # The fragment may name the content to show; unknown names are reported
     # and the default stands.
-    sig { params(window_name: String, default_name: String, requested: T.nilable(String)).returns(String) }
+    sig { params(window_name: String, default_name: String, requested: T.untyped).returns(String) }
     def requested_content(window_name, default_name, requested)
-      return default_name if requested == nil || requested == default_name
+      return default_name unless requested.is_a?(String)
+      return default_name if requested == default_name
       return requested if window_content?(requested)
       warn("window \"#{window_name}\" requested unknown content \"#{requested}\"")
       default_name
@@ -966,39 +967,74 @@ module Swill
     def write_window_state(window)
       controller = window.controller
       return unless controller
+      changes = T.let({}, T::Hash[String, T.untyped])
       T.let(Runtime.restorations(controller), T::Array[T.untyped]).each do |declaration|
         path = declaration.path
         # A value that could not be restored is not worth keeping in the URL.
         value = writable_path?(controller, path) ? encode_fragment_value(controller, Runtime.readPath(controller, path), path) : nil
-        @fragments.write(window.scoped_key(declaration.key), value, history: :replace)
+        changes[window.scoped_key(declaration.key)] = value
       end
+      @fragments.write_values(changes, history: :replace)
     end
 
     # Typed URL leaves; nil rejects invalid values.
-    sig { params(type: String, text: String).returns(T.untyped) }
+    sig { params(type: T.nilable(String), text: T.untyped).returns(T.untyped) }
     def decode_fragment_value(type, text) # :nodoc:
-      if type == "Integer" || type == "T.nilable(Integer)"
-        stripped = text.strip
-        return nil unless stripped =~ /\A[+-]?\d/
+      kind = T.let(type || "T.untyped", String)
+      kind = kind.slice(10, kind.length - 11) || "" if kind.start_with?("T.nilable(")
+      if text.is_a?(Array)
+        return nil unless kind.start_with?("T::Array[") || kind == "T.untyped"
+        element = kind == "T.untyped" ? "String" : kind.slice(9, kind.length - 10)
+        values = T.cast(text, T::Array[String]).map { |item| decode_fragment_value(element, item) }
+        return values.any? { |value| value.nil? } ? nil : values
+      end
+      return nil unless text.is_a?(String)
+      scalar = T.cast(text, String)
+      return nil if kind.start_with?("T::Array[")
+      if kind == "Integer"
+        stripped = scalar.strip
+        return nil unless stripped =~ /\A[+-]?\d+\z/
         return stripped.to_i
       end
-      if type == "T::Boolean" || type == "T.nilable(T::Boolean)"
-        return true if text == "true" || text == "1"
-        return false if text == "false" || text == "0"
+      if kind == "Float"
+        return nil unless scalar.strip =~ /\A[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\z/
+        number = scalar.to_f
+        return nil if number.to_s =~ /Infinity|NaN/
+        return number
+      end
+      if kind == "T::Boolean"
+        return true if scalar == "true" || scalar == "1"
+        return false if scalar == "false" || scalar == "0"
         return nil
       end
-      text
+      kind == "String" || kind == "T.untyped" ? scalar : nil
     end
 
-    # A value's text in the fragment, or nil to leave it out. Only a string,
-    # number or boolean round-trips through a URL; anything else is left out,
-    # with a warning, rather than written as text that cannot be restored.
-    sig { params(controller: Controller, value: T.untyped, path: String).returns(T.nilable(String)) }
+    # Scalar text or a flat array of scalar text; nil leaves the key out.
+    sig { params(controller: Controller, value: T.untyped, path: String).returns(T.untyped) }
     def encode_fragment_value(controller, value, path) # :nodoc:
-      return nil if value.nil? || value == ""
+      return nil if value.nil?
+      if value.is_a?(Array)
+        values = T.cast(value, T::Array[T.untyped]).map { |item| fragment_scalar(item) }
+        if values.any? { |item| item.nil? }
+          warn_unrestorable(controller, path, "its array must contain only strings, finite numbers or booleans")
+          return nil
+        end
+        return values
+      end
+      text = fragment_scalar(value)
+      return text unless text.nil?
+      warn_unrestorable(controller, path, "its value cannot be written to the URL; restore a string, finite number, boolean or flat array")
+      nil
+    end
+
+    sig { params(value: T.untyped).returns(T.nilable(String)) }
+    def fragment_scalar(value) # :nodoc:
       return value if value.is_a?(String)
-      return "#{value}" if value.is_a?(Integer) || value.is_a?(Float) || value == true || value == false
-      warn_unrestorable(controller, path, "its value cannot be written to the URL; restore a string, number or boolean")
+      if value.is_a?(Integer) || value.is_a?(Float) || value == true || value == false
+        text = "#{value}"
+        return text unless text =~ /Infinity|NaN/
+      end
       nil
     end
 
@@ -1041,11 +1077,11 @@ module Swill
       @windows.each { |window| apply_fragment_to(window, params) }
     end
 
-    sig { params(window: Window, params: T::Hash[String, String]).void }
+    sig { params(window: Window, params: T::Hash[String, T.untyped]).void }
     def apply_fragment_to(window, params) # :nodoc:
       return unless window.container?
       requested = params[window.name]
-      if requested != nil && requested != window.content_name
+      if requested.is_a?(String) && requested != window.content_name
         if window_content?(requested)
           load_window_content(window.name, requested, history: :none)
         else

@@ -253,6 +253,7 @@ module Swill
       GLOBALS = {
         "fetch" => ["Promise[Response]", "url: String, init?: T.untyped"],
         "encodeURIComponent" => ["String", "value: String"],
+        "decodeURIComponent" => ["String", "value: String"],
         "setTimeout" => ["Integer", "callback: T.proc.void, delay: Integer"],
         "clearTimeout" => ["void", "id: Integer"],
         "queueMicrotask" => ["void", "callback: T.proc.void"]

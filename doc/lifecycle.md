@@ -66,6 +66,39 @@ with a property declared on the class; the key names the fragment parameter and
 defaults to the path. The application scopes it under the window name, so
 `restorable :query, key: :q` in the `main` window reads and writes `main.q`.
 
+The fragment groups properties by window, using semicolons between windows
+and commas between properties:
+
+```text
+#main.q=star,selection=44;toolbar.mode=owner,theme=linear
+```
+
+The first dot identifies the window; later dots can be part of a property path.
+Window content has a bare window key: `#main=welcome,n=3` selects the `welcome`
+content and restores its `n` property. Windows with inline content need no
+content name. Output orders windows and keys consistently. Only the grouped
+format is supported; ampersand-separated query-style fragments are not restored.
+
+Arrays use parentheses and their declared element type:
+
+```ruby
+property :selected_ids, type: T::Array[Integer], default: []
+restorable :selected_ids, key: :ids
+```
+
+This writes `#main.ids=(1,2,9)`. String, Integer, Float, and Boolean elements are
+supported; arrays are flat, with no nil elements. `ids=()` is an empty array,
+`q=` is an empty string, and `labels=('')` is an array containing one empty
+string. A nil property is omitted. An array containing an invalid element is
+ignored as a whole when restoring, rather than partially applied.
+
+Names and values are percent-encoded individually. Literal commas, semicolons,
+equals signs, parentheses, apostrophes and percent signs in values are escaped;
+spaces are written as `%20`, and `+` means a literal plus sign. For example, the single string `Alien (1979)` is
+`q=Alien%20%281979%29`, not an array. Syntax is parsed before values are decoded.
+Malformed groups or values are ignored without preventing other groups from
+restoring. Unknown keys survive unrelated state writes.
+
 Restoration applies only to the controller a window holds as its content — the
 topmost controller in the container. Nested controllers may declare
 `restorable`, but nothing restores them, and the application warns once per
@@ -91,8 +124,8 @@ A restorable path must end at a property that can be written: a stored
 property, or a computed one declared with `writer:`. The compiler rejects a
 path that ends at a read-only property, naming the `_id` property to restore
 instead when there is one, so `movie_list.selected_object` is refused in favour
-of `movie_list.selected_object_id`. The fragment holds strings, numbers and
-booleans; a path whose value is anything else, or one the compiler could not
+of `movie_list.selected_object_id`. The fragment holds strings, finite numbers,
+booleans, and flat arrays of those values; a path whose value is anything else, or one the compiler could not
 check that turns out to be read-only, is left out of the fragment and the rest
 of the window's state still restores. The application warns once for each.
 

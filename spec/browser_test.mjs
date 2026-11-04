@@ -80,7 +80,7 @@ try {
     assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
-  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/rb/index.html#main=farewell&main.n=2&people.selected=2`}, sessionId);
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/rb/index.html#main=farewell,n=2;people.selected=2`}, sessionId);
   await evaluate(`new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
     const poll = () => {
@@ -187,7 +187,7 @@ try {
     dialog.querySelector("[data-action=close]").click();
     results.push(document.querySelector("dialog") === null, application.firstResponder() === application.controllers[0].nameField);
     return results;
-  })()`), ["farewell", "Farewell", "Badge 0", 5, "welcome", "Welcome", 1, "#main=welcome&main.n=0&people.selected=2", true, true, true, true]);
+  })()`), ["farewell", "Farewell", "Badge 0", 5, "welcome", "Welcome", 1, "#main=welcome,n=0;people.selected=2", true, true, true, true]);
   // Back returns to the previous window content and its restored state.
   assert.deepEqual(await evaluate(`(async () => {
     const container = document.querySelector("[window=main]");
@@ -198,7 +198,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 0));
     const badge = container.children[0].__swill_view__.controllerValue();
     return [...before, location.hash, container.getAttribute("name"), badge.count, badge.restored];
-  })()`), ["#main=welcome&main.n=0&people.selected=2", "welcome", "#main=farewell&main.n=0&people.selected=2", "farewell", 0, true]);
+  })()`), ["#main=welcome,n=0;people.selected=2", "welcome", "#main=farewell,n=0;people.selected=2", "farewell", 0, true]);
   // The people list rendered rows from its template inside the people
   // window and restored the selection the fragment named by id. Clicks and
   // arrow keys select, the fragment follows, Enter hands the selection to
@@ -227,12 +227,12 @@ try {
     return results;
   })()`), [
     ["Ada", "Grace", "Linus"], [false, true, false], "Grace", false,
-    [true, false, false], "1", "Ada", "#main=farewell&main.n=0&people.selected=1&people.dir=ascending",
+    [true, false, false], "1", "Ada", "#main=farewell,n=0;people.dir=ascending,selected=1",
     true,
-    [false, true, false], "#main=farewell&main.n=0&people.selected=2&people.dir=ascending",
+    [false, true, false], "#main=farewell,n=0;people.dir=ascending,selected=2",
     4, true, true,
     3, false, true,
-    ["Ada", "Grace"], "3", [false, false], "Hello Hopper"
+    ["Ada", "Grace"], null, [false, false], "Hello Hopper"
   ]);
   // Header cells sort the list through the sort_by action; the sort is
   // written to the fragment, the list marks the sorted column (its class,
@@ -254,8 +254,8 @@ try {
     return results;
   })()`), [
     ["Ada", "Grace"], [null, null],
-    ["Grace", "Ada"], [null, "sorted-ascending"], [null, "ascending"], [false, true], "#main=farewell&main.n=0&people.selected=1&people.dir=ascending&people.sort=role",
-    ["Ada", "Grace"], [null, "sorted-descending"], "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
+    ["Grace", "Ada"], [null, "sorted-ascending"], [null, "ascending"], [false, true], "#main=farewell,n=0;people.dir=ascending,selected=1,sort=role",
+    ["Ada", "Grace"], [null, "sorted-descending"], "#main=farewell,n=0;people.dir=descending,selected=1,sort=role"
   ]);
   // Enter on the selected row opens the inline editor after it; typing
   // edits a draft, Enter commits it into the person and the row, and Escape
@@ -285,7 +285,7 @@ try {
     3, true, true,
     "Ada", "Edited",
     2, "Edited", "Edited", true,
-    true, "Edited", "#main=farewell&main.n=0&people.selected=1&people.dir=descending&people.sort=role"
+    true, "Edited", "#main=farewell,n=0;people.dir=descending,selected=1,sort=role"
   ]);
   // Code-created content awakens through the MutationObserver, and removed
   // content is torn down, without any explicit call.
@@ -323,7 +323,7 @@ try {
 
   // The static example: every facility on one page. The fragment picks the
   // main pane and restores the workspace pane's fields.
-  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/rb/static/index.html#main=bindings&workspace=intro-pane&workspace.q=Hi&workspace.page=3`}, sessionId);
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/examples/rb/static/index.html#main=bindings;workspace=intro-pane,page=3,q=Hi`}, sessionId);
   await evaluate(`new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
     const poll = () => {
@@ -361,7 +361,7 @@ try {
     "Counter changed to 1",
     "Hello, Ada!", false,
     "Hello, Grace!", true,
-    "Hi", "3", "#main=bindings&workspace=intro-pane&workspace.q=Hi&workspace.page=3"
+    "Hi", "3", "#main=bindings;workspace=intro-pane,page=3,q=Hi"
   ]);
   // Controls pane through the toolbar, then the data pane's editable list,
   // then the palette dialog.
