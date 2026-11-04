@@ -25,7 +25,7 @@ The findings below remain open proposals, not approved API changes.
 | Sort criteria | `sortDescriptors` supports multiple descriptors | One `sort_key` and `sort_direction`; `sort_states` supplies header presentation | Make ordered `sort_descriptors` authoritative. Retain single-column header behavior as a convenience over that state, without competing sort state. |
 | Filtering | `filterPredicate`, with `arrangeObjects:` for custom arrangement | Only the `includes_object?` override | Design `filter_predicate` using a Ruby-callable contract. Keep it distinct from remote query criteria. Decide whether the per-object override remains a convenience. |
 | Selection policy | `preservesSelection`, `avoidsEmptySelection`, and `selectsInsertedObjects`; documented defaults are YES | Hardcoded identity preservation, empty selection allowed, first selection requested by list focus, temporary insertion always selects | Expose and test deliberate policies. Do not infer that preserving selection authorizes remembering every filtered-out request indefinitely. |
-| Requested versus actual selection | Selection setters may fail because editing cannot commit | `select_objects` retains absent objects, `selected_objects` exposes only present ones, and `selected_object_id` can defer selection | Separate restoration intent from ordinary selection. Test filtering, removal, reappearance, replacement objects with the same id, and explicit deselection before changing behavior. |
+| Requested versus actual selection | Selection setters may fail because editing cannot commit | Ordinary selection now drops absent objects. Explicit `selected_object_id` restoration waits until matched or cancelled, then becomes ordinary selection | Restoration is separated; selection setters' editing refusal/result contract remains open. |
 | Editing and selection | Selection setters can attempt `commitEditing` and report failure | EditableList guards some UI operations; an arrangement change cancels the edit; shared ArrayController selection has no common editing gate | Define one coordination contract for direct selection writes, shared controllers, sort/filter changes, and asynchronous saves. This is a behavioral gap, not just spelling. |
 | Insertion | Insertion adds to content and arranged objects; selection and filter-clearing policies are configurable | `show_first` temporarily includes an object outside query membership and selects it; source membership is unchanged | Preserve the remote-data distinction. Document temporary presentation as a Swill extension, not an implementation of Cocoa insertion. Design actual mutable-content insertion separately. |
 | Selection bindings | Inherited `selection` is a KVC proxy with no-selection/multiple-values markers | `selected_object` returns the first selected object; no selection proxy | Keep the singular convenience clearly named. It is not equivalent to Cocoa `selection`; multi-object inspectors need a separately designed proxy/marker contract. |
@@ -47,6 +47,14 @@ The findings below remain open proposals, not approved API changes.
   different public name.
 
 ## Next steps
+
+October 2026 selection correction: filtering or published content removal now
+clears the missing selection and its saved id. Reappearance does not restore it.
+Explicit id restoration still waits through missing results and resolves once.
+This matches the disappearance/reappearance behavior observed with native
+NSArrayController on current AppKit; it is not a claim of testing OS X 10.8.
+Swill still permits empty selection and retains its immediate same-id replacement
+behavior. Broader selection policy and editing coordination remain below.
 
 1. Settle `selection_indexes`, `arrange_objects(objects)`, and explicit
    `rearrange_objects`, including observable writers and selection results.

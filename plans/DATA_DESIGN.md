@@ -70,3 +70,9 @@ queries or broadcast cross-client updates. Query membership freshness and an
 explicit refresh API remain open in [the data plan](DATA_PLAN.md); connection
 delivery caches and subscriptions remain exploratory in
 [data exchange design](DATA_EXCHANGE_DESIGN.md).
+
+## Unresolve iOS / Compiled Application Tension
+
+Today when the server schema is updated, old clients are invalidated.
+When building iOS applications, we'll have to contend with longer release
+cycles and the need to support past client versions. We should explore different approaches to solving this problem before selecting a direction.

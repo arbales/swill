@@ -7,12 +7,10 @@ clarity, not another site build-out.
 
 ## Open work
 
-1. Close the current coverage gap. `Rakefile` sets
-   `DOC_COVERAGE_BASELINE = 171`; on 1 October 2026, `bundle exec rake
-   doc_coverage` reported **173** undocumented public entries. Document public
-   methods, mark true internals `:nodoc:`, and lower the baseline when the
-   count improves. `EditableList#commit_distant_edit` remains among the gaps;
-   the old reference to `List#observe_collection` is obsolete.
+1. Keep closing the coverage gap. `Rakefile` sets
+   `DOC_COVERAGE_BASELINE = 164` (27 October 2026). Document public methods,
+   mark true internals `:nodoc:`, and lower the baseline as the count improves.
+   New public API arrives documented, so the count does not grow.
 2. Settle one vocabulary for binding *target* and *destination* across guides
    and source. Cold-read [markup](../doc/markup.md) and
    [responders](../doc/responders.md) for a newcomer.
@@ -24,14 +22,12 @@ clarity, not another site build-out.
 4. Make the generated Runtime page own runtime reference material now
    duplicated in [the compiler guide](../doc/compiler.md). Keep the compiler
    guide focused on source-to-JavaScript semantics.
-5. Decide whether generated identifiers such as `Swill.Swill__Window` should
-   be non-enumerable or more explicitly documented as private. Separately
-   settle whether `Runtime.send` reading plain-object entries should match
-   ordinary JavaScript dot access.
+5. Settle whether `Runtime.send` reading plain-object entries should match
+   ordinary JavaScript dot access. (Hiding the generated `Swill__*`
+   identifiers was dropped; see [abandoned](ABANDONED.md).)
 6. Decide whether registered JavaScript models need persisted `static
-   attributes` and property `nameDidChange` hooks. The current limitations
-   are described in [plain JavaScript](../doc/plain_javascript.md); the hook
-   implementation candidate is tracked in [the framework plan](FRAMEWORK_PLAN.md).
+   attributes`; tracked as deferred in [the developer-experience
+   plan](DEVX_PLAN.md).
 7. Review JavaScript-index treatment of Ruby-only namespaces and extensions;
    implement general collapsible namespace rows only after the expanded-state
    design is settled. Replace the language switch's placeholder UI with its

@@ -12,7 +12,9 @@ the [compiler](../doc/compiler.md), [collections](../doc/collections.md), and
   every row after an arrangement change. The documentation navigator measured
   roughly 110–120 ms to restore about 900 results. Reconcile rows by object
   identity, retaining surviving views and their bindings; verify ordering,
-  selection, ownership, and teardown.
+  selection, ownership, and teardown. The same reconciliation is what lets a
+  list adopt rows the server rendered; see
+  [the URL and server rendering design](URL_AND_SSR_DESIGN.md).
 - **Action lookup.** `Responder#action_target` uses `Runtime.respondsTo`, which
   can answer true for a property. Match action lookup to the method table and
   `performAction` arity/visibility rules, so a same-named property does not
@@ -22,11 +24,6 @@ the [compiler](../doc/compiler.md), [collections](../doc/collections.md), and
   near 217 ns versus an ordinary getter near 11.7 ns. Profile the current
   runtime before optimizing. Descriptor resolution on every binding write is
   a candidate to evaluate alongside the write path.
-- **Plain JavaScript registration.** Registered classes expose actions but do
-  not register `nameDidChange` methods as property hooks. Add metadata and
-  coverage if the plain-JavaScript API should support the same hooks as Ruby
-  classes; the current limitation is documented in
-  [plain JavaScript](../doc/plain_javascript.md).
 
 ## Controller composition and Cocoa alignment
 
@@ -72,9 +69,18 @@ test it with an actual control before changing the existing delegate path.
 `html_attribute`, extracting `EditableList` persistence behavior, and the
 static example's brewery search were candidate slices in the port plan, not
 approved implementation commitments. Reassess them against current APIs and
-applications. Gem publication depends on a released Ruby2JS Pragma filter;
-CDN publication needs a versioned asset. npm packaging remains deferred.
+applications. Gem publication depends on a released Ruby2JS Pragma filter. The CDN
+serves tagged releases; see [the developer-experience plan](DEVX_PLAN.md).
+npm packaging remains deferred.
 
 General Ruby module hooks, `prepend`, runtime class mutation, broad
 metaprogramming, browser `sorbet-runtime`, arbitrary ActiveSupport behavior,
 and general Ruby compatibility remain outside the finite compiler target.
+
+## URLs and server rendering
+
+The plan of record is [the URL and server rendering design](URL_AND_SSR_DESIGN.md):
+one state grammar in the fragment, the query and the path, the routed
+window's content as the path, a shared codec the server parses too, and
+server rendering in three steps (route-shaped page, data preload, the
+client's templates rendered on the server and adopted).

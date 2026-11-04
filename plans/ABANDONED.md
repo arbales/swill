@@ -4,7 +4,7 @@ These are discarded directions, not a list of work merely deferred.
 
 - **The Opal browser port (20 September 2026).** The Ruby2JS UI-kernel
   checkpoint retired the plan to ship a Ruby runtime to the browser. The Opal
-  examples remain as historical references under `examples/opal/`.
+  examples were removed in October 2026; git history keeps them.
 - **`arranged_content` as a second public arrangement API (September 2026).**
   It split reads and observation from Cocoa's `arrangedObjects` concept. The
   single `arranged_objects` property replaced it.
@@ -25,6 +25,16 @@ These are discarded directions, not a list of work merely deferred.
   composition step.** `CollectionArrangement` and optional `ArrayController`
   now own those responsibilities. Editing composition remains open in
   [the framework plan](FRAMEWORK_PLAN.md).
+- **Running the compiled application on the server to render pages
+  (November 2026).** Executing `swill.js` and `app.js` in a server-side
+  JavaScript runtime against a DOM, then hydrating, would need the Node-shaped
+  toolchain Swill avoids, a browser the framework assumes (history, focus,
+  layout), and in-process data, to produce what rendering the client's own
+  templates on the server gives at far lower cost. See
+  [the URL and server rendering design](URL_AND_SSR_DESIGN.md).
+- **Server-driven HTML fragments (November 2026).** Pushing rendered fragments
+  into the page over SSE, as Movies' Datastar page does, bypasses the client's
+  objects and bindings, where Swill keeps state. Not Swill's model.
 - **Hiding `Swill__*` on the global (October 2026).** Compiled applications
   link against the generated identifiers through
   `build/framework.external.mjs`, so they stay; the plan was only to make them
