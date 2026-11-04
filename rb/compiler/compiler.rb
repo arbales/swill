@@ -44,6 +44,7 @@ module Swill
       rb/framework/core/binding.rb
       rb/framework/core/object_bindings.rb
       rb/framework/core/collection_arrangement.rb
+      rb/framework/core/array_controller.rb
       rb/framework/core/responder.rb
       rb/framework/core/outlet_owner.rb
       rb/framework/core/bundle.rb
@@ -88,6 +89,8 @@ module Swill
       rb/framework/model/dataset.rb
       rb/framework/model/resource.rb
       rb/framework/distant/object.rb
+      rb/framework/distant/context.rb
+      rb/framework/distant/edit.rb
       rb/framework/distant/client.rb
     ].freeze
 

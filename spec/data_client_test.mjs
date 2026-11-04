@@ -5,6 +5,7 @@ import {pack, unpack} from "../rb/runtime/message_pack.mjs";
 import {
   Swill__Distant__Object as DistantBase,
   Swill__Distant__Client as Client,
+  Swill__Distant__Context as Context,
   Swill__DateTransformer as DateTransformer,
   Swill__Model__Collection as Collection,
   Swill__Model__ResultSet as ResultSet
@@ -219,7 +220,7 @@ test("queries return canonical ResultSets and unknown fields hydrate", async () 
   assert.equal(post.title, "Newer", "an older response cannot replace a newer field");
 });
 
-test("distant drafts persist only after acceptance and deletion is observable", async () => {
+test("editing contexts accept before persistence and deletion is observable", async () => {
   globalThis.WebSocket = FakeWebSocket;
   let transport;
   Runtime.configureData("ws://fixture-lifecycle", "schema", () => (transport = new FakeWebSocket()));
@@ -227,20 +228,22 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   const post = new Post();
   post.title = "Created";
   assert.equal(post.isDraft(), false);
-  assert.throws(() => post.draft(), /before drafting/);
+  assert.throws(() => post.context().newEditingContext().object(post), /before opening/);
   const saved = await post.save();
   assert.equal(saved, post, "the newly assigned identity keeps the original object canonical");
   assert.equal(post.id, "2");
   assert.equal(post.isDirty, false);
 
-  const draft = post.draft();
-  assert.equal(draft.isDraft(), true);
+  const editing = post.context().newEditingContext();
+  const draft = editing.object(post);
   draft.title = "Edited";
   assert.equal(post.title, "Created", "editing a draft does not expose unaccepted values");
-  await post.applyDraft(draft);
+  await editing.save();
+  assert.equal(post.isDirty, true, "acceptance precedes persistence");
+  await post.save();
   assert.equal(post.title, "Edited");
   assert.equal(draft.isDirty, false);
-  await assert.rejects(draft.save(), /original\.apply_draft/);
+  editing.dealloc();
 
   transport.holdNextQuery = true;
   const stale = Client.default().query("Post", "search", ["stale"], {}, "result_set");
@@ -251,7 +254,7 @@ test("distant drafts persist only after acceptance and deletion is observable", 
   const staleResults = await stale;
   assert.equal(staleResults.first(), post, "an older response retains the deleted tombstone identity");
   assert.equal(post.title, "Edited", "an older response cannot resurrect deleted data");
-  await assert.rejects(post.save(), /deleted distant object/);
+  await assert.rejects(post.save(), /deleted record/);
   assert.equal(transport.requests.filter(request => request.type === "CREATE").length, 1);
   assert.equal(transport.requests.filter(request => request.type === "UPDATE").length, 1);
   assert.equal(transport.requests.filter(request => request.type === "DELETE").length, 1);
@@ -355,17 +358,19 @@ test("a field's state is observable as it loads and fails", async () => {
   stops.forEach(stop => stop());
 });
 
-test("a draft is refused by any object but its original", async () => {
+test("context identity and relationship counterparts stay isolated", async () => {
   const {post, client} = await effectsFixture();
-  const draft = post.draft();
-  assert.equal(draft.isDraft(), true);
-  assert.equal(draft.isDraftOf(post), true);
+  const editing = post.context().newEditingContext();
+  const local = editing.object(post);
+  assert.equal(editing.object(post), local);
+  assert.notEqual(local, post);
+  assert.equal(local.context(), editing);
   const stranger = (await client.query("Post", "search", [], {}, "result_set")).first();
-  assert.equal(stranger, post, "the query answers the canonical object");
-  const other = new Post();
-  other.applyDataField("id", "9", 1, true);
-  assert.equal(draft.isDraftOf(other), false);
-  await assert.rejects(other.applyDraft(draft), /draft created from this distant object/);
+  assert.equal(stranger, post);
+  assert.equal(editing.object(stranger), local);
+  assert.equal(post.context().object(local), post);
+  editing.dealloc();
+  await assert.rejects(local.save(), /released/);
 });
 
 test("an association controller is released when its owner deallocs", async () => {
@@ -575,7 +580,7 @@ test("automatic recovery backs off, coalesces manual retries, and connects an id
   }
 });
 
-test("compatible reconnection preserves canonical objects, dirty fields, drafts and queued hydration", async () => {
+test("compatible reconnection preserves canonical objects, dirty fields, contexts and queued hydration", async () => {
   Runtime.closeData();
   const client = Client.default();
   let current;
@@ -591,7 +596,7 @@ test("compatible reconnection preserves canonical objects, dirty fields, drafts 
   try {
     const first = (await client.query("Post", "search", [], {}, "array"))[0];
     first.title = "Local edit";
-    const draft = first.draft();
+    const draft = first.context().newEditingContext().object(first);
     draft.title = "Draft edit";
     holdReads = true;
     assert.equal(first.body, null);
@@ -609,4 +614,257 @@ test("compatible reconnection preserves canonical objects, dirty fields, drafts 
     assert.equal(draft.title, "Draft edit");
     assert.equal(current.requests.filter(r => r.type === "GET").length, 1);
   } finally { Runtime.closeData(); }
+});
+
+test("isolated edits accept locally, rollback independently, and preserve cyclic identity", async () => {
+  const {post, transport} = await effectsFixture();
+  const parent = post.context();
+  const editing = parent.newEditingContext();
+  const local = editing.object(post);
+  assert.equal(local.isFieldLoaded("comments"), false, "opening an editor does not traverse its relationship graph");
+  assert.equal(local.comments.first(), local);
+  local.title = "Accepted";
+  assert.equal(editing.hasChanges, true);
+  assert.equal(parent.hasChanges, false);
+  editing.rollback();
+  assert.equal(local.title, "Hello");
+  local.title = "Accepted";
+  const before = transport.requests.length;
+  await local.save();
+  assert.equal(transport.requests.length, before, "child acceptance makes no request");
+  assert.equal(post.title, "Accepted");
+  assert.equal(parent.hasChanges, true);
+  assert.equal(editing.hasChanges, false);
+  editing.rollback();
+  assert.equal(post.title, "Accepted", "child rollback cannot retract accepted changes");
+  parent.rollback();
+  assert.equal(post.title, "Hello");
+  assert.equal(parent.hasChanges, false);
+  editing.dealloc();
+});
+
+test("multi-record and overlapping parent edits are refused before any acceptance", async () => {
+  const {post} = await effectsFixture();
+  const other = Client.default().canonical("Post", "9", 1);
+  other.applyDataField("title", "Other", 1, false);
+  const editing = post.context().newEditingContext();
+  const local = editing.object(post);
+  const second = editing.object(other);
+  local.title = "Child";
+  second.title = "Second";
+  await assert.rejects(editing.save(), /multiple changed records/);
+  assert.equal(post.title, "Hello");
+  assert.equal(other.title, "Other");
+  second.rollback();
+  post.title = "Parent";
+  await assert.rejects(editing.save(), /Parent changed title/);
+  assert.equal(local.title, "Child");
+  assert.equal(post.title, "Parent");
+  assert.equal(editing.hasChanges, true);
+  editing.dealloc();
+});
+
+test("server conflicts keep local edits and rollback reveals the received baseline", async () => {
+  const {post} = await effectsFixture();
+  post.title = "Local";
+  post.applyDataField("title", "Remote", 10000, false);
+  assert.equal(post.title, "Local");
+  assert.deepEqual(post.conflictedFields, ["title"]);
+  await assert.rejects(post.save(), /conflicting fields/);
+  post.rollback();
+  assert.equal(post.title, "Remote");
+  assert.equal(post.isDirty, false);
+  assert.deepEqual(post.conflictedFields, []);
+});
+
+test("inline changes share identity and scoped cancellation preserves earlier dirties", async () => {
+  const {post} = await effectsFixture();
+  post.body = "Earlier edit";
+  const edit = post.beginEdit();
+  post.title = "Inline";
+  assert.equal(post.context().object(post).title, "Inline");
+  edit.rollback();
+  assert.equal(post.title, "Hello");
+  assert.equal(post.body, "Earlier edit");
+  assert.deepEqual(post.dirtyAttributes, ["body"]);
+  const finished = post.beginEdit();
+  post.title = "Accepted";
+  finished.finish();
+  post.title = "Later";
+  assert.throws(() => finished.rollback(), /changed after this edit/);
+  assert.equal(post.title, "Later");
+});
+
+class SavingSocket extends FakeWebSocket {
+  send(bytes) {
+    const request = unpack(bytes);
+    if (request.type === "UPDATE" || request.type === "CREATE") {
+      this.pending = request;
+      this.requests.push(request);
+      return;
+    }
+    super.send(bytes);
+  }
+  complete(error = null, fields = null) {
+    const request = this.pending;
+    this.pending = null;
+    const id = request.id || "2";
+    const response = error
+      ? {type: "ERROR", request_id: request.request_id, error}
+      : {type: "RETURN", request_id: request.request_id, value: {$ref: ["Post", id]},
+          patches: [{model: "Post", id, generation: request.generation,
+            fields: fields || request.attributes}]};
+    this.emit("message", {data: pack(response).buffer});
+  }
+}
+
+async function savingFixture() {
+  Runtime.closeData();
+  let transport;
+  Runtime.configureData("ws://saving", "schema", () => (transport = new SavingSocket()));
+  const post = (await Client.default().query("Post", "search", [], {}, "result_set")).first();
+  return {post, transport};
+}
+
+test("save acknowledgement preserves later edits and takes server normalization as baseline", async () => {
+  const {post, transport} = await savingFixture();
+  post.title = "submitted";
+  const saving = post.save();
+  await nextTurn();
+  post.title = "Later";
+  transport.complete(null, {title: "Submitted"});
+  await saving;
+  assert.equal(post.title, "Later");
+  assert.equal(post.isDirty, true);
+  assert.equal(post.saving, false);
+  post.rollback();
+  assert.equal(post.title, "Submitted");
+  assert.equal(post.isDirty, false);
+});
+
+test("a rejected save retains accepted edits for retry or later", async () => {
+  const {post, transport} = await savingFixture();
+  const editing = post.context().newEditingContext();
+  editing.object(post).title = "Accepted";
+  await editing.save();
+  const saving = post.context().save();
+  const rejected = assert.rejects(saving, /Validation failed/);
+  await nextTurn();
+  transport.complete({code: "validation_failed", message: "Validation failed"});
+  await rejected;
+  assert.equal(post.title, "Accepted");
+  assert.equal(post.isDirty, true);
+  editing.dealloc();
+  assert.equal(post.context().hasChanges, true, "closing the child leaves accepted edits unsaved");
+  const retry = post.save();
+  await nextTurn();
+  transport.complete();
+  await retry;
+  assert.equal(post.isDirty, false);
+});
+
+test("an uncertain write cannot be blindly retried or locally rolled back", async () => {
+  const {post, transport} = await savingFixture();
+  post.title = "Possibly saved";
+  const saving = post.save();
+  const rejected = assert.rejects(saving, {code: "outcome_unknown"});
+  await nextTurn();
+  transport.close();
+  await rejected;
+  assert.equal(post.saveOutcomeUnknown, true);
+  assert.equal(post.isDirty, true);
+  await assert.rejects(post.save(), /outcome is unknown/);
+  assert.throws(() => post.rollback(), /outcome is unknown/);
+  Runtime.closeData();
+});
+
+test("isolated field hydration uses the shared connection and cannot issue commands", async () => {
+  const {post, client, transport} = await effectsFixture();
+  const child = post.context().newEditingContext();
+  const local = child.object(post);
+  assert.equal(await local.loadField("body"), null);
+  assert.equal(local.isFieldLoaded("body"), true);
+  assert.equal(post.isFieldLoaded("body"), true);
+  assert.equal(transport.requests.filter(r => r.type === "GET").length, 1);
+  await assert.rejects(client.command(local, "invalidate", [], {}, "primitive"), /isolated editing context/);
+  await assert.rejects(local.delete(), /isolated editing context/);
+  assert.equal(transport.requests.filter(r => r.type === "COMMAND" || r.type === "DELETE").length, 0);
+  Runtime.closeData();
+  await assert.rejects(local.save(), /released actor scope/);
+  await assert.rejects(post.save(), /released actor scope/);
+});
+
+test("child acceptance cannot become part of another active inline interaction", async () => {
+  const {post} = await effectsFixture();
+  const child = post.context().newEditingContext();
+  const local = child.object(post);
+  local.title = "Popup";
+  const inline = post.beginEdit();
+  post.body = "Inline";
+  await assert.rejects(child.save(), /active inline edit/);
+  assert.equal(post.title, "Hello");
+  assert.equal(local.title, "Popup");
+  inline.rollback();
+  await child.save();
+  assert.equal(post.title, "Popup");
+  child.dealloc();
+});
+
+test("rollback never restores obsolete baselines for already-clean fields", async () => {
+  const {post} = await effectsFixture();
+  post.title = "Temporary";
+  post.title = "Hello";
+  post.applyDataField("title", "New server value", 10000, false);
+  post.body = "Unsaved body";
+  post.rollback();
+  assert.equal(post.title, "New server value");
+  assert.equal(post.isDirty, false);
+  post.title = "Local";
+  post.applyDataField("title", "Another server value", 10001, false);
+  assert.deepEqual(post.conflictedFields, ["title"]);
+  post.title = "Another server value";
+  assert.equal(post.isDirty, false);
+  assert.deepEqual(post.conflictedFields, []);
+  await post.save();
+});
+
+test("association controller survives observation teardown but context reset retires it", async () => {
+  const {client, post} = await effectsFixture();
+  const controller = post.associationController("comments");
+  const stop = Runtime.observe(controller, "arranged_objects", () => {});
+  controller.selectObject(post);
+  stop();
+  assert.equal(post.associationController("comments"), controller);
+  assert.equal(controller.selectedObject, post);
+  let resolve;
+  const request = controller.fetch(Runtime.blockArgument(() => new Promise(done => { resolve = done; })));
+  client.reset();
+  resolve([post]);
+  assert.equal(await request, false);
+  assert.equal(controller.content, null);
+  await assert.rejects(controller.fetch(), /released/);
+  const fresh = client.canonical("Post", post.id, 2, null);
+  assert.notEqual(fresh.associationController("comments"), controller);
+});
+
+test("closing an editing context retires its pending field hydration quietly", async () => {
+  for (const fails of [false, true]) {
+    const {post} = await effectsFixture();
+    const editing = post.context().newEditingContext();
+    const local = editing.object(post);
+    let resolve, reject;
+    post.loadContextField = () => new Promise((done, fail) => { resolve = done; reject = fail; });
+    const warnings = [];
+    const stop = Runtime.observeWarnings(message => warnings.push(message));
+    try {
+      const pending = local.loadContextField("body", true);
+      editing.dealloc();
+      fails ? reject(new Error("late load failure")) : resolve();
+      assert.equal(await pending, null);
+      assert.equal(local.isFieldLoaded("body"), false);
+      assert.deepEqual(warnings, [], "closing a popup is not a stale-actor error");
+    } finally {
+      stop();
+    }
+  }
 });

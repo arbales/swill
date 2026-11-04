@@ -55,7 +55,8 @@ module Swill
       "Model.Collection" => "Swill::Model::Collection",
       "Model.ResultSet" => "Swill::Model::ResultSet",
       "Distant.Object" => "Swill::Distant::Object",
-      "Distant.Client" => "Swill::Distant::Client"
+      "Distant.Client" => "Swill::Distant::Client",
+      "Distant.Context" => "Swill::Distant::Context"
     }.freeze
 
     # The public classes a plain JavaScript class may extend directly. The

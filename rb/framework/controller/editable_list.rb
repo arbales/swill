@@ -2,19 +2,8 @@
 # frozen_string_literal: true
 
 module Swill
-  # A sortable list whose rows can be edited in place. At most one editor
-  # exists at a time, cloned from the list's own <template for="editor">
-  # whose root is an InlineEditor controller, mounted after the row being
-  # edited. The edit works on a copy: a model's draft, or a duplicate of a
-  # plain object. The copy is edited_object here and the editor's
-  # represented_object through an object binding; a commit applies the draft
-  # back to the original (or replaces a plain object in the collection) and
-  # a discard drops it. Enter commits, Escape discards, and focus leaving the
-  # editor asks editor_should_end_editing. The editor's commit_editing is
-  # asked first; an editor that cannot push its pending edit keeps it open.
-  # One edit in progress: the editor loaned to a row, the row's index, and
-  # the object the row showed. The copy being edited lives on the list as
-  # edited_object.
+  # A row and its temporary editor. Distant rows edit the shared model with
+  # scoped cancellation; local/REST models retain their draft behavior.
   class RowEdit < Swill::Object
     extend T::Sig
 
@@ -44,7 +33,7 @@ module Swill
     # Activation edits the selected row instead of telling the owner.
     sig { override.void }
     def activate_selection
-      indexes = current_indexes
+      indexes = selected_indexes
       if indexes.empty?
         super
       else
@@ -61,6 +50,7 @@ module Swill
     sig { override.void }
     def awake_from_dom
       super
+      @model_edit = T.let(nil, T.nilable(Distant::Edit))
       retain(->() { close_editor })
     end
 
@@ -71,7 +61,11 @@ module Swill
       original = object_at(index)
       return false unless original
       return false if editing? && !end_editing(true)
-      copy = original.respond_to?(:draft) ? original.draft : original.dup
+      copy = if original.is_a?(Distant::Object)
+        original
+      else
+        original.respond_to?(:draft) ? original.draft : original.dup
+      end
       open_editor(index, original, copy)
     end
 
@@ -88,9 +82,16 @@ module Swill
           editing_did_fail_validation(error)
           return false
         end
+        @model_edit&.finish
         close_editor
         commit_edit(copy, edit.original, edit.index)
       else
+        begin
+          @model_edit&.rollback
+        rescue => error
+          editing_did_fail_save(error)
+          return false
+        end
         edit.editor.discard_editing
         close_editor
         finish_edit(edit.index, nil)
@@ -162,6 +163,25 @@ module Swill
       super
     end
 
+    # Registered with the arrangement owner while an inline editor is open.
+    sig { returns(T::Boolean) }
+    def commit_editing
+      end_editing(true)
+    end
+
+    sig { void }
+    def discard_editing
+      end_editing(false)
+    end
+
+    sig { override.params(objects: T.untyped).void }
+    def set_represented_object(objects)
+      if edited_object.is_a?(Distant::Object)
+        return unless commit_editing_if_needed
+      end
+      super
+    end
+
     # ---- policy hooks ----
 
     sig { params(copy: T.untyped, original: T.untyped, index: Integer).void }
@@ -177,7 +197,7 @@ module Swill
     async def commit_distant_edit(copy, original, _index)
       generation = @edit_generation
       begin
-        await original.apply_draft(copy)
+        await original.save
       rescue => error
         return unless @awakened && generation == @edit_generation
         editing_did_fail_save(error)
@@ -185,6 +205,7 @@ module Swill
         open_editor(index, original, copy) if index
         return
       end
+      editing_did_save(original) if @awakened
       # A save may finish after rows move, another edit starts, or the view closes.
       return unless @awakened && generation == @edit_generation
       index = arranged_objects.index(original)
@@ -231,7 +252,12 @@ module Swill
       warn("Edit refused: #{error.message}")
     end
 
-    # Override to present a persistence error. The same draft is remounted.
+    # Successful persistence can change membership in an application's query.
+    sig { params(object: T.untyped).void }
+    def editing_did_save(object)
+    end
+
+    # Override to present a persistence error. Unsaved edits are remounted.
     sig { params(error: T.untyped).void }
     def editing_did_fail_save(error)
       warn("Edit did not save: #{error.message}")
@@ -253,13 +279,17 @@ module Swill
       found.empty? ? nil : T.cast(found[0], HTMLTemplateElement)
     end
 
-    # Mount an editor after the row, bind it to the copy, and give it the
+    # Mount an editor after the row, bind its editing object, and give it the
     # keyboard.
     sig { params(index: Integer, original: T.untyped, copy: T.untyped).returns(T::Boolean) }
     def open_editor(index, original, copy)
       row = row_elements[index]
       return false unless row
       @edit_generation = (@edit_generation || 0) + 1
+      @model_edit = original.is_a?(Distant::Object) ? T.cast(original, Distant::Object).begin_edit : nil
+      object_did_begin_editing(self)
+      controller = array_controller
+      controller&.object_did_begin_editing(self)
       node = instantiate_editor
       self.edited_object = copy
       container_view.mark(row, "being-edited", true)
@@ -299,6 +329,8 @@ module Swill
     def close_editor
       edit = @edit
       @edit = nil
+      @model_edit&.finish
+      @model_edit = nil
       self.edited_object = nil
       return unless edit
       # Restore the row immediately; a remote commit may still be pending.
@@ -307,6 +339,9 @@ module Swill
       element = edit.editor.view.element
       Awakening.detach(element)
       container_view.remove(element)
+      controller = array_controller
+      controller&.object_did_end_editing(self)
+      object_did_end_editing(self)
     end
 
     # Select the final object and give the list the keyboard back.

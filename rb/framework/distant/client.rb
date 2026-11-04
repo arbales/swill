@@ -4,7 +4,7 @@
 module Swill
   module Distant
     # `Swill::Distant::Client` is the browser's end of a Distant Objects
-    # connection. It holds one canonical object per `(model, id)`, so every
+    # connection. Its default context holds one object per `(model, id)`, so every
     # query, association, patch and write that names a record updates the same
     # object; it batches the fields read in one turn into one request; and it
     # applies each response — the value, the patches for every record it
@@ -50,7 +50,7 @@ module Swill
       sig { void }
       def initialize
         super
-        @stores = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
+        @context = Context.default
         @tombstones = T.let({}, T::Hash[String, T::Hash[String, T.untyped]])
         @queued_demands = T.let({}, T::Hash[String, T.untyped])
         @demand_scheduled = T.let(false, T::Boolean)
@@ -147,13 +147,13 @@ module Swill
 
       # Sends a `COMMAND` for the command `name` on `object`, identified by
       # its model and id, and returns the result as `query` does. The
-      # response's patches replace dirty fields: the command is the
-      # application's own write.
+      # response updates confirmed values without erasing local edits.
       sig do
         params(object: Object, name: String, positional: T::Array[T.untyped],
                keywords: T::Hash[T.untyped, T.untyped], result_kind: String).returns(T.untyped)
       end
       async def command(object, name, positional, keywords, result_kind)
+        Context.refuse("Commands in an isolated editing context are not supported yet") if object.context.parent
         contents = operation(object.class.data_model_name, name, positional, keywords)
         contents["id"] = object.id
         value = await request("COMMAND", contents, nil, true)
@@ -186,15 +186,14 @@ module Swill
       end
 
       # Sends an `UPDATE` of `object` with `attributes`, applies the response
-      # over dirty fields, and returns `object`. `Object#save` and
-      # `Object#apply_draft` call this.
+      # as an acknowledgement, and returns `object`. `Object#save` calls this.
       sig { params(object: Object, attributes: T::Hash[T.untyped, T.untyped]).returns(Object) }
       async def update(object, attributes)
         await request("UPDATE", {
           "model" => object.class.data_model_name,
           "id" => object.id,
           "attributes" => encode_value(attributes)
-        }, nil, true)
+        }, object, true)
         object
       end
 
@@ -210,9 +209,10 @@ module Swill
         _value, removed_generation = await request_with_generation("DELETE", {
           "model" => model, "id" => id
         }, nil, true)
-        model_store(model).delete(id)
+        @context.forget(object)
         model_tombstones(model)[id] = {"object" => object, "generation" => removed_generation}
         object.deleted = true
+        object.mark_clean!
         @queued_demands.delete("#{model}:#{id}")
         object.dealloc
         prune_tombstones
@@ -269,15 +269,7 @@ module Swill
       # scope: another actor's records are another identity.
       sig { void }
       def reset
-        @stores.each do |_model, store|
-          typed_store = T.cast(store, T::Hash[String, T.untyped])
-          typed_store.each do |_id, object|
-            distant = T.cast(object, Object)
-            distant.reset_data_fields
-            distant.dealloc
-          end
-        end
-        @stores = {}
+        @context.reset
         @tombstones = {}
         @queued_demands = {}
         @actor_scope = nil
@@ -440,7 +432,8 @@ module Swill
 
           object = preferred || Runtime.resolve(model).new
           object.apply_data_field("id", id, response_generation, true)
-          store[id] = object
+          object.attach_context(@context)
+          @context.register(object)
           object
         end
 
@@ -506,12 +499,15 @@ module Swill
                  preferred: T.nilable(Object), overwrite_dirty: T::Boolean).returns(T.untyped)
         end
         def apply_envelope(message, response_generation, preferred, overwrite_dirty)
+          preferred&.begin_acknowledgement
           invalidations = T.cast(message["invalidations"] || [], T::Array[T::Hash[String, T.untyped]])
           invalidations.each { |effect| apply_invalidation(effect) }
           patches = T.cast(message["patches"] || [], T::Array[T::Hash[String, T.untyped]])
           patches.each { |patch| apply_patch(patch, preferred, overwrite_dirty) }
           invalidations.each { |effect| refresh_observed(effect) }
           decode_value(message["value"], response_generation, preferred)
+        ensure
+          preferred&.end_acknowledgement
         end
 
         # Sends one message and returns its decoded value; see
@@ -587,7 +583,7 @@ module Swill
         # The held objects of `model` by id, created empty on first use.
         sig { params(model: String).returns(T::Hash[String, T.untyped]) }
         def model_store(model)
-          @stores[model] ||= {}
+          @context.model_store(model)
         end
 
         # The deleted objects of `model` by id, each with the generation of

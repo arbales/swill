@@ -13,8 +13,11 @@ require_relative "../rb/framework/model/store"
 require_relative "../rb/framework/model/identity"
 require_relative "../rb/framework/core/object_bindings"
 require_relative "../rb/framework/core/collection_arrangement"
+require_relative "../rb/framework/core/array_controller"
 require_relative "../rb/framework/model/collection"
 require_relative "../rb/framework/distant/object"
+require_relative "../rb/framework/distant/context"
+require_relative "../rb/framework/distant/edit"
 require_relative "../rb/framework/distant/client"
 require_relative "../rb/framework/model/association"
 require_relative "../rb/framework/model/codec"
@@ -122,8 +125,39 @@ class SharedTest < Minitest::Test
     controller.query = "ada"
     assert_equal [ada], controller.arranged_objects
     assert_nil controller.selected_object
+    controller.query = ""
+    assert_nil controller.selected_object, "clearing the filter does not reselect"
+    assert_nil controller.selected_object_id
     controller.selected_object_id = "1"
     assert_same ada, controller.selected_object
+    controller.dealloc
+  end
+
+  def test_array_controller_restores_once_and_prunes_selection_without_reads
+    ada = Demo::Person.new
+    ada.id = "1"
+    grace = Demo::Person.new
+    grace.id = "2"
+    controller = Swill::ArrayController.new
+    controller.selected_object_id = "2"
+    controller.content = [ada]
+    assert_equal "2", controller.selected_object_id
+    assert_nil controller.selected_object
+    controller.content = [ada, grace]
+    assert_same grace, controller.selected_object
+    controller.content = [ada]
+    controller.content = [ada, grace]
+    assert_nil controller.selected_object
+    assert_nil controller.selected_object_id
+    controller.select_objects([ada, grace])
+    controller.content = [grace]
+    controller.content = [ada, grace]
+    assert_equal [grace], controller.selected_objects
+    controller.content = [ada]
+    controller.selected_object_id = "2"
+    controller.deselect_all
+    controller.content = [ada, grace]
+    assert_nil controller.selected_object
     controller.dealloc
   end
 
@@ -185,15 +219,22 @@ class SharedTest < Minitest::Test
     record = RelatedRecord.new
     record.apply_data_field("id", "1", 1, true)
     record.apply_data_field("body", "Text", 1, true)
-    draft = record.draft
-    assert draft.draft?
-    assert draft.draft_of?(record)
-    assert draft.field_loaded?(:body)
-    assert_equal "Text", draft.body
-    refute draft.dirty?
-    stranger = RelatedRecord.new
-    stranger.apply_data_field("id", "2", 1, true)
-    assert_raises(RuntimeError) { stranger.apply_draft(draft) }
+    context = record.context.new_editing_context
+    copy = context.object(record)
+    assert_same copy, context.object(record)
+    assert copy.field_loaded?(:body)
+    assert_equal "Text", copy.body
+    refute copy.dirty?
+    copy.body = "Changed"
+    assert_equal "Text", record.body
+    context.save
+    assert_equal "Changed", record.body
+    assert record.dirty?
+    refute copy.dirty?
+    record.rollback
+    assert_equal "Text", record.body
+    context.dealloc
+
   end
 
   def test_model_strategies_share_only_the_explicit_base_layers
@@ -211,9 +252,9 @@ class SharedTest < Minitest::Test
     refute_respond_to distant.class, :store
 
     distant.id = "1"
-    copy = distant.draft
+    copy = distant.context.new_editing_context.object(distant)
     refute distant.draft?
-    assert copy.draft?
+    refute copy.draft?
     assert_equal "1", copy.id
   end
 

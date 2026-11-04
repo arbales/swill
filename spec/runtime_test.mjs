@@ -2425,12 +2425,12 @@ test("clicks select by identity, shift-click extends, and the selection shows on
   assert.deepEqual([Array.from(f.controller.selectedIndexes), f.controller.selectedObjectId], [[1], "2"],
     "the selection follows its object through a new collection");
   f.parent.people = [ada, linus];
-  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId], [[], "2"],
-    "an object that left is no longer selected, but its id stays wanted");
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId], [[], null],
+    "an object that left loses its selection and saved id");
   assert.deepEqual([f.selected.textContent, f.edit.disabled], ["", true]);
   f.parent.people = [grace, ada];
-  assert.deepEqual([f.controller.selectedObject, Array.from(f.controller.selectedIndexes)], [grace, [0]],
-    "the wanted id resolves when its object returns");
+  assert.deepEqual([f.controller.selectedObject, Array.from(f.controller.selectedIndexes)], [null, []],
+    "returning objects stay unselected");
   f.controller.deselectAll();
   assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId, f.edit.disabled], [[], null, true]);
   assert.deepEqual(f.rowsOf().map(row => row.classList.contains("selected")), [false, false]);
@@ -2466,8 +2466,8 @@ test("row actions dispatch from the list knowing their row, and activation reach
   f.rowsOf()[0].children[2].children[0].click();
   assert.deepEqual(Array.from(f.parent.people), [grace, linus], "the row's button reached the parent's remove_person");
   assert.deepEqual(f.rowsOf().map(row => row.children[0].textContent), ["Grace", "Linus"]);
-  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId], [[], "1"],
-    "the click selected the row before its action removed it");
+  assert.deepEqual([Array.from(f.controller.selectedObjects), f.controller.selectedObjectId], [[], null],
+    "removing the clicked row clears its selection and restoration id");
   f.rowsOf()[1].children[0].doubleClick();
   assert.equal(f.controller.selectedObject, linus);
   assert.equal(f.parent.person, linus, "double-click activates: the parent received the list as sender");
@@ -2587,6 +2587,11 @@ test("a list's selection restores by id from the fragment and follows it afterwa
   late.name = "Nine";
   f.parent.people = [ada, late];
   assert.equal(f.controller.selectedObject, late, "the wanted id resolves when its object arrives");
+  f.parent.people = [ada];
+  assert.equal(f.controller.selectedObjectId, null, "a resolved restoration becomes ordinary selection");
+  assert.equal(f.browser.location.hash, "#people.dir=ascending", "removal clears the saved id");
+  f.parent.people = [ada, late];
+  assert.equal(f.controller.selectedObject, null, "returning content does not resurrect selection");
   f.browser.navigate("#people.selected=1");
   assert.equal(f.controller.selectedObject, ada, "the fragment reapplies on navigation");
   f.controller.deselectAll();
@@ -3292,7 +3297,7 @@ test("array controllers cache arrangement and track filter and sort property rea
   assert.deepEqual(Array.from(controller.arrangedObjects), [ada]);
   assert.equal(controller.selectedObject, null);
   controller.query = "";
-  assert.equal(controller.selectedObject, grace, "clearing the filter restores the requested selection");
+  assert.equal(controller.selectedObject, null, "clearing the filter does not resurrect selection");
   grace.name = "Aaron";
   assert.deepEqual(Array.from(controller.arrangedObjects), [grace, ada]);
   const other = new ArrayController(); other.content = controller.content;
@@ -3301,6 +3306,62 @@ test("array controllers cache arrangement and track filter and sort property rea
   assert.deepEqual(Array.from(controller.content), [grace, ada], "arrangement does not reorder content");
   controller.dealloc(); other.dealloc();
   assert.equal(Runtime.observed(grace, "name"), false);
+});
+
+test("selection prunes missing members even without reads between content changes", () => {
+  const Controller = Runtime.resolve("Swill::ArrayController");
+  const controller = new Controller();
+  const ada = new Person(); ada.id = "1";
+  const grace = new Person(); grace.id = "2";
+  controller.content = [ada, grace];
+  controller.selectObjects([ada, grace]);
+  controller.content = [grace];
+  controller.content = [ada, grace];
+  assert.deepEqual(Array.from(controller.selectedObjects), [grace]);
+  assert.equal(controller.selectedObjectId, "2");
+  controller.content = [];
+  controller.content = [ada, grace];
+  assert.equal(controller.selectedObject, null);
+  assert.equal(controller.selectedObjectId, null);
+  controller.selectObject({id: "absent"});
+  controller.content = [...controller.content, {id: "absent"}];
+  assert.equal(controller.selectedObject, null, "ordinary selection cannot queue an absent object");
+  controller.selectObject(ada);
+  const replacement = new Person(); replacement.id = "1";
+  controller.content = [replacement, grace];
+  assert.equal(controller.selectedObject, replacement, "an immediate same-id replacement retains selection");
+  controller.dealloc();
+  assert.equal(Runtime.observed(controller, "arranged_objects"), false);
+});
+
+test("pending restoration waits through missing results, resolves once, and yields to user selection", () => {
+  const Controller = Runtime.resolve("Swill::ArrayController");
+  const controller = new Controller(), delegate = new Controller();
+  delegate.arrayController = controller;
+  const ada = new Person(); ada.id = "1";
+  const grace = new Person(); grace.id = "2";
+  delegate.selectedObjectId = "2";
+  controller.content = [];
+  controller.content = [ada];
+  assert.equal(delegate.selectedObjectId, "2");
+  assert.equal(delegate.selectedObject, null);
+  controller.content = [ada, grace];
+  assert.equal(delegate.selectedObject, grace);
+  controller.content = [ada];
+  controller.content = [ada, grace];
+  assert.equal(delegate.selectedObject, null);
+  assert.equal(delegate.selectedObjectId, null);
+  controller.content = [ada];
+  delegate.selectedObjectId = "2";
+  delegate.selectObject(ada);
+  controller.content = [ada, grace];
+  assert.equal(delegate.selectedObject, ada, "user selection replaces pending restoration");
+  delegate.selectedObjectId = "missing";
+  delegate.deselectAll();
+  const late = new Person(); late.id = "missing";
+  controller.content = [late];
+  assert.equal(delegate.selectedObject, null, "explicit deselection cancels pending restoration");
+  delegate.dealloc(); controller.dealloc();
 });
 
 test("arranged_objects is the observable and bindable arrangement property", () => {
@@ -3369,10 +3430,11 @@ test("lists accept an array controller through ordinary bind and share one selec
   controller.sort("name", "descending");
   assert.equal(renders, 1, "one sort operation renders once");
   f.controller.unload();
-  assert.equal(Runtime.observed(controller, "arranged_objects"), false);
+  assert.equal(Runtime.observed(controller, "arranged_objects"), true, "the shared controller still tracks its selection");
   controller.sort("name", "ascending");
   assert.equal(renders, 1, "unloading the list releases its observations");
   controller.dealloc();
+  assert.equal(Runtime.observed(controller, "arranged_objects"), false, "releasing the owner stops selection tracking");
 });
 
 test("temporary first placement belongs to presentation and clears on sorting or new content", () => {
@@ -3423,7 +3485,7 @@ for (const fails of [false, true]) test(`inline row stays visible while remote s
   const f = peoplePage();
   const ada = f.parent.people[0];
   let resolve, reject, pending;
-  ada.applyDraft = () => new Promise((done, fail) => { resolve = done; reject = fail; });
+  ada.save = () => new Promise((done, fail) => { resolve = done; reject = fail; });
   f.controller.commitEdit = (copy, original, index) => {
     pending = f.controller.commitDistantEdit(copy, original, index);
   };
@@ -3450,7 +3512,7 @@ test("failed remote edits reopen beside the record's current row", async () => {
   const f = peoplePage();
   const [ada, grace] = f.parent.people;
   let reject;
-  ada.applyDraft = () => new Promise((_resolve, fail) => { reject = fail; });
+  ada.save = () => new Promise((_resolve, fail) => { reject = fail; });
   f.controller.editingDidFailSave = () => {};
   const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
   f.controller.sort("name", "descending");
@@ -3467,7 +3529,7 @@ test("a failed remote edit cannot replace a newer editor", async () => {
   const f = peoplePage();
   const [ada, grace] = f.parent.people;
   let reject;
-  ada.applyDraft = () => new Promise((_resolve, fail) => { reject = fail; });
+  ada.save = () => new Promise((_resolve, fail) => { reject = fail; });
   f.controller.editingDidFailSave = () => {};
   const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
   f.controller.beginEditing(1);
@@ -3482,7 +3544,7 @@ test("remote save completion leaves a replacement query alone", async () => {
   const f = peoplePage();
   const [ada, grace] = f.parent.people;
   let resolve;
-  ada.applyDraft = () => new Promise(done => { resolve = done; });
+  ada.save = () => new Promise(done => { resolve = done; });
   const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
   f.parent.people = [grace];
   f.controller.selectObject(grace);
@@ -3497,7 +3559,7 @@ test("a failed remote edit does not reopen after the list unloads", async () => 
   const f = peoplePage();
   const ada = f.parent.people[0];
   let reject;
-  ada.applyDraft = () => new Promise((_resolve, fail) => { reject = fail; });
+  ada.save = () => new Promise((_resolve, fail) => { reject = fail; });
   const pending = f.controller.commitDistantEdit(ada.draft(), ada, 0);
   f.controller.unload();
   reject(new Error("save failed"));
@@ -3895,4 +3957,294 @@ test("focus the browser gave before launch makes its responder first", () => {
   const [controller] = application.controllers;
   assert.equal(application.firstResponder(), controller, "an autofocused field's controller takes the keys");
   application.terminate();
+});
+
+function remotePerson(id, name) {
+  let Remote;
+  try { Remote = Runtime.resolve("Test::ContextPerson"); } catch {
+    Remote = class extends Runtime.resolve("Swill::Distant::Object") {};
+    Runtime.install({classes: {"Test::ContextPerson": {
+      constructor: Remote,
+      properties: {
+        name: {type: "String", attribute: true, key: "name", willAccess: true, defaultValue: () => ""},
+        role: {type: "String", attribute: true, key: "role", willAccess: true, defaultValue: () => ""},
+        ...Object.fromEntries(["name", "role"].flatMap(field => [
+          [`${field}_loaded`, {defaultValue: () => false}],
+          [`${field}_loading`, {defaultValue: () => false}],
+          [`${field}_error`, {defaultValue: () => null}]
+        ]))
+      },
+      registries: {
+        modelAttributes: Object.fromEntries(["id", "name", "role"].map(field => [field,
+          {name: field, key: field, type: "String", default: ""}])),
+        dataFields: {name: {kind: "field", type: "String"}, role: {kind: "field", type: "String"}}
+      },
+      settings: [{js: "dataModelName", value: "Test::ContextPerson"}]
+    }}});
+  }
+  const row = new Remote();
+  row.applyDataField("id", id, 1, false);
+  row.applyDataField("name", name, 1, false);
+  row.applyDataField("role", "editor", 1, false);
+  return row;
+}
+
+test("distant inline editing binds the shared object and defers rearrangement until cancellation", () => {
+  const f = peoplePage();
+  const ada = remotePerson("inline-1", "Ada");
+  const grace = remotePerson("inline-2", "Grace");
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  controller.content = [ada, grace];
+  controller.sort("name", "ascending");
+  f.parent.people = controller;
+  f.controller.selectObject(ada);
+  assert.equal(f.controller.beginEditing(0), true);
+  const row = f.controller.rowElements()[0];
+  assert.equal(f.controller.editedObject, ada);
+  ada.name = "Zed";
+  assert.equal(f.controller.rowElements()[0], row);
+  assert.equal(controller.arrangedObjects[0], ada);
+  assert.equal(f.controller.selectedObject, ada);
+  assert.equal(f.controller.isEditing(), true);
+  assert.equal(f.controller.endEditing(false), true);
+  assert.equal(ada.name, "Ada");
+  assert.equal(ada.isDirty, false);
+  assert.equal(controller.registeredEditors.length, 0);
+  assert.equal(f.controller.isEditing(), false);
+  f.controller.unload();
+  controller.dealloc();
+});
+
+test("distant inline acceptance releases arrangement and failed persistence keeps the shared edit", async () => {
+  const f = peoplePage();
+  const ada = remotePerson("inline-3", "Ada");
+  const grace = remotePerson("inline-4", "Grace");
+  f.parent.people = [ada, grace];
+  f.controller.sort("name", "ascending");
+  let reject, pending;
+  ada.save = () => new Promise((_done, fail) => { reject = fail; });
+  f.controller.commitEdit = (copy, original, index) => {
+    pending = f.controller.commitDistantEdit(copy, original, index);
+  };
+  f.controller.editingDidFailSave = () => {};
+  f.controller.beginEditing(0);
+  ada.name = "Zed";
+  f.controller.selectObject(ada);
+  assert.equal(f.controller.endEditing(true), true);
+  assert.equal(f.controller.arrangedObjects[1], ada);
+  assert.equal(f.controller.selectedObject, ada);
+  assert.equal(ada.isDirty, true);
+  reject(new Error("Refused"));
+  await pending;
+  assert.equal(f.controller.editedObject, ada);
+  assert.equal(ada.name, "Zed");
+  f.controller.endEditing(false);
+  assert.equal(ada.name, "Zed", "Escape does not retract an already accepted edit");
+  f.controller.unload();
+});
+
+function deferredFetch(controller) {
+  let resolve, reject;
+  const result = new Promise((done, fail) => { resolve = done; reject = fail; });
+  const pending = controller.fetch(Runtime.blockArgument(() => result));
+  return {resolve, reject, pending};
+}
+
+test("array controller fetch keeps content through failure and retries its remembered operation", async () => {
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  await assert.rejects(controller.fetch(), /requires a block/);
+  const old = [new Person()], next = [new Person()];
+  controller.content = old;
+  let attempts = 0;
+  const operation = () => {
+    if (++attempts === 1) throw new Error("offline");
+    return next;
+  };
+  assert.equal(await controller.fetch(Runtime.blockArgument(operation)), false);
+  assert.equal(controller.content, old);
+  assert.equal(controller.error, "offline");
+  assert.equal(controller.loaded, false);
+  assert.equal(controller.stale, true);
+  assert.equal(controller.loading, false);
+  assert.equal(await controller.fetch(), true);
+  assert.equal(controller.content, next);
+  assert.equal(controller.error, null);
+  assert.equal(controller.loaded, true);
+  assert.equal(controller.stale, false);
+  controller.dealloc();
+});
+
+test("only the latest array controller fetch can publish or report failure", async () => {
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  const star = deferredFetch(controller), trek = deferredFetch(controller), wars = deferredFetch(controller);
+  star.resolve([new Person()]);
+  trek.reject(new Error("old request failed"));
+  assert.equal(await star.pending, false);
+  assert.equal(await trek.pending, false);
+  assert.equal(controller.loading, true);
+  assert.equal(controller.error, null);
+  const result = [new Person()];
+  wars.resolve(result);
+  assert.equal(await wars.pending, true);
+  assert.equal(controller.content, result);
+  assert.equal(controller.loading, false);
+  controller.dealloc();
+});
+
+test("selection survives loading, failure, and superseded results until new membership is published", async () => {
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  const movie = new Person(); movie.id = "selected";
+  controller.content = [movie];
+  controller.selectObject(movie);
+  const old = deferredFetch(controller), current = deferredFetch(controller);
+  assert.equal(controller.selectedObject, movie);
+  old.resolve([]);
+  assert.equal(await old.pending, false);
+  assert.equal(controller.selectedObject, movie);
+  current.reject(new Error("offline"));
+  assert.equal(await current.pending, false);
+  assert.equal(controller.selectedObject, movie);
+  assert.equal(controller.selectedObjectId, "selected");
+  await controller.fetch(Runtime.blockArgument(() => []));
+  await controller.fetch(Runtime.blockArgument(() => [movie]));
+  assert.equal(controller.selectedObject, null);
+  controller.dealloc();
+});
+
+test("fetch accepts collections and preserves independent membership and shared identity", async () => {
+  const Controller = Runtime.resolve("Swill::ArrayController");
+  const first = new Controller(), second = new Controller();
+  const ada = remotePerson("query-ada", "Ada"), grace = remotePerson("query-grace", "Grace");
+  const Collection = Runtime.resolve("Swill::Model::ResultSet");
+  const result = new Collection();
+  result.records = [ada, grace];
+  await first.fetch(Runtime.blockArgument(() => result));
+  await second.fetch(Runtime.blockArgument(() => [ada]));
+  first.selectObject(ada);
+  second.selectObject(ada);
+  ada.name = "Augusta";
+  await first.fetch(Runtime.blockArgument(() => [grace, ada]));
+  assert.equal(first.selectedObject, ada);
+  assert.equal(second.selectedObject, ada);
+  assert.equal(second.arrangedObjects[0].name, "Augusta");
+  await first.fetch(Runtime.blockArgument(() => [grace]));
+  assert.equal(first.selectedObject, null);
+  assert.equal(second.selectedObject, ada);
+  await first.fetch(Runtime.blockArgument(() => [ada, grace]));
+  assert.equal(first.selectedObject, null, "refetching an absent record does not reselect it");
+  assert.equal(second.selectedObject, ada, "the other controller retains its own selection");
+  await first.fetch(Runtime.blockArgument(() => [grace]));
+  assert.equal(await first.fetch(Runtime.blockArgument(() => null)), false);
+  assert.match(first.error, /array or collection/);
+  assert.equal(first.arrangedObjects[0], grace);
+  first.dealloc(); second.dealloc();
+});
+
+test("fetch waits for the last editor and drops deferred results superseded by a failed query", async () => {
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  const old = [new Person()], next = [new Person()];
+  controller.content = old;
+  controller.selectObject(old[0]);
+  const editor = {}, other = {};
+  controller.objectDidBeginEditing(editor);
+  controller.objectDidBeginEditing(other);
+  assert.equal(await controller.fetch(Runtime.blockArgument(() => next)), true);
+  assert.equal(controller.content, old);
+  assert.equal(controller.loading, false);
+  assert.equal(controller.loaded, false);
+  assert.equal(controller.stale, true);
+  assert.equal(controller.selectedObject, old[0]);
+  controller.objectDidEndEditing(editor);
+  assert.equal(controller.content, old);
+  controller.objectDidEndEditing(other);
+  assert.equal(controller.content, next);
+  assert.equal(controller.selectedObject, null, "publication prunes the selection after the last editor ends");
+  assert.equal(controller.loaded, true);
+  assert.equal(controller.stale, false);
+  controller.objectDidBeginEditing(editor);
+  await controller.fetch(Runtime.blockArgument(() => old));
+  await controller.fetch(Runtime.blockArgument(() => { throw new Error("failed latest"); }));
+  controller.objectDidEndEditing(editor);
+  assert.equal(controller.content, next);
+  assert.equal(controller.stale, true);
+  controller.dealloc();
+});
+
+test("invalidation, temporary placement and disposal retire unfinished fetches", async () => {
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  const old = new Person(), created = new Person();
+  controller.content = [old];
+  let pending = deferredFetch(controller);
+  controller.invalidate();
+  pending.resolve([]);
+  assert.equal(await pending.pending, false);
+  assert.equal(controller.arrangedObjects[0], old);
+  pending = deferredFetch(controller);
+  controller.showFirst(created);
+  pending.resolve([]);
+  assert.equal(await pending.pending, false);
+  assert.equal(controller.arrangedObjects[0], created);
+  assert.equal(controller.selectedObject, created);
+  await controller.fetch(Runtime.blockArgument(() => [old]));
+  assert.equal(controller.arrangedObjects[0], old);
+  pending = deferredFetch(controller);
+  controller.dealloc();
+  pending.reject(new Error("late failure"));
+  assert.equal(await pending.pending, false);
+  assert.equal(controller.loading, false);
+  await assert.rejects(controller.fetch(), /released/);
+});
+
+test("completed fetch does not replace an active inline editor or its rows", async () => {
+  const f = peoplePage();
+  const ada = remotePerson("query-edit-ada", "Ada"), grace = remotePerson("query-edit-grace", "Grace");
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  controller.content = [ada, grace];
+  f.parent.people = controller;
+  f.controller.selectObject(ada);
+  f.controller.beginEditing(0);
+  const row = f.controller.rowElements()[0];
+  ada.name = "Edited";
+  await controller.fetch(Runtime.blockArgument(() => [grace]));
+  assert.equal(f.controller.rowElements()[0], row);
+  assert.equal(f.controller.isEditing(), true);
+  assert.equal(controller.selectedObject, ada, "unpublished results retain the editing selection");
+  f.controller.endEditing(false);
+  assert.equal(ada.name, "Ada");
+  assert.equal(f.controller.isEditing(), false);
+  assert.equal(f.controller.arrangedObjects.length, 1);
+  assert.equal(f.controller.arrangedObjects[0], grace);
+  assert.equal(controller.selectedObject, grace, "returning keyboard focus selects the first remaining row");
+  await controller.fetch(Runtime.blockArgument(() => [ada, grace]));
+  assert.equal(controller.selectedObject, grace, "the removed editing selection does not return");
+  assert.equal(controller.stale, false);
+  f.controller.unload(); controller.dealloc();
+});
+
+test("fetch state observers can start a newer request without older completion clearing it", async () => {
+  const controller = new (Runtime.resolve("Swill::ArrayController"))();
+  let newer;
+  const dispose = Runtime.observe(controller, "loaded", loaded => {
+    if (loaded) newer = deferredFetch(controller);
+  });
+  await controller.fetch(Runtime.blockArgument(() => [new Person()]));
+  assert.equal(controller.loading, true);
+  assert.equal(controller.stale, true);
+  newer.resolve([]);
+  assert.equal(await newer.pending, true);
+  assert.equal(controller.stale, false);
+  dispose(); controller.dealloc();
+});
+
+test("deallocating an array controller releases its content binding", () => {
+  const ArrayController = Runtime.resolve("Swill::ArrayController");
+  const source = new ArrayController(), dependent = new ArrayController();
+  const original = [new Person()];
+  source.content = original;
+  dependent.bind("content", Runtime.keywordArguments({to: source, key_path: "content"}));
+  assert.equal(dependent.content, original);
+  dependent.dealloc();
+  source.content = [new Person()];
+  assert.equal(dependent.content, original, "a released controller cannot receive source changes");
+  source.dealloc();
 });

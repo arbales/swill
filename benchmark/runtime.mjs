@@ -107,8 +107,8 @@ measure("in-memory protocol round trip", 50_000, () => unpack(pack(envelope)).re
   const FrameworkObject = Framework.resolve("Swill::Object");
   const Bindings = swill.Swill__Connections__Bindings;
 
-  const DistantObject = Framework.resolve("Swill::Model::DistantObject");
-  const DistantClient = Framework.resolve("Swill::Model::DistantClient");
+  const DistantObject = Framework.resolve("Swill::Distant::Object");
+  const DistantClient = Framework.resolve("Swill::Distant::Client");
   class Remote extends DistantObject {}
   Framework.install({classes: {"Benchmark::Remote": {
     constructor: Remote,
@@ -116,6 +116,11 @@ measure("in-memory protocol round trip", 50_000, () => unpack(pack(envelope)).re
       title: {type: "String", attribute: true, key: "title", willAccess: true, defaultValue: () => ""},
       excerpt: {type: "T.nilable(String)", attribute: true, key: "excerpt", willAccess: true,
         defaultValue: () => null},
+      ...Object.fromEntries(["title", "excerpt", "published"].flatMap(name => [
+        [`${name}_loaded`, {type: "T::Boolean", defaultValue: () => false}],
+        [`${name}_loading`, {type: "T::Boolean", defaultValue: () => false}],
+        [`${name}_error`, {type: "T.nilable(String)", defaultValue: () => null}]
+      ])),
       published: {type: "T::Boolean", attribute: true, key: "published", willAccess: true,
         defaultValue: () => false}
     },

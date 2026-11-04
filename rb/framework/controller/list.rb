@@ -13,7 +13,8 @@ module Swill
   # reorder keeps the selection without bookkeeping. selected_object_id names
   # the selection by model id: it follows the selection, and writing it
   # selects the matching object now or, when no arranged object carries the
-  # id yet, once the collection changes. That is the path to restore.
+  # id yet, once the collection changes. That restoration resolves once;
+  # removing a selected object clears its selection and saved id.
   class Controller::List < Controller
     extend T::Sig
     include CollectionArrangement
@@ -125,7 +126,7 @@ module Swill
       return super if total == 0
 
       event.preventDefault
-      indexes = current_indexes
+      indexes = selected_indexes
       current = indexes.empty? ? -1 : T.must(indexes[0])
       index = current < 0 ? 0 : current + 1
       index = total - 1 if index > total - 1
@@ -140,7 +141,7 @@ module Swill
       return super if arranged_objects.length == 0
 
       event.preventDefault
-      indexes = current_indexes
+      indexes = selected_indexes
       current = indexes.empty? ? -1 : T.must(indexes[0])
       if current <= 0
         cancel_operation(event)
@@ -153,7 +154,7 @@ module Swill
     # Enter activates the selection when there is one.
     sig { override.params(event: KeyboardEvent).void }
     def insert_newline(event)
-      if !current_selection.empty?
+      if !selected_objects.empty?
         event.preventDefault
         activate_selection
       else
@@ -269,7 +270,7 @@ module Swill
     sig { void }
     def sync_selected_rows
       return unless @awakened
-      indexes = current_indexes
+      indexes = selected_indexes
       elements = row_elements
       elements.each_with_index do |element, index|
         container_view.mark_selected(element, indexes.include?(index))

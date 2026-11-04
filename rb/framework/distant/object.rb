@@ -130,13 +130,13 @@ module Swill
     # its extension file and never writes one by hand.
     #
     # A distant object is canonical — one instance per `(model, id)`, held by
-    # `Swill::Distant::Client` — and partial: a field is nil until it is
+    # its editing context — and partial: a field is nil until it is
     # loaded, and reading an unloaded field of a saved object requests it.
     # Each field's state is a set of properties beside it — `<name>_loaded`,
     # `<name>_loading`, `<name>_error`, and `<name>_stale` for an association
     # — read by the `field_*` predicates and bindable as any property is.
     # Editing goes through `Editable`'s attributes and `save`, or through a
-    # `draft`; associations are read-only and change through commands.
+    # an isolated editing context; associations change through commands.
     #
     #     post = await Post.find(id)   # a generated query
     #     post.title = "Revised"
@@ -147,8 +147,12 @@ module Swill
       extend T::Sig
       include Fields
 
+      property :conflicted_fields, type: T::Array[String], default: []
+      property :saving, type: T::Boolean, default: false
+      property :save_outcome_unknown, type: T::Boolean, default: false
+
       # Whether the server has deleted this record. A deleted object stays as
-      # a tombstone: it cannot be saved, drafted or loaded.
+      # a tombstone: it cannot be saved or loaded.
       property :deleted, type: T::Boolean, default: false
 
       # `deleted`, as a predicate.
@@ -161,6 +165,13 @@ module Swill
       sig { void }
       def initialize
         super
+        @editing_context = T.let(nil, T.nilable(Context))
+        @parent_object = T.let(nil, T.nilable(Object))
+        @confirmed = T.let({}, T::Hash[String, T.untyped])
+        @versions = T.let({}, T::Hash[String, Integer])
+        @submitted = T.let({}, T::Hash[String, T.untyped])
+        @acknowledging = false
+        @active_edit = T.let(nil, T.nilable(Edit))
         @data_generations = T.let({}, T::Hash[String, T::Hash[String, Integer]])
         @data_controllers = T.let({}, T::Hash[String, ArrayController])
         self.class.data_fields.each do |name, descriptor|
@@ -237,107 +248,261 @@ module Swill
 
       # Loads the field or association `name` from the server and returns its
       # value, or returns the current value when it is loaded and not stale.
-      # Raises when the request fails, and for a draft, a deleted object, or an
+      # Raises when the request fails, and for a deleted object or an
       # unsaved one.
       sig { params(name: Symbol).returns(T.untyped) }
       async def load_field(name)
-        raise "A distant draft cannot hydrate fields" if draft?
         raise "A deleted distant object cannot hydrate fields" if deleted?
         raise "An unsaved distant object cannot hydrate fields" unless id
-        await Client.default.load_field(self, name.to_s, false)
+        await load_context_field(name.to_s, false)
       end
 
       # Loads the field or association `name` from the server again, whether or
       # not it is loaded, and returns its value. Raises as `load_field` does.
       sig { params(name: Symbol).returns(T.untyped) }
       async def reload_field(name)
-        raise "A distant draft cannot hydrate fields" if draft?
         raise "A deleted distant object cannot hydrate fields" if deleted?
         raise "An unsaved distant object cannot hydrate fields" unless id
-        await Client.default.load_field(self, name.to_s, true)
+        await load_context_field(name.to_s, true)
       end
 
       # :section: Persisting
       # Writes go to the server and the response comes back as the truth.
 
-      # Sends the dirty writable fields to the server — a `CREATE` for an
-      # object with no id, an `UPDATE` otherwise — applies the response, marks the
-      # object clean, and returns it. A saved object with nothing dirty sends
-      # nothing. An object created this way becomes the canonical instance for the
-      # id the server assigns. Raises for a deleted object, and for a draft, which
-      # is saved through `apply_draft` on its original.
+      # Save into the parent context, or persist this record at the root.
       sig { returns(T.self_type) }
       async def save
-        raise "Cannot persist a deleted distant object" if deleted?
-        raise "Save a distant draft with original.apply_draft(draft)" if draft?
+        await context.save_object(self)
+        self
+      end
 
+      sig { returns(Context) }
+      def context
+        Context.refuse("Record belongs to a released actor scope") if @context_invalid
+        current = @editing_context
+        return current if current
+        current = Context.default
+        @editing_context = current
+        current.register(self)
+        current
+      end
+
+      sig { params(value: Context).returns(T::Boolean) }
+      def claim_context(value) # :nodoc:
+        return false if @registered_context == value
+        @registered_context = value
+        @editing_context = value
+        true
+      end
+
+      sig { params(value: Context).void }
+      def attach_context(value) # :nodoc:
+        @editing_context = value
+      end
+
+      sig { params(_previous: T.untyped, _value: T.untyped).void }
+      def dirty_attributes_did_change(_previous, _value) # :nodoc:
+        unless conflicted_fields.empty?
+          self.conflicted_fields = conflicted_fields.select { |name| dirty_attributes.include?(name) }
+        end
+        context.changed(self)
+      end
+
+      # Versions distinguish edits made after a request was submitted.
+      sig { override.params(name: T.any(Symbol, String), previous: T.untyped, value: T.untyped).void }
+      def property_will_change(name, previous, value)
+        name = name.to_s
+        if (@dirty_suspensions || 0) == 0 && self.class.data_fields[name]
+          context.check_active
+          @versions[name] = (@versions[name] || 0) + 1
+          @active_edit&.record(name, previous, T.must(@versions[name]), @confirmed[name])
+        end
+        super
+      end
+
+      sig { returns(Edit) }
+      def begin_edit
+        Context.refuse("This object already has an active inline editor") if @active_edit
+        edit = Edit.new(self)
+        @active_edit = edit
+        edit
+      end
+
+      sig { params(edit: Edit).void }
+      def finish_edit(edit) # :nodoc:
+        @active_edit = nil if @active_edit == edit
+      end
+
+      sig { params(name: String, version: Integer, baseline: T.untyped).returns(T::Boolean) }
+      def edit_matches(name, version, baseline) # :nodoc:
+        @versions[name] == version && @confirmed[name] == baseline
+      end
+
+      sig { void }
+      async def persist_changes # :nodoc:
+        Context.refuse("Cannot persist a deleted record") if deleted?
+        check_recovery
+        Context.refuse("Resolve conflicting fields before saving: #{conflicted_fields.join(', ')}") unless conflicted_fields.empty?
         attributes = collect_dirty_attributes
-        return self if id && attributes.empty?
+        return if id && attributes.empty?
+        @submitted = {}
+        dirty_attributes.each do |name|
+          key = name.to_s
+          @submitted[key] = {"version" => @versions[key], "value" => Runtime.read(self, key)}
+        end
+        self.saving = true
+        begin
+          if id
+            await Client.default.update(self, attributes)
+          else
+            await Client.default.create(self, attributes)
+          end
+        rescue Error => error
+          self.save_outcome_unknown = true if error.code == "outcome_unknown"
+          raise error
+        ensure
+          self.saving = false
+          @submitted = {}
+        end
+      end
 
-        if id
-          await Client.default.update(self, attributes)
+      sig { void }
+      def check_recovery # :nodoc:
+        context.check_active
+        Context.refuse("Wait for the current save to finish") if saving
+        Context.refuse("Save outcome is unknown; reconcile with the server before retrying or rolling back") if save_outcome_unknown
+      end
+
+      sig { void }
+      def check_acceptance # :nodoc:
+        check_recovery
+        Context.refuse("Finish or cancel the active inline edit before accepting another editor's changes") if @active_edit
+      end
+
+      # Restores the latest known parent/server baseline, through bindings.
+      sig { void }
+      def rollback
+        check_recovery
+        baseline = @dirty_baseline || {}
+        values = T.let({}, T::Hash[String, T.untyped])
+        dirty_attributes.each { |name| values[name.to_s] = baseline[name] }
+        apply_attributes(values)
+        mark_clean!
+        self.conflicted_fields = []
+      end
+
+      # Context counterparts can hydrate; associations stay in this workspace.
+      sig { params(source: Object).void }
+      def import_parent(source) # :nodoc:
+        @parent_object = source
+        self.class.data_fields.each do |name, descriptor|
+          next unless descriptor["kind"] == "field"
+          import_parent_field(name) if source.field_loaded?(name.to_sym)
+        end
+      end
+
+      sig { params(name: String).void }
+      def import_parent_field(name) # :nodoc:
+        context.check_active
+        source = T.must(@parent_object)
+        descriptor = self.class.data_fields[name]
+        return unless descriptor
+        value = Runtime.read(source, name)
+        if descriptor["kind"] == "many"
+          value = T.cast(value.records, T::Array[Object]).map { |item| context.object(item) }
+        elsif descriptor["kind"] == "one" && value
+          value = context.object(value)
+        end
+        generation = T.must(data_generation(name)["applied"]) + 1
+        apply_data_field(name, value, generation, false)
+      end
+
+      sig { params(name: String, reload: T::Boolean).returns(T.untyped) }
+      async def load_context_field(name, reload) # :nodoc:
+        context.check_active
+        source = @parent_object
+        if source
+          begin_data_field_load(name, reload)
+          begin
+            await source.load_context_field(name, reload)
+            # A closed editor no longer owns this hydration request.
+            return nil if @context_invalid
+            import_parent_field(name)
+          rescue => error
+            return nil if @context_invalid
+            fail_data_field(name, error.message)
+            raise error
+          end
+          Runtime.read(self, name)
         else
-          await Client.default.create(self, attributes)
+          await Client.default.load_field(self, name, reload)
+        end
+      end
+
+      sig { params(name: String).void }
+      async def demand_parent_field(name) # :nodoc:
+        begin
+          await load_context_field(name, false)
+        rescue => error
+          Context.report("Field did not load: #{error.message}")
+        end
+      end
+
+      # Preflight every field before publishing any child changes.
+      sig { void }
+      def accept_into_parent # :nodoc:
+        check_recovery
+        source = T.must(@parent_object)
+        source.check_acceptance
+        Context.refuse("Cannot accept edits to a deleted record") if source.deleted?
+        names = T.let(dirty_attributes.map { |name| name.to_s }, T::Array[String])
+        names.each do |name|
+          current = Runtime.read(source, name)
+          proposed = Runtime.read(self, name)
+          if current != @confirmed[name] && current != proposed
+            Context.refuse("Parent changed #{name} while the editor was open; edits were kept")
+          end
+        end
+        names.each do |name|
+          Runtime.write(source, name, Runtime.read(self, name))
+          @confirmed[name] = Runtime.read(source, name)
         end
         mark_clean!
-        self
+        self.conflicted_fields = []
       end
 
-      # Sends the dirty fields of `copy`, a draft made from this object, as an
-      # `UPDATE` of this object, applies the response here, marks the draft clean,
-      # and returns this object. A draft with nothing dirty sends nothing. Raises
-      # when `copy` was not drafted from this object, or this object is deleted.
-      sig { params(copy: Object).returns(T.self_type) }
-      async def apply_draft(copy)
-        raise "Cannot persist a deleted distant object" if deleted?
-        unless copy.draft_of?(self)
-          raise "apply_draft requires a draft created from this distant object"
-        end
-
-        attributes = copy.collect_dirty_attributes
-        return self if attributes.empty?
-
-        await Client.default.update(self, attributes)
-        copy.mark_clean!
-        self
+      sig { void }
+      def begin_acknowledgement # :nodoc:
+        @acknowledging = true
       end
 
-      # Sends a `DELETE` for this object and returns it. Afterwards `deleted?`
-      # is true, the object has dealloc'd, and it stays as a tombstone so that
-      # an older response cannot bring it back. Raises for a deleted object, a
-      # draft, or an unsaved one.
+      sig { void }
+      def end_acknowledgement # :nodoc:
+        @acknowledging = false
+      end
+
+      # Deletion is immediate at the root; staging deletes is deferred.
       sig { returns(T.self_type) }
       async def delete
+        check_recovery
+        Context.refuse("Deleting inside an isolated editing context is not supported yet") if @parent_object
         raise "Cannot persist a deleted distant object" if deleted?
-        raise "Save a distant draft with original.apply_draft(draft)" if draft?
         raise "Cannot delete an unsaved distant object" unless id
-
         await Client.default.delete(self)
         self
       end
 
-      # :section: Drafting
-      # Editing a copy and applying it.
-
-      # Returns a detached copy of this object holding its id and every loaded
-      # scalar field, marked loaded on the copy, for editing without touching
-      # the original. A draft never loads fields on its own; `apply_draft` on
-      # the original saves it, and `draft?` and `draft_of?` name the lineage.
-      # Raises for a deleted or unsaved object.
+      # Distant editing uses contexts; local/REST models retain Drafts.
       sig { returns(T.self_type) }
       def draft
-        raise "Cannot draft a deleted distant object" if deleted?
-        raise "Save a distant object before drafting it" unless id
+        Context.refuse("Use an editing context instead of a distant draft")
+        self
+      end
 
-        copy = self.class.new
-        copy.apply_data_field("id", id, 0, true)
-        self.class.data_fields.each do |name, descriptor|
-          next unless descriptor["kind"] == "field" && read_data_state(name, "loaded") == true
-          copy.apply_data_field(name, Swill::Runtime.read(self, name), 0, true)
-        end
-        copy.mark_clean!
-        copy.draft_original = self
-        copy
+      sig { params(_copy: Object).returns(T.self_type) }
+      async def apply_draft(_copy)
+        Context.refuse("Use an editing context instead of apply_draft")
+        self
       end
 
       # :section: Driven by the Client
@@ -352,16 +517,25 @@ module Swill
       # already holds is ignored, and a failure older than either is ignored,
       # so a slow reply cannot undo a newer value or a newer invalidation.
 
-      # Requests the field `name` from the client when it is read on a saved
-      # object that is neither a draft nor deleted. The property system
+      # Requests the field `name` when read on a saved, live object. The property system
       # invokes this before resolving a property declared `will_access:`,
       # and an `AssociationCollection` invokes it on its owner when its
       # records are read. Public because the collection calls it.
       sig { params(name: String).void }
       def property_will_access(name)
         super
-        return if draft? || deleted?
-        Client.default.demand(self, name) if self.class.data_fields.key?(name)
+        return if @context_invalid || deleted? || !self.class.data_fields.key?(name)
+        source = @parent_object
+        if source
+          return unless id && begin_data_field_load(name, false)
+          if source.field_loaded?(name.to_sym) && !source.field_stale?(name.to_sym)
+            import_parent_field(name)
+          else
+            demand_parent_field(name)
+          end
+        else
+          Client.default.demand(self, name)
+        end
       end
 
       # Applies `value` as the server's value for the field `name` from a
@@ -369,26 +543,48 @@ module Swill
       # without error. Ignored when a newer response already applied. A
       # to-many association's collection replaces its membership; a scalar
       # field and `id` apply as attributes, cleanly; a to-one association is
-      # written to its stored property. The value is left alone, and only
-      # the state marked, when the field is dirty and `overwrite_dirty` is
-      # false: a background patch does not replace a local edit.
-      sig { params(name: String, value: T.untyped, generation: Integer, overwrite_dirty: T::Boolean).void }
-      def apply_data_field(name, value, generation, overwrite_dirty)
+      # written to its stored property. Dirty scalars retain local edits;
+      # an acknowledgement replaces only the submitted version.
+      sig { params(name: String, value: T.untyped, generation: Integer, _overwrite_dirty: T::Boolean).void }
+      def apply_data_field(name, value, generation, _overwrite_dirty)
         generations = data_generation(name)
         return if generation < T.must(generations["applied"])
         generations["applied"] = generation
 
-        unless !overwrite_dirty && dirty_attributes.include?(name)
-          descriptor = self.class.data_fields[name]
-          if descriptor && descriptor["kind"] == "many"
-            data_collection(name).apply_membership(T.cast(value || [], T::Array[T.untyped]))
-          elsif (descriptor && descriptor["kind"] == "field") || name == "id"
-            apply_attributes({name => value})
-          else
-            Swill::Runtime.write(self, "data_#{name}", value)
-          end
+        descriptor = self.class.data_fields[name]
+        if descriptor && descriptor["kind"] == "many"
+          data_collection(name).apply_membership(T.cast(value || [], T::Array[T.untyped]))
+        elsif (descriptor && descriptor["kind"] == "field") || name == "id"
+          apply_confirmed_field(name, value)
+        else
+          Swill::Runtime.write(self, "data_#{name}", value)
         end
         present_data_field(name)
+      end
+
+      # A response advances the baseline without erasing later local edits.
+      sig { params(name: String, value: T.untyped).void }
+      def apply_confirmed_field(name, value) # :nodoc:
+        dirty = dirty_attributes.include?(name)
+        submitted = @acknowledging ? @submitted[name] : nil
+        previous = @confirmed[name]
+        known = @confirmed.key?(name)
+        @confirmed[name] = value
+        if !dirty || (submitted && submitted["version"] == @versions[name])
+          apply_attributes({name => value})
+        elsif !submitted && known && previous != value && Runtime.read(self, name) != value
+          unless conflicted_fields.include?(name)
+            self.conflicted_fields = [*conflicted_fields, name]
+            Context.report("Server or parent changed #{name} during editing; local edits were kept")
+          end
+        end
+        return unless dirty
+        @dirty_baseline ||= {}
+        @dirty_baseline[name] = value
+        if Runtime.read(self, name) == value
+          self.dirty_attributes = dirty_attributes.reject { |item| item == name }
+          self.conflicted_fields = conflicted_fields.reject { |item| item == name }
+        end
       end
 
       # Marks the association `name` stale from an invalidation of
@@ -465,6 +661,7 @@ module Swill
       # is reset, before the object deallocs.
       sig { void }
       def reset_data_fields
+        @context_invalid = true
         @data_generations = {}
         self.class.data_fields.each do |name, _descriptor|
           write_data_state(name, "loaded", false)

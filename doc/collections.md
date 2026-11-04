@@ -31,7 +31,10 @@ keeps the selection. `selected_object_id` names the selection by model id. It
 follows the selection, and writing it selects the matching object now or, when
 no arranged object carries the id yet, once the collection changes; that is
 the path to restore a selection before its record arrives. Clicking a row
-selects it. `allows_multiple_selection` lets shift-click extend the selection
+selects it. Restoration waits until matched or replaced by another selection;
+once matched, it follows ordinary selection rules. Removing or filtering out a
+selected object clears its selection and saved id, so returning it later does
+not select it again. `allows_multiple_selection` lets shift-click extend the selection
 from the last plain click; the default is false, and a `multiple` attribute on
 the list's root element turns it on from markup. Taking the keyboard selects
 the first row when nothing is selected, and the arrow keys move a single
@@ -81,34 +84,30 @@ and mounted after the row being edited; that row carries the `being-edited`
 class while the editor is open. Beginning an edit raises when the list has no
 editor template or when the template's root is not an `InlineEditor`.
 
-The edit works on a copy: a model's `draft`, or a `dup` of a plain object. The
-copy is the list's `edited_object` property, and the editor's
-`represented_object` is bound to it. `editing?` reports whether an edit is in
-progress.
+Distant rows edit the shared model in place. Bindings elsewhere see those edits
+immediately, while the controller holds the displayed arrangement until editing
+ends. Escape rolls back that edit's changes; overlapping changes that cannot be
+safely rolled back are reported. Local and REST models retain their draft/copy
+behavior. `edited_object` is the object bound to the editor, and `editing?`
+reports whether an editor is open.
 
-Activation edits the selected row instead of sending `activate_selection` to
-the owner. Enter commits and Escape discards. When focus leaves the editor,
-the list is asked `editor_should_end_editing`: an unchanged copy is discarded,
-where a model decides by `dirty?` and a plain copy always counts as changed;
-otherwise the edit commits when `confirm_edit?` agrees, and the default
-agrees. A commit asks the editor's `commit_editing` first; an editor that
-cannot push its pending edit keeps the edit open. Then `validation_error`
-asks the copy's own `validate`, when it has one; an error invokes
-`editing_did_fail_validation`, which warns by default, and the editor stays
-open. Override `editing_did_fail_validation` to show the error.
+Enter commits and Escape discards. Moving focus out asks
+`editor_should_end_editing`; an unchanged edit is discarded, otherwise it
+commits when `confirm_edit?` agrees. A commit first asks the editor to push its
+pending values, then validates. A refusal keeps the editor open and invokes
+`editing_did_fail_validation` for validation errors.
 
-An accepted commit applies the copy back to the original. A `Swill::Distant::Object`
-awaits `apply_draft` and, when the server rejects it, invokes
-`editing_did_fail_save` and mounts the same draft again. Another model takes
-its draft back through `apply_draft` and remains the row's object. A plain
-object is replaced by the copy in the collection. The final object is
-selected, and the list takes the keyboard back. A discard drops the copy and
-leaves the selection unchanged.
+Accepting a distant edit releases the held arrangement before saving the model.
+A failed save retains its dirty values and invokes `editing_did_fail_save`,
+reopening the editor when its row still exists and no newer editor has started.
+A successful save invokes `editing_did_save(object)`, which an application can
+override to refresh query membership. These callbacks belong to the live view;
+unloading it prevents late callbacks from remounting an editor. Popup editing
+uses an isolated child context; see [models](models.md).
 
-Toggling the sort commits an edit in progress first, and a refused commit
-leaves the sort unchanged. New content or a change to the arranged content
-ends the edit without committing, since its row is gone. Unloading the list
-closes an open editor without committing.
+Toggling sort first commits the active editor, and a refusal leaves sorting
+unchanged. Directly replacing a list's represented object ends its current edit;
+for refreshes that preserve an editor, use `ArrayController#fetch` below.
 
 ## Filtering a List
 
@@ -190,6 +189,72 @@ binds to `members.selected_object`. Those bindings do not depend on finding a
 table outlet. This costs one owned object and an explicit connection, and is
 worth it only when that separation is useful.
 
+## Fetching Query Results
+
+An `ArrayController` can also own a repeatable query. Bind the table to that
+controller immediately; its identity stays stable as the query changes:
+
+```ruby
+class MoviesController < Swill::ArrayController
+  async def search(text)
+    fetch do
+      await Movie.search(text)
+    end
+  end
+end
+
+movies = MoviesController.new
+# Bind the table's represented_object to movies once.
+movies.search("star")
+movies.search("star trek")
+movies.fetch # Refresh or retry the last search.
+```
+
+`fetch` remembers its block, which must return an array or collection. A new
+block replaces the remembered operation. Old rows remain available during a
+request or after failure, and only the latest request can replace membership.
+Applications can still await model queries directly and assign `content`.
+
+| Property | Meaning |
+| --- | --- |
+| `loading` | The current fetch is pending. |
+| `loaded` | A fetch has published content at least once, including an empty result. |
+| `stale` | A fetch is pending, failed, invalidated, or waiting for editors. |
+| `error` | Latest fetch's error message, cleared when another fetch begins. |
+
+A successful fetch returns true, including when its result is waiting for an
+editor; a failed or superseded fetch returns false. Calling without a block
+before configuring an operation, or after releasing the controller, raises.
+While registered editors remain active, the latest successful result waits to
+replace content. Publishing it when the last editor ends preserves the existing
+selection rules. Shared models still receive field updates through their
+contexts; the controller owns membership and presentation, not model merging.
+
+`invalidate` marks stale and retires outstanding work without sending a query.
+`show_first` also retires outstanding work before placing/selecting a new row;
+a subsequent successful fetch or explicit sort clears temporary placement.
+`dealloc` releases the remembered operation and ignores late completion.
+
+An application chooses refresh triggers. Movies repeats its latest query after
+successful saves/deletion and a compatible reconnect, and invalidates on
+connection loss. Generic controllers have no transport dependency. Completion
+promises the query's membership and declared fields, not complete model
+hydration or server-wide freshness. There are no inferred query dependencies
+or automatic server subscriptions.
+
+Movies' `MovieResults` adds scheduling for its replaceable searches. Its
+`search(text, unwatched:)` remembers the latest criteria, and `refresh` repeats
+them after mutations or recovery. Up to two reads run at a time; waiting calls
+issue a query only if still newest. Superseded waiting calls return false when
+a running read next settles. Loading remains true while the newest search waits,
+and obsolete
+results cannot replace membership or report errors. Invalidation, temporary
+first placement, and release also retire waiting searches. This application
+policy does not change generic `fetch` blocks or cancel submitted SQL.
+Loading ends when the current search settles, even if an obsolete read is still
+finishing. Older model envelopes may still merge under the field-generation and
+dirty-edit rules; superseded membership cannot replace the displayed result.
+
 ## Association Convenience and Independent Views
 
 A distant object's to-many association supplies a shared `ArrayController`
@@ -237,11 +302,18 @@ behavior.
 
 ## Selection and Temporary Placement
 
-Sorting preserves selection by object identity. Filtering hides selected
-objects without choosing replacements; clearing the filter can restore the
-requested selection. `selected_object_id` also supports restoring a selection
-before its record arrives. Keyboard focus, scrolling, and row activation
-remain in `List`.
+Sorting preserves selection by object identity. Filtering or replacing content
+clears selected objects that leave the arrangement, without choosing replacements.
+Returning those objects later does not select them again. Ordinary selection
+accepts only currently arranged objects. An immediate replacement with the same
+model id can retain the leading selection.
+
+Writing `selected_object_id` explicitly supports restoring a selection before
+its record arrives. This pending id survives results that do not contain it,
+resolves once, and is cancelled by another selection or explicit deselection.
+A fetch preserves selection while loading or failing; results deferred for an
+active editor affect selection only when published. Keyboard focus, scrolling,
+and row activation remain in `List`.
 
 `show_first(movie)` places the movie first and selects it without changing
 query or association membership. New content or explicit sorting clears that

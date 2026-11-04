@@ -12,7 +12,7 @@ the model and how it travels:
 | --- | --- | --- |
 | Declared by | the client: `endpoint`, `attribute`, `has_many … url:` | the server's distant interface, then generated |
 | Transport | JSON:API or plain JSON over HTTP | MessagePack over a WebSocket |
-| Identity | one instance per id in the class's pool | one canonical object per `(model, id)` held by `Swill::Distant::Client` |
+| Identity | one instance per id in the class's pool | one object per `(model, id)` in each editing context |
 | Associations | loaded from their own URLs on first read | `AssociationCollection`s the server keeps current |
 | Server side | none; any endpoint that serves JSON | queries, resolvers, commands and effects |
 
@@ -89,8 +89,9 @@ selection state, not only the data. Constructing it creates no DOM objects and
 fetches nothing.
 
 A view-owned controller should be retained by its owner and released with it.
-A model-cached association controller lives until the model disconnects or
-resets; it can outlive individual views. Reading `members_controller` does not
+A model-cached association controller lives until its model is released,
+including an identity-context reset; it can outlive individual views. A temporary
+transport disconnect keeps models and their controllers intact. Reading `members_controller` does not
 fetch membership. Reading or observing its arrangement accesses the
 association and participates in normal loading. Invalidation releases
 obsolete computation dependencies, and release ends the remaining
@@ -169,21 +170,57 @@ Sequel setters, validation, and hooks; when sequel-privacy is loaded, its
 policies run as well. It then returns an authoritative patch. See
 [persistence](server_data.md#persistence).
 
-Use a draft when rejected values must not appear through the shared canonical
-object:
+The default `Swill::Distant::Context` holds shared models and their pending
+changes. Inline editors bind directly to these objects. Accepted local edits
+are visible before persistence; `dirty?` remains true until acknowledged.
+
+For an isolated Save/Cancel form, create a child context:
 
 ```ruby
-draft = contact.draft
-draft.name = "Grace"
+editing = contact.context.new_editing_context
+local_contact = editing.object(contact)
+local_contact.name = "Grace"
 
-await contact.apply_draft(draft)
+await editing.save        # Accept into the parent; no network request.
+await contact.context.save # Persist the parent's pending changes.
+editing.dealloc
 ```
 
-A distant draft requires a saved original and copies only scalar fields already
-present on it. It does not enter the canonical store or hydrate missing fields.
-`apply_draft` sends only its dirty values and changes the canonical object only
-after the server accepts them. `draft?` distinguishes the detached copy from a
-canonical object. Discarding the draft abandons the edit.
+Each context has one instance per model/id. Relationships resolve on access to
+instances in that same context, including cycles; opening a form does not copy
+the whole loaded relationship graph. Missing fields can hydrate
+through the shared transport. Creating a context does not open a connection.
+The browser editing context and the server's authorization/operation
+`Swill::Distant::Context` are separate classes in separate environments.
+
+`context.has_changes` is observable. `object.save` saves that record into its
+parent, or to the server in the default context. `context.save` currently
+accepts at most one changed record; it refuses a multi-record save before
+applying anything. Isolated editing currently requires saved records and
+supports scalar changes; commands and deletion must run in the default context.
+
+Before acceptance, Cancel simply releases the child context. After acceptance,
+a parent save failure leaves the changes visible and dirty. Retry saves them
+again, while closing the form leaves them unsaved. Without durable local
+storage, unsaved edits are lost on reload. `context.rollback` discards all
+pending changes in that context; `object.rollback` discards that record's
+changes. Rolling back a child does not undo edits already accepted by its parent.
+
+Baseline values and each submitted version are retained internally. Later edits
+survive an acknowledgement. Incoming values do not overwrite dirty local fields;
+observed conflicts are reported and block saving until resolved. Rollback reveals
+the latest received baseline. A lost write response leaves
+`save_outcome_unknown` true and blocks blind retry/rollback: reconciliation of
+uncertain writes is deferred, and local rollback cannot undo a server commit.
+
+Inline editors retain a scoped `begin_edit` interaction: `finish` accepts it,
+while `rollback` reverses only its recorded changes. Later writes or changed
+baselines refuse scoped rollback rather than erasing work. Concurrent inline
+editors on one object are refused. A general undo/redo manager is deferred.
+
+Distant `draft`/`apply_draft` now report migration errors. Local and REST models
+retain their existing draft APIs. See the [data plan](../plans/DATA_PLAN.md)
+for deferred conflict resolution and multi-record persistence.
 
 After an accepted `delete`, `deleted?` becomes true, the object leaves the
 canonical store, cached values remain readable by existing bindings, and

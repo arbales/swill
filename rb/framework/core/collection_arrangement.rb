@@ -7,9 +7,8 @@ module Swill
   #
   # - `content`, and `arranged_objects`: the content filtered by
   #   `includes_object?` and sorted by `sort_key` and `sort_direction`;
-  # - a selection held by object identity, so it survives filtering, sorting
-  #   and replacement of the content, and `selected_object_id`, which names
-  #   the selection by id before the object arrives;
+  # - a selection held by object identity while its objects remain arranged,
+  #   and `selected_object_id`, which can restore it before the object arrives;
   # - `array_controller`: another arrangement to delegate all of this to, so
   #   a table, a detail pane and a toolbar share one selection.
   #
@@ -31,6 +30,9 @@ module Swill
 
     sig { params(base: T.class_of(Swill::Object)).void }
     def self.included(base) # :nodoc:
+      # Keep presentation stable until every registered editor finishes.
+      base.property :registered_editors, type: T::Array[T.untyped], default: []
+      base.property :editing_arrangement, type: T.nilable(T::Array[T.untyped]), default: nil
       # :section: Arranging Content
       # The content, and the filtered and sorted content presented from it.
 
@@ -84,7 +86,7 @@ module Swill
       # :section: Selecting
       # The selection, held by object identity within the arranged content.
 
-      # The requested selection: the objects, and the id to fall back to.
+      # Current objects/id, or an explicit id waiting to restore once.
       base.property :selection_state, type: T::Hash[String, T.untyped], default: {} # :nodoc:
 
       # The selected objects that are present in the arranged content, in
@@ -94,8 +96,9 @@ module Swill
         arranged_selection
       end
 
-      # The id of the first selected object, or nil when nothing is selected
-      # or the object has no id. Writing it selects the object with that id
+      # The first selected object's id, or a pending restoration id. Nil
+      # when neither exists or the selected object has no id. Writing it selects
+      # the object with that id
       # now, or once the content includes it, which is how a restored
       # selection waits for its record.
       base.property :selected_object_id, type: T.nilable(String), writer: :select_identifier do
@@ -137,6 +140,34 @@ module Swill
       super
     end
 
+    # NSEditorRegistration: accepting input and persisting it are separate.
+    sig { params(editor: T.untyped).void }
+    def object_did_begin_editing(editor)
+      T.bind(self, Swill::ArrayController)
+      return if registered_editors.include?(editor)
+      self.editing_arrangement = arranged_objects if registered_editors.empty?
+      self.registered_editors = [*registered_editors, editor]
+    end
+
+    sig { params(editor: T.untyped).void }
+    def object_did_end_editing(editor)
+      T.bind(self, Swill::ArrayController)
+      self.registered_editors = registered_editors.reject { |item| item == editor }
+      self.editing_arrangement = nil if registered_editors.empty?
+    end
+
+    sig { returns(T::Boolean) }
+    def commit_editing
+      T.bind(self, Swill::ArrayController)
+      registered_editors.all? { |editor| editor.commit_editing }
+    end
+
+    sig { void }
+    def discard_editing
+      T.bind(self, Swill::ArrayController)
+      registered_editors.each(&:discard_editing)
+    end
+
     # Returns the content filtered by `includes_object?` and sorted by
     # `sort_key` and `sort_direction`, with the object `show_first` placed
     # ahead of the rest. Nil values sort last, numbers and booleans by value,
@@ -144,6 +175,8 @@ module Swill
     # `arranged_objects` computes; override it to arrange another way.
     sig { returns(T::Array[T.untyped]) }
     def arrange_content
+      held = editing_arrangement
+      return held if held
       controller = array_controller
       return controller.arranged_objects if controller
 
@@ -281,6 +314,30 @@ module Swill
 
     # :section: Selecting
 
+    # Track membership only while selected or waiting for restoration.
+    sig { params(_previous: T.untyped, _value: T.untyped).void }
+    def selection_state_did_change(_previous, _value) # :nodoc:
+      if selection_state.empty?
+        observation = @selection_observation
+        @selection_observation = nil
+        release(observation) if observation
+      else
+        @selection_observation ||= retain(Runtime.observe(self, "arranged_objects", ->(_objects) { reconcile_selection }))
+        reconcile_selection
+      end
+    end
+
+    sig { void }
+    def reconcile_selection # :nodoc:
+      return if array_controller
+      selected = arranged_selection
+      return if selected.empty? && selection_state["pending"]
+      current = T.cast(selection_state["objects"] || [], T::Array[T.untyped])
+      return if !selection_state["pending"] && selected == current
+
+      select_objects(selected)
+    end
+
     sig { returns(T::Array[T.untyped]) }
     def arranged_selection # :nodoc:
       controller = array_controller
@@ -298,28 +355,30 @@ module Swill
     end
 
     # Selects `objects`, replacing the current selection; the writer of
-    # `selected_objects`. The array is copied. An object the arranged content
-    # does not include stays requested, and is selected once it appears.
+    # `selected_objects`. Only objects in the current arrangement can be selected.
     sig { params(objects: T::Array[T.untyped]).void }
     def select_objects(objects)
       controller = array_controller
       if controller
         controller.selected_objects = objects
       else
-        self.selection_state = { "objects" => objects.dup, "id" => identifier_for(objects.first) }
+        arranged = arranged_objects
+        selected = objects.select { |object| arranged.include?(object) }
+        self.selection_state = selected.empty? ? {} : { "objects" => selected, "id" => identifier_for(selected.first) }
       end
     end
 
     # Selects the object whose id is `identifier`, now or once the content
     # includes it, replacing the current selection; the writer of
-    # `selected_object_id`. Nil deselects.
+    # `selected_object_id`. The pending restoration ends once matched or
+    # another selection is made. Nil deselects.
     sig { params(identifier: T.nilable(String)).void }
     def select_identifier(identifier)
       controller = array_controller
       if controller
         controller.selected_object_id = identifier
       else
-        self.selection_state = { "objects" => [], "id" => identifier }
+        self.selection_state = identifier ? { "objects" => [], "id" => identifier, "pending" => true } : {}
       end
     end
 
@@ -383,37 +442,5 @@ module Swill
 
       arranged_objects.find { |object| identifier_for(object) == identifier }
     end
-
-    sig { returns(T::Array[T.untyped]) }
-    def current_selection # :nodoc:
-      selected_objects
-    end
-
-    sig { returns(T::Array[Integer]) }
-    def current_indexes # :nodoc:
-      selected_indexes
-    end
-
-    sig { void }
-    def reconcile_selection # :nodoc:
-      selected_objects
-    end
-  end
-
-  # `ArrayController` manages a collection of objects: its arrangement and
-  # its selection, through `CollectionArrangement`, with no view of its own.
-  # A list given one through its `bind` or its `array_controller` property
-  # delegates arrangement and selection to it, so a table, a detail pane and
-  # a toolbar that bind to the same controller share one selection.
-  #
-  #     members = MembersController.new
-  #     members.content = mailing_list.members
-  #
-  # Subclass it to filter, by overriding `includes_object?`. The object that
-  # creates a controller retains it and releases it when it unloads. See
-  # [Collections](rdoc-ref:doc/collections.md).
-  class ArrayController < Swill::Object
-    include CollectionArrangement
-    include ObjectBindings
   end
 end

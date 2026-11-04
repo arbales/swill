@@ -157,10 +157,12 @@ try {
     comment.body = "Browser draft";
     const saved = await comment.save();
     const id = comment.id;
-    const draft = comment.draft();
+    const editing = comment.context().newEditingContext();
+    const draft = editing.object(comment);
     draft.body = "Browser accepted";
     const before = comment.body;
-    await comment.applyDraft(draft);
+    await editing.save();
+    await comment.save();
     const after = comment.body;
     await comment.delete();
     return [saved === comment, id, before, after, draft.isDirty, comment.isDeleted];
@@ -181,7 +183,7 @@ try {
     window.recoveryClient = Swill.Runtime.resolve("Swill::Distant::Client").default();
     window.recoveryPost = document.querySelector("main").__swill_view__.controllerValue().post;
     recoveryPost.title = "Unsaved title";
-    window.recoveryDraft = recoveryPost.draft();
+    window.recoveryDraft = recoveryPost.context().newEditingContext().object(recoveryPost);
     recoveryDraft.title = "Unsaved draft";
     window.recoveryOffline = true;
     recoverySockets.at(-1).close();
