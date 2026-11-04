@@ -1192,9 +1192,6 @@
     strip,
     upcase,
     downcase,
-    valueRead,
-    NIL_READERS,
-    VALUE_READERS,
     // Ruby core semantics
     length,
     stringify,
@@ -1907,6 +1904,8 @@
     Swill__DateTransformer: () => Swill__DateTransformer,
     Swill__DevelopmentMonitor: () => Swill__DevelopmentMonitor,
     Swill__Distant__Client: () => Swill__Distant__Client,
+    Swill__Distant__Context: () => Swill__Distant__Context,
+    Swill__Distant__Edit: () => Swill__Distant__Edit,
     Swill__Distant__Fields: () => Swill__Distant__Fields,
     Swill__Distant__Fields_ClassMethods: () => Swill__Distant__Fields_ClassMethods,
     Swill__Distant__Object: () => Swill__Distant__Object,
@@ -2035,7 +2034,36 @@
       }
     }
     static focus(element) {
-      return element.focus({ preventScroll: true });
+      element.focus({ preventScroll: true });
+      if (this._revealing) return this.reveal(element);
+    }
+    static reveal(element) {
+      let browser = element.ownerDocument.defaultView;
+      if (!browser) return;
+      let rect = element.getBoundingClientRect();
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        Runtime.logicalAnd(
+          Runtime.send(rect, "bottom") > 0 && Runtime.send(rect, "top") < browser.innerHeight,
+          () => Runtime.send(rect, "right") > 0
+        ),
+        () => Runtime.send(rect, "left") < browser.innerWidth
+      ))) return;
+      return element.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    static revealing(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(
+        __swill_arguments,
+        { positional: [], keywords: [], keywordRest: null, block: "block" }
+      );
+      let block = Runtime.argument(__swill_bound, "block");
+      let _implicitBlockYield = block;
+      let previous = this._revealing;
+      this._revealing = Runtime.cast(true, "T.nilable(T::Boolean)");
+      try {
+        return Runtime.yieldBlock(_implicitBlockYield);
+      } finally {
+        this._revealing = previous;
+      }
     }
     static focusRevealing(element) {
       return element.focus();
@@ -2106,6 +2134,8 @@
   };
   Swill__DOM.eachChild = Swill__DOM_Functions.eachChild;
   Swill__DOM.focus = Swill__DOM_Functions.focus;
+  Swill__DOM.reveal = Swill__DOM_Functions.reveal;
+  Swill__DOM.revealing = Swill__DOM_Functions.revealing;
   Swill__DOM.focusRevealing = Swill__DOM_Functions.focusRevealing;
   Swill__DOM.eachOwned = Swill__DOM_Functions.eachOwned;
   Swill__DOM.isHandlesKey = Swill__DOM_Functions.isHandlesKey;
@@ -2437,24 +2467,6 @@
         content_type: "application/vnd.api+json"
       }));
     }
-    async requestFormJSON(...__swill_arguments) {
-      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
-        positional: [
-          { name: "method", kind: "req" },
-          { name: "url", kind: "req" }
-        ],
-        keywords: [{ name: "body", kind: "keyreq" }],
-        keywordRest: null,
-        block: "__swill_block"
-      });
-      let method = Runtime.argument(__swill_bound, "method");
-      let url = Runtime.argument(__swill_bound, "url");
-      let body = Runtime.argument(__swill_bound, "body");
-      return await this.request(method, url, Runtime.keywordArguments({
-        body: _Swill__Wire.encodeParams(body),
-        content_type: "application/x-www-form-urlencoded"
-      }));
-    }
     async request(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
@@ -2488,7 +2500,7 @@
       );
       if (body != null) {
         if (content_type != null) headers["Content-Type"] = content_type;
-        init.body = content_type === "application/x-www-form-urlencoded" ? body : JSON.stringify(body);
+        init.body = JSON.stringify(body);
       }
       ;
       let response = await fetch(request_url, init);
@@ -2864,6 +2876,7 @@
   function Swill__CollectionArrangement(Superclass) {
     class Swill__CollectionArrangement_Layer extends Superclass {
       // :nodoc:
+      // Keep presentation stable until every registered editor finishes.
       // :section: Arranging Content
       // The content, and the filtered and sorted content presented from it.
       // The collection to arrange: an array, or a `Model::Collection`, whose
@@ -2886,17 +2899,18 @@
       // Writing it sorts.
       // `"ascending"` or `"descending"`. The default is `"ascending"`. Writing
       // it sorts.
-      // The sort key mapped to its direction, for `bind-aria-sort`; an empty
-      // hash when unsorted.
+      // The sort key mapped to its direction; an empty hash when unsorted.
+      // SortableList marks its sorted header cell from it.
       // :section: Selecting
       // The selection, held by object identity within the arranged content.
-      // The requested selection: the objects, and the id to fall back to.
+      // Current objects/id, or an explicit id waiting to restore once.
       // :nodoc:
       // The selected objects that are present in the arranged content, in
       // the order they were selected; an empty array when nothing is
       // selected. Writing it replaces the selection.
-      // The id of the first selected object, or nil when nothing is selected
-      // or the object has no id. Writing it selects the object with that id
+      // The first selected object's id, or a pending restoration id. Nil
+      // when neither exists or the selected object has no id. Writing it selects
+      // the object with that id
       // now, or once the content includes it, which is how a restored
       // selection waits for its record.
       // The first selected object, or nil when nothing is selected.
@@ -2928,12 +2942,35 @@
         ;
         return super.coercePropertyValue(name, value, previous);
       }
+      // NSEditorRegistration: accepting input and persisting it are separate.
+      objectDidBeginEditing(editor) {
+        if (this.registeredEditors.includes(editor)) return;
+        if (Runtime.isEmpty(this.registeredEditors)) {
+          this.editingArrangement = this.arrangedObjects;
+        }
+        ;
+        return this.registeredEditors = [...this.registeredEditors, editor];
+      }
+      objectDidEndEditing(editor) {
+        this.registeredEditors = this.registeredEditors.filter((item) => !Runtime.isEqual(item, editor));
+        if (Runtime.isEmpty(this.registeredEditors)) {
+          return this.editingArrangement = null;
+        }
+      }
+      commitEditing() {
+        return this.registeredEditors.every((editor) => Runtime.isTruthy(Runtime.send(editor, "commit_editing")));
+      }
+      discardEditing() {
+        return this.registeredEditors.forEach((__swill_item) => Runtime.invoke(__swill_item, "discard_editing"));
+      }
       // Returns the content filtered by `includes_object?` and sorted by
       // `sort_key` and `sort_direction`, with the object `show_first` placed
       // ahead of the rest. Nil values sort last, numbers and booleans by value,
       // and everything else as text. The default implementation is what
       // `arranged_objects` computes; override it to arrange another way.
       arrangeContent() {
+        let held = this.editingArrangement;
+        if (held) return held;
         let controller = this.arrayController;
         if (controller) return controller.arrangedObjects;
         let source = this.content;
@@ -3086,6 +3123,42 @@
         return this.sort(this.sortKey, direction);
       }
       // :section: Selecting
+      // Track membership only while selected or waiting for restoration.
+      selectionStateDidChange(_previous, _value) {
+        let observation;
+        if (Runtime.isEmpty(this.selectionState)) {
+          observation = this._selection_observation;
+          this._selection_observation = null;
+          if (observation) return this.release(observation);
+        } else {
+          this._selection_observation ||= this.retain(Runtime.observe(
+            this,
+            "arranged_objects",
+            (_objects) => this.reconcileSelection()
+          ));
+          return this.reconcileSelection();
+        }
+      }
+      reconcileSelection() {
+        if (this.arrayController) {
+          return;
+        }
+        ;
+        let selected = this.arrangedSelection();
+        if (Runtime.isTruthy(Runtime.isEmpty(selected) && this.selectionState.pending)) {
+          return;
+        }
+        ;
+        let current = Runtime.cast(
+          Runtime.logicalOr(this.selectionState.objects, () => []),
+          "T::Array[T.untyped]"
+        );
+        if (Runtime.isTruthy(!Runtime.isTruthy(this.selectionState.pending) && Runtime.isEqual(
+          selected,
+          current
+        ))) return;
+        return this.selectObjects(selected);
+      }
       arrangedSelection() {
         let controller = this.arrayController;
         if (controller) return controller.selectedObjects;
@@ -3107,24 +3180,32 @@
         return selected;
       }
       // Selects `objects`, replacing the current selection; the writer of
-      // `selected_objects`. The array is copied. An object the arranged content
-      // does not include stays requested, and is selected once it appears.
+      // `selected_objects`. Only objects in the current arrangement can be selected.
       selectObjects(objects) {
+        let arranged, selected;
         let controller = this.arrayController;
-        return controller ? controller.selectedObjects = objects : this.selectionState = {
-          objects: objects.slice(),
-          id: this.identifierFor(objects[0])
-        };
+        if (controller) {
+          return controller.selectedObjects = objects;
+        } else {
+          arranged = this.arrangedObjects;
+          selected = objects.filter((object) => arranged.includes(object));
+          return this.selectionState = Runtime.isEmpty(selected) ? {} : {
+            objects: selected,
+            id: this.identifierFor(selected[0])
+          };
+        }
       }
       // Selects the object whose id is `identifier`, now or once the content
       // includes it, replacing the current selection; the writer of
-      // `selected_object_id`. Nil deselects.
+      // `selected_object_id`. The pending restoration ends once matched or
+      // another selection is made. Nil deselects.
       selectIdentifier(identifier) {
         let controller = this.arrayController;
-        return controller ? controller.selectedObjectId = identifier : this.selectionState = {
+        return controller ? controller.selectedObjectId = identifier : this.selectionState = identifier != null ? {
           objects: [],
-          id: identifier
-        };
+          id: identifier,
+          pending: true
+        } : {};
       }
       // Selects the objects at `indexes` in the arranged content, replacing
       // the current selection. An index outside the content is ignored.
@@ -3174,21 +3255,137 @@
         if (identifier == null || Runtime.isEmpty(identifier)) return null;
         return this.arrangedObjects.find((object) => this.identifierFor(object) === identifier);
       }
-      currentSelection() {
-        return this.selectedObjects;
-      }
-      // :nodoc:
-      currentIndexes() {
-        return this.selectedIndexes;
-      }
-      // :nodoc:
-      reconcileSelection() {
-        return this.selectedObjects;
-      }
     }
     return Swill__CollectionArrangement_Layer;
   }
   var Swill__ArrayController = class extends Swill__Object {
+    constructor() {
+      super();
+      this._fetch_generation = Runtime.cast(0, "Integer");
+      this._fetch_operation = Runtime.cast(
+        null,
+        "T.nilable(T.proc.returns(T.untyped))"
+      );
+      this._pending_content = null;
+      this._has_pending_content = false;
+      this._fetch_disposed = Runtime.cast(false, "T::Boolean");
+    }
+    async fetch(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(
+        __swill_arguments,
+        { positional: [], keywords: [], keywordRest: null, block: "operation" }
+      );
+      let operation = Runtime.argument(__swill_bound, "operation");
+      if (this._fetch_disposed) {
+        throw new Error("Cannot fetch with a released ArrayController");
+      }
+      ;
+      if (operation) this._fetch_operation = operation;
+      let request = this._fetch_operation;
+      if (!request) throw new Error("fetch requires a block on its first call");
+      if (this.arrayController) {
+        throw new Error("Fetch on the owning array controller");
+      }
+      ;
+      this._fetch_generation++;
+      let generation = this._fetch_generation;
+      this.clearPendingContent();
+      this.error = null;
+      if (!this.isCurrentFetch(generation)) return false;
+      this.stale = true;
+      if (!this.isCurrentFetch(generation)) return false;
+      this.loading = true;
+      if (!this.isCurrentFetch(generation)) return false;
+      try {
+        let result = await request();
+        if (!this.isCurrentFetch(generation)) return false;
+        if (!Runtime.isTruthy(Array.isArray(result) || this.isCollection(result) && Array.isArray(Runtime.send(
+          result,
+          "records"
+        )))) throw new Error("fetch must return an array or collection");
+        this._pending_content = result;
+        this._has_pending_content = true;
+        if (Runtime.isEmpty(this.registeredEditors)) this.publishPendingContent();
+        return this.isCurrentFetch(generation);
+      } catch (failure) {
+        if (!this.isCurrentFetch(generation)) return false;
+        this.stale = true;
+        if (this.isCurrentFetch(generation)) this.error = failure.message;
+        return false;
+      } finally {
+        if (this.isCurrentFetch(generation)) this.loading = false;
+      }
+    }
+    // Retire work that no longer establishes current membership. The caller
+    // decides when to fetch again; invalidation never replays a request.
+    invalidate() {
+      let generation = this.retireFetch();
+      if (this.isCurrentFetch(generation)) return this.loading = false;
+    }
+    // Schedulers can retire membership while keeping their pending work busy.
+    retireFetch() {
+      this._fetch_generation++;
+      this.clearPendingContent();
+      let generation = this._fetch_generation;
+      this.stale = true;
+      return generation;
+    }
+    showFirst(object) {
+      if (Runtime.isTruthy(this._fetch_operation || this.loading)) this.invalidate();
+      return super.showFirst(object);
+    }
+    objectDidEndEditing(editor) {
+      if (Runtime.isTruthy(this.registeredEditors.length === 1 && this.registeredEditors.includes(editor))) {
+        this.publishPendingContent();
+      }
+      ;
+      return super.objectDidEndEditing(editor);
+    }
+    isCurrentFetch(generation) {
+      return !this._fetch_disposed && generation === this._fetch_generation;
+    }
+    clearPendingContent() {
+      this._pending_content = null;
+      this._has_pending_content = false;
+      return this._has_pending_content;
+    }
+    publishPendingContent() {
+      if (!Runtime.isTruthy(this._has_pending_content && !this._fetch_disposed)) {
+        return;
+      }
+      ;
+      let generation = this._fetch_generation;
+      let result = this._pending_content;
+      this.clearPendingContent();
+      this.content = result;
+      if (!this.isCurrentFetch(generation)) return;
+      this.contentDidChange(this.content, result);
+      if (!this.isCurrentFetch(generation)) return;
+      this.loaded = true;
+      if (this.isCurrentFetch(generation)) return this.stale = false;
+    }
+    dealloc() {
+      this._fetch_disposed = true;
+      this._fetch_generation++;
+      this._fetch_operation = null;
+      this.clearPendingContent();
+      this.loading = false;
+      this.unbindAll();
+      return super.dealloc();
+    }
+    async commitEditingAsync() {
+      let editors = this.registeredEditors;
+      let index = 0;
+      while (index < editors.length) {
+        if (!Runtime.isTruthy(await Runtime.send(
+          editors[index],
+          "commit_editing"
+        ))) return false;
+        index++;
+      }
+      ;
+      return true;
+    }
   };
   var Swill__Responder = class _Swill__Responder extends Swill__Object {
     // The next link in the chain, or nil at the end of it.
@@ -5352,6 +5549,8 @@
   Swill__Awakening.detach = Swill__Awakening_Functions.detach;
   Swill__Awakening.nearestView = Swill__Awakening_Functions.nearestView;
   var Swill__URLFragment = class extends Object {
+    // A fragment read from and written to +browser+'s location; nil, or a
+    // window without a location and history, makes it inert.
     constructor(browser) {
       super();
       this._browser = browser;
@@ -5361,6 +5560,7 @@
         "T.nilable(T.proc.params(event:Event).void)"
       );
     }
+    // Whether there is a location and history to read and write.
     isAvailable() {
       let browser = this._browser;
       return Runtime.logicalAnd(
@@ -5368,19 +5568,147 @@
         () => browser.history != null
       );
     }
+    // Flat, window-scoped keys internally; values are strings or string arrays.
     params() {
-      let found = Runtime.cast({}, "T::Hash[String, String]");
       let browser = this._browser;
-      if (!Runtime.isTruthy(browser && this.isAvailable())) return found;
-      let search = new URLSearchParams(browser.location.hash.replace(
+      return Runtime.isTruthy(browser && this.isAvailable()) ? this.parse(browser.location.hash.replace(
         /^#/m,
         ""
-      ));
-      search.forEach((value, key) => found[key] = value);
+      )) : {};
+    }
+    // Parse groups before decoding their names and values.
+    parse(text) {
+      let found = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      Runtime.split(text, ";").forEach((group) => {
+        if (group.includes("&")) return;
+        let entries = this.splitEntries(group);
+        if (!entries) return;
+        let scope = Runtime.cast(null, "T.nilable(String)");
+        return Runtime.cast(entries, "T::Array[String]").forEach((entry) => {
+          let key = entry.replace(/=.*/, "");
+          if (key === entry) return;
+          let value = Runtime.logicalOr(
+            Runtime.slice(entry, key.length + 1, entry.length),
+            () => ""
+          );
+          if (scope == null) {
+            scope = key.replace(/\..*/, "");
+            key = key.startsWith(scope + ".") ? Runtime.logicalOr(
+              Runtime.slice(key, Runtime.send(scope, "length") + 1, key.length),
+              () => ""
+            ) : "";
+          }
+          ;
+          let window_name = this.decodeComponent(scope);
+          let property = this.decodeComponent(key);
+          let decoded = this.decodeValue(value);
+          if (window_name == null || property == null || decoded == null) return;
+          let name = Runtime.isEmpty(property) ? window_name : `${window_name}.${property}`;
+          if (Runtime.isTruthy(name === "__proto__" || Runtime.isEmpty(property) && !Runtime.conforms(
+            decoded,
+            "String"
+          ))) return;
+          return found[name] = decoded;
+        });
+      });
       return found;
     }
-    // :push adds a history entry, :replace rewrites the current one, :none is
-    // a no-op. Writes are also dropped while fragment state is being applied.
+    // Commas inside a flat array separate its elements, not properties.
+    splitEntries(text) {
+      let entries = Runtime.cast([], "T::Array[String]");
+      let entry = "";
+      let depth = 0;
+      let characters = Array.from(text);
+      let index = 0;
+      while (index < characters.length) {
+        let character = Runtime.must(characters[index]);
+        index++;
+        if (character === "(") depth++;
+        if (character === ")") depth--;
+        if (depth < 0 || depth > 1) return null;
+        if (Runtime.isTruthy(character === "," && depth === 0)) {
+          Runtime.append(entries, entry);
+          entry = "";
+        } else {
+          entry += character;
+        }
+      }
+      ;
+      if (depth !== 0) return null;
+      Runtime.append(entries, entry);
+      return entries;
+    }
+    decodeComponent(text) {
+      try {
+        return decodeURIComponent(text);
+      } catch {
+        return null;
+      }
+    }
+    encodeComponent(text) {
+      let escapes = { "(": "%28", ")": "%29", "'": "%27" };
+      return Array.from(encodeURIComponent(text)).map((character) => Runtime.logicalOr(escapes[character], () => character)).join("");
+    }
+    decodeValue(text) {
+      if (Runtime.isTruthy(text.startsWith("(") && text.endsWith(")"))) {
+        let body = Runtime.logicalOr(
+          Runtime.slice(text, 1, text.length - 2),
+          () => ""
+        );
+        if (Runtime.isEmpty(body)) return [];
+        let parts = Runtime.split(body, ",");
+        if (body.endsWith(",") || parts.some((part) => Runtime.isEmpty(part) || part.includes("(") || part.includes(")"))) return null;
+        let values = parts.map((part) => part === "''" ? "" : this.decodeComponent(part));
+        if (values.some((value) => value == null)) return null;
+        return values;
+      }
+      ;
+      if (text.includes("(") || text.includes(")")) return null;
+      return this.decodeComponent(text);
+    }
+    encodeValue(value) {
+      if (Runtime.conforms(value, "String")) return this.encodeComponent(value);
+      return "(" + Runtime.cast(value, "T::Array[String]").map((part) => Runtime.isEmpty(part) ? "''" : this.encodeComponent(part)).join(",") + ")";
+    }
+    // Stable group/key order; bare window keys select named content.
+    serialize(values) {
+      let groups = Runtime.cast([], "T::Array[String]");
+      let entries = Runtime.cast([], "T::Array[String]");
+      let previous = Runtime.cast(null, "T.nilable(String)");
+      let names2 = Runtime.sortWith(Object.keys(values), (left, right) => {
+        let order = Runtime.compareText(
+          left.replace(/\..*/, ""),
+          Runtime.cast(right, "String").replace(/\..*/, "")
+        );
+        return order === 0 ? Runtime.compareText(left, right) : order;
+      });
+      names2.forEach((name) => {
+        let key, prefix;
+        let scope = name.replace(/\..*/, "");
+        if (scope !== previous) {
+          if (!Runtime.send(entries, "empty?")) {
+            Runtime.append(groups, Runtime.invoke(entries, "join", ","));
+          }
+          ;
+          entries = [];
+          previous = scope;
+        }
+        ;
+        if (name === scope) {
+          return entries.push(this.encodeComponent(scope) + "=" + this.encodeValue(values[name]));
+        } else {
+          key = Runtime.logicalOr(
+            Runtime.slice(name, scope.length + 1, name.length),
+            () => ""
+          );
+          prefix = Runtime.send(entries, "empty?") ? this.encodeComponent(scope) + "." : "";
+          return entries.push(prefix + this.encodeComponent(key) + "=" + this.encodeValue(values[name]));
+        }
+      });
+      if (!Runtime.isEmpty(entries)) Runtime.append(groups, entries.join(","));
+      return groups.join(";");
+    }
+    // :push adds history, :replace updates it, :none suppresses the write.
     write(...__swill_arguments) {
       let __swill_bound = Runtime.bindArguments(__swill_arguments, {
         positional: [
@@ -5394,18 +5722,36 @@
       let key = Runtime.argument(__swill_bound, "key");
       let value = Runtime.argument(__swill_bound, "value");
       let history = Runtime.argument(__swill_bound, "history");
-      if (history === "none" || this._suspended) return;
+      return this.writeValues(
+        { [key]: value },
+        Runtime.keywordArguments({ history })
+      );
+    }
+    // Publish a window's state together, with one parse and history write.
+    writeValues(...__swill_arguments) {
+      let __swill_bound = Runtime.bindArguments(__swill_arguments, {
+        positional: [{ name: "changes", kind: "req" }],
+        keywords: [{ name: "history", kind: "keyreq" }],
+        keywordRest: null,
+        block: "__swill_block"
+      });
+      let changes = Runtime.argument(__swill_bound, "changes");
+      let history = Runtime.argument(__swill_bound, "history");
+      if (history === "none" || this._suspended) {
+        return;
+      }
+      ;
       let browser = this._browser;
       if (!Runtime.isTruthy(browser && this.isAvailable())) return;
       let location = browser.location;
-      let search = new URLSearchParams(location.hash.replace(/^#/m, ""));
-      if (value == null) {
-        search.delete(key);
-      } else {
-        search.set(key, value);
-      }
-      ;
-      let query = search.toString();
+      let values = this.params();
+      let changed = Runtime.cast(false, "T::Boolean");
+      Object.entries(changes).forEach(([key, value]) => {
+        if (!Runtime.isEqual(values[key], value)) changed = true;
+        return value == null ? Runtime.deleteKey(values, key) : values[key] = value;
+      });
+      if (!changed) return;
+      let query = this.serialize(values);
       let next_url = location.pathname + location.search + (Runtime.isEmpty(query) ? "" : "#" + query);
       if (next_url === location.pathname + location.search + location.hash) return;
       return history === "push" ? browser.history.pushState(
@@ -5430,6 +5776,8 @@
         this._suspended = false;
       }
     }
+    // Calls +callback+ when the browser changes the fragment: back, forward,
+    // or a new hash. Writes through #write do not call it.
     startObserving(callback) {
       let browser = this._browser;
       if (!Runtime.isTruthy(browser && this.isAvailable())) return;
@@ -5438,6 +5786,7 @@
       browser.addEventListener("popstate", on_change);
       return browser.addEventListener("hashchange", on_change);
     }
+    // Stops calling the callback #start_observing gave.
     stopObserving() {
       let on_change = this._on_change;
       let browser = this._browser;
@@ -5487,8 +5836,8 @@
     }
     // ---- fragment restoration ----
     //
-    // The window's own fragment param is its bare name (main=farewell); its
-    // controller's state params are scoped under it (main.n=3).
+    // Internal keys stay flat: main selects content and main.n names state.
+    // URLFragment groups these as main=farewell,n=3 when writing the URL.
     scopedKey(key) {
       return `${this._name}.${key}`;
     }
@@ -5506,12 +5855,16 @@
       disposers.forEach((dispose2) => dispose2());
       return keys;
     }
+    // The window's name: what `window=` gives a container, and empty for the
+    // page.
     get name() {
       return this._name;
     }
+    // The element the window's content is in.
     get root() {
       return this._root;
     }
+    // The controller the window holds as its content, or nil.
     get controller() {
       return this._controller;
     }
@@ -5519,6 +5872,7 @@
     isModal() {
       return this._modal;
     }
+    // The name of the template the content came from, or nil.
     get contentName() {
       return this._content_name;
     }
@@ -5601,6 +5955,7 @@
     isContainer() {
       return this._root.hasAttribute("window");
     }
+    // Whether +candidate+ is the window's content or inside it.
     containsController(candidate) {
       return candidate === this._controller || this._root.contains(candidate.view.element);
     }
@@ -6240,7 +6595,7 @@
         this.verifyFocus("a key");
       }
       ;
-      return this.firstResponder().keyDown(event);
+      return Swill__DOM.revealing(Runtime.blockArgument(() => this.firstResponder().keyDown(event)));
     }
     // Focus the browser gave before launch, as to an `autofocus` field,
     // makes its responder first, as later focus does.
@@ -6496,7 +6851,8 @@
     // The fragment may name the content to show; unknown names are reported
     // and the default stands.
     requestedContent(window_name, default_name, requested) {
-      if (requested == null || requested === default_name) return default_name;
+      if (!Runtime.conforms(requested, "String")) return default_name;
+      if (requested === default_name) return default_name;
       if (this.isWindowContent(requested)) return requested;
       Runtime.warn(`window "${window_name}" requested unknown content "${requested}"`);
       return default_name;
@@ -6647,54 +7003,108 @@
     writeWindowState(window) {
       let controller = window.controller;
       if (!controller) return;
-      return Runtime.cast(
-        Runtime.restorations(controller),
-        "T::Array[T.untyped]"
-      ).forEach((declaration) => {
+      let changes = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      Runtime.cast(Runtime.restorations(controller), "T::Array[T.untyped]").forEach((declaration) => {
         let path = Runtime.send(declaration, "path");
         let value = this.isWritablePath(controller, path) ? this.encodeFragmentValue(
           controller,
           Runtime.readPath(controller, path),
           path
         ) : null;
-        return this._fragments.write(
-          window.scopedKey(Runtime.send(declaration, "key")),
-          value,
-          Runtime.keywordArguments({ history: "replace" })
-        );
+        return changes[window.scopedKey(Runtime.send(declaration, "key"))] = value;
       });
+      return this._fragments.writeValues(
+        changes,
+        Runtime.keywordArguments({ history: "replace" })
+      );
     }
     // Typed URL leaves; nil rejects invalid values.
     decodeFragmentValue(type, text) {
-      if (type === "Integer" || type === "T.nilable(Integer)") {
-        let stripped = Runtime.strip(text);
-        if (!Runtime.isTruthy(/^[+-]?\d/.test(stripped))) return null;
+      let kind = Runtime.cast(type != null ? type : "T.untyped", "String");
+      if (kind.startsWith("T.nilable(")) {
+        kind = Runtime.logicalOr(
+          Runtime.slice(kind, 10, kind.length - 11),
+          () => ""
+        );
+      }
+      ;
+      if (Array.isArray(text)) {
+        if (!kind.startsWith("T::Array[") && kind !== "T.untyped") return null;
+        let element = kind === "T.untyped" ? "String" : Runtime.slice(
+          kind,
+          9,
+          kind.length - 10
+        );
+        let values = Runtime.cast(text, "T::Array[String]").map((item) => this.decodeFragmentValue(element, item));
+        return values.some((value) => value == null) ? null : values;
+      }
+      ;
+      if (!Runtime.conforms(text, "String")) return null;
+      let scalar = Runtime.cast(text, "String");
+      if (kind.startsWith("T::Array[")) return null;
+      if (kind === "Integer") {
+        let stripped = Runtime.strip(scalar);
+        if (!Runtime.isTruthy(/^[+-]?\d+$/.test(stripped))) return null;
         return Runtime.toInteger(stripped);
       }
       ;
-      if (type === "T::Boolean" || type === "T.nilable(T::Boolean)") {
-        if (text === "true" || text === "1") return true;
-        if (text === "false" || text === "0") return false;
+      if (kind === "Float") {
+        if (!Runtime.isTruthy(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(Runtime.strip(scalar)))) {
+          return null;
+        }
+        ;
+        let number = Runtime.toFloat(scalar);
+        if (Runtime.isTruthy(/Infinity|NaN/.test(Runtime.stringify(number)))) {
+          return null;
+        }
+        ;
+        return number;
+      }
+      ;
+      if (kind === "T::Boolean") {
+        if (scalar === "true" || scalar === "1") return true;
+        if (scalar === "false" || scalar === "0") return false;
         return null;
       }
       ;
-      return text;
+      return kind === "String" || kind === "T.untyped" ? scalar : null;
     }
-    // A value's text in the fragment, or nil to leave it out. Only a string,
-    // number or boolean round-trips through a URL; anything else is left out,
-    // with a warning, rather than written as text that cannot be restored.
+    // Scalar text or a flat array of scalar text; nil leaves the key out.
     encodeFragmentValue(controller, value, path) {
-      if (value == null || value === "") return null;
+      if (value == null) return null;
+      if (Array.isArray(value)) {
+        let values = Runtime.cast(value, "T::Array[T.untyped]").map((item) => this.fragmentScalar(item));
+        if (values.some((item) => item == null)) {
+          this.warnUnrestorable(
+            controller,
+            path,
+            "its array must contain only strings, finite numbers or booleans"
+          );
+          return null;
+        }
+        ;
+        return values;
+      }
+      ;
+      let text = this.fragmentScalar(value);
+      if (text != null) return text;
+      this.warnUnrestorable(
+        controller,
+        path,
+        "its value cannot be written to the URL; restore a string, finite number, boolean or flat array"
+      );
+      return null;
+    }
+    fragmentScalar(value) {
       if (Runtime.conforms(value, "String")) return value;
       if (Runtime.conforms(value, "Integer") || Runtime.conforms(
         value,
         "Float"
-      ) || value === true || value === false) return `${value}`;
-      this.warnUnrestorable(
-        controller,
-        path,
-        "its value cannot be written to the URL; restore a string, number or boolean"
-      );
+      ) || value === true || value === false) {
+        let text = `${value}`;
+        if (!Runtime.isTruthy(/Infinity|NaN/.test(text))) return text;
+      }
+      ;
       return null;
     }
     // Writes a restored value through +path+, answering false when the path
@@ -6738,7 +7148,7 @@
     applyFragmentTo(window, params) {
       if (!window.isContainer()) return;
       let requested = params[window.name];
-      if (Runtime.isTruthy(requested != null && requested !== window.contentName)) {
+      if (Runtime.isTruthy(Runtime.conforms(requested, "String") && requested !== window.contentName)) {
         return this.isWindowContent(requested) ? this.loadWindowContent(
           window.name,
           requested,
@@ -6918,7 +7328,7 @@
       let total = this.arrangedObjects.length;
       if (total === 0) return super.moveDown(event);
       event.preventDefault();
-      let indexes = this.currentIndexes();
+      let indexes = this.selectedIndexes;
       let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
       let index = current < 0 ? 0 : current + 1;
       if (index > total - 1) index = total - 1;
@@ -6931,7 +7341,7 @@
     moveUp(event) {
       if (this.arrangedObjects.length === 0) return super.moveUp(event);
       event.preventDefault();
-      let indexes = this.currentIndexes();
+      let indexes = this.selectedIndexes;
       let current = Runtime.isEmpty(indexes) ? -1 : Runtime.must(indexes[0]);
       if (current <= 0) {
         return this.cancelOperation(event);
@@ -6943,7 +7353,7 @@
     }
     // Enter activates the selection when there is one.
     insertNewline(event) {
-      if (!Runtime.isEmpty(this.currentSelection())) {
+      if (!Runtime.isEmpty(this.selectedObjects)) {
         event.preventDefault();
         return this.activateSelection();
       } else {
@@ -7049,7 +7459,7 @@
     // selected row in view.
     syncSelectedRows() {
       if (!this._awakened) return;
-      let indexes = this.currentIndexes();
+      let indexes = this.selectedIndexes;
       let elements = this.rowElements();
       elements.forEach((element, index) => this.containerView().markSelected(element, indexes.includes(index)));
       let first = Runtime.isEmpty(indexes) ? null : elements[Runtime.must(indexes[0])];
@@ -7132,9 +7542,30 @@
     sortKeyFor(sender) {
       return sender.getAttribute("data-column");
     }
-    // Compatibility for subclasses; sort state is now derived from arrangement.
-    syncSortStates() {
-      return this.sortStates;
+    awakeFromDOM() {
+      super.awakeFromDOM();
+      return this.markSortedColumn();
+    }
+    // Marks the newly sorted header cell.
+    sortStatesDidChange(_previous, _states) {
+      if (this._awakened) return this.markSortedColumn();
+    }
+    // Marks each header cell the list owns with its column's sort direction,
+    // and clears the others.
+    markSortedColumn() {
+      let states2 = this.sortStates;
+      return Swill__DOM.ownedMatching(this._view.element, "[data-column]").forEach((cell) => {
+        let direction = states2[Runtime.logicalOr(
+          this.sortKeyFor(cell),
+          () => ""
+        )];
+        cell.classList.toggle("sorted-ascending", direction === "ascending");
+        cell.classList.toggle(
+          "sorted-descending",
+          direction === "descending"
+        );
+        return direction != null ? cell.setAttribute("aria-sort", direction) : cell.removeAttribute("aria-sort");
+      });
     }
   };
   var Swill__Controller__Editor = class extends Swill__Controller {
@@ -7226,7 +7657,7 @@
   var Swill__Controller__EditableList = class extends Swill__Controller__SortableList {
     // Activation edits the selected row instead of telling the owner.
     activateSelection() {
-      let indexes = this.currentIndexes();
+      let indexes = this.selectedIndexes;
       return Runtime.isEmpty(indexes) ? super.activateSelection() : this.beginEditing(Runtime.must(indexes[0]));
     }
     isEditing() {
@@ -7235,6 +7666,10 @@
     // Teardown closes an open editor without committing.
     awakeFromDOM() {
       super.awakeFromDOM();
+      this._model_edit = Runtime.cast(
+        null,
+        "T.nilable(Swill::Distant::Edit)"
+      );
       return this.retain(() => this.closeEditor());
     }
     // Whether the editor opened. An edit in progress is committed first; a
@@ -7243,10 +7678,10 @@
       let original = this.objectAt(index);
       if (!Runtime.isTruthy(original)) return false;
       if (Runtime.isTruthy(this.isEditing() && !this.endEditing(true))) return false;
-      let copy = Runtime.isTruthy(Runtime.respondsTo(original, "draft")) ? Runtime.send(
+      let copy = original instanceof Swill__Distant__Object ? original : Runtime.isTruthy(Runtime.respondsTo(
         original,
         "draft"
-      ) : Runtime.send(original, "dup");
+      )) ? Runtime.send(original, "draft") : Runtime.send(original, "dup");
       return this.openEditor(index, original, copy);
     }
     // False only when a commit was refused; the editor then stays open.
@@ -7262,9 +7697,17 @@
           return false;
         }
         ;
+        Runtime.nilable(this._model_edit?.finish());
         this.closeEditor();
         this.commitEdit(copy, edit.original, edit.index);
       } else {
+        try {
+          Runtime.nilable(this._model_edit?.rollback());
+        } catch (error) {
+          this.editingDidFailSave(error);
+          return false;
+        }
+        ;
         edit.editor.discardEditing();
         this.closeEditor();
         this.finishEdit(edit.index, null);
@@ -7320,6 +7763,20 @@
       if (this.isEditing()) this.endEditing(false);
       return super.arrangedObjectsDidChange(previous, objects);
     }
+    // Registered with the arrangement owner while an inline editor is open.
+    commitEditing() {
+      return this.endEditing(true);
+    }
+    discardEditing() {
+      return this.endEditing(false);
+    }
+    setRepresentedObject(objects) {
+      if (this.editedObject instanceof Swill__Distant__Object) {
+        if (!this.commitEditingIfNeeded()) return;
+      }
+      ;
+      return super.setRepresentedObject(objects);
+    }
     // ---- policy hooks ----
     commitEdit(copy, original, index) {
       if (original instanceof Swill__Distant__Object) {
@@ -7332,7 +7789,7 @@
     async commitDistantEdit(copy, original, _index) {
       let generation = this._edit_generation;
       try {
-        await original.applyDraft(copy);
+        await original.save();
       } catch (error) {
         if (!Runtime.isTruthy(this._awakened && Runtime.isEqual(
           generation,
@@ -7344,6 +7801,7 @@
         return;
       }
       ;
+      if (this._awakened) this.editingDidSave(original);
       if (!Runtime.isTruthy(this._awakened && Runtime.isEqual(
         generation,
         this._edit_generation
@@ -7391,7 +7849,11 @@
     editingDidFailValidation(error) {
       return Runtime.warn(`Edit refused: ${Runtime.send(error, "message")}`);
     }
-    // Override to present a persistence error. The same draft is remounted.
+    // Successful persistence can change membership in an application's query.
+    editingDidSave(object) {
+      return null;
+    }
+    // Override to present a persistence error. Unsaved edits are remounted.
     editingDidFailSave(error) {
       return Runtime.warn(`Edit did not save: ${Runtime.send(
         error,
@@ -7412,7 +7874,7 @@
       );
       return Runtime.isEmpty(found) ? null : found[0];
     }
-    // Mount an editor after the row, bind it to the copy, and give it the
+    // Mount an editor after the row, bind its editing object, and give it the
     // keyboard.
     openEditor(index, original, copy) {
       let row = this.rowElements()[index];
@@ -7421,6 +7883,13 @@
         this._edit_generation,
         () => 0
       ) + 1;
+      this._model_edit = original instanceof Swill__Distant__Object ? Runtime.cast(
+        original,
+        "Swill::Distant::Object"
+      ).beginEdit() : null;
+      this.objectDidBeginEditing(this);
+      let controller = this.arrayController;
+      Runtime.nilable(controller?.objectDidBeginEditing(this));
       let node = this.instantiateEditor();
       this.editedObject = copy;
       this.containerView().mark(row, "being-edited", true);
@@ -7466,13 +7935,18 @@
     closeEditor() {
       let edit = this._edit;
       this._edit = null;
+      Runtime.nilable(this._model_edit?.finish());
+      this._model_edit = null;
       this.editedObject = null;
       if (!edit) return;
       let row = this.rowElements()[edit.index];
       if (row) this.containerView().mark(row, "being-edited", false);
       let element = edit.editor.view.element;
       Swill__Awakening.detach(element);
-      return this.containerView().remove(element);
+      this.containerView().remove(element);
+      let controller = this.arrayController;
+      Runtime.nilable(controller?.objectDidEndEditing(this));
+      return this.objectDidEndEditing(this);
     }
     // Select the final object and give the list the keyboard back.
     finishEdit(_index, final) {
@@ -8703,12 +9177,28 @@
   }
   var Swill__Distant__Object = class _Swill__Distant__Object extends Swill__Model__Editable {
     // Whether the server has deleted this record. A deleted object stays as
-    // a tombstone: it cannot be saved, drafted or loaded.
+    // a tombstone: it cannot be saved or loaded.
     // `deleted`, as a predicate.
     // Creates an object with no loaded fields and a stable, empty
     // `AssociationCollection` for each to-many association.
     constructor() {
       super();
+      this._editing_context = Runtime.cast(
+        null,
+        "T.nilable(Swill::Distant::Context)"
+      );
+      this._parent_object = Runtime.cast(
+        null,
+        "T.nilable(Swill::Distant::Object)"
+      );
+      this._confirmed = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      this._versions = Runtime.cast({}, "T::Hash[String, Integer]");
+      this._submitted = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      this._acknowledging = false;
+      this._active_edit = Runtime.cast(
+        null,
+        "T.nilable(Swill::Distant::Edit)"
+      );
       this._data_generations = Runtime.cast(
         {},
         "T::Hash[String, T::Hash[String, Integer]]"
@@ -8780,7 +9270,6 @@
       return controller;
     }
     async loadField(name) {
-      if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
       if (this.isDeleted) {
         throw new Error("A deleted distant object cannot hydrate fields");
       }
@@ -8789,14 +9278,9 @@
         throw new Error("An unsaved distant object cannot hydrate fields");
       }
       ;
-      return await Swill__Distant__Client.default().loadField(
-        this,
-        name,
-        false
-      );
+      return await this.loadContextField(name, false);
     }
     async reloadField(name) {
-      if (this.isDraft()) throw new Error("A distant draft cannot hydrate fields");
       if (this.isDeleted) {
         throw new Error("A deleted distant object cannot hydrate fields");
       }
@@ -8805,50 +9289,255 @@
         throw new Error("An unsaved distant object cannot hydrate fields");
       }
       ;
-      return await Swill__Distant__Client.default().loadField(
-        this,
-        name,
-        true
-      );
+      return await this.loadContextField(name, true);
     }
     async save() {
-      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (this.isDraft()) {
-        throw new Error("Save a distant draft with original.apply_draft(draft)");
+      await this.context().saveObject(this);
+      return this;
+    }
+    context() {
+      if (this._context_invalid) {
+        Swill__Distant__Context.refuse("Record belongs to a released actor scope");
+      }
+      ;
+      let current = this._editing_context;
+      if (current) return current;
+      current = Swill__Distant__Context.default();
+      this._editing_context = current;
+      current.register(this);
+      return current;
+    }
+    claimContext(value) {
+      if (this._registered_context === value) return false;
+      this._registered_context = value;
+      this._editing_context = value;
+      return true;
+    }
+    attachContext(value) {
+      this._editing_context = value;
+      return this._editing_context;
+    }
+    dirtyAttributesDidChange(_previous, _value) {
+      if (!Runtime.isEmpty(this.conflictedFields)) {
+        this.conflictedFields = this.conflictedFields.filter((name) => this.dirtyAttributes.includes(name));
+      }
+      ;
+      return this.context().changed(this);
+    }
+    // Versions distinguish edits made after a request was submitted.
+    propertyWillChange(name, previous, value) {
+      name = Runtime.send(name, "to_s");
+      if (Runtime.isTruthy(Runtime.logicalOr(
+        this._dirty_suspensions,
+        () => 0
+      ) === 0 && this.constructor.dataFields()[name])) {
+        this.context().checkActive();
+        this._versions[name] = Runtime.logicalOr(
+          this._versions[name],
+          () => 0
+        ) + 1;
+        Runtime.nilable(this._active_edit?.record(name, previous, Runtime.must(this._versions[name]), this._confirmed[name]));
+      }
+      ;
+      return super.propertyWillChange(name, previous, value);
+    }
+    beginEdit() {
+      if (this._active_edit) {
+        Swill__Distant__Context.refuse("This object already has an active inline editor");
+      }
+      ;
+      let edit = new Swill__Distant__Edit(this);
+      this._active_edit = edit;
+      return edit;
+    }
+    finishEdit(edit) {
+      if (this._active_edit === edit) {
+        this._active_edit = null;
+        return this._active_edit;
+      }
+    }
+    editMatches(name, version, baseline) {
+      return this._versions[name] === version && Runtime.isEqual(
+        this._confirmed[name],
+        baseline
+      );
+    }
+    async persistChanges() {
+      if (this.isDeleted) {
+        Swill__Distant__Context.refuse("Cannot persist a deleted record");
+      }
+      ;
+      this.checkRecovery();
+      if (!Runtime.isEmpty(this.conflictedFields)) {
+        Swill__Distant__Context.refuse(`Resolve conflicting fields before saving: ${this.conflictedFields.join(", ")}`);
       }
       ;
       let attributes = this.collectDirtyAttributes();
       if (Runtime.isTruthy(Runtime.logicalAnd(
         this.id,
         () => Runtime.isEmpty(attributes)
-      ))) return this;
-      if (this.id != null) {
-        await Swill__Distant__Client.default().update(this, attributes);
-      } else {
-        await Swill__Distant__Client.default().create(this, attributes);
+      ))) return;
+      this._submitted = {};
+      this.dirtyAttributes.forEach((name) => {
+        let key = Runtime.send(name, "to_s");
+        return this._submitted[key] = {
+          version: this._versions[key],
+          value: Runtime.read(this, key)
+        };
+      });
+      this.saving = true;
+      try {
+        return this.id != null ? await Swill__Distant__Client.default().update(
+          this,
+          attributes
+        ) : await Swill__Distant__Client.default().create(this, attributes);
+      } catch (error) {
+        if (error instanceof Error) {
+          if (error.code === "outcome_unknown") this.saveOutcomeUnknown = true;
+          return (() => {
+            throw error;
+          })();
+        } else {
+          throw error;
+        }
+      } finally {
+        this.saving = false;
+        this._submitted = {};
       }
-      ;
-      this.markCleanBang();
-      return this;
     }
-    async applyDraft(copy) {
-      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (!copy.isDraftOf(this)) {
-        throw new Error("apply_draft requires a draft created from this distant object");
+    checkRecovery() {
+      this.context().checkActive();
+      if (this.saving) {
+        Swill__Distant__Context.refuse("Wait for the current save to finish");
       }
       ;
-      let attributes = copy.collectDirtyAttributes();
-      if (Runtime.isEmpty(attributes)) return this;
-      await Swill__Distant__Client.default().update(this, attributes);
-      copy.markCleanBang();
-      return this;
+      if (this.saveOutcomeUnknown) {
+        return Swill__Distant__Context.refuse("Save outcome is unknown; reconcile with the server before retrying or rolling back");
+      }
+    }
+    checkAcceptance() {
+      this.checkRecovery();
+      if (this._active_edit) {
+        return Swill__Distant__Context.refuse("Finish or cancel the active inline edit before accepting another editor's changes");
+      }
+    }
+    // Restores the latest known parent/server baseline, through bindings.
+    rollback() {
+      this.checkRecovery();
+      let baseline = this._dirty_baseline || {};
+      let values = Runtime.cast({}, "T::Hash[String, T.untyped]");
+      this.dirtyAttributes.forEach((name) => values[Runtime.send(name, "to_s")] = baseline[name]);
+      this.applyAttributes(values);
+      this.markCleanBang();
+      return this.conflictedFields = [];
+    }
+    // Context counterparts can hydrate; associations stay in this workspace.
+    importParent(source) {
+      this._parent_object = source;
+      return Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
+        if (descriptor.kind !== "field") return;
+        if (source.isFieldLoaded(Runtime.send(name, "to_sym"))) {
+          return this.importParentField(name);
+        }
+      });
+    }
+    importParentField(name) {
+      this.context().checkActive();
+      let source = Runtime.must(this._parent_object);
+      let descriptor = this.constructor.dataFields()[name];
+      if (!Runtime.isTruthy(descriptor)) return;
+      let value = Runtime.read(source, name);
+      if (descriptor.kind === "many") {
+        value = Runtime.cast(
+          Runtime.send(value, "records"),
+          "T::Array[Object]"
+        ).map((item) => this.context().object(item));
+      } else if (Runtime.isTruthy(descriptor.kind === "one" && value)) {
+        value = this.context().object(value);
+      }
+      ;
+      let generation = Runtime.must(this.dataGeneration(name).applied) + 1;
+      return this.applyDataField(name, value, generation, false);
+    }
+    async loadContextField(name, reload) {
+      this.context().checkActive();
+      let source = this._parent_object;
+      if (source) {
+        this.beginDataFieldLoad(name, reload);
+        try {
+          await source.loadContextField(name, reload);
+          if (this._context_invalid) {
+            return null;
+          }
+          ;
+          this.importParentField(name);
+        } catch (error) {
+          if (this._context_invalid) return null;
+          this.failDataField(name, error.message);
+          throw error;
+        }
+        ;
+        return Runtime.read(this, name);
+      } else {
+        return await Swill__Distant__Client.default().loadField(
+          this,
+          name,
+          reload
+        );
+      }
+    }
+    async demandParentField(name) {
+      try {
+        return await this.loadContextField(name, false);
+      } catch (error) {
+        return Swill__Distant__Context.report(`Field did not load: ${error.message}`);
+      }
+    }
+    // Preflight every field before publishing any child changes.
+    acceptIntoParent() {
+      this.checkRecovery();
+      let source = Runtime.must(this._parent_object);
+      source.checkAcceptance();
+      if (source.isDeleted) {
+        Swill__Distant__Context.refuse("Cannot accept edits to a deleted record");
+      }
+      ;
+      let names2 = Runtime.cast(
+        this.dirtyAttributes.map((name) => Runtime.send(name, "to_s")),
+        "T::Array[String]"
+      );
+      names2.forEach((name) => {
+        let current = Runtime.read(source, name);
+        let proposed = Runtime.read(this, name);
+        if (Runtime.isTruthy(!Runtime.isEqual(current, this._confirmed[name]) && !Runtime.isEqual(
+          current,
+          proposed
+        ))) {
+          return Swill__Distant__Context.refuse(`Parent changed ${name} while the editor was open; edits were kept`);
+        }
+      });
+      names2.forEach((name) => {
+        Runtime.write(source, name, Runtime.read(this, name));
+        return this._confirmed[name] = Runtime.read(source, name);
+      });
+      this.markCleanBang();
+      return this.conflictedFields = [];
+    }
+    beginAcknowledgement() {
+      this._acknowledging = true;
+      return this._acknowledging;
+    }
+    endAcknowledgement() {
+      this._acknowledging = false;
+      return this._acknowledging;
     }
     async delete() {
-      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
-      if (this.isDraft()) {
-        throw new Error("Save a distant draft with original.apply_draft(draft)");
+      this.checkRecovery();
+      if (this._parent_object) {
+        Swill__Distant__Context.refuse("Deleting inside an isolated editing context is not supported yet");
       }
       ;
+      if (this.isDeleted) throw new Error("Cannot persist a deleted distant object");
       if (this.id == null) {
         throw new Error("Cannot delete an unsaved distant object");
       }
@@ -8856,31 +9545,14 @@
       await Swill__Distant__Client.default().delete(this);
       return this;
     }
-    // :section: Drafting
-    // Editing a copy and applying it.
-    // Returns a detached copy of this object holding its id and every loaded
-    // scalar field, marked loaded on the copy, for editing without touching
-    // the original. A draft never loads fields on its own; `apply_draft` on
-    // the original saves it, and `draft?` and `draft_of?` name the lineage.
-    // Raises for a deleted or unsaved object.
+    // Distant editing uses contexts; local/REST models retain Drafts.
     draft() {
-      if (this.isDeleted) throw new Error("Cannot draft a deleted distant object");
-      if (this.id == null) {
-        throw new Error("Save a distant object before drafting it");
-      }
-      ;
-      let copy = new this.constructor();
-      copy.applyDataField("id", this.id, 0, true);
-      Object.entries(this.constructor.dataFields()).forEach(([name, descriptor]) => {
-        if (!Runtime.isTruthy(descriptor.kind === "field" && this.readDataState(
-          name,
-          "loaded"
-        ) === true)) return;
-        return copy.applyDataField(name, Runtime.read(this, name), 0, true);
-      });
-      copy.markCleanBang();
-      copy.draftOriginal = this;
-      return copy;
+      Swill__Distant__Context.refuse("Use an editing context instead of a distant draft");
+      return this;
+    }
+    async applyDraft(_copy) {
+      Swill__Distant__Context.refuse("Use an editing context instead of apply_draft");
+      return this;
     }
     // :section: Driven by the Client
     // The protocol between `Client` and the objects it holds. The client
@@ -8893,15 +9565,24 @@
     // of the request last sent for it. A response older than what a field
     // already holds is ignored, and a failure older than either is ignored,
     // so a slow reply cannot undo a newer value or a newer invalidation.
-    // Requests the field `name` from the client when it is read on a saved
-    // object that is neither a draft nor deleted. The property system
+    // Requests the field `name` when read on a saved, live object. The property system
     // invokes this before resolving a property declared `will_access:`,
     // and an `AssociationCollection` invokes it on its owner when its
     // records are read. Public because the collection calls it.
     propertyWillAccess(name) {
       super.propertyWillAccess(name);
-      if (this.isDraft() || this.isDeleted) return;
-      if (Object.hasOwn(this.constructor.dataFields(), name)) {
+      if (this._context_invalid || this.isDeleted || !Object.hasOwn(
+        this.constructor.dataFields(),
+        name
+      )) return;
+      let source = this._parent_object;
+      if (source) {
+        if (!Runtime.isTruthy(Runtime.logicalAnd(
+          this.id,
+          () => this.beginDataFieldLoad(name, false)
+        ))) return;
+        return Runtime.isTruthy(source.isFieldLoaded(name) && !source.isFieldStale(name)) ? this.importParentField(name) : this.demandParentField(name);
+      } else {
         return Swill__Distant__Client.default().demand(this, name);
       }
     }
@@ -8910,35 +9591,64 @@
     // without error. Ignored when a newer response already applied. A
     // to-many association's collection replaces its membership; a scalar
     // field and `id` apply as attributes, cleanly; a to-one association is
-    // written to its stored property. The value is left alone, and only
-    // the state marked, when the field is dirty and `overwrite_dirty` is
-    // false: a background patch does not replace a local edit.
-    applyDataField(name, value, generation, overwrite_dirty) {
-      let descriptor;
+    // written to its stored property. Dirty scalars retain local edits;
+    // an acknowledgement replaces only the submitted version.
+    applyDataField(name, value, generation, _overwrite_dirty) {
       let generations = this.dataGeneration(name);
       if (generation < Runtime.must(generations.applied)) return;
       generations.applied = generation;
-      if (!Runtime.isTruthy(!overwrite_dirty && this.dirtyAttributes.includes(name))) {
-        descriptor = this.constructor.dataFields()[name];
-        if (Runtime.isTruthy(Runtime.logicalAnd(
-          descriptor,
-          () => descriptor.kind === "many"
-        ))) {
-          this.dataCollection(name).applyMembership(Runtime.cast(
-            Runtime.logicalOr(value, () => []),
-            "T::Array[T.untyped]"
-          ));
-        } else if (Runtime.isTruthy(Runtime.logicalOr(
-          Runtime.logicalAnd(descriptor, () => descriptor.kind === "field"),
-          () => name === "id"
-        ))) {
-          this.applyAttributes({ [name]: value });
-        } else {
-          Runtime.write(this, `data_${name}`, value);
-        }
+      let descriptor = this.constructor.dataFields()[name];
+      if (Runtime.isTruthy(Runtime.logicalAnd(
+        descriptor,
+        () => descriptor.kind === "many"
+      ))) {
+        this.dataCollection(name).applyMembership(Runtime.cast(
+          Runtime.logicalOr(value, () => []),
+          "T::Array[T.untyped]"
+        ));
+      } else if (Runtime.isTruthy(Runtime.logicalOr(
+        Runtime.logicalAnd(descriptor, () => descriptor.kind === "field"),
+        () => name === "id"
+      ))) {
+        this.applyConfirmedField(name, value);
+      } else {
+        Runtime.write(this, `data_${name}`, value);
       }
       ;
       return this.presentDataField(name);
+    }
+    // A response advances the baseline without erasing later local edits.
+    applyConfirmedField(name, value) {
+      let dirty = this.dirtyAttributes.includes(name);
+      let submitted = this._acknowledging ? this._submitted[name] : null;
+      let previous = this._confirmed[name];
+      let known = Object.hasOwn(this._confirmed, name);
+      this._confirmed[name] = value;
+      if (Runtime.isTruthy(!dirty || Runtime.logicalAnd(
+        submitted,
+        () => submitted.version === this._versions[name]
+      ))) {
+        this.applyAttributes({ [name]: value });
+      } else if (Runtime.isTruthy(Runtime.logicalAnd(
+        Runtime.logicalAnd(
+          !Runtime.isTruthy(submitted) && known,
+          () => !Runtime.isEqual(previous, value)
+        ),
+        () => !Runtime.isEqual(Runtime.read(this, name), value)
+      ))) {
+        if (!this.conflictedFields.includes(name)) {
+          this.conflictedFields = [...this.conflictedFields, name];
+          Swill__Distant__Context.report(`Server or parent changed ${name} during editing; local edits were kept`);
+        }
+      }
+      ;
+      if (!dirty) return;
+      this._dirty_baseline ||= {};
+      this._dirty_baseline[name] = value;
+      if (Runtime.isEqual(Runtime.read(this, name), value)) {
+        this.dirtyAttributes = this.dirtyAttributes.filter((item) => !(item === name));
+        return this.conflictedFields = this.conflictedFields.filter((item) => !(item === name));
+      }
     }
     // Marks the association `name` stale from an invalidation of
     // `generation`, clearing its error and its loading flag; its records
@@ -9013,6 +9723,7 @@
     // The client calls this on each object it forgets when the connection
     // is reset, before the object deallocs.
     resetDataFields() {
+      this._context_invalid = true;
       this._data_generations = {};
       return Object.entries(this.constructor.dataFields()).forEach(([name, _descriptor]) => {
         this.writeDataState(name, "loaded", false);
@@ -9073,6 +9784,202 @@
       );
     }
   };
+  var Swill__Distant__Context = class _Swill__Distant__Context extends Swill__Object {
+    static default() {
+      return this._default ||= new this(null);
+    }
+    get parent() {
+      return this._parent;
+    }
+    constructor(parent) {
+      super();
+      this._parent = parent;
+      this._stores = Runtime.cast(
+        {},
+        "T::Hash[String, T::Hash[String, T.untyped]]"
+      );
+      this._objects = Runtime.cast([], "T::Array[Object]");
+      this._children = Runtime.cast([], "T::Array[Context]");
+      this._active = true;
+    }
+    newEditingContext() {
+      this.checkActive();
+      let child = new _Swill__Distant__Context(this);
+      Runtime.append(this._children, child);
+      return child;
+    }
+    // One instance per record, including when reached through a relationship.
+    object(record2) {
+      let existing;
+      this.checkActive();
+      if (record2.context() === this) return record2;
+      if (Runtime.isTruthy(record2.context().parent === this && record2.id)) {
+        existing = this.modelStore(Runtime.send(
+          record2.constructor.dataModelName(),
+          "to_s"
+        ))[Runtime.stringify(record2.id)];
+        if (Runtime.isTruthy(existing)) {
+          return Runtime.cast(existing, "Swill::Distant::Object");
+        }
+      }
+      ;
+      let ancestor = this._parent;
+      if (!ancestor) {
+        _Swill__Distant__Context.refuse("Import objects from the parent editing context");
+      }
+      ;
+      let source = Runtime.cast(
+        Runtime.must(ancestor).object(record2),
+        "Swill::Distant::Object"
+      );
+      if (source.id == null) {
+        _Swill__Distant__Context.refuse("Save a new record before opening an isolated editor");
+      }
+      ;
+      if (source.isDeleted) {
+        _Swill__Distant__Context.refuse("Cannot edit a deleted record");
+      }
+      ;
+      let store = this.modelStore(Runtime.send(
+        source.constructor.dataModelName(),
+        "to_s"
+      ));
+      existing = store[Runtime.stringify(source.id)];
+      if (Runtime.isTruthy(existing)) {
+        return Runtime.cast(existing, "Swill::Distant::Object");
+      }
+      ;
+      let copy = new source.constructor();
+      copy.attachContext(this);
+      copy.applyDataField("id", source.id, 0, true);
+      this.register(copy);
+      copy.importParent(source);
+      return copy;
+    }
+    register(object) {
+      if (object.claimContext(this)) Runtime.append(this._objects, object);
+      if (object.id != null) {
+        this.modelStore(Runtime.send(
+          object.constructor.dataModelName(),
+          "to_s"
+        ))[Runtime.stringify(object.id)] = object;
+      }
+      ;
+      return this.changed(object);
+    }
+    changed(object) {
+      let present = this.changedObjects.includes(object);
+      if (Runtime.isTruthy(object.isDirty && !present)) {
+        return this.changedObjects = [...this.changedObjects, object];
+      } else if (Runtime.isTruthy(!object.isDirty && present)) {
+        return this.changedObjects = this.changedObjects.filter((item) => !(item === object));
+      }
+    }
+    // Tombstones live in Client only while older requests can reference them.
+    forget(object) {
+      this._objects = this._objects.filter((item) => !(item === object));
+      Runtime.deleteKey(
+        this.modelStore(Runtime.send(
+          object.constructor.dataModelName(),
+          "to_s"
+        )),
+        Runtime.stringify(object.id)
+      );
+      return this.changedObjects = this.changedObjects.filter((item) => !(item === object));
+    }
+    modelStore(model) {
+      return this._stores[model] ||= {};
+    }
+    async save() {
+      this.checkActive();
+      let objects = this.changedObjects;
+      if (objects.length > 1) {
+        _Swill__Distant__Context.refuse("Saving multiple changed records is not supported yet; no changes were saved");
+      }
+      ;
+      let object = objects[0];
+      if (object) return await this.saveObject(object);
+    }
+    async saveObject(object) {
+      this.checkActive();
+      if (object.context() !== this) {
+        _Swill__Distant__Context.refuse("Object belongs to another editing context");
+      }
+      ;
+      return this._parent ? object.acceptIntoParent() : await object.persistChanges();
+    }
+    // Rollback concerns this workspace only, never an already-saved child.
+    rollback() {
+      this.checkActive();
+      let objects = this.changedObjects;
+      objects.forEach((__swill_item) => __swill_item.checkRecovery());
+      return objects.forEach((__swill_item) => __swill_item.rollback());
+    }
+    checkActive() {
+      if (!this._active) {
+        return _Swill__Distant__Context.refuse("Editing context has been released or its actor changed");
+      }
+    }
+    static report(message) {
+      return Runtime.warn(message);
+    }
+    static refuse(message) {
+      this.report(message);
+      return (() => {
+        throw new Error(message);
+      })();
+    }
+    reset() {
+      this._children.slice().forEach((__swill_item) => __swill_item.dealloc());
+      this._objects.forEach((object) => {
+        Runtime.send(object, "reset_data_fields");
+        return Runtime.send(object, "dealloc");
+      });
+      this._objects = [];
+      this._stores = {};
+      return this.changedObjects = [];
+    }
+    releaseChild(child) {
+      this._children = this._children.filter((item) => !(item === child));
+      return this._children;
+    }
+    dealloc() {
+      if (!this._active) return;
+      this.reset();
+      this._active = false;
+      Runtime.nilable(this._parent?.releaseChild(this));
+      return super.dealloc();
+    }
+  };
+  var Swill__Distant__Edit = class extends Swill__Object {
+    constructor(object) {
+      super();
+      this._object = object;
+      this._entries = Runtime.cast({}, "T::Hash[String, T.untyped]");
+    }
+    record(name, previous, version, baseline) {
+      let entry = this._entries[name] ||= {
+        previous,
+        baseline
+      };
+      return entry.version = version;
+    }
+    finish() {
+      return this._object.finishEdit(this);
+    }
+    rollback() {
+      this._object.checkRecovery();
+      Object.entries(this._entries).forEach(([name, entry]) => {
+        if (!this._object.editMatches(name, entry.version, entry.baseline)) {
+          Swill__Distant__Context.refuse(`Cannot undo ${name}: it changed after this edit; changes were kept`);
+        }
+      });
+      this.finish();
+      Object.entries(this._entries).forEach(([name, entry]) => Runtime.write(this._object, name, entry.previous));
+      this._entries = {};
+      return this._entries;
+    }
+  };
   var Swill__Distant__Client = class _Swill__Distant__Client extends Swill__Object {
     // Milliseconds between failed attempts, capped during prolonged outages.
     static RETRY_DELAYS = Object.freeze([
@@ -9107,10 +10014,7 @@
     // leaves local objects intact; only an intentional reset forgets them.
     constructor() {
       super();
-      this._stores = Runtime.cast(
-        {},
-        "T::Hash[String, T::Hash[String, T.untyped]]"
-      );
+      this._context = Swill__Distant__Context.default();
       this._tombstones = Runtime.cast(
         {},
         "T::Hash[String, T::Hash[String, T.untyped]]"
@@ -9214,6 +10118,10 @@
       return this.wrapResult(value, result_kind);
     }
     async command(object, name, positional, keywords, result_kind) {
+      if (object.context().parent) {
+        Swill__Distant__Context.refuse("Commands in an isolated editing context are not supported yet");
+      }
+      ;
       let contents = this.operation(
         object.constructor.dataModelName(),
         name,
@@ -9253,7 +10161,7 @@
           id: object.id,
           attributes: this.encodeValue(attributes)
         },
-        null,
+        object,
         true
       );
       return object;
@@ -9267,12 +10175,13 @@
         null,
         true
       );
-      Runtime.deleteKey(this.modelStore(model), id);
+      this._context.forget(object);
       this.modelTombstones(model)[id] = {
         object,
         generation: removed_generation
       };
       object.deleted = true;
+      object.markCleanBang();
       Runtime.deleteKey(this._queued_demands, `${model}:${id}`);
       object.dealloc();
       this.pruneTombstones();
@@ -9323,15 +10232,7 @@
     // the connection is intentionally closed or the handshake changes actor
     // scope: another actor's records are another identity.
     reset() {
-      Object.entries(this._stores).forEach(([_model, store]) => {
-        let typed_store = Runtime.cast(store, "T::Hash[String, T.untyped]");
-        return Object.entries(typed_store).forEach(([_id, object]) => {
-          let distant = Runtime.cast(object, "Swill::Distant::Object");
-          distant.resetDataFields();
-          return distant.dealloc();
-        });
-      });
-      this._stores = {};
+      this._context.reset();
       this._tombstones = {};
       this._queued_demands = {};
       this._actor_scope = null;
@@ -9586,7 +10487,8 @@
         response_generation,
         true
       );
-      store[id] = object;
+      Runtime.invoke(object, "attach_context", this._context);
+      this._context.register(object);
       return object;
     }
     // Applies one patch — a record's model, id, generation and fields —
@@ -9671,22 +10573,27 @@
     // — and returns its decoded value. Patches follow invalidations so a
     // patch carrying the invalidated field satisfies it without a request.
     applyEnvelope(message, response_generation, preferred, overwrite_dirty) {
-      let invalidations = Runtime.cast(
-        Runtime.logicalOr(message.invalidations, () => []),
-        "T::Array[T::Hash[String, T.untyped]]"
-      );
-      invalidations.forEach((effect) => this.applyInvalidation(effect));
-      let patches = Runtime.cast(
-        Runtime.logicalOr(message.patches, () => []),
-        "T::Array[T::Hash[String, T.untyped]]"
-      );
-      patches.forEach((patch) => this.applyPatch(patch, preferred, overwrite_dirty));
-      invalidations.forEach((effect) => this.refreshObserved(effect));
-      return this.decodeValueWithPreferred(
-        message.value,
-        response_generation,
-        preferred
-      );
+      try {
+        Runtime.nilable(preferred?.beginAcknowledgement());
+        let invalidations = Runtime.cast(
+          Runtime.logicalOr(message.invalidations, () => []),
+          "T::Array[T::Hash[String, T.untyped]]"
+        );
+        invalidations.forEach((effect) => this.applyInvalidation(effect));
+        let patches = Runtime.cast(
+          Runtime.logicalOr(message.patches, () => []),
+          "T::Array[T::Hash[String, T.untyped]]"
+        );
+        patches.forEach((patch) => this.applyPatch(patch, preferred, overwrite_dirty));
+        invalidations.forEach((effect) => this.refreshObserved(effect));
+        return this.decodeValueWithPreferred(
+          message.value,
+          response_generation,
+          preferred
+        );
+      } finally {
+        Runtime.nilable(preferred?.endAcknowledgement());
+      }
     }
     async request(type, contents, preferred, overwrite_dirty) {
       let [value, _operation_generation] = await this.requestWithGeneration(
@@ -9777,7 +10684,7 @@
     }
     // The held objects of `model` by id, created empty on first use.
     modelStore(model) {
-      return this._stores[model] ||= {};
+      return this._context.modelStore(model);
     }
     // The deleted objects of `model` by id, each with the generation of
     // its deletion, created empty on first use.
@@ -9949,6 +10856,22 @@
             "arity": 3,
             "js": "coercePropertyValue"
           },
+          "object_did_begin_editing": {
+            "arity": 1,
+            "js": "objectDidBeginEditing"
+          },
+          "object_did_end_editing": {
+            "arity": 1,
+            "js": "objectDidEndEditing"
+          },
+          "commit_editing": {
+            "arity": 0,
+            "js": "commitEditing"
+          },
+          "discard_editing": {
+            "arity": 0,
+            "js": "discardEditing"
+          },
           "arrange_content": {
             "arity": 0,
             "js": "arrangeContent"
@@ -9992,6 +10915,14 @@
             "arity": 1,
             "js": "changeSortDirection"
           },
+          "selection_state_did_change": {
+            "arity": 2,
+            "js": "selectionStateDidChange"
+          },
+          "reconcile_selection": {
+            "arity": 0,
+            "js": "reconcileSelection"
+          },
           "arranged_selection": {
             "arity": 0,
             "js": "arrangedSelection"
@@ -10031,18 +10962,6 @@
           "object_with_id": {
             "arity": 1,
             "js": "objectWithId"
-          },
-          "current_selection": {
-            "arity": 0,
-            "js": "currentSelection"
-          },
-          "current_indexes": {
-            "arity": 0,
-            "js": "currentIndexes"
-          },
-          "reconcile_selection": {
-            "arity": 0,
-            "js": "reconcileSelection"
           }
         }
       },
@@ -10351,12 +11270,6 @@
             "maximum": 2,
             "js": "requestJSON"
           },
-          "request_form_json": {
-            "arity": 2,
-            "minimum": 2,
-            "maximum": 2,
-            "js": "requestFormJSON"
-          },
           "request": {
             "arity": 2,
             "minimum": 2,
@@ -10562,6 +11475,22 @@
         constructor: Swill__ArrayController,
         mixins: [Swill__CollectionArrangement, Swill__ObjectBindings],
         properties: {
+          "registered_editors": {
+            js: "registeredEditors",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "editing_arrangement": {
+            js: "editingArrangement",
+            type: "T.nilable(T::Array[T.untyped])",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
           "content": {
             type: "T.untyped",
             attribute: false,
@@ -10681,9 +11610,80 @@
               });
               return indexes;
             }
+          },
+          "loading": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "loaded": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "stale": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "error": {
+            type: "T.nilable(String)",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
           }
         },
-        methods: {}
+        methods: {
+          "initialize": {
+            "arity": 0
+          },
+          "fetch": {
+            "arity": 0,
+            "minimum": 0,
+            "maximum": 0
+          },
+          "invalidate": {
+            "arity": 0
+          },
+          "retire_fetch": {
+            "arity": 0,
+            "js": "retireFetch"
+          },
+          "show_first": {
+            "arity": 1,
+            "js": "showFirst"
+          },
+          "object_did_end_editing": {
+            "arity": 1,
+            "js": "objectDidEndEditing"
+          },
+          "current_fetch?": {
+            "arity": 1,
+            "js": "isCurrentFetch"
+          },
+          "clear_pending_content": {
+            "arity": 0,
+            "js": "clearPendingContent"
+          },
+          "publish_pending_content": {
+            "arity": 0,
+            "js": "publishPendingContent"
+          },
+          "dealloc": {
+            "arity": 0
+          },
+          "commit_editing_async": {
+            "arity": 0,
+            "js": "commitEditingAsync"
+          }
+        }
       },
       "Swill::Responder": {
         constructor: Swill__Responder,
@@ -11559,10 +12559,42 @@
           "params": {
             "arity": 0
           },
+          "parse": {
+            "arity": 1
+          },
+          "split_entries": {
+            "arity": 1,
+            "js": "splitEntries"
+          },
+          "decode_component": {
+            "arity": 1,
+            "js": "decodeComponent"
+          },
+          "encode_component": {
+            "arity": 1,
+            "js": "encodeComponent"
+          },
+          "decode_value": {
+            "arity": 1,
+            "js": "decodeValue"
+          },
+          "encode_value": {
+            "arity": 1,
+            "js": "encodeValue"
+          },
+          "serialize": {
+            "arity": 1
+          },
           "write": {
             "arity": 2,
             "minimum": 2,
             "maximum": 2
+          },
+          "write_values": {
+            "arity": 1,
+            "minimum": 1,
+            "maximum": 1,
+            "js": "writeValues"
           },
           "suspended": {
             "arity": 0,
@@ -12013,6 +13045,10 @@
             "arity": 3,
             "js": "encodeFragmentValue"
           },
+          "fragment_scalar": {
+            "arity": 1,
+            "js": "fragmentScalar"
+          },
           "restore_path": {
             "arity": 3,
             "js": "restorePath"
@@ -12058,6 +13094,22 @@
         constructor: Swill__Controller__List,
         mixins: [Swill__CollectionArrangement],
         properties: {
+          "registered_editors": {
+            js: "registeredEditors",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "editing_arrangement": {
+            js: "editingArrangement",
+            type: "T.nilable(T::Array[T.untyped])",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
           "content": {
             type: "T.untyped",
             attribute: false,
@@ -12353,9 +13405,17 @@
             "arity": 1,
             "js": "sortKeyFor"
           },
-          "sync_sort_states": {
+          "awake_from_dom": {
             "arity": 0,
-            "js": "syncSortStates"
+            "js": "awakeFromDOM"
+          },
+          "sort_states_did_change": {
+            "arity": 2,
+            "js": "sortStatesDidChange"
+          },
+          "mark_sorted_column": {
+            "arity": 0,
+            "js": "markSortedColumn"
           }
         }
       },
@@ -12501,6 +13561,18 @@
             "arity": 2,
             "js": "arrangedObjectsDidChange"
           },
+          "commit_editing": {
+            "arity": 0,
+            "js": "commitEditing"
+          },
+          "discard_editing": {
+            "arity": 0,
+            "js": "discardEditing"
+          },
+          "set_represented_object": {
+            "arity": 1,
+            "js": "setRepresentedObject"
+          },
           "commit_edit": {
             "arity": 3,
             "js": "commitEdit"
@@ -12528,6 +13600,10 @@
           "editing_did_fail_validation": {
             "arity": 1,
             "js": "editingDidFailValidation"
+          },
+          "editing_did_save": {
+            "arity": 1,
+            "js": "editingDidSave"
           },
           "editing_did_fail_save": {
             "arity": 1,
@@ -13091,6 +14167,29 @@
         constructor: Swill__Distant__Object,
         mixins: [Swill__Distant__Fields],
         properties: {
+          "conflicted_fields": {
+            js: "conflictedFields",
+            type: "T::Array[String]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "saving": {
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
+          "save_outcome_unknown": {
+            js: "saveOutcomeUnknown",
+            type: "T::Boolean",
+            attribute: false,
+            defaultValue() {
+              return false;
+            }
+          },
           "deleted": {
             type: "T::Boolean",
             attribute: false,
@@ -13142,15 +14241,89 @@
           "save": {
             "arity": 0
           },
-          "apply_draft": {
+          "context": {
+            "arity": 0
+          },
+          "claim_context": {
             "arity": 1,
-            "js": "applyDraft"
+            "js": "claimContext"
+          },
+          "attach_context": {
+            "arity": 1,
+            "js": "attachContext"
+          },
+          "dirty_attributes_did_change": {
+            "arity": 2,
+            "js": "dirtyAttributesDidChange"
+          },
+          "property_will_change": {
+            "arity": 3,
+            "js": "propertyWillChange"
+          },
+          "begin_edit": {
+            "arity": 0,
+            "js": "beginEdit"
+          },
+          "finish_edit": {
+            "arity": 1,
+            "js": "finishEdit"
+          },
+          "edit_matches": {
+            "arity": 3,
+            "js": "editMatches"
+          },
+          "persist_changes": {
+            "arity": 0,
+            "js": "persistChanges"
+          },
+          "check_recovery": {
+            "arity": 0,
+            "js": "checkRecovery"
+          },
+          "check_acceptance": {
+            "arity": 0,
+            "js": "checkAcceptance"
+          },
+          "rollback": {
+            "arity": 0
+          },
+          "import_parent": {
+            "arity": 1,
+            "js": "importParent"
+          },
+          "import_parent_field": {
+            "arity": 1,
+            "js": "importParentField"
+          },
+          "load_context_field": {
+            "arity": 2,
+            "js": "loadContextField"
+          },
+          "demand_parent_field": {
+            "arity": 1,
+            "js": "demandParentField"
+          },
+          "accept_into_parent": {
+            "arity": 0,
+            "js": "acceptIntoParent"
+          },
+          "begin_acknowledgement": {
+            "arity": 0,
+            "js": "beginAcknowledgement"
+          },
+          "end_acknowledgement": {
+            "arity": 0,
+            "js": "endAcknowledgement"
           },
           "delete": {
             "arity": 0
           },
           "draft": {
             "arity": 0
+          },
+          "apply_draft": {
+            "arity": 1,
+            "js": "applyDraft"
           },
           "property_will_access": {
             "arity": 1,
@@ -13159,6 +14332,10 @@
           "apply_data_field": {
             "arity": 4,
             "js": "applyDataField"
+          },
+          "apply_confirmed_field": {
+            "arity": 2,
+            "js": "applyConfirmedField"
           },
           "invalidate_data_field": {
             "arity": 2,
@@ -13213,6 +14390,98 @@
             "arity": 1,
             "js": "dataCollection",
             "visibility": "private"
+          }
+        }
+      },
+      "Swill::Distant::Context": {
+        constructor: Swill__Distant__Context,
+        properties: {
+          "changed_objects": {
+            js: "changedObjects",
+            type: "T::Array[Swill::Distant::Object]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "has_changes": {
+            js: "hasChanges",
+            type: "T::Boolean",
+            attribute: false,
+            compute: function compute_hasChanges() {
+              return !Runtime.isEmpty(this.changedObjects);
+            }
+          }
+        },
+        methods: {
+          "parent": {
+            "arity": 0,
+            "accessor": true
+          },
+          "initialize": {
+            "arity": 1
+          },
+          "new_editing_context": {
+            "arity": 0,
+            "js": "newEditingContext"
+          },
+          "object": {
+            "arity": 1
+          },
+          "register": {
+            "arity": 1
+          },
+          "changed": {
+            "arity": 1
+          },
+          "forget": {
+            "arity": 1
+          },
+          "model_store": {
+            "arity": 1,
+            "js": "modelStore"
+          },
+          "save": {
+            "arity": 0
+          },
+          "save_object": {
+            "arity": 1,
+            "js": "saveObject"
+          },
+          "rollback": {
+            "arity": 0
+          },
+          "check_active": {
+            "arity": 0,
+            "js": "checkActive"
+          },
+          "reset": {
+            "arity": 0
+          },
+          "release_child": {
+            "arity": 1,
+            "js": "releaseChild"
+          },
+          "dealloc": {
+            "arity": 0
+          }
+        }
+      },
+      "Swill::Distant::Edit": {
+        constructor: Swill__Distant__Edit,
+        properties: {},
+        methods: {
+          "initialize": {
+            "arity": 1
+          },
+          "record": {
+            "arity": 4
+          },
+          "finish": {
+            "arity": 0
+          },
+          "rollback": {
+            "arity": 0
           }
         }
       },
@@ -13614,7 +14883,7 @@
 
   // build/browser.mjs
   if (globalThis.Swill) throw new Error("Framework already loaded");
-  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
+  globalThis.Swill = browserAPI(framework_exports, Runtime, { "Object": "Swill__Object", "Swell": "Swill__Swell", "ArrayController": "Swill__ArrayController", "Controller": "Swill__Controller", "Application": "Swill__Application", "View": "Swill__View", "List": "Swill__Controller__List", "SortableList": "Swill__Controller__SortableList", "Editor": "Swill__Controller__Editor", "InlineEditor": "Swill__Controller__InlineEditor", "EditableList": "Swill__Controller__EditableList", "Control": "Swill__Control", "TextField": "Swill__Control__TextField", "Button": "Swill__Control__Button", "Select": "Swill__Control__Select", "CustomSelect": "Swill__Control__CustomSelect", "Segmented": "Swill__Control__Segmented", "ImageView": "Swill__Control__ImageView", "Alert": "Swill__Alert", "Bundle": "Swill__Bundle", "Image": "Swill__Image", "NotificationCenter": "Swill__NotificationCenter", "Wire": "Swill__Wire", "ValueTransformer": "Swill__ValueTransformer", "Model.Base": "Swill__Model__Base", "Model.Editable": "Swill__Model__Editable", "Model.Resource": "Swill__Model__Resource", "Model.Store": "Swill__Model__Store", "Model.Codec": "Swill__Model__Codec", "Model.PlainJSON": "Swill__Model__PlainJSON", "Model.JSONAPI": "Swill__Model__JSONAPI", "Model.Dataset": "Swill__Model__Dataset", "Model.Collection": "Swill__Model__Collection", "Model.ResultSet": "Swill__Model__ResultSet", "Distant.Object": "Swill__Distant__Object", "Distant.Client": "Swill__Distant__Client", "Distant.Context": "Swill__Distant__Context" }, ["Object", "ArrayController", "Controller", "Application", "View", "List", "SortableList", "Editor", "InlineEditor", "EditableList", "Control", "TextField", "Button", "Select", "CustomSelect", "ValueTransformer", "Model.Base", "Model.Resource", "Distant.Object"]);
   {
     const script = typeof document === "undefined" ? null : document.currentScript;
     const base = script && script.src ? new URL(".", script.src).href : "";

@@ -81,6 +81,8 @@
   var Swill__Distant__Fields = framework.Swill__Distant__Fields;
   var Swill__Distant__Fields_ClassMethods = framework.Swill__Distant__Fields_ClassMethods;
   var Swill__Distant__Object = framework.Swill__Distant__Object;
+  var Swill__Distant__Context = framework.Swill__Distant__Context;
+  var Swill__Distant__Edit = framework.Swill__Distant__Edit;
   var Swill__Distant__Client = framework.Swill__Distant__Client;
 
   // build/application.classes.mjs
@@ -1184,6 +1186,22 @@
         constructor: Demo__FilteredPeopleController,
         mixins: [Swill__CollectionArrangement, Demo__PersonFilter],
         properties: {
+          "registered_editors": {
+            js: "registeredEditors",
+            type: "T::Array[T.untyped]",
+            attribute: false,
+            defaultValue() {
+              return [];
+            }
+          },
+          "editing_arrangement": {
+            js: "editingArrangement",
+            type: "T.nilable(T::Array[T.untyped])",
+            attribute: false,
+            defaultValue() {
+              return null;
+            }
+          },
           "content": {
             type: "T.untyped",
             attribute: false,
