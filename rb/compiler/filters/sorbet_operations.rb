@@ -19,8 +19,8 @@ module Swill
 
         # The types a check can name: the declaration types plus Float,
         # Symbol, NilClass, T.untyped, and a generic class, which is checked
-        # as its class. Unions and procs are not checkable here.
-        SIMPLE_TYPE = /(?:String|Integer|Float|Symbol|NilClass|T::Boolean|T\.untyped|T\.proc\.void|T\.proc\.params\([^()]*\)\.(?:void|returns\([^()]*\))|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)/
+        # as its class. Proc types check callable identity, not their signatures.
+        SIMPLE_TYPE = /(?:String|Integer|Float|Symbol|NilClass|T::Boolean|T\.untyped|T\.proc\.(?:void|returns\([^()]*\))|T\.proc\.params\([^()]*\)\.(?:void|returns\([^()]*\))|T::(?:Array|Hash)\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*\[[\w:., ()\[\]]+\]|[A-Z]\w*(?:::\w+)*)/
         TYPE = /\A(?:#{SIMPLE_TYPE}|T\.nilable\(#{SIMPLE_TYPE}\))\z/
 
         def self.operation?(node)

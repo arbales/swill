@@ -551,6 +551,28 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
   # async and await are reserved forms: async def marks a method
   # asynchronous, await yields inside it, and both compile to JavaScript's
   # keywords. await elsewhere is rejected.
+  def test_async_method_accepts_an_awaiting_block
+    js = javascript(<<~RUBY)
+      sig { params(operation: T.nilable(T.proc.returns(T.untyped))).returns(Integer) }
+      async def perform(&operation)
+        @operation = T.let(operation, T.nilable(T.proc.returns(T.untyped))) if operation
+        await @operation.call
+      end
+
+      async def run
+        offset = 4
+        first = await(perform do
+          (await Promise.resolve(3)) + offset
+        end)
+        first + (await perform)
+      end
+    RUBY
+    assert_equal 14, execute(js + <<~JS)
+      const example = new (Runtime.resolve("Example"))();
+      console.log(JSON.stringify(await example.run()));
+    JS
+  end
+
   def test_async_methods_and_await_compile_to_javascript_keywords
     compiler = compiler_with_test_object.add(<<~RUBY)
       class Loader < TestObject

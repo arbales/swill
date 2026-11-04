@@ -231,13 +231,17 @@ module Swill
             raise CompileError, "a block takes required arguments only"
           end
           previous_async = @in_async
-          # A block or lambda is its own function: no await inside it.
+          # Ordinary callbacks stay synchronous. A block passed to a known
+          # async method may await; its result is then a Promise for that method.
           @in_async = false
           call, block_args, body = node.children
           if call.type == :send && (entry = collected_call_entry(call)) && entry["complex"]
             block_formal = entry.fetch("formals", []).find { |formal| formal["kind"] == "block" }
             type = block_formal && entry.fetch("parameters", {})[block_formal["name"]]
-            callback = process_lambda(s(:block, s(:send, nil, :lambda), block_args, body), proc_parameter_types(type))
+            @in_async = entry["async"] == true
+            callback = with_parameter_types(block_args, proc_parameter_types(type), body) do
+              super_block(s(:block, s(:send, nil, :lambda), block_args, body))
+            end
             carrier = s(:call, s(:const, nil, :Runtime), :blockArgument, callback)
             return process(call.updated(nil, [*call.children, carrier]))
           end

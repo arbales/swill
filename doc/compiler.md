@@ -659,8 +659,13 @@ assignment; the compiler keeps its check.
 name` (Ruby parses it as `async(def ...)`) declares an asynchronous method,
 compiled with the `async` keyword, so calling it yields a promise. `await
 expression` inside such a method compiles to `await`. `await` outside an async
-method, or inside a block or lambda within one (their functions are not the
-method), is rejected. On MRI, `Swill::Object` provides `async` as a no-op
+method is rejected. Ordinary blocks and lambdas are synchronous, even inside
+an async method. A block passed to a known async method with a block parameter
+may itself await; it compiles to an async callback when necessary. The receiving
+method must await the callback's result. For example, `fetch do; await
+Movie.search(text); end` supplies an asynchronous operation. To await the whole
+call, use `await(fetch do ... end)`; Ruby attaches the block in `await fetch do`
+to `await` instead of `fetch`. On MRI, `Swill::Object` provides `async` as a no-op
 wrapper and `await` as the identity, so shared code runs synchronously there.
 
 An async method's signature names the value it yields, not the promise: `sig {
