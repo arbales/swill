@@ -19,7 +19,6 @@
 --ignore=/rb/bundles.rb
 --ignore=/rb/swill/server/
 --ignore=/rb/swill/development.rb
---ignore=/examples/opal/
 --ignore=/rakelib/
 --silence-dev-message
 --enable-experimental-requires-ancestor

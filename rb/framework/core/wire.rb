@@ -29,11 +29,6 @@ module Swill
       await request(method, url, body: body, content_type: "application/vnd.api+json")
     end
 
-    sig { params(method: String, url: String, body: T::Hash[String, T.untyped]).returns(T.untyped) }
-    async def request_form_json(method, url, body:)
-      await request(method, url, body: Wire.encode_params(body), content_type: "application/x-www-form-urlencoded")
-    end
-
     # The decoded JSON a request answers with; nil for no content.
     sig { params(method: String, url: String, body: T.untyped, content_type: T.nilable(String)).returns(T.untyped) }
     async def request(method, url, body: nil, content_type: nil)
@@ -42,7 +37,7 @@ module Swill
       init = T.let({"method" => method, "headers" => headers}, T::Hash[String, T.untyped])
       if body != nil
         headers["Content-Type"] = content_type if content_type
-        init["body"] = content_type == "application/x-www-form-urlencoded" ? body : JSON.generate(body)
+        init["body"] = JSON.generate(body)
       end
       response = await fetch(request_url, init)
       raise "#{method} #{request_url} -> #{response.status}" unless response.ok

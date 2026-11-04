@@ -127,22 +127,6 @@ module Swill
         File.expand_path(config["out"] || File.join(File.dirname(config.fetch("client")), "dist/app.js"), directory)
       end
 
-      # Include missing/new files, but never our own generated outputs.
-      def snapshot
-        patterns = config.fetch("watch", ["**/*.rb", "Gemfile", "Gemfile.lock"])
-        files = patterns.flat_map { |pattern| Dir.glob(File.expand_path(pattern, directory)) }
-        generated = [File.join(config.fetch("root", "."), "client/models/generated"),
-                     File.join(config.fetch("root", "."), "sorbet"),
-                     File.join(types_root, "sorbet")].map { |name| File.expand_path(name, directory) }
-        files.reject! do |file|
-          generated.any? { |root| file.start_with?("#{root}/") } ||
-            file.match?(%r{/(?:vendor|node_modules|\.git|build)/})
-        end
-        (files + [path]).uniq.sort.filter_map do |file|
-          [file, Digest::SHA256.file(file).hexdigest] if File.file?(file)
-        end
-      end
-
       private
 
       def globs?(value)

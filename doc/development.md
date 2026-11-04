@@ -97,8 +97,7 @@ chooses while loading (a field focused in `controller_did_load`) stands.
 ## The Static Example
 
 `examples/rb/static/index.html` with `examples/rb/static.rb` is the full proof
-of the UI surface, ported from the retired Opal port's static example
-(`examples/opal/static/app.rb`): a toolbar that switches the main window
+of the UI surface: a toolbar that switches the main window
 between a bindings pane (key-path bindings, computed model predicates, a draft
 editor, a nested card with a binding root, a nested counter posting
 notifications, and a first-responder readout), a controls pane (text field,

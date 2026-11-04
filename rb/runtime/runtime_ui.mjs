@@ -28,7 +28,6 @@ import {
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
   isBlank, isPresent, isEmpty,
   strip, upcase, downcase,
-  valueRead, NIL_READERS, VALUE_READERS,
   length, stringify, toInteger, toFloat, capitalize, split, slice,
   sort, sortWith, sortBy, minBy, maxBy, min, max, sum,
   uniq, compact, flatten, reverse, indexOf,
@@ -132,8 +131,7 @@ export const UIRuntime = {
   // Values
   isTruthy, logicalAnd, logicalOr, isEqual, duplicate, nilable,
   isBlank, isPresent, isEmpty,
-  strip, upcase, downcase, valueRead,
-  NIL_READERS, VALUE_READERS,
+  strip, upcase, downcase,
 
   // Ruby core semantics
   length, stringify, toInteger, toFloat, capitalize, split, slice,

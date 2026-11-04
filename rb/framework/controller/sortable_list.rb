@@ -24,12 +24,6 @@ module Swill
       sender.getAttribute("data-column")
     end
 
-    # Compatibility for subclasses; sort state is now derived from arrangement.
-    sig { void }
-    def sync_sort_states
-      sort_states
-    end
-
     sig { override.void }
     def awake_from_dom
       super

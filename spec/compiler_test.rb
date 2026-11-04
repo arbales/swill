@@ -2725,20 +2725,6 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
     assert_equal js, Swill::Ruby2JS::Compiler.format_javascript(js)
   end
 
-  def test_old_model_base_reports_the_explicit_resource_migration
-    framework = Swill::Ruby2JS::Compiler.new
-    Swill::Ruby2JS::FRAMEWORK_SOURCES.each { |path| framework.add(File.read(path), file: path) }
-    compiler = Swill::Ruby2JS::Compiler.new(imports: framework.knowledge.interface)
-    error = assert_raises(Swill::Ruby2JS::CompileError) do
-      compiler.add(<<~RUBY)
-        class OldMenu < Swill::Model::Base
-          endpoint "/api/menus"
-        end
-      RUBY
-    end
-    assert_includes error.message, "must inherit Swill::Model::Resource"
-  end
-
   def test_source_constants_do_not_capture_runtime_or_mixin_plumbing_names
     compiler = compiler_with_test_object.add(<<~RUBY)
       class Runtime < TestObject

@@ -1,3 +1,4 @@
+require "digest"
 require "json"
 require "minitest/autorun"
 require "open3"
@@ -171,17 +172,21 @@ class CLITest < Minitest::Test
       assert File.file?(File.join(dir, "public/swill.js"))
       assert File.file?(File.join(dir, "client/sorbet/rbi/application.rbi"))
       project = Swill::Ruby2JS::Project.new(config)
-      stamps = project.snapshot
+      # What swill dev watches: each category's files, by content.
+      snapshot = lambda do
+        project.files(project.categories.values.flatten).to_h { |file| [file, Digest::SHA256.file(file).hexdigest] }
+      end
+      stamps = snapshot.()
       generated = File.join(dir, "client/models/generated/project_fixture/note.rb")
       File.write(generated, "stale")
-      assert_equal stamps, project.snapshot, "generated files must not trigger a rebuild loop"
+      assert_equal stamps, snapshot.(), "generated files must not trigger a rebuild loop"
       File.write(File.join(dir, "server.rb"), server.sub("title: String", "title: String, body: String"))
-      refute_equal stamps, project.snapshot
+      refute_equal stamps, snapshot.()
       _stdout, stderr, status = swill("build", "--project", config)
       assert status.success?, stderr
       assert_includes File.read(generated), "attribute :body"
       File.write(File.join(dir, "client/new.rb"), "# newly added source\n")
-      assert project.snapshot.any? { |file, _| file.end_with?("client/new.rb") }
+      assert snapshot.().keys.any? { |file| file.end_with?("client/new.rb") }
     end
   end
 

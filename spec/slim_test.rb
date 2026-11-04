@@ -5,7 +5,7 @@ require_relative "../rb/swill/slim"
 
 class SlimTest < Minitest::Test
   def test_toolbar_sketch_renders_swill_markup
-    template = Swill::Slim.from_file(File.expand_path("../sketches/slim_exploration.slim", __dir__), namespace: "Movies")
+    template = Swill::Slim.from_file(File.expand_path("fixtures/slim_exploration.slim", __dir__), namespace: "Movies")
     html = template.render
     assert_includes html, '<header class="toolbar" klass="Movies::Menubar" outlet="menubar">'
     assert_includes html,

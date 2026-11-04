@@ -27,12 +27,12 @@ function measure(label, count, operation) {
   console.log(`${label}: ${samples[4].toFixed(2)} ns/op`);
 }
 
-measure("arranged_objects (1000 sorted rows)", 1000, () => list.arrangedObjects());
+measure("arranged_objects (1000 sorted rows)", 1000, () => list.arrangedObjects);
 measure("selected_indexes (1000 sorted rows)", 1000, () => list.selectedIndexes);
 measure("selection change (1000 sorted rows)", 1000, i => list.selectObject(rows[i % rows.length]));
 const reversed = [...rows].reverse();
 measure("replace and arrange (1000 sorted rows)", 200, i => {
   list.representedObject = i % 2 ? rows : reversed;
-  list.arrangedObjects();
+  list.arrangedObjects;
 });
 list.dealloc();

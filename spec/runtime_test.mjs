@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {runInContext} from "node:vm";
 import {loadBundles} from "./load_bundles.mjs";
+import {valueRead} from "../rb/runtime/values.mjs";
 
 const swill = loadBundles();
 const {Runtime, context} = swill;
@@ -209,8 +210,8 @@ test("reader chains share value helpers with compiled expressions", () => {
   assert.equal(Runtime.readPath(person, "name.strip.upcase"), "ADA");
   assert.equal(Runtime.read(person, "greeting"), "Hello   Ada  ");
   assert.throws(() => Runtime.read(person, "constructor"), /Unknown reader/);
-  assert.equal(Runtime.valueRead("\u00a0", "blank?"), false);
-  assert.equal(Runtime.valueRead("\0\t Ada \n\0", "strip"), "Ada");
+  assert.equal(valueRead("\u00a0", "blank?"), false);
+  assert.equal(valueRead("\0\t Ada \n\0", "strip"), "Ada");
 });
 
 test("nested paths rehook before callbacks and stop after disposal", () => {
@@ -3185,11 +3186,11 @@ test("plain JSON codec, datasets, query parameters, and the wire's base URL", as
   }
 });
 
-test("the wire encodes forms, resolves relative URLs against its base, and reports failures", async () => {
+test("the wire sends JSON, resolves relative URLs against its base, and reports failures", async () => {
   const requests = fakeServer({"POST /api/login": {ok: 1}});
   const wire = new Wire();
-  const answer = await wire.requestFormJSON("POST", "/api/login", Runtime.keywordArguments({body: {user: "ada", token: null, n: 2}}));
-  assert.deepEqual(plain([answer, requests[0].body, requests[0].headers["Content-Type"]]), [{ok: 1}, "user=ada&n=2", "application/x-www-form-urlencoded"]);
+  const answer = await wire.requestJSON("POST", "/api/login", Runtime.keywordArguments({body: {user: "ada", n: 2}}));
+  assert.deepEqual(plain([answer, requests[0].body, requests[0].headers["Content-Type"]]), [{ok: 1}, {user: "ada", n: 2}, "application/vnd.api+json"]);
   assert.equal(requests[0].headers.Accept, "application/vnd.api+json, application/json");
   wire.baseURL = "https://api.test";
   assert.deepEqual(plain([wire.resolveURL("api/x"), wire.resolveURL("/api/x"), wire.resolveURL("https://other.test/y")]),

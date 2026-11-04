@@ -129,21 +129,9 @@ module Swill
           @sources << [source, file]
           self
         rescue CompileError => error
-          error = model_base_migration_error(source, error)
           rebuild_knowledge
           raise error if file == "(spike)"
           raise CompileError, "#{file}: #{error.message}"
-        end
-
-        def model_base_migration_error(source, error)
-          return error unless source.match?(/<\s*Swill::Model::Base\b/)
-          match = error.message.match(/undefined method '(endpoint|resource_type|codec|has_many|has_one)'/)
-          return error unless match
-
-          destination = %w[has_many has_one].include?(match[1]) ?
-            "Swill::Model::Resource for endpoint associations or Swill::Distant::Object for generated associations" :
-            "Swill::Model::Resource"
-          CompileError.new("#{error.message}; models using #{match[1]} must inherit #{destination}")
         end
 
         def javascript(runtime:, framework: nil)
