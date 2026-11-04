@@ -4,6 +4,7 @@ import {spawn} from "node:child_process";
 import {createServer} from "node:net";
 import {readFile} from "node:fs/promises";
 import {createContext, runInContext} from "node:vm";
+import {pack, unpack} from "../rb/runtime/message_pack.mjs";
 
 const root = new URL("..", import.meta.url);
 
@@ -123,6 +124,49 @@ test("generated clients cross the real WebSocket boundary", {timeout: 20_000}, a
     stop();
     Runtime.closeData();
     assert.equal(shared.content, null, "connection reset releases cached controllers");
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/data`);
+    socket.binaryType = "arraybuffer";
+    await new Promise((resolve, reject) => {
+      socket.onopen = resolve; socket.onerror = reject;
+    });
+    const pending = new Map(), order = [];
+    socket.onmessage = event => {
+      const response = unpack(new Uint8Array(event.data));
+      const id = response.request_id ?? 'hello';
+      order.push(id);
+      pending.get(id)?.(response); pending.delete(id);
+    };
+    const send = message => new Promise(resolve => {
+      pending.set(message.request_id ?? 'hello', resolve);
+      socket.send(pack(message));
+    });
+    const query = (id, delay = 0, text = '') => send({
+      type: 'QUERY', request_id: id, generation: id, model: 'DataFixture::Post',
+      name: 'search', arguments: [text], test_delay_ms: delay,
+    });
+    try {
+      assert.equal((await send({type: 'HELLO', protocol_version: schema.protocol_version,
+        schema_hash: schema.schema_hash})).type, 'WELCOME');
+      const slow = query(1, 100), fast = query(2);
+      assert.equal((await fast).type, 'RESULT');
+      assert.equal((await slow).type, 'RESULT');
+      assert.deepEqual(order.slice(-2), [2, 1], 'independent reads complete out of order');
+
+      const before = query(3, 75);
+      const saved = send({type: 'UPDATE', request_id: 4, generation: 4,
+        model: 'DataFixture::Post', id: '1', attributes: {title: 'Concurrency fixture'}});
+      const after = query(5, 0, 'Concurrency fixture');
+      assert.equal((await before).type, 'RESULT');
+      assert.equal((await saved).type, 'RETURN');
+      const refreshed = await after;
+      assert.equal(refreshed.type, 'RESULT');
+      const refreshedPost = refreshed.patches.find(patch => patch.model === 'DataFixture::Post');
+      assert.equal(refreshedPost?.fields.title, 'Concurrency fixture', 'later read observes committed write');
+      assert.deepEqual(order.slice(-3), [3, 4, 5], 'write fences reads on both sides');
+    } finally {
+      socket.close();
+    }
   } catch (error) {
     error.message += `\nFalcon output:\n${output}`;
     throw error;

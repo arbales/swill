@@ -124,6 +124,7 @@ task test: :typecheck do
     sh "bundle exec ruby spec/development_test.rb"
     sh "bundle exec ruby spec/slim_test.rb"
     sh "bundle exec ruby spec/data_test.rb"
+    sh "bundle exec ruby spec/data_connection_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
     sh "deno test -A spec/data_transport_test.mjs"
     sh "deno test -A spec/data_values_test.mjs"
@@ -207,7 +208,7 @@ RDOC_OPTS = [
 # gets documented. Internals drop out of the count as they are marked :nodoc:.
 # Declared properties and outlets count as they do on the class page, and
 # protected methods count with public ones; private methods do not appear.
-DOC_COVERAGE_BASELINE = 165
+DOC_COVERAGE_BASELINE = 164
 
 desc "Report undocumented public framework API (fails if it grew)"
 task :doc_coverage do

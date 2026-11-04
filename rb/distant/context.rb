@@ -26,9 +26,9 @@ module Swill
     # patches and the invalidated associations as invalidations. See
     # [Server Data](rdoc-ref:doc/server_data.md).
     class Context
-      # The thread-local key under which the current context is installed.
+      # Thread#[] is fiber-local: each concurrent invocation has its own scope.
       KEY = :__swill_data_context
-      # The thread-local key under which the current invocation's effects are
+      # The fiber-local key under which the current invocation's effects are
       # collected.
       EFFECTS_KEY = :__swill_data_effects
 
@@ -54,7 +54,7 @@ module Swill
       end
 
       # Returns the context installed for the remote method or write running
-      # on the current thread. Raises `RuntimeError` when none is running,
+      # in the current fiber. Raises `RuntimeError` when none is running,
       # such as from a model method called outside the dispatcher.
       def self.current
         Thread.current[KEY] || raise("no Swill data operation is active")
@@ -141,7 +141,7 @@ module Swill
     end
 
     # Returns the `Context` of the remote method or write running on the
-    # current thread. Raises `RuntimeError` when none is running. This is how
+    # current fiber. Raises `RuntimeError` when none is running. This is how
     # a model method reaches its viewer context and records effects.
     def self.context
       Context.current

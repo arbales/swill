@@ -4,6 +4,16 @@ require "roda"
 require_relative "../server"
 
 module DataFixture
+  # Delay delivery after the real read to exercise out-of-order responses.
+  module QueryDelay
+    def call(message)
+      response = super
+      sleep(message.fetch("test_delay_ms", 0) / 1000.0) if message["type"] == "QUERY"
+      response
+    end
+  end
+  Swill::Distant::Dispatcher.prepend(QueryDelay)
+
   SCHEMA = Swill::Distant::Schema.discover
 
   class App < Roda

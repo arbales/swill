@@ -122,6 +122,17 @@ command to manage its own transaction, for a command that must keep an
 external request outside the database transaction. A remote method exports a
 trusted application method; it does not sandbox the method's implementation.
 
+After the handshake, a connection runs up to two queries concurrently. Queries
+and the field/association readers used by their projections must be safe to
+overlap. Put mutations in commands. Replies may arrive out of request order;
+the client uses request ids and generations to match them and protect newer
+field values. Generations are not database revisions.
+
+Other operations are barriers: earlier queries finish before a command, write,
+resolver, or hydration request starts, and later queries wait for it to finish.
+This preserves read-after-write ordering on one connection. It does not promise
+ordering across connections or a transaction spanning multiple messages.
+
 Generated methods keep the method's parameters: required and optional
 positional, positional rest, required and optional keywords, and keyword
 rest. Defaults are evaluated on the server, and an explicit `nil` is
@@ -350,6 +361,14 @@ viewer context every remote method on the connection runs under (nil for
 plain Sequel), the actor, and an opaque token that identifies the
 authenticated scope. A new actor or scope is a new token. A request that is
 not a WebSocket upgrade is answered `426`.
+
+The connection enables Sequel's `fiber_concurrency` extension so overlapping
+operations borrow separate pool checkouts. It does not reserve a database
+connection for each WebSocket. The viewer context and actor remain shared for
+the connection; effects and privacy caches are scoped to each invocation.
+Application code must avoid unsynchronized mutation of shared authentication
+state in concurrent queries. Query admission is bounded per connection, and
+the database pool still bounds database concurrency across connections.
 
 `Swill::Server` mounts the connection for you; see [Serving](serving.md).
 Start the Rack server with `bundle exec falcon serve`; the

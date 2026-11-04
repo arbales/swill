@@ -9,6 +9,8 @@ module Swill
     # and the reply is written back as a binary frame. The connection closes
     # after a `schema_mismatch` reply, and a request that is not a WebSocket
     # upgrade is answered `426 Upgrade Required`.
+    # Up to two queries run concurrently; other operations wait for earlier
+    # queries and finish before later queries start. Replies are written serially.
     #
     # It is mounted in `config.ru` with the schema and an authenticator:
     #
@@ -31,7 +33,11 @@ module Swill
       # context may be nil when the application does not use sequel-privacy;
       # the scope token is an opaque string identifying the authenticated
       # scope, and a new actor or scope is a new token.
+      # Enables Sequel's fiber-aware pool ownership for concurrent operations.
       def initialize(schema:, authenticate:)
+        require "sequel"
+        # Concurrent operations must never share a thread-owned pool checkout.
+        Sequel.extension :fiber_concurrency
         @schema = schema
         @authenticate = authenticate
       end
@@ -47,6 +53,7 @@ module Swill
         begin
           require "async/websocket/adapters/rack"
           require "protocol/websocket/message"
+          require_relative "connection_session"
         rescue LoadError => e
           raise LoadError, "Swill::Distant::Connection needs the async-websocket gem and a server that " \
                            "supports it, such as Falcon (#{e.message})"
@@ -55,12 +62,7 @@ module Swill
         Async::WebSocket::Adapters::Rack.open(env) do |connection|
           identity = @authenticate.call(env)
           dispatcher = Dispatcher.new(schema: @schema, **identity)
-          while (frame = connection.read)
-            reply = dispatcher.call(Protocol.unpack(frame.to_str))
-            connection.write(::Protocol::WebSocket::BinaryMessage.new(Protocol.pack(reply)))
-            connection.flush
-            break if reply.dig("error", "code") == "schema_mismatch"
-          end
+          ConnectionSession.new(dispatcher, connection).run
         end || [426, { "content-type" => "text/plain" }, ["WebSocket required"]]
       end
     end

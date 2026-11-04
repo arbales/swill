@@ -78,6 +78,8 @@ module Swill
       # of each returned record sent with the result, as names and
       # `{association: [...]}` Hashes. Raises `ArgumentError` when a remote
       # method `name` is already declared.
+      # Queries and their projected readers are read operations and must be
+      # safe to overlap. A connection runs up to two, with writes as barriers.
       def query(name, returns: nil, preload: [])
         declare_remote(:query, name, returns:, projection: preload)
       end
