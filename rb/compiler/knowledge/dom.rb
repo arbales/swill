@@ -119,6 +119,8 @@ module Swill
           "document" => [:attr, "Document"],
           "location" => [:attr, "Location"],
           "history" => [:attr, "History"],
+          "innerWidth" => [:attr, "Float"],
+          "innerHeight" => [:attr, "Float"],
           "prompt" => [:method, "T.nilable(String)", "message: String, default?: String"],
           "confirm" => [:method, "T::Boolean", "message: String"],
           "print" => [:method, "void", ""]

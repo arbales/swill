@@ -580,7 +580,7 @@ module Swill
     sig { params(event: KeyboardEvent).void }
     def key_down_in_window(event) # :nodoc:
       in_development { verify_focus("a key") }
-      first_responder.key_down(event)
+      DOM.revealing { first_responder.key_down(event) }
     end
 
     # Focus the browser gave before launch, as to an `autofocus` field,

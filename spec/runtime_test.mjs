@@ -4146,6 +4146,37 @@ test("distant inline acceptance releases arrangement and failed persistence keep
   f.controller.unload();
 });
 
+test("a key that moves the keyboard reveals where it went, if it is out of sight", () => {
+  const Search = class extends SwillController {
+    moveDown() { Application.shared().makeFirstResponder(Application.shared().controllers[1]); }
+  };
+  const Results = class extends SwillController {
+    cancelOperation() { Application.shared().makeFirstResponder(Application.shared().controllers[0]); }
+  };
+  Runtime.install({classes: {"Test::RevealSearch": {constructor: Search}, "Test::RevealResults": {constructor: Results}}});
+  const field = element("input", {});
+  const row = element("button", {});
+  const body = element("body", {}, [
+    element("header", {controller: "Test::RevealSearch"}, [field]),
+    element("main", {controller: "Test::RevealResults"}, [row])
+  ]);
+  const document = element("#document", {}, [body]);
+  document.defaultView = new Browser();
+  // The field is scrolled off the top; the results fill the window and more.
+  field.rect = {top: -120, bottom: -90, left: 0, right: 300};
+  row.rect = {top: 200, bottom: 2400, left: 0, right: 1000};
+  const [search, results] = launched(body);
+  Application.shared().makeFirstResponder(results);
+  assert.equal(document.scrolledTo, undefined, "a move the application makes leaves the page where it is");
+  pressKey(row, "Escape");
+  assert.equal(Application.shared().firstResponder(), search);
+  assert.equal(document.scrolledTo, field, "Escape's move brings the field into view");
+  document.scrolledTo = undefined;
+  pressKey(field, "ArrowDown");
+  assert.equal(Application.shared().firstResponder(), results);
+  assert.equal(document.scrolledTo, undefined, "Down's move to results already in view leaves the page where it is");
+});
+
 function deferredFetch(controller) {
   let resolve, reject;
   const result = new Promise((done, fail) => { resolve = done; reject = fail; });

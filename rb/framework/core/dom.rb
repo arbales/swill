@@ -18,12 +18,40 @@ module Swill
       end
     end
 
-    # Focuses +element+ without scrolling to it, the one way the framework
-    # moves focus. See `DOM.focus_revealing` for a move the user made, which
-    # should bring the element into view.
+    # Focuses +element+, the one way the framework moves focus, without
+    # scrolling. A move a key press caused (see DOM.revealing) then brings
+    # the element into view when none of it is in sight.
     sig { params(element: Element).void }
     def self.focus(element)
       element.focus({preventScroll: true})
+      reveal(element) if @revealing
+    end
+
+    # Scrolls +element+ into view when none of it is in the window. What is
+    # partly in view, as a tall list is, stays where it is: scrolling a list
+    # to its top would move the row the user is looking at.
+    sig { params(element: Element).void }
+    def self.reveal(element)
+      browser = element.ownerDocument.defaultView
+      return unless browser
+      rect = element.getBoundingClientRect
+      return if rect.bottom > 0 && rect.top < browser.innerHeight && rect.right > 0 && rect.left < browser.innerWidth
+      element.scrollIntoView({block: "nearest", inline: "nearest"})
+    end
+
+    # Runs +block+ with focus moves revealing what they focus. The
+    # application handles each key press this way, so a key that moves the
+    # keyboard, as Up from a list's first row back to its search field does,
+    # shows where it went.
+    sig { params(block: T.proc.void).void }
+    def self.revealing(&block)
+      previous = @revealing
+      @revealing = T.let(true, T.nilable(T::Boolean))
+      begin
+        yield
+      ensure
+        @revealing = previous
+      end
     end
 
     # Focuses +element+ and scrolls it into view, as the browser does when
