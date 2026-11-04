@@ -65,34 +65,64 @@ class CLITest < Minitest::Test
     end
   end
 
-  # An application typechecks itself without the framework checkout on its
-  # own terms: the artifacts land beside its entry, and the config names its
-  # own sources, the framework's, and the generated RBIs.
+  # The editor and CLI check one directory, including a refreshed local copy
+  # of the framework. No absolute gem paths or per-source lists can go stale.
   def test_types_writes_sorbet_artifacts_a_consumer_can_check_against
     Dir.mktmpdir do |dir|
       FileUtils.cp_r(File.join(ROOT, "spec/fixtures/cli_app"), File.join(dir, "app"))
       stdout, stderr, status = swill("types", File.join(dir, "app"))
       assert status.success?, stderr
-      assert_match(/wrote 6 Sorbet files/, stdout)
+      assert_match(/wrote 8 Sorbet files/, stdout)
       sorbet = File.join(dir, "app", "sorbet")
-      %w[rbi/swill.rbi rbi/swill-dom.rbi rbi/swill-runtime.rbi rbi/application.rbi
-         checks/declarations.rb config].each do |name|
+      %w[swill/rbi/swill.rbi swill/rbi/swill-dom.rbi swill/rbi/swill-runtime.rbi swill/rbi/application.rbi
+         swill/checks/declarations.rb swill/framework/core/controller.rb swill/.gitignore swill.config config].each do |name|
         assert File.file?(File.join(sorbet, name)), "#{name} was written"
       end
-      assert_includes File.read(File.join(sorbet, "rbi/application.rbi")), "Fixture::Note"
-      assert_includes File.read(File.join(sorbet, "rbi/swill.rbi")), "Swill::Controller"
-      assert_includes File.read(File.join(sorbet, "rbi/swill-dom.rbi")), "class Element"
-      config = File.read(File.join(sorbet, "config"))
-      assert_includes config, "app.rb", "the application's own sources are checked"
-      assert_includes config, "rb/framework/core/controller.rb", "so is the framework's Ruby"
-      assert_includes config, "--dir=sorbet/rbi"
+      assert_includes File.read(File.join(sorbet, "swill/rbi/application.rbi")), "Fixture::Note"
+      assert_includes File.read(File.join(sorbet, "swill/rbi/swill.rbi")), "Swill::Controller"
+      assert_includes File.read(File.join(sorbet, "swill/rbi/swill-dom.rbi")), "class Element"
+      assert_equal "@sorbet/swill.config\n", File.read(File.join(sorbet, "config"))
+      config = File.read(File.join(sorbet, "swill.config"))
+      assert_equal ["--dir=.\n"], config.lines.grep(/^--dir=/)
+      %w[/public /tmp /node_modules /dist /sorbet/rbi/shims/generated].each do |path|
+        assert_includes config, "--ignore=#{path}"
+      end
       assert_includes config, "--enable-experimental-requires-ancestor"
-      refute_includes config, "rb/runtime/", "the MRI host is described by swill-runtime.rbi instead"
+      refute_includes config, ROOT, "nothing points into the installed gem"
+      output, status = Open3.capture2e("srb", "tc", chdir: File.join(dir, "app"))
+      assert status.success?, output
+      # Fresh files are picked up without regenerating a source list.
+      File.write(File.join(dir, "app", "new.rb"), "# typed: true\nT.let(123, String)\n")
+      output, status = Open3.capture2e("srb", "tc", chdir: File.join(dir, "app"))
+      refute status.success?
+      assert_includes output, "new.rb"
       # An existing config is the consumer's; it is not overwritten.
       File.write(File.join(sorbet, "config"), "--dir=.\n")
+      File.write(File.join(sorbet, "swill.config"), "stale")
+      stale = File.join(sorbet, "swill/framework/stale.rb")
+      File.write(stale, "# removed by a gem update")
       _stdout, stderr, status = swill("types", File.join(dir, "app"))
       assert status.success?, stderr
       assert_equal "--dir=.\n", File.read(File.join(sorbet, "config"))
+      assert_equal config, File.read(File.join(sorbet, "swill.config"))
+      refute File.exist?(stale), "each generation refreshes the framework copy"
+    end
+  end
+
+  def test_types_never_ignores_sources_when_output_shares_their_directory
+    Dir.mktmpdir do |dir|
+      FileUtils.cp_r(File.join(ROOT, "spec/fixtures/cli_app"), File.join(dir, "client"))
+      _stdout, stderr, status = swill("types", File.join(dir, "client"), "--into", dir,
+                                    "--out", File.join(dir, "client/app.js"))
+      assert status.success?, stderr
+      config = File.read(File.join(dir, "sorbet/swill.config"))
+      refute_includes config, "--ignore=/client\n"
+      output, status = Open3.capture2e("srb", "tc", chdir: dir)
+      assert status.success?, output
+      File.write(File.join(dir, "client/new.rb"), "# typed: true\nT.let(123, String)\n")
+      output, status = Open3.capture2e("srb", "tc", chdir: dir)
+      refute status.success?
+      assert_includes output, "client/new.rb"
     end
   end
 
@@ -170,7 +200,7 @@ class CLITest < Minitest::Test
       _stdout, stderr, status = swill("build", "--project", config)
       assert status.success?, stderr
       assert File.file?(File.join(dir, "public/swill.js"))
-      assert File.file?(File.join(dir, "client/sorbet/rbi/application.rbi"))
+      assert File.file?(File.join(dir, "client/sorbet/swill/rbi/application.rbi"))
       project = Swill::Ruby2JS::Project.new(config)
       # What swill dev watches: each category's files, by content.
       snapshot = lambda do
@@ -259,6 +289,17 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_project_rejects_malformed_types_options
+    Dir.mktmpdir do |dir|
+      config = File.join(dir, "swill.yml")
+      [true, "", {"check" => "true"}, {"into" => false}, {"typo" => true}].each do |value|
+        File.write(config, {"client" => "app.rb", "types" => value}.to_yaml)
+        error = assert_raises(Swill::Ruby2JS::CompileError) { Swill::Ruby2JS::Project.new(config) }
+        assert_includes error.message, "project types must be"
+      end
+    end
+  end
+
   def test_documented_data_form_builds_and_validates_a_save
     Dir.mktmpdir do |dir|
       blocks = File.read(File.join(ROOT, "doc/data_form.md")).scan(/```(?:ruby|html|yaml)\n(.*?)```/m).flatten
@@ -335,6 +376,111 @@ class CLITest < Minitest::Test
       _stdout, stderr, status = swill("new", File.join(dir, "123"))
       refute status.success?
       assert_includes stderr, "does not make a Ruby module name"
+    end
+  end
+
+  def test_init_adds_only_the_client_and_config_and_refuses_either_existing_path
+    Dir.mktmpdir("existing-app") do |dir|
+      %w[Gemfile config.ru app.rb .gitignore views/index.erb].each do |path|
+        target = File.join(dir, path)
+        FileUtils.mkdir_p(File.dirname(target))
+        File.write(target, "# existing #{path}\n")
+      end
+      existing = Dir.glob("#{dir}/**/*", File::FNM_DOTMATCH).select { |path| File.file?(path) }
+                    .to_h { |path| [path, File.read(path)] }
+      output, status = Open3.capture2e(RbConfig.ruby, File.join(ROOT, "exe/swill"), "init", chdir: dir)
+      assert status.success?, output
+      %w[swill.yml client/app.rb client/application.rb client/controllers/hello.rb client/resources/app.css].each do |path|
+        assert File.file?(File.join(dir, path)), path
+      end
+      existing.each { |path, source| assert_equal source, File.read(path) }
+      assert_includes output, 'map("/assets") { run SWILL.assets_app }'
+      assert_equal "public/assets/app.js", YAML.safe_load_file(File.join(dir, "swill.yml"))["out"]
+      assert_includes output, "If /assets is already in use"
+      assert_includes output, "Sinatra"
+      assert_includes output, "Roda"
+      assert_includes output, "bind=\"greeting\""
+      _stdout, stderr, status = swill("build", "--project", File.join(dir, "swill.yml"))
+      assert status.success?, stderr
+      assert File.file?(File.join(dir, "public/assets/app.js"))
+      _stdout, stderr, status = swill("init", dir)
+      refute status.success?
+      assert_includes stderr, "will not overwrite"
+    end
+    %w[swill.yml client].each do |conflict|
+      Dir.mktmpdir do |dir|
+        File.symlink("missing", File.join(dir, conflict))
+        _stdout, stderr, status = swill("init", dir)
+        refute status.success?
+        assert_includes stderr, "#{conflict} already exists"
+        assert_equal [conflict], Dir.children(dir), "preflight must not write part of the scaffold"
+      end
+    end
+  end
+
+  def test_project_type_checking_is_fatal_in_build_and_a_warning_in_dev
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "client"))
+      File.write(File.join(dir, "client/app.rb"), <<~RUBY)
+        # typed: true
+        class Wrong < Swill::Object
+          extend T::Sig
+          sig { returns(String) }
+          def value
+            123
+          end
+        end
+      RUBY
+      File.write(File.join(dir, "swill.yml"), {
+        "client" => "client/app.rb", "out" => "client/assets/app.js",
+        "framework" => false, "types" => {"check" => true},
+        "dev" => {"server" => false}
+      }.to_yaml)
+      output, status = Open3.capture2e(RbConfig.ruby, File.join(ROOT, "exe/swill"), "build", chdir: dir)
+      refute status.success?, output
+      assert_includes output, "type checking failed"
+      assert_includes output, "Expected `String`"
+      config = File.read(File.join(dir, "client/sorbet/swill.config"))
+      assert_includes config, "--ignore=/assets"
+      output, status = Open3.capture2e(RbConfig.ruby, File.join(ROOT, "exe/swill"), "dev", "--once", chdir: dir)
+      assert status.success?, output
+      assert_includes output, "type checking failed"
+      assert_includes output, "swill: ready"
+    end
+  end
+
+  def test_plain_watch_rediscovers_dependencies_after_failures_and_watches_resources
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "app.rb"), "class Watched < Swill::Object; end\n")
+      log = File.join(dir, "watch.log")
+      pid = Process.spawn(RbConfig.ruby, File.join(ROOT, "exe/swill"), "watch", dir, "--interval", "0.05",
+                          out: log, err: [:child, :out], pgroup: true)
+      begin
+        Timeout.timeout(30) do
+          output = File.join(dir, "dist/app.js")
+          sleep 0.05 until File.file?(output)
+          File.write(File.join(dir, "app.rb"), "require_relative 'extra'\n")
+          sleep 0.05 until File.read(log).include?("requires a missing file")
+          File.write(File.join(dir, "extra.rb"), "require_relative 'nested'\n")
+          sleep 0.05 until File.read(log).include?("extra.rb requires a missing file")
+          File.write(File.join(dir, "extra.rb"), "class Recovered < Swill::Object; end\n")
+          sleep 0.05 until File.read(output).include?("Recovered") && !File.read(output).include?("reportBuildFailure")
+          FileUtils.mkdir_p(File.join(dir, "resources/icons"))
+          resource = File.join(dir, "resources/icons/hello.txt")
+          copied = File.join(dir, "dist/resources/app/icons/hello.txt")
+          File.write(resource, "one")
+          sleep 0.05 until File.file?(copied) && File.read(copied) == "one"
+          File.write(resource, "two")
+          sleep 0.05 until File.read(copied) == "two"
+          File.delete(resource)
+          sleep 0.05 while File.exist?(copied)
+        end
+      rescue Timeout::Error
+        flunk "watch did not recover:\n#{File.read(log)}"
+      ensure
+        Process.kill("TERM", -pid)
+        Process.wait(pid)
+      end
     end
   end
 

@@ -3,7 +3,9 @@
 ## Status and intent
 
 This is the plan of record for URLs and server rendering, adopted 3 November
-2026. Build order is at the end; nothing here is built yet.
+2026. Grouped fragment restoration already works; path/query routing, the
+shared client/server codec, presented-window restoration, and server rendering
+are not implemented. [Build order](#build-order) is at the end.
 
 Restoration lives in the fragment today (`#main=movies,view=all,s=44;
 toolbar.mode=owner`), through `URLFragment` and each window's content
@@ -333,8 +335,9 @@ of every binding has its value. No markup is filled on the server.
 - Needs: the Distant codec on the server (exists: the WebSocket encodes
   records today); `Distant::Client` reading an inline snapshot at launch and
   installing it as if received; a query that finds its results already in
-  the pool and reports them without a round trip (the query freshness
-  contract in [the data plan](DATA_PLAN.md) decides whether it still refreshes).
+  the pool and reports them without a round trip. Preserve the implemented
+  [query contract](../doc/collections.md#fetching-query-results); whether a
+  preloaded query refreshes once remains an open question below.
 - First paint still has empty rows until the client renders them, but no
   network wait, and no flash of blanked text. Privacy and authorization go
   through the same dispatcher as a request would.
@@ -418,24 +421,6 @@ the wait and the flash and touches no markup. C ends the duplicate row
 template and gives a finished first paint, and its client half (row
 reconciliation, binding adoption) is work the framework plan wants anyway.
 
-### What each needs, in order
-
-1. **A.** `Bundles::Page#template` and `#present`; the client adopting a
-   window already in the page as presented (the `isConnected` check in
-   `present_window` becomes "adopt"); the Movies page rendering its content
-   from `swill.route`.
-2. **B.** `Page#preload(records, **state)` encoding through the schema's
-   codec with the dispatcher's privacy rules; `Distant::Client` reading the
-   inline snapshot before launch; `fetch` answering from the pool without a
-   round trip, per the freshness contract; a browser test that a preloaded
-   page makes no `/data` request before interaction.
-3. **C.** `Swill::Bundles::Renderer`: key-path reads (`rb/runtime/paths` on
-   MRI, or a string-level equivalent), `bind`/`bind-*`/`transform`/`for="row"`;
-   `Page#render(template, object)`, `#render_rows(objects, selected:)`,
-   `#present(name, object)`; rows carrying their object id; `List` adopting
-   rows by id (reconciliation); bindings leaving pre-rendered content on an
-   initial nil; a fixture rendered on both sides and compared.
-
 ## What the pieces are
 
 - **`Swill::URLState`** (`rb/framework/core/url_state.rb`): the string codec,
@@ -463,7 +448,9 @@ reconciliation, binding adoption) is work the framework plan wants anyway.
   or nil; `url_for`.
 - **`Swill::Server`** `routes:`; `swill.head` writing `<base>` when mounted;
   **`Bundles::Page#route`, `#url_for`, `#template`, `#present`**, then
-  `#preload`, then `#render` and `#render_rows`; the **Roda plugin**
+  `#preload(records, **state)`, then `#render(template, object)` and
+  `#render_rows(objects, selected:)`; `#present(name, object)` for bound
+  presentation; the **Roda plugin**
   `rb/swill/server/roda.rb` (Roda a development dependency, for its test);
   Sinatra documented.
 - **`Swill::Bundles::Renderer`** (C) and the Distant snapshot (B).
@@ -485,10 +472,16 @@ reconciliation, binding adoption) is work the framework plan wants anyway.
    presentation, back and forward.
 4. The server: `Routes`, helpers, `Swill::Server routes:`, `<base>`, the
    Roda plugin; `bundles_test` for the path table above and the helpers; a
-   Roda test. This is rendering approach A.
+   Roda test. This is rendering approach A, including adoption of an already
+   presented window rather than cloning it.
 5. Movies: the Ruby page at `/` (or `/app`), `MainWindow` and
    `EditMovieWindow`, `in: :path` on `s`, the page shaped by `swill.route`.
-6. Rendering B, then C, as above; Movies drops `views/_row.erb`.
+6. Rendering B: preload through the schema/privacy boundary, seed the client
+   before launch, and verify that a preloaded page needs no `/data` request
+   before interaction, subject to the chosen refresh policy.
+7. Rendering C: render the client's bindings and row templates on MRI,
+   reconcile/adopt rows by identity, and compare the same fixture rendered on
+   both sides. Movies drops `views/_row.erb`.
 
 ## Open questions
 

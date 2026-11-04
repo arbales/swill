@@ -18,8 +18,14 @@ the [compiler](../doc/compiler.md), [collections](../doc/collections.md), and
 - **Action lookup.** `Responder#action_target` uses `Runtime.respondsTo`, which
   can answer true for a property. Match action lookup to the method table and
   `performAction` arity/visibility rules, so a same-named property does not
-  intercept responder-chain search. JavaScript-side private/protected dispatch
-  also needs a deliberate rule; see [the data plan](DATA_PLAN.md).
+  intercept responder-chain search.
+- **Dispatch visibility.** MRI enforces `private` and `protected`, but emitted
+  methods remain reachable through browser dispatch. Choose native private
+  methods where dynamic access is unnecessary or runtime dispatch that refuses
+  private names; coordinate with action lookup.
+- **Plain-object reads.** Decide whether `Runtime.send` reading plain-object
+  entries should match ordinary JavaScript dot access, then align the runtime
+  reference and compiler guide with that rule.
 - **Property-write cost.** A September benchmark measured an unobserved write
   near 217 ns versus an ordinary getter near 11.7 ns. Profile the current
   runtime before optimizing. Descriptor resolution on every binding write is
@@ -69,8 +75,9 @@ test it with an actual control before changing the existing delegate path.
 `html_attribute`, extracting `EditableList` persistence behavior, and the
 static example's brewery search were candidate slices in the port plan, not
 approved implementation commitments. Reassess them against current APIs and
-applications. Gem publication depends on a released Ruby2JS Pragma filter. The CDN
-serves tagged releases; see [the developer-experience plan](DEVX_PLAN.md).
+applications. Gem publication depends on a released Ruby2JS Pragma filter.
+Release verification and CDN availability belong in
+[the developer-experience plan](DEVX_PLAN.md#the-first-release).
 npm packaging remains deferred.
 
 General Ruby module hooks, `prepend`, runtime class mutation, broad

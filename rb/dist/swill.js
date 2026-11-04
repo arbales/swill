@@ -14711,6 +14711,29 @@
       properties[name] = { defaultValue: defaultValue(name, descriptor) };
       names2.add(name);
     }
+    const attributes = ownDeclaration(klass, "attributes", {});
+    assertDescriptorMap(attributes, "attributes");
+    const modelAttributes = /* @__PURE__ */ Object.create(null);
+    if (Object.keys(attributes).length && (!framework.ModelBase || !(klass.prototype instanceof framework.ModelBase))) {
+      throw new TypeError("static attributes requires a Swill.Model.Base subclass");
+    }
+    for (const [name, descriptor] of Object.entries(attributes)) {
+      if (name.length === 0) throw new TypeError("Attribute names must not be empty");
+      if (names2.has(name)) throw new TypeError(`Duplicate declaration: ${name}`);
+      if (!isObject(descriptor) || Array.isArray(descriptor)) throw new TypeError(`Attribute ${name} must use a descriptor`);
+      assertKeys(descriptor, ["default", "key", "type"], `attribute ${name}`);
+      const key = descriptor.key ?? name;
+      const type = descriptor.type ?? "T.untyped";
+      if (typeof key !== "string" || !key || typeof type !== "string" || !type) {
+        throw new TypeError(`Attribute ${name} key and type must be non-empty strings`);
+      }
+      const createDefault = defaultValue(name, Object.hasOwn(descriptor, "default") ? { default: descriptor.default } : {});
+      properties[name] = { defaultValue: createDefault, attribute: true, key, type };
+      modelAttributes[name] = { name, key, type, get default() {
+        return createDefault();
+      } };
+      names2.add(name);
+    }
     const outlets2 = ownDeclaration(klass, "outlets", {});
     assertDescriptorMap(outlets2, "outlets");
     for (const [name, descriptor] of Object.entries(outlets2)) {
@@ -14744,6 +14767,11 @@
         }
       }
     }
+    const inheritedAttributes = framework.ModelBase && klass.prototype instanceof framework.ModelBase ? Object.getPrototypeOf(klass).modelAttributes() : {};
+    for (const name of Object.keys({ ...inheritedAttributes, ...modelAttributes })) {
+      const validator = `validate${name[0].toUpperCase()}${name.slice(1)}`;
+      if (methods[validator]) methods[`validate_${name}`] = methods[validator];
+    }
     const actions = ownDeclaration(klass, "actions", []);
     if (!Array.isArray(actions)) throw new TypeError("static actions must be an array");
     const actionNames = /* @__PURE__ */ new Set();
@@ -14758,7 +14786,8 @@
       if (descriptor.value.length > 2) throw new TypeError(`Action ${name} accepts more than two arguments`);
       actionNames.add(name);
     }
-    return { properties, methods, restorations: restorationsFor(klass, declared) };
+    const registries = Object.keys(modelAttributes).length ? { modelAttributes: { ...inheritedAttributes, ...modelAttributes } } : {};
+    return { properties, methods, registries, restorations: restorationsFor(klass, declared) };
   }
   var snakeCase = (name) => name.replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
   function restorationsFor(klass, declared) {
@@ -14790,9 +14819,9 @@
     if (!framework.roots.has(parent) && !registered2.has(parent)) {
       throw new Error(`Register the parent class before ${name}`);
     }
-    const { properties, methods, restorations: restorations2 } = declarationsFor(klass);
+    const { properties, methods, registries, restorations: restorations2 } = declarationsFor(klass);
     framework.Runtime.aliasInstalledJavaScriptNames(framework.publicNames);
-    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods, restorations: restorations2 } } });
+    framework.Runtime.install({ classes: { [name]: { constructor: klass, properties, methods, registries, restorations: restorations2 } } });
     registered2.add(klass);
     return klass;
   }
@@ -14875,6 +14904,7 @@
       Runtime: Runtime2,
       Application: definitions.Swill__Application,
       Bundle: definitions.Swill__Bundle,
+      ModelBase: definitions.Swill__Model__Base,
       publicNames: Object.fromEntries(Object.entries(names2).filter(([, identifier]) => definitions[identifier]).map(([name, identifier]) => [`Swill::${name.replaceAll(".", "::")}`, definitions[identifier]])),
       roots: new Set(roots.map((name) => definitions[names2[name]]).filter(Boolean))
     };

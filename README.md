@@ -67,6 +67,7 @@ copying, and type artifacts. See [the project workflow](doc/getting_started.md#p
 | `examples/rb/` | Browser example and application source |
 | `sorbet/rbi/runtime.rbi` | Types for runtime and DSL boundaries |
 | `doc/` | The guides |
+| `plans/` | Current status, open work, and design decisions |
 | `build/` | Disposable intermediate modules and test files |
 | `ts/` | The legacy TypeScript implementation: `src/`, its own `dist/`, `build.sh`, and its dev server (`dev.sh`, `dev_server.py`) |
 

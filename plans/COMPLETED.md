@@ -16,7 +16,7 @@ in the guides under [`doc/`](../doc/); the original plans remain in git history.
   [responders](../doc/responders.md), and [collections](../doc/collections.md)
   guides.
 - Gem packaging, `swill build`, `swill watch`, `swill types`, Ruby/JavaScript
-  bundles, source maps, and the first Sorbet/DOM interfaces were delivered.
+  bundles, JavaScript source maps, and the first Sorbet/DOM interfaces were delivered.
   Keyword, rest, and block parameters were subsequently added to the compiler;
   the port plan's positional-only limitation is obsolete.
 
@@ -57,32 +57,72 @@ in the guides under [`doc/`](../doc/); the original plans remain in git history.
 - Ownership review fixed ArrayController binding cleanup and late popup
   hydration after context release. Shared association controllers survive
   individual views and temporary transport loss, and retire on context reset.
-  Framework, Sorbet, optimized bundles, browser fixtures, and Movies checks pass.
+  Validation covered compiler/MRI parity, Sorbet, runtime/data tests, optimized
+  bundles, real WebSocket integration, browser fixtures, and Movies interactions.
 - Selection now clears when filtering or published results remove its object;
   reappearance does not revive it. Explicit id/URL restoration waits until
   matched or cancelled, then becomes ordinary selection. Loading and deferred
   editor results preserve selection until publication.
-- Local arrangement and fetch-bookkeeping measurements are recorded in the
-  data plan. Representative Movies profiling now covers ordinary/overlapping
-  search, hydration, saves/refresh, and rapid typing using a disposable copy of
-  the real collection. Movies now schedules one running search and the newest
-  pending criteria in its Ruby results controller, preserving generic `fetch`.
-  Same-run profiling reduced median trailing latency from 618 to 285 ms and
-  median requests from nine to seven; REST remained faster at 168 ms. Lifecycle,
-  retry/reconnect, deferred editing, and reentrant observers have focused checks.
-  Exchange optimizations and subscriptions remain deferred.
 - The server now admits two concurrent queries per connection, with commands,
   writes, resolvers, and hydration as barriers. Query declarations promise safe
   read overlap, including projected readers. Sequel uses fiber-owned checkouts;
   response writes are serialized and invocation effects/privacy caches stay
   separate. Movies' compiled scheduler uses two slots and newest-pending input.
+  It retires obsolete membership, preserves loading across queued input, and
+  refreshes the latest criteria after mutations or compatible reconnects without
+  replaying writes or cancelling submitted SQL. Generic `fetch` is unchanged.
   Real WebSocket/SQL tests cover out-of-order completion and read-after-write;
   failure/teardown tests cover socket writes and PostgreSQL checkout reuse.
 - Save/refresh tracing found no redundant scalar-update read: Ruby executes two
   SELECTs and one UPDATE plus BEGIN/COMMIT; REST executes two SELECTs and one
   UPDATE. Keep transaction, model, and membership-refresh semantics. The profiler
-  now reports statement sequences and separate read/write/transaction counts;
-  the data plan records measurements and the decision to retain the save path.
+  reports statement sequences and separate read/write/transaction counts.
+
+### Measurements and reports
+
+Movies' reports own the workload results, methodology, and reproduction:
+
+| Report | What it establishes |
+| --- | --- |
+| [Production two-read scheduling](../../movies/benchmark/RESULTS_TWO_READS.md) | Current two-slot implementation against one-slot, uncoalesced, and REST baselines; bounded admission and trailing latency. |
+| [Save/refresh review](../../movies/benchmark/RESULTS_SAVE_REVIEW.md) | Actual statement sequences and the decision to retain persistence semantics. |
+| [Concurrent-read experiment](../../movies/benchmark/RESULTS_CONCURRENT.md) | Historical experiment that informed the production policy; submitting every keystroke can build a backlog. |
+| [Single-read scheduling](../../movies/benchmark/RESULTS_SCHEDULED.md) | Historical one-slot implementation, superseded by two slots. |
+| [Initial workload review](../../movies/benchmark/RESULTS_CURRENT.md) | Overlapping searches, payload/merge/render costs, hydration, saves, and database-locality effects. |
+
+The reports use disposable copies of the collection. Their client workloads
+differ; timings are local observations, not universal speedup or parity claims.
+See [the harness guide](../../movies/benchmark/README.md) for instrumentation
+boundaries. The reports and application checks live in the separate Movies
+repository.
+
+Local framework medians from the context-editing review (non-gating):
+
+| Operation | Before | Contexts |
+| --- | ---: | ---: |
+| Canonical lookup | 75 ns | 74 ns |
+| Three-field patch | 1.48 µs | 1.48 µs |
+| Decode 50 overlapping references | 23.4 µs | 21.2 µs |
+| Edit and restore one field | 4.47 µs | 7.24 µs |
+| Open/discard isolated editor, three fields | 35.6 µs (draft) | 50.4 µs |
+| Replace/arrange 1,000 sorted rows | 170 µs | 166 µs |
+| Fresh bundle evaluation | 1.49 ms | 1.68 ms |
+
+Change tracking adds editing cost; lookup, patching, and arrangement remained
+similar. `benchmark/editing.mjs` accepts a saved bundle for comparison.
+Relationships materialize on access rather than being copied eagerly.
+
+The subsequent `benchmark/fetch.mjs` run, excluding network/model decoding,
+measured 50-row assignment/arrangement at 10.12 µs and repeat fetch/arrangement
+at 10.83 µs (about 0.71 µs bookkeeping). The 1,000-row replacement benchmark
+measured 159 µs versus the prior 166 µs. These are not end-to-end latency claims.
+
+## Grouped fragment restoration (October 2026)
+
+Grouped URL-fragment state, typed flat arrays, explicit empty values, escaping,
+and batched history writes are implemented; query-style `&` fragments are no
+longer restored. See [lifecycle](../doc/lifecycle.md). Path/query routing and
+server rendering remain in the [URL/SSR plan](URL_AND_SSR_DESIGN.md).
 
 ## Developer experience (October 2026)
 
@@ -114,6 +154,26 @@ in the guides under [`doc/`](../doc/); the original plans remain in git history.
   reveals an element out of sight; `SortableList` marks its sorted header for
   the themes, so markup carries neither `tabindex` nor ARIA;
   backwards-compatibility shims and the Opal examples were removed.
+
+- The deferred tooling slice is implemented: `swill init [DIR]` adds only a
+  client skeleton and project config, preflights both paths, and prints
+  integration steps. Both scaffolds default to `/assets` and `public/assets/`;
+  existing applications explicitly share or remap conflicting paths. Rack/Roda
+  regressions cover prefix ownership and Roda's shared-prefix routing; a
+  Sinatra 4.2.1 smoke check verified coexistence using a separate mount.
+- `swill types` refreshes a gitignored framework copy and generated artifacts
+  under `sorbet/swill/`. The managed config uses one `--dir=.`, exclusions,
+  and no absolute gem paths or per-file source list; a new `sorbet/config`
+  includes it without taking ownership of existing configs. Optional
+  `types: {check: true}` runs real Sorbet: warning in dev, fatal in a project
+  build. See [Sorbet](../doc/sorbet.md).
+- Plain `swill watch ENTRY` follows resources and rediscovers even missing
+  dependencies each tick, so edits and newly created files repair failed
+  builds. Registered JavaScript models declare `static attributes`, using
+  the shared validation, wire keys, codecs, dirty tracking, and inherited
+  registries; see [plain JavaScript](../doc/plain_javascript.md#model-attributes).
+- Validation for that tooling slice: `rake test optimize`, `rake browser`,
+  and `STRICT=1 rake rdoc`, plus the separate Sinatra smoke check.
 
 ## Documentation site (September 2026)
 

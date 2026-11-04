@@ -127,6 +127,52 @@ class BundlesTest < Minitest::Test
     assert_equal 426, Rack::MockRequest.new(server).get("/data").status
   end
 
+  def test_rack_mounts_take_precedence_over_an_existing_apps_public_folder
+    require_relative "../rb/swill/server"
+    require "rack/static"
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "assets"))
+      File.write(File.join(dir, "assets/app.js"), "// stale public asset")
+      File.write(File.join(dir, "site.css"), "body {}")
+      existing = Rack::Static.new(->(_env) { [200, {}, ["existing page"]] }, urls: ["/assets", "/site.css"], root: dir)
+      server = Swill::Server.new(assets: {url: "/assets", directory: PUBLIC}, development: nil)
+      request = Rack::MockRequest.new(Rack::Builder.new do
+        map("/assets") { run server.assets_app }
+        map("/") { run existing }
+      end)
+      assert_equal File.read(File.join(PUBLIC, "app.js")), request.get("/assets/app.js").body
+      assert_equal 200, request.get("/assets/swill.js").status
+      assert_equal 404, request.get("/assets/missing.js").status
+      assert_equal "body {}", request.get("/site.css").body, "other public files still belong to the app"
+      assert_equal "existing page", request.get("/").body
+    end
+  end
+
+  def test_roda_can_share_the_assets_prefix_when_its_plugin_runs_first
+    require_relative "../rb/swill/server"
+    require "roda"
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "css"))
+      File.write(File.join(dir, "css/site.css"), "body {}")
+      server = Swill::Server.new(assets: {url: "/assets", directory: PUBLIC}, development: nil)
+      existing = Class.new(Roda) do
+        plugin :assets, path: dir, css: "site.css"
+        route do |r|
+          r.assets
+          r.on("assets") { r.run server.assets_app }
+          r.root { "existing page" }
+        end
+      end
+      request = Rack::MockRequest.new(existing)
+      assert_equal File.read(File.join(PUBLIC, "app.js")), request.get("/assets/app.js").body
+      assert_equal 200, request.get("/assets/resources/swill/linear.css").status
+      assert_equal 404, request.get("/assets/missing.js").status
+      assert_equal "existing page", request.get("/").body
+      assert_equal "body {}", request.get("/assets/css/site.css").body,
+                   "Roda's default asset routes remain reachable"
+    end
+  end
+
   def test_the_browser_bundle_agrees_with_the_server
     names = [["Poster", nil], ["icons/Star", "svg"], ["icons/Star", "png"], ["read me", nil], ["theme", "css"],
              ["Missing", nil], ["icons/Star", nil]]

@@ -410,6 +410,94 @@ test("plain JavaScript extends the object, transformer, and model roots", () => 
   assert.equal(Runtime.resolve("Primary"), Primary);
 });
 
+test("JavaScript attributes share model validation, wire keys, dirty tracking, and inheritance", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  let factories = 0;
+  class Note extends Swill.Model.Resource {
+    static attributes = {
+      title: {default: "", type: "String", key: "name"},
+      tags: {default: () => { factories++; return []; }, type: "T::Array[String]"},
+      optional: {default: null}
+    };
+    static properties = {expanded: {default: false}};
+    validateTitle(value, _previous) {
+      if (value === "invalid") throw new Error("bad title");
+      return value.trim();
+    }
+  }
+  Swill.register(Note);
+  Note.resourceType("notes");
+  assert.equal(factories, 0, "registration never runs a default factory");
+  const note = Note.fromAttributes({id: "1", name: " First ", tags: ["a"]});
+  assert.equal(note.title, "First");
+  assert.equal(note.isDirty, false, "materialization is clean");
+  const changes = [];
+  note.observe("title", value => changes.push(value));
+  note.title = " Second ";
+  note.expanded = true;
+  assert.deepEqual(changes, ["Second"]);
+  assert.equal(JSON.stringify(note.collectDirtyAttributes()), JSON.stringify({name: "Second"}));
+  assert.deepEqual(JSON.parse(JSON.stringify(note.serialize(true))),
+    {data: {type: "notes", id: "1", attributes: {name: "Second"}}});
+  assert.throws(() => { note.title = "invalid"; }, /bad title/);
+  assert.equal(note.title, "Second", "a failed validation leaves the previous value");
+  note.title = "First";
+  assert.equal(note.isDirty, false, "returning to the baseline is clean");
+  const beforeNull = factories;
+  note.applyAttributes({name: null, tags: null, optional: null});
+  assert.equal(note.title, "", "a non-nilable type normalizes null to its default");
+  assert.deepEqual(Array.from(note.tags), []);
+  assert.equal(note.optional, null, "untyped attributes retain null");
+  assert.equal(factories, beforeNull + 1, "null normalization uses a fresh factory value");
+  const other = new Note();
+  assert.notEqual(other.tags, note.tags);
+  class SpecialNote extends Note {
+    static attributes = {score: {default: 1}};
+    validateTitle(value, _previous) { return value.toUpperCase(); }
+  }
+  Swill.register(SpecialNote);
+  const special = SpecialNote.fromAttributes({name: "special", score: 5});
+  assert.equal(special.title, "SPECIAL", "subclasses may override inherited validators");
+  assert.equal(special.score, 5);
+  assert.ok(SpecialNote.modelAttributes().id, "the framework's id is inherited");
+  assert.ok(SpecialNote.modelAttributes().title);
+  assert.equal(Note.modelAttributes().score, undefined, "a subclass never changes its parent's registry");
+  assert.equal(Swill.Model.Base.modelAttributes().title, undefined);
+  class WithoutDeclarations extends SpecialNote {}
+  Swill.register(WithoutDeclarations);
+  assert.equal(new WithoutDeclarations().score, 1, "inherited static fields are not redeclared");
+});
+
+test("JavaScript attribute declarations reject malformed and conflicting descriptors", () => {
+  const environment = bundleEnvironment({minified});
+  const Swill = environment.load("swill");
+  for (const [attributes, pattern] of [
+    [[], /static attributes must be an object/],
+    [{title: ""}, /must use a descriptor/],
+    [{title: {}}, /missing default/],
+    [{title: {default: []}}, /Mutable default/],
+    [{title: {default: "", typo: true}}, /Unknown attribute title option/],
+    [{title: {default: "", key: 1}}, /key and type must be non-empty strings/],
+    [{title: {default: "", type: String}}, /key and type must be non-empty strings/]
+  ]) {
+    class Invalid extends Swill.Model.Base { static attributes = attributes; }
+    assert.throws(() => Swill.register(Invalid), pattern);
+  }
+  class NotAModel extends Swill.Controller { static attributes = {title: {default: ""}}; }
+  assert.throws(() => Swill.register(NotAModel), /requires a Swill.Model.Base subclass/);
+  class Duplicate extends Swill.Model.Base {
+    static attributes = {title: {default: ""}};
+    static properties = {title: {default: ""}};
+  }
+  assert.throws(() => Swill.register(Duplicate), /Duplicate declaration: title/);
+  class Computed extends Swill.Model.Base {
+    static attributes = {title: {default: ""}};
+    get title() { return ""; }
+  }
+  assert.throws(() => Swill.register(Computed), /Duplicate declaration: title/);
+});
+
 test("a page without a build registers its bundle, and starting waits for its templates", async () => {
   const environment = bundleEnvironment({minified});
   const Swill = environment.load("swill");

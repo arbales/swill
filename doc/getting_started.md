@@ -22,8 +22,19 @@ sources, `application.rb` and `controllers/hello.rb` are the application, and
 server entry for [Distant Objects](server_data.md). A directory that already
 has files is refused.
 
-An existing application adds a `swill.yml` beside its own server, as below;
-`swill dev` runs that server's `config.ru`.
+## An Existing Application
+
+Run `bundle exec swill init` in an existing Rack application (or pass its
+directory). It writes only `swill.yml` and a `client/` skeleton, refusing to
+write anything if either path already exists. The Gemfile, server, pages,
+and ignore rules remain yours. The command prints the server and page
+integration steps; see [Serving](serving.md#initializing-an-existing-application).
+
+Like `swill new`, the client builds into `public/assets/`, with assets served
+at `/assets`. If the application already uses those paths, choose how to
+share or remap them during integration; `init` does not choose a different
+prefix automatically. Review the watch paths in `swill.yml`; `swill dev`
+runs your existing `config.ru`.
 
 ## Building an Application
 
@@ -35,6 +46,11 @@ bundle exec swill build frontend            # frontend/app.rb, output frontend/d
 bundle exec swill build frontend/app.rb --out public/assets/app.js --with-framework
 bundle exec swill watch frontend            # rebuild as the sources change
 ```
+
+Plain `watch` also follows the entry's `resources/` tree, including additions
+and removals. It rediscovers `require_relative` dependencies on every tick,
+even after a failed build, so creating or repairing a newly required file
+does not require restarting the watcher.
 
 The entry file's `require_relative` lines name the sources in order, as they
 would on MRI; the compiler treats those lines as inert. The page loads
@@ -57,7 +73,7 @@ server: server/server.rb        # optional: the Distant data entry
 client: client/app.rb
 out: public/assets/app.js
 framework: false                # true copies swill.js beside the output
-types: false                    # or a directory for Sorbet artifacts
+types: false                    # or a directory, or {into: client, check: true}
 watch:
   client: ["client/**/*.rb"]
   resources: ["client/resources/**/*"]
@@ -113,10 +129,13 @@ reflected on every rebuild. `server` is optional for applications without
 distant data. `root` defaults to the configuration directory and controls
 data generation. `out` defaults to `dist/app.js` beside the client entry.
 `framework` defaults to true; `minify` defaults to false. `types` defaults to
-the client entry directory; `false` skips type generation. Generation does not
-run `srb tc`. An existing `sorbet/config` belongs to the application: update
-its source list when adding client files, or remove it to regenerate the
-default.
+the client entry directory; `false` skips type generation. A directory string
+chooses its root. `types: {check: true}` also runs `srb tc` there after
+generation; `into` optionally chooses another root. Add `sorbet` to the
+application's development bundle when enabling the check. Failure is a warning
+in `dev` (the page still runs), but fails a project `build`. An existing
+`sorbet/config` belongs to the application; newly generated ones include the
+managed `sorbet/swill.config`. See [Sorbet](sorbet.md#typing-an-application).
 
 Keep the client Sorbet root separate from server Sorbet configuration. Data
 generation also emits shims under `<root>/sorbet/rbi/shims/generated`; those

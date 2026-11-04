@@ -159,8 +159,8 @@ Store the version name inside the artifact as well as in its filename. Names
 must be unique across the directory; dates organize snapshots but do not define
 a conversion chain. Build on the existing deterministic generated schema.
 
-Proposed commands (not currently implemented; server-entry/project arguments
-will follow the existing tooling):
+Proposed snapshot/compatibility workflow (not implemented; server-entry/project
+arguments will follow the existing tooling):
 
 ```sh
 swill data snapshot --name ios-v1
@@ -169,6 +169,10 @@ swill data snapshot --name ios-v1
 swill data check
 # Checks the current interface against every supported snapshot.
 ```
+
+Today's `swill data check SERVER_ENTRY` only verifies that generated files are
+current. Checking supported-version compatibility would extend that command;
+it does not do so yet.
 
 - Create snapshots explicitly when publishing a client contract, not on every
   application build. Normal generation never overwrites a released snapshot.
@@ -302,15 +306,11 @@ A movie may leave the visible results, change elsewhere, and reappear later.
 Remembering that its title was sent earlier does not establish that the title
 is still current. This is a central test of any proposed cache design.
 
-## Separate identity, membership, availability, and freshness
+## Active interests and graph lifetime
 
-| Concern | Meaning |
-| --- | --- |
-| Object identity | One canonical representative for a model and ID within each context and actor scope. |
-| Collection membership | The references belonging to a particular query or relationship, including their order. |
-| Field availability | The client has a value for a field, including a present nil. |
-| Field freshness | There is a reason to regard that value as current under a stated policy. |
-| Active interest | A consumer currently needs updates to particular objects, fields, or membership. |
+The [contract boundaries](#separate-the-contracts) also govern delivery and
+observation. An active interest means a consumer currently needs updates to
+particular objects, fields, or membership; it is separate from object identity.
 
 An object may survive many short-lived query results. Retaining it in the
 identity map must not imply an active subscription or current data. Likewise,
@@ -385,8 +385,8 @@ client to decide what it needs.
 
 ## Freshness, invalidation, and live exchange
 
-Explicit refresh is the initial direction. Future changes could travel over
-the existing WebSocket using the reserved `CHANGE` concept:
+Explicit refresh is implemented. Future live changes could travel over the
+existing WebSocket using the reserved `CHANGE` concept:
 
 - A patch supplies authoritative replacement values.
 - An invalidation says selected fields or relationships need reloading.
@@ -483,6 +483,6 @@ Behavioral checks should include editing a shared member, moving a membership,
 revisiting a movie changed while absent, rapidly replacing searches, closing
 one of several overlapping views, permission changes, and out-of-band writes.
 
-The next implementation milestone should follow those decisions. The earlier
-per-field coverage and refresh proposal remains a candidate, not a commitment
-to a protocol bump, subscription API, or specific wire format.
+Any delivery/subscription milestone should follow those decisions. Per-field
+coverage remains a candidate, not a commitment to a protocol bump, subscription
+API, or specific wire format. Explicit refresh itself is already implemented.

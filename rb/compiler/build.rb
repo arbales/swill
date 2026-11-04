@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "pathname"
 require "tmpdir"
 require_relative "../swill"
 require_relative "compiler"
@@ -33,15 +34,24 @@ module Swill
       end
 
       # Sources in order: the entry file's require_relative lines, followed
-      # recursively, each file once, dependencies first.
-      def sources
+      # recursively, each file once, dependencies first. Watching includes
+      # missing dependencies too, so creating one can repair a failed build.
+      def sources(allow_missing: false)
         found = []
+        visited = []
         visit = lambda do |file|
-          next if found.include?(file)
+          next if visited.include?(file)
+          visited << file
+          unless File.file?(file)
+            found << file
+            next
+          end
           File.read(file).scan(/^\s*require_relative\s+["']([^"']+)["']/).flatten.each do |name|
             target = File.expand_path(name, File.dirname(file))
             target += ".rb" unless target.end_with?(".rb")
-            raise CompileError, "#{file} requires a missing file: #{target}" unless File.file?(target)
+            unless allow_missing || File.file?(target)
+              raise CompileError, "#{file} requires a missing file: #{target}"
+            end
             visit.(target)
           end
           found << file
@@ -114,10 +124,9 @@ module Swill
         File.basename(out, ".js").delete_suffix(".min")
       end
 
-      # Sorbet artifacts for the application, written beside the entry so a
-      # consumer can `srb tc` their own sources without the framework
-      # checkout. The framework's RBI is regenerated rather than shipped
-      # prebuilt: it costs a fraction of a second and cannot go stale.
+      # Sorbet's language server accepts a single input directory. Keep a
+      # refreshed copy of the framework inside it, beside the generated RBIs,
+      # and leave the consumer's sorbet/config under their control.
       def types(directory = nil)
         root = File.expand_path(directory || File.dirname(entry))
         framework = self.class.framework_compiler
@@ -125,8 +134,16 @@ module Swill
         sources.each { |file| application.add(File.read(file), file: file) }
         application.validate!
 
-        rbi = File.join(root, "sorbet", "rbi")
-        checks = File.join(root, "sorbet", "checks")
+        generated = File.join(root, "sorbet", "swill")
+        framework_copy = File.join(generated, "framework")
+        FileUtils.rm_rf(framework_copy)
+        FRAMEWORK_SOURCES.each do |path|
+          target = File.join(framework_copy, path.delete_prefix("rb/framework/"))
+          FileUtils.mkdir_p(File.dirname(target))
+          FileUtils.cp(File.join(ROOT, path), target)
+        end
+        rbi = File.join(generated, "rbi")
+        checks = File.join(generated, "checks")
         FileUtils.mkdir_p(rbi)
         FileUtils.mkdir_p(checks)
         written = {
@@ -134,12 +151,14 @@ module Swill
           File.join(rbi, "swill-dom.rbi") => DOM.rbi,
           File.join(rbi, "swill-runtime.rbi") => File.read(self.class.runtime_rbi),
           File.join(rbi, "application.rbi") => application.rbi,
-          File.join(checks, "declarations.rb") => application.type_probes
+          File.join(checks, "declarations.rb") => application.type_probes,
+          File.join(root, "sorbet", "swill.config") => sorbet_config(root),
+          File.join(generated, ".gitignore") => "*\n"
         }
         written.each { |file, source| File.write(file, source) }
         config = File.join(root, "sorbet", "config")
         unless File.file?(config)
-          File.write(config, sorbet_config(root))
+          File.write(config, "@sorbet/swill.config\n")
           written[config] = nil
         end
         written.keys
@@ -147,22 +166,20 @@ module Swill
 
     private
 
-      # The application's own sources, the artifacts written beside them, and
-      # the framework's Ruby, which is where its methods and declaration
-      # macros are declared. Files are listed one by one rather than by
-      # directory, so nothing is read twice: a directory covering the project
-      # would also cover sorbet/rbi.
+      # Exactly one input directory, with exclusions rather than a source list
+      # that goes stale when files are added. Ignore an output directory only
+      # when it is inside this root and contains none of the client's sources.
       def sorbet_config(root)
-        relative = lambda do |path|
-          path.start_with?("#{root}/") ? path.delete_prefix("#{root}/") : path
+        folder = File.dirname(out)
+        output = Pathname.new(folder).relative_path_from(Pathname.new(root)).to_s
+        ignored = %w[/public /tmp /node_modules /sorbet/rbi/shims/generated]
+        if output != "." && output != ".." && !output.start_with?("../") &&
+           sources.none? { |file| file.start_with?("#{folder}/") }
+          ignored << "/#{output}"
         end
         [
-          *sources.map { |file| relative.(file) },
-          # The framework's MRI host is described by swill-runtime.rbi
-          # instead, so checking both would declare its macros twice.
-          *FRAMEWORK_SOURCES.map { |path| File.join(ROOT, path) },
-          "--dir=sorbet/rbi",
-          "--dir=sorbet/checks",
+          "--dir=.",
+          *ignored.uniq.map { |path| "--ignore=#{path}" },
           "--silence-dev-message",
           # Model and controller concerns declare requires_ancestor.
           "--enable-experimental-requires-ancestor",

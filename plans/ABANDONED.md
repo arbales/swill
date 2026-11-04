@@ -13,9 +13,8 @@ These are discarded directions, not a list of work merely deferred.
   availability state when they need to know whether a value was loaded.
 - **Automatic arbitrary-query dependency inference for the first refresh
   slice.** A query's membership depends on server filtering, ordering,
-  limits, and privacy scope. [The data plan](DATA_PLAN.md) instead calls for an
-  explicit, testable refresh contract. This does not rule out later opt-in
-  subscriptions.
+  limits, and privacy scope. [Explicit refresh](../doc/collections.md#fetching-query-results)
+  is implemented instead. This does not rule out later opt-in subscriptions.
 - **A required four-directory data-model layout and signature-free remote
   return values.** The server entry and application root determine layout;
   exposed operations without return signatures declare `returns:`. The

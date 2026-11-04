@@ -1,4 +1,4 @@
-# Developer Experience Plan
+# Developer experience plan
 
 ## Goal
 
@@ -6,26 +6,19 @@
 reloading page, in Ruby or plain JavaScript, with errors that point at the Ruby
 that caused them. An application owns its application; Swill owns the loop.
 
-Two ways in:
-
-# FIXME: How will the existing application flow interact with Sinatra's public folder? Or with Roda's Assets plugin?
+The development loop, scaffold, server composition, JavaScript parity, and
+release tooling are implemented; see
+[completed](COMPLETED.md#developer-experience-october-2026). Remaining work is
+below.
 
 - **A new project.** `swill new` writes a self-contained application: the
   client, a page, a `swill.yml` and a `config.ru` on `Swill::Server`, with
   `--data` adding a server entry for Distant.
 - **An existing application** (a Roda, Sinatra or plain Rack app that
-  already serves pages). `swill init` writes only `swill.yml` and a `client/`
-  skeleton beside what is there, and prints what to add to the page: the
-  helpers, or the three tags. Swill never takes over the server: the author
-  mounts the parts of `Swill::Server` they want (`assets_app` for the bundles,
-  `data_app` for `/data`, the development middleware) where their router
-  puts things, and `swill dev` starts and restarts *their* server with the
-  command `dev.server` names, publishing revisions as it goes. Movies is this
-  case.
-
-Workstreams 1, 2, 3 (except `swill.d.ts`), 5 and 6 are done; see
-[completed](COMPLETED.md#developer-experience-october-2026). What remains is
-below.
+  already serves pages). `swill init` writes `swill.yml` and `client/` without
+  replacing either, and prints the server and page integration steps. Mount
+  the desired parts as [serving](../doc/serving.md) describes; Movies uses
+  this integration path.
 
 ## Ruby source maps
 
@@ -56,10 +49,10 @@ stdin, so the maps need line padding and file-based formatting.
 ## The first release
 
 `rake release` and `.github/workflows/release.yml` exist, and the version is
-0.0.2. Before tagging `v0.0.2`: rebuild and commit `rb/dist` (the workflow
-fails when it differs from a fresh build), and make the repository public so
-jsDelivr can serve it. The first run is also the first check that the Linux
-build matches a Mac's byte for byte.
+0.0.2. Before tagging `v0.0.2`, verify the repository is public for jsDelivr
+and that committed `rb/dist` matches a fresh build. The first release run
+must establish that Linux and Mac builds match byte for byte; having the
+workflow and rebuilt bundles does not establish that result.
 
 ## `swill.d.ts`, for editors
 
@@ -67,36 +60,48 @@ TypeScript is not a target: Swill neither compiles to it nor builds
 TypeScript applications. A declaration file gives plain JavaScript authors
 completion, hover documentation and type errors in VS Code and Zed, which read
 `.d.ts` files for JavaScript too. `javascript_spelling.rb` already renders
-every class's signatures in TypeScript notation for the docs.
-`rakelib/swill_doc/typescript.rb` reuses it (a text-only `ts_type` split from
-the HTML one) to write `rb/dist/swill.d.ts` for the friendly names during
-`rake build`; `rake test` runs `tsc --noEmit` on it when `tsc` is on the PATH;
-`rake release` adds it to the zip. Lowest priority.
+every class's signatures in TypeScript notation for the docs. Planned:
+`rakelib/swill_doc/typescript.rb` would reuse it (a text-only `ts_type` split
+from the HTML one) to write `rb/dist/swill.d.ts` during `rake build`;
+`rake test` would run `tsc --noEmit` when available, and `rake release` would
+add it to the zip. Not implemented; lowest priority.
 
-## Deferred
+## Generated distribution artifacts
 
-- **`swill init`**, as the goal describes.
-- **Sorbet in one directory.** Sorbet's language server accepts one input
-  directory, so the generated configuration is `--dir=.` and nothing else:
-  `swill types` copies the gem's `rb/framework` into `sorbet/swill/framework`
-  (gitignored, refreshed on every run), writes the RBIs beside it, and lists
-  what to skip with `--ignore` lines (`/public`, `/tmp`, `/node_modules`, the
-  output directory, and `sorbet/rbi/shims/generated`). It rewrites
-  `sorbet/swill.config` on every run and creates `sorbet/config` once, holding
-  `@sorbet/swill.config` so an author can add lines. `types: {check: true}`
-  runs `srb tc`: a warning in `dev`, fatal in `build --project`.
-- **Plain `swill watch ENTRY`** also stamps `resources/**`, and rediscovers
-  the sources each tick after a failed build.
-- **Static attributes for JavaScript models**, so a registered model can
-  declare persisted attributes into the registries.
+**Current choice: keep `rb/dist` tracked and suppress generated diffs.**
+`.gitattributes` marks `/rb/dist/**` with `linguist-generated=true -diff`.
+Revisit source-only distribution later; no install or CDN contract changes now.
+The deferred tooling items have been implemented; see
+[completed](COMPLETED.md#developer-experience-october-2026).
+
+- **Keep it:** Git/path installs serve the framework without building it,
+  examples work from a checkout, and jsDelivr serves immutable tagged files.
+  Costs: generated diff/history noise and a stale-output check on releases.
+- **Mark it generated:** GitHub can collapse generated diffs and omit them
+  from language statistics; that alone leaves local diff counts unchanged.
+  Adding `-diff` in `.gitattributes` also makes Git treat the output as binary
+  for diffs and numeric stats (`git diff --text` can still inspect it).
+  This is the current repository policy.
+  Git history is unchanged, and other review tools may not honor the attributes.
+  This is a review aid, not source-only distribution.
+- **Untrack it:** source-only changes and releases built from tagged sources,
+  but Git/path installs and examples need an explicit framework build, and
+  jsDelivr's current GitHub URLs stop working for new tags. The gemspec,
+  server/copy paths, release workflow, and CDN documentation need one coherent
+  replacement delivery contract. Release zips already carry built files.
+
+Prefer separating source and release artifacts over hidden install-time
+builds. Choose the replacement for Git-based consumers and CDN delivery before
+untracking; verify a clean install and release, not just a warm checkout. No
+history rewrite is needed to stop tracking future output.
 
 ## Framework follow-ups surfaced by Movies
 
 Not designed here: a modal form controller (`Controller::Form`: busy, error,
 save, cancel, dismiss); a status channel (`Application#post_status`); a typed
-`show_window` return; `restorable` on any controller; a stale-query token in
-`Controller::List`; a sortable-header template; a client-side
-`Distant::Enum`.
+`show_window` return; `restorable` on any controller; a sortable-header
+template; a client-side `Distant::Enum`. Stale-result protection is already
+owned by `ArrayController#fetch` and Movies' scheduler, not a new List token.
 
 ## Risks
 

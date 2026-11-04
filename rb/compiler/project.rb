@@ -39,9 +39,7 @@ module Swill
             raise CompileError, "project #{key} must be true or false"
           end
         end
-        if config.key?("types") && config["types"] != false && !config["types"].is_a?(String)
-          raise CompileError, "project types must be a directory or false"
-        end
+        validate_types(config["types"]) if config.key?("types")
         if config.key?("watch") && !globs?(config["watch"]) &&
            !(config["watch"].is_a?(Hash) && config["watch"].all? { |key, globs| key.is_a?(String) && globs?(globs) })
           raise CompileError, "project watch must be an array of glob patterns, or categories of them"
@@ -85,7 +83,10 @@ module Swill
           swill("client build", *args)
         end
         if only.include?(:types) && config["types"] != false
-          swill("type generation", "types", config.fetch("client"), "--into", types_root)
+          args = ["types", config.fetch("client"), "--into", types_root]
+          args.concat(["--out", config["out"]]) if config["out"]
+          swill("type generation", *args)
+          execute("type checking", %w[srb tc], chdir: types_root) if config["types"].is_a?(Hash) && config["types"]["check"]
         end
       end
 
@@ -131,6 +132,16 @@ module Swill
 
       def globs?(value)
         value.is_a?(Array) && value.all? { |item| item.is_a?(String) }
+      end
+
+      def validate_types(value)
+        return if value == false || (value.is_a?(String) && !value.empty?)
+        if value.is_a?(Hash) && (value.keys - %w[into check]).empty? &&
+           (!value.key?("into") || (value["into"].is_a?(String) && !value["into"].empty?)) &&
+           (!value.key?("check") || [true, false].include?(value["check"]))
+          return
+        end
+        raise CompileError, "project types must be a directory, false, or a mapping with into and check"
       end
 
       def asset_entry?(entry)
@@ -180,6 +191,7 @@ module Swill
 
       def types_root
         return config["types"] if config["types"].is_a?(String)
+        return config["types"]["into"] if config["types"].is_a?(Hash) && config["types"]["into"]
         client = config.fetch("client")
         File.directory?(File.expand_path(client, directory)) ? client : File.dirname(client)
       end

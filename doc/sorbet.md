@@ -155,16 +155,40 @@ swill types frontend        # writes frontend/sorbet/, then run srb tc there
 
 | File | What it carries |
 | --- | --- |
-| `sorbet/rbi/application.rbi` | The accessors the application's own declarations create |
-| `sorbet/rbi/swill.rbi` | The same for the framework's classes |
-| `sorbet/rbi/swill-dom.rbi` | The DOM and the browser globals, from `knowledge/dom.rb` |
-| `sorbet/rbi/swill-runtime.rbi` | The runtime and declaration-macro boundary, handwritten |
-| `sorbet/checks/declarations.rb` | Each declaration expression as a typed method, so defaults and computed blocks are checked |
+| `sorbet/swill/framework/` | A refreshed copy of the installed framework's Ruby, for method definitions and editor navigation |
+| `sorbet/swill/rbi/application.rbi` | The accessors the application's own declarations create |
+| `sorbet/swill/rbi/swill.rbi` | The same for the framework's classes |
+| `sorbet/swill/rbi/swill-dom.rbi` | The DOM and the browser globals, from `knowledge/dom.rb` |
+| `sorbet/swill/rbi/swill-runtime.rbi` | The runtime and declaration-macro boundary, handwritten |
+| `sorbet/swill/checks/declarations.rb` | Each declaration expression as a typed method, so defaults and computed blocks are checked |
+| `sorbet/swill/.gitignore` | Keeps the generated copy and artifacts out of Git |
+| `sorbet/swill.config` | Regenerated each run: one input directory, exclusions, and checker options |
 | `sorbet/config` | Written only if absent; an existing one is the application's own |
 
-The config lists the application's sources, the framework's Ruby (where its
-methods and macros are declared), and the generated RBIs. The framework's MRI
-host is described by `swill-runtime.rbi`, not checked as source. The config is
-written only when absent and belongs to the application afterwards: update its
-source list when adding client files. It names absolute paths into the
-installed gem, so delete it and rebuild after the gem moves.
+Sorbet's language server accepts one input directory. The managed config uses
+`--dir=.`, with the framework and generated definitions inside that root, and
+no absolute gem paths or per-file source list. New client files are picked up
+automatically. `/public`, `/tmp`, `/node_modules`, the build's output directory
+(when inside the root and not also a source directory), and
+`/sorbet/rbi/shims/generated` are excluded. Those
+data shims duplicate the executable client proxies, so they cannot be checked
+together. Pass `--out` to `swill types` when the plain build uses a custom output
+directory; project workflows forward it automatically.
+
+The framework copy is replaced on each run, so removed framework files do not
+linger after a gem update. Its MRI host is described by `swill-runtime.rbi`,
+not copied as source. The generated tree is gitignored; `sorbet/swill.config`
+may be committed, and is always regenerated.
+
+A new `sorbet/config` contains `@sorbet/swill.config`. Add application-specific
+options there without editing the managed file. When upgrading from the old
+layout, replace the old source list with that include and remove the old
+generated `sorbet/rbi/{application,swill,swill-dom,swill-runtime}.rbi` and
+`sorbet/checks/declarations.rb`; the command never overwrites an existing
+`sorbet/config`.
+
+Generation alone does not run Sorbet. In `swill.yml`, `types: {check: true}`
+runs `srb tc` after generation; `into: frontend` optionally chooses the root.
+Install the `sorbet` gem in the application's development bundle. Type failures
+warn during `swill dev`, without preventing the page from running, and fail
+`swill build --project swill.yml`.

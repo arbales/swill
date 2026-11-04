@@ -27,12 +27,42 @@ module Swill
         if File.directory?(directory) && !Dir.empty?(directory)
           raise CompileError, "#{directory} is not empty; swill new writes a new application"
         end
-        files.each do |path, content|
+        write_files(files)
+      end
+
+      # Add only the client and its build configuration to an existing app.
+      # Preflight both paths before writing anything, including dangling links.
+      def init
+        %w[swill.yml client].each do |path|
           target = File.join(directory, path)
-          FileUtils.mkdir_p(File.dirname(target))
-          File.write(target, content)
+          if File.exist?(target) || File.symlink?(target)
+            raise CompileError, "#{target} already exists; swill init will not overwrite it"
+          end
         end
-        files.keys
+        write_files({"swill.yml" => project(existing: true)}.merge(client_files))
+      end
+
+      def integration
+        <<~TEXT
+          swill: next, integrate with the existing application:
+            1. Add Swill and Ruby2JS to its Gemfile if needed (see doc/getting_started.md).
+            2. Require "swill/server" and create:
+                 SWILL = Swill::Server.new(assets: {url: "/assets", directory: "public/assets"})
+            3. In config.ru, before running your existing app:
+                 SWILL.use_in(self)
+                 map("/assets") { run SWILL.assets_app }
+                 map("/") { run YourExistingApp }
+               This reserves /assets, including 404s, before Sinatra's public folder or Roda's Assets plugin.
+               If /assets is already in use, integrate into the router or choose another URL;
+               check public/assets/app.js for output collisions too. See doc/serving.md.
+            4. Render SWILL.helpers(request.env).head(theme: "linear") unescaped in the page head,
+               and its stylesheet_tag("app") for the client's CSS.
+            5. Name the application on the body: application="#{module_name}::Application".
+               Add controller="#{module_name}::Hello", an input bind="name", and a heading bind="greeting".
+            6. Ignore /public/assets/ and /tmp/, review swill.yml's watch paths, then run:
+                 bundle exec swill dev
+          swill: doc/serving.md has router and template-engine examples.
+        TEXT
       end
 
       def files
@@ -41,18 +71,32 @@ module Swill
           "swill.yml" => project,
           "config.ru" => rackup,
           "pages/index.html.erb" => page,
-          "client/app.rb" => entry,
-          "client/application.rb" => application,
-          "client/controllers/hello.rb" => hello,
-          "client/resources/app.css" => stylesheet,
           "README.md" => readme,
           ".gitignore" => "/public/assets/\n/tmp/\n"
-        }
+        }.merge(client_files)
         written["server/server.rb"] = server if @data
         written
       end
 
     private
+
+      def write_files(files)
+        files.each do |path, content|
+          target = File.join(directory, path)
+          FileUtils.mkdir_p(File.dirname(target))
+          File.write(target, content)
+        end
+        files.keys
+      end
+
+      def client_files
+        {
+          "client/app.rb" => entry,
+          "client/application.rb" => application,
+          "client/controllers/hello.rb" => hello,
+          "client/resources/app.css" => stylesheet
+        }
+      end
 
       # The gem as this command was run from it: from its git repository
       # when Bundler installed it from one, and otherwise by path to this
@@ -86,9 +130,11 @@ module Swill
         base + data
       end
 
-      def project
+      def project(existing: false)
         schema = @data ? %(\n  schema: ["server/**/*.rb"]) : ""
         server = @data ? "server: server/server.rb\n" : ""
+        server_globs = existing ? '["config.ru", "app.rb", "lib/**/*.rb"]' : '["config.ru"]'
+        pages = existing ? '["views/**/*", "public/**/*.html"]' : '["pages/**/*"]'
         <<~YAML
           #{server}client: client/app.rb
           out: public/assets/app.js
@@ -99,8 +145,8 @@ module Swill
           watch:
             client: ["client/**/*.rb"]
             resources: ["client/resources/**/*"]
-            server: ["config.ru"]#{schema}
-            pages: ["pages/**/*"]
+            server: #{server_globs}#{schema}
+            pages: #{pages}
           dev:
             port: 9292
         YAML

@@ -59,6 +59,31 @@ function declarationsFor(klass) {
     names.add(name);
   }
 
+  const attributes = ownDeclaration(klass, "attributes", {});
+  assertDescriptorMap(attributes, "attributes");
+  const modelAttributes = Object.create(null);
+  if (Object.keys(attributes).length && (!framework.ModelBase || !(klass.prototype instanceof framework.ModelBase))) {
+    throw new TypeError("static attributes requires a Swill.Model.Base subclass");
+  }
+  for (const [name, descriptor] of Object.entries(attributes)) {
+    if (name.length === 0) throw new TypeError("Attribute names must not be empty");
+    if (names.has(name)) throw new TypeError(`Duplicate declaration: ${name}`);
+    if (!isObject(descriptor) || Array.isArray(descriptor)) throw new TypeError(`Attribute ${name} must use a descriptor`);
+    assertKeys(descriptor, ["default", "key", "type"], `attribute ${name}`);
+    const key = descriptor.key ?? name;
+    const type = descriptor.type ?? "T.untyped";
+    if (typeof key !== "string" || !key || typeof type !== "string" || !type) {
+      throw new TypeError(`Attribute ${name} key and type must be non-empty strings`);
+    }
+    const createDefault = defaultValue(name, Object.hasOwn(descriptor, "default") ? {default: descriptor.default} : {});
+    properties[name] = {defaultValue: createDefault, attribute: true, key, type};
+    // The shared Ruby model reads a literal default from the registry when
+    // normalizing null. A getter gives a JavaScript factory the same fresh-
+    // default behavior, without calling it while registering the class.
+    modelAttributes[name] = {name, key, type, get default() { return createDefault(); }};
+    names.add(name);
+  }
+
   const outlets = ownDeclaration(klass, "outlets", {});
   assertDescriptorMap(outlets, "outlets");
   for (const [name, descriptor] of Object.entries(outlets)) {
@@ -98,6 +123,13 @@ function declarationsFor(klass) {
     }
   }
 
+  const inheritedAttributes = framework.ModelBase && klass.prototype instanceof framework.ModelBase
+    ? Object.getPrototypeOf(klass).modelAttributes() : {};
+  for (const name of Object.keys({...inheritedAttributes, ...modelAttributes})) {
+    const validator = `validate${name[0].toUpperCase()}${name.slice(1)}`;
+    if (methods[validator]) methods[`validate_${name}`] = methods[validator];
+  }
+
   // static actions, when given, checks the methods markup is meant to send.
   const actions = ownDeclaration(klass, "actions", []);
   if (!Array.isArray(actions)) throw new TypeError("static actions must be an array");
@@ -114,7 +146,9 @@ function declarationsFor(klass) {
     actionNames.add(name);
   }
 
-  return {properties, methods, restorations: restorationsFor(klass, declared)};
+  const registries = Object.keys(modelAttributes).length
+    ? {modelAttributes: {...inheritedAttributes, ...modelAttributes}} : {};
+  return {properties, methods, registries, restorations: restorationsFor(klass, declared)};
 }
 
 const snakeCase = name => name.replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
@@ -153,6 +187,9 @@ let framework = null;
  * with `optional: true` for one that may be absent; and `static actions =
  * ["name"]` for the methods markup may send. Every getter is a computed
  * property, and its dependencies are collected while it runs.
+ * Models declare persisted properties with `static attributes =
+ * {title: {default: "", key: "name", type: "String"}}`. The key defaults to
+ * the property name and the type to `"T.untyped"`.
  *
  * Register a parent before its subclasses. The parent must be a public
  * framework class such as `Swill.Controller`, or a class already registered.
@@ -180,11 +217,11 @@ export function register(name, klass) {
   if (!framework.roots.has(parent) && !registered.has(parent)) {
     throw new Error(`Register the parent class before ${name}`);
   }
-  const {properties, methods, restorations} = declarationsFor(klass);
+  const {properties, methods, registries, restorations} = declarationsFor(klass);
   // Framework names answer to their JavaScript spelling too, once a page
   // registers JavaScript classes; a page of Ruby alone never pays for it.
   framework.Runtime.aliasInstalledJavaScriptNames(framework.publicNames);
-  framework.Runtime.install({classes: {[name]: {constructor: klass, properties, methods, restorations}}});
+  framework.Runtime.install({classes: {[name]: {constructor: klass, properties, methods, registries, restorations}}});
   registered.add(klass);
   return klass;
 }
@@ -335,6 +372,7 @@ export function browserAPI(definitions, Runtime, names = {}, roots = []) {
     Runtime,
     Application: definitions.Swill__Application,
     Bundle: definitions.Swill__Bundle,
+    ModelBase: definitions.Swill__Model__Base,
     publicNames: Object.fromEntries(Object.entries(names)
       .filter(([, identifier]) => definitions[identifier])
       .map(([name, identifier]) => [`Swill::${name.replaceAll(".", "::")}`, definitions[identifier]])),

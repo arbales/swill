@@ -7,31 +7,30 @@ clarity, not another site build-out.
 
 ## Open work
 
-1. Keep closing the coverage gap. `Rakefile` sets
-   `DOC_COVERAGE_BASELINE = 164` (27 October 2026). Document public methods,
-   mark true internals `:nodoc:`, and lower the baseline as the count improves.
-   New public API arrives documented, so the count does not grow.
+1. Keep closing the coverage gap against `DOC_COVERAGE_BASELINE` in `Rakefile`.
+   Document public methods, mark true internals `:nodoc:`, and lower the baseline
+   as the count improves. New public API arrives documented, so the count does
+   not grow.
 2. Settle one vocabulary for binding *target* and *destination* across guides
    and source. Cold-read [markup](../doc/markup.md) and
    [responders](../doc/responders.md) for a newcomer.
-3. Decide which controls/controllers need conceptual guides beyond their class
-   pages: `Control` and its subclasses, `SortableList`, `EditableList`,
-   `CustomSelect`, `NotificationCenter`, and `Window` were candidates after
-   `dom_boundaries.md` was retired. Preserve the author's asides and TODOs in
-   existing guides.
+3. Review conceptual gaps beyond class pages. Start with the existing
+   [controls](../doc/controls.md), [collections](../doc/collections.md), and
+   [lifecycle](../doc/lifecycle.md) guides before adding guides for individual
+   controls/controllers or notifications. Preserve the author's asides and
+   TODOs in existing guides.
 4. Make the generated Runtime page own runtime reference material now
    duplicated in [the compiler guide](../doc/compiler.md). Keep the compiler
    guide focused on source-to-JavaScript semantics.
-5. Settle whether `Runtime.send` reading plain-object entries should match
-   ordinary JavaScript dot access. (Hiding the generated `Swill__*`
-   identifiers was dropped; see [abandoned](ABANDONED.md).)
-6. Decide whether registered JavaScript models need persisted `static
-   attributes`; tracked as deferred in [the developer-experience
-   plan](DEVX_PLAN.md).
-7. Review JavaScript-index treatment of Ruby-only namespaces and extensions;
+5. Review JavaScript-index treatment of Ruby-only namespaces and extensions;
    implement general collapsible namespace rows only after the expanded-state
    design is settled. Replace the language switch's placeholder UI with its
    finished design.
+
+Runtime plain-object semantics belong in [the framework plan](FRAMEWORK_PLAN.md);
+persisted JavaScript `static attributes` belong in [the developer-experience
+plan](DEVX_PLAN.md). Update their documentation when those decisions are made,
+rather than maintaining duplicate API tasks here.
 
 ## Checks
 

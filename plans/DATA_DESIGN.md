@@ -5,9 +5,9 @@ implementation steps or a current API reference. The original fifteen-part
 sketch is preserved in git history. See [Completed](COMPLETED.md) for the
 milestone, [the data plan](DATA_PLAN.md) for open work, and
 [server data](../doc/server_data.md) and [collections](../doc/collections.md)
-for current usage. [Data exchange design](DATA_EXCHANGE_DESIGN.md) explores
-future refresh, delivery, and subscription choices without committing to a
-protocol.
+for current usage. [Data exchange design](DATA_EXCHANGE_DESIGN.md) owns the
+accepted, unimplemented schema-versioning direction and exploratory delivery
+and subscription choices.
 
 ## Boundary between server and client
 
@@ -43,12 +43,13 @@ actual API.
 
 ## Identity, availability, and privacy
 
-A client has one canonical object per model class and normalized id. Responses
-patch only included fields; an omitted field stays unavailable, and a loaded
-nil is a valid value. Lazy hydration supplies fields and associations as they
-are needed, while explicit load methods let callers await them. Returned
-projections and preloads reduce latency but never expand the declared schema
-or the viewer's authorization.
+A client has one canonical object per model class and normalized id within
+each editing context and actor scope. Responses patch only included fields;
+omission preserves existing knowledge, including an unavailable field staying
+unavailable. A loaded nil is a valid value. Lazy hydration supplies fields
+and associations as they are needed, while explicit load methods let callers
+await them. Returned projections and preloads reduce latency but never expand
+the declared schema or the viewer's authorization.
 
 Privacy-denied nils intentionally remain indistinguishable from ordinary
 nils. This reflects the chosen privacy contract, not a requirement that every
@@ -66,13 +67,14 @@ implemented guarantee; it belongs with future measured exchange work.
 
 Commands return authoritative values and may name related fields or
 associations to refresh or invalidate. They do not silently infer all affected
-queries or broadcast cross-client updates. Query membership freshness and an
-explicit refresh API remain open in [the data plan](DATA_PLAN.md); connection
-delivery caches and subscriptions remain exploratory in
+queries or broadcast cross-client updates. Explicit query refresh is implemented
+through collection controllers; see [collections](../doc/collections.md#fetching-query-results).
+Connection delivery caches and subscriptions remain exploratory in
 [data exchange design](DATA_EXCHANGE_DESIGN.md).
 
-## Unresolve iOS / Compiled Application Tension
+## Independently released clients
 
-Today when the server schema is updated, old clients are invalidated.
-When building iOS applications, we'll have to contend with longer release
-cycles and the need to support past client versions. We should explore different approaches to solving this problem before selecting a direction.
+The current handshake rejects a changed schema hash. Independently released
+iOS/static clients need longer-lived contracts rather than a browser reload
+policy. The [schema-versioning plan of record](DATA_EXCHANGE_DESIGN.md#plan-of-record-schema-versions-and-compatibility)
+addresses this; it is accepted direction, not implemented compatibility.

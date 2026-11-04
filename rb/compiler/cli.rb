@@ -18,11 +18,12 @@ module Swill
           swill build [ENTRY] [--out FILE] [--minify] [--with-framework] [--show-errors]
           swill watch [ENTRY] [--out FILE] [--minify] [--with-framework]
           swill new NAME [--data]
+          swill init [DIR]
           swill manifest DIR
           swill dev [--port N] [--no-server] [--once] [--interval S] [--project FILE]
           swill build --project swill.yml
           swill watch --project swill.yml
-          swill types [ENTRY] [--into DIR]
+          swill types [ENTRY] [--into DIR] [--out FILE]
           swill data generate SERVER_ENTRY [--root DIR]
           swill data check SERVER_ENTRY [--root DIR]
 
@@ -35,6 +36,8 @@ module Swill
 
         `new` writes an application in a new directory NAME that `swill dev`
         runs as it is; --data adds a server entry for Distant Objects.
+        `init` adds swill.yml and client/ to an existing application, without
+        replacing files, and prints the server and page integration steps.
 
         `dev` builds the project in swill.yml, runs its server (config.ru, with
         Falcon when the bundle has it, else rackup), and rebuilds what each
@@ -50,8 +53,9 @@ module Swill
         `types` writes the Sorbet artifacts an application needs to typecheck
         itself — the framework's RBI, the DOM's, the runtime's, its own
         declared accessors, and the checks for its declaration expressions —
-        into sorbet/ beside the entry, with a sorbet/config if none exists.
-        Run `srb tc` from that directory afterwards.
+        under sorbet/swill/ beside the entry, with a local framework copy.
+        sorbet/swill.config is refreshed; sorbet/config includes it if none
+        exists. Run `srb tc` from the entry directory afterwards.
       TEXT
 
       def self.start(argv)
@@ -78,6 +82,7 @@ module Swill
         arguments = parser.parse(rest)
         return dev(options) if command == "dev"
         return scaffold(arguments, options) if command == "new"
+        return init(arguments, options) if command == "init"
         return manifest(arguments) if command == "manifest"
         project = options[:project]
         project ||= "swill.yml" if %w[build watch].include?(command) && arguments.empty? && File.file?("swill.yml")
@@ -125,11 +130,11 @@ module Swill
       end
 
       def types(entry, options)
-        build = Build.new(entry)
+        build = Build.new(entry, out: options[:out])
         written = build.types(options[:into])
-        root = File.dirname(written.first)
-        puts format("swill: wrote %d Sorbet files under %s", written.length, File.dirname(root))
-        puts "swill: run `srb tc` from #{File.dirname(File.dirname(root))}"
+        root = File.expand_path(options[:into] || File.dirname(build.entry))
+        puts format("swill: wrote %d Sorbet files under %s", written.length, File.join(root, "sorbet"))
+        puts "swill: run `srb tc` from #{root}"
         written
       end
 
@@ -157,15 +162,17 @@ module Swill
       # watcher. A build error is reported and watching continues.
       def watch(entry, options)
         interval = options[:interval] || 0.5
+        raise CompileError, "watch interval must be positive" unless interval.positive?
+        $stdout.sync = true
+        stamps = stamp(entry)
         build = attempt(entry, options)
-        stamps = stamp(build, entry)
         puts "swill: watching #{build ? build.sources.length : 0} sources (Ctrl-C to stop)"
         loop do
           sleep interval
-          current = stamp(build, entry)
+          current = stamp(entry)
           next if current == stamps
           stamps = current
-          build = attempt(entry, options) || build
+          attempt(entry, options)
         end
       rescue Interrupt
         puts
@@ -191,6 +198,19 @@ module Swill
         written = scaffold.write
         puts "swill: wrote #{written.length} files into #{name}"
         puts "swill: cd #{name} && bundle install && bundle exec swill dev"
+        0
+      end
+
+      # `swill init`: only the client and project configuration. The existing
+      # application's dependencies, server, pages, and ignore rules stay its own.
+      def init(arguments, options)
+        unless arguments.length <= 1 && options.empty?
+          raise OptionParser::ParseError, "init expects only an optional DIR"
+        end
+        scaffold = Scaffold.new(arguments.first || ".")
+        written = scaffold.init
+        puts "swill: wrote #{written.length} files into #{scaffold.directory}"
+        puts scaffold.integration
         0
       end
 
@@ -224,10 +244,14 @@ module Swill
         nil
       end
 
-      def stamp(build, entry)
-        files = build ? build.sources : [Build.new(entry).entry]
-        files.map { |file| [file, File.file?(file) ? File.mtime(file).to_f : nil] }
-      rescue CompileError
+      def stamp(entry)
+        build = Build.new(entry)
+        files = build.sources(allow_missing: true) + Dir.glob(File.join(build.resources, "**/*")).select { |file| File.file?(file) }
+        files.sort.map do |file|
+          stat = File.stat(file) if File.file?(file)
+          [file, stat ? [stat.mtime.to_f, stat.size] : nil]
+        end
+      rescue CompileError, SystemCallError
         []
       end
 

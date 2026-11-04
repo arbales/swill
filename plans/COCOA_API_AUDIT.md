@@ -12,8 +12,9 @@ These links require the local Dash server. This first pass covers
 CollectionArrangement, ArrayController, and their List/EditableList integration.
 It is not a completed audit of the entire framework.
 
-The `arranged_objects` correction is recorded in [Completed](COMPLETED.md).
-The findings below remain open proposals, not approved API changes.
+The `arranged_objects` correction, selection-restoration distinction, and editor
+registration are implemented; see [Completed](COMPLETED.md). The remaining API
+changes in the proposed-decision column are open proposals, not approved APIs.
 
 ## Findings and proposed decisions
 
@@ -26,7 +27,7 @@ The findings below remain open proposals, not approved API changes.
 | Filtering | `filterPredicate`, with `arrangeObjects:` for custom arrangement | Only the `includes_object?` override | Design `filter_predicate` using a Ruby-callable contract. Keep it distinct from remote query criteria. Decide whether the per-object override remains a convenience. |
 | Selection policy | `preservesSelection`, `avoidsEmptySelection`, and `selectsInsertedObjects`; documented defaults are YES | Hardcoded identity preservation, empty selection allowed, first selection requested by list focus, temporary insertion always selects | Expose and test deliberate policies. Do not infer that preserving selection authorizes remembering every filtered-out request indefinitely. |
 | Requested versus actual selection | Selection setters may fail because editing cannot commit | Ordinary selection now drops absent objects. Explicit `selected_object_id` restoration waits until matched or cancelled, then becomes ordinary selection | Restoration is separated; selection setters' editing refusal/result contract remains open. |
-| Editing and selection | Selection setters can attempt `commitEditing` and report failure | EditableList guards some UI operations; an arrangement change cancels the edit; shared ArrayController selection has no common editing gate | Define one coordination contract for direct selection writes, shared controllers, sort/filter changes, and asynchronous saves. This is a behavioral gap, not just spelling. |
+| Editing and selection | Selection setters can attempt `commitEditing` and report failure | Editor registration holds arrangement and fetch publication until editing ends. EditableList guards some UI operations; direct shared-controller selection writes have no common editing gate | Finish the coordination contract for direct selection writes, shared controllers, sort/filter changes, and asynchronous saves. Registration is implemented; setter refusal/results remain open. |
 | Insertion | Insertion adds to content and arranged objects; selection and filter-clearing policies are configurable | `show_first` temporarily includes an object outside query membership and selects it; source membership is unchanged | Preserve the remote-data distinction. Document temporary presentation as a Swill extension, not an implementation of Cocoa insertion. Design actual mutable-content insertion separately. |
 | Selection bindings | Inherited `selection` is a KVC proxy with no-selection/multiple-values markers | `selected_object` returns the first selected object; no selection proxy | Keep the singular convenience clearly named. It is not equivalent to Cocoa `selection`; multi-object inspectors need a separately designed proxy/marker contract. |
 | Controller structure | NSArrayController inherits NSObjectController | ArrayController includes arrangement and bindings on Swill::Object; views can include the same module | The reusable module was an explicit design choice. Review which object-controller contracts are missing rather than assuming the class name establishes compatibility. |

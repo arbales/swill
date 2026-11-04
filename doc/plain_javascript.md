@@ -82,9 +82,9 @@ editors; `Swill.Control` and its subclasses; `Swill.ValueTransformer`, whose
 instances `Swill.ValueTransformer.register` makes available to markup by name;
 and `Swill.Model.Base`, `Swill.Model.Resource`, and `Swill.Distant.Object`.
 A model's `static properties` are observable properties, not persisted
-attributes; attributes are declared in Ruby. The other public classes, such as
-`Swill.NotificationCenter` and `Swill.Distant.Client`, are used as they
-are.
+attributes; `static attributes` declares persisted attributes, as below.
+The other public classes, such as `Swill.NotificationCenter` and
+`Swill.Distant.Client`, are used as they are.
 
 `Swill.register("Admin::Editor", Editor)` supplies a markup name explicitly;
 `"Admin.Editor"` names the same class.
@@ -94,6 +94,43 @@ custom registered application class, use
 runs per page: `start` returns it, `Swill.Application.shared()` returns it
 from anywhere, `Swill.Application.isRunning()` says whether one is up, and a
 second `start` while it runs throws.
+
+## Model Attributes
+
+```js
+class Note extends Swill.Model.Resource {
+  static attributes = {
+    title: {default: "", type: "String", key: "name"},
+    tags: {default: () => [], type: "T::Array[String]"},
+    memo: {default: null}
+  };
+
+  validateTitle(value, previous) {
+    return value.trim();
+  }
+}
+Swill.register(Note);
+const note = Note.fromAttributes({id: "1", name: " First "});
+note.title = "Second";
+// note.collectDirtyAttributes() => {name: "Second"}
+```
+
+An attribute is an observable property in the model's inherited attribute
+registry, so the existing model validators, codecs, dirty tracking, and drafts
+use it. `key` defaults to its property name; `type` is a Ruby/Sorbet type-name
+string, defaulting to `"T.untyped"`. As in Ruby models, incoming null is
+replaced with the default for a non-nilable type; `T.untyped`, `NilClass`, and
+`T.nilable(...)` retain null. This type metadata controls null normalization,
+not JavaScript assignment typechecking.
+
+`default` is required and follows the same scalar-or-zero-argument-factory
+rule as `properties`. Factories run on demand, not at registration, including
+when null normalization needs a fresh default. `validateTitle(value, previous)`
+is the JavaScript spelling of `validate_title`; it may coerce or throw to reject
+the value. Subclasses inherit the registry without changing their parents.
+Attributes require a model subclass and cannot share a name with another
+declaration on the same class. Distant models still need their server schema;
+attributes alone do not declare remote fields or operations.
 
 ## Themes and Resources
 

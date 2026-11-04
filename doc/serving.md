@@ -62,6 +62,55 @@ for the views, and the two apps mounted with `map` in `config.ru`. Plain Rack:
 `Rack::Builder` with `map(SWILL.assets_url) { run SWILL.assets_app }`, which is
 what `Swill::Server#to_app` builds.
 
+## Initializing an Existing Application
+
+`swill init` writes `client/` and `swill.yml`, never the existing server or
+pages. Like `swill new`, its defaults are `/assets` and `public/assets/`:
+
+```ruby
+# In the application's boot file, before its views render:
+require "swill/server"
+SWILL = Swill::Server.new(
+  assets: {url: "/assets", directory: "public/assets"}
+)
+
+# In config.ru, after loading the application's boot file:
+SWILL.use_in(self)
+map("/assets") { run SWILL.assets_app }
+map("/") { run App } # your existing Roda, Sinatra, or Rack app
+```
+
+Rack dispatches `/assets/*` to Swill before the existing application
+sees it. This reserves the whole prefix, including Swill's 404s; the
+application's other routes and static files are unchanged. If Sinatra's
+public folder or Roda's Assets plugin already serves files under `/assets`,
+do not reserve the prefix with this Rack mount unless you intend to replace
+those routes. Choose another unused URL or share the prefix in the application's
+router. For example, Roda can serve its own assets first, then delegate
+unmatched asset requests to Swill:
+
+```ruby
+# In the Roda app, instead of map("/assets") in config.ru:
+route do |r|
+  r.assets
+  r.on("assets") { r.run SWILL.assets_app }
+  r.root { view :index }
+end
+```
+
+The URL and disk directory are independently configurable. Check for existing
+`public/assets/app.js` and resource files before building; if they collide,
+change the asset directory and the output path in `swill.yml` together.
+`init` never changes either default automatically.
+
+In the view, write `SWILL.helpers(request.env).head(theme: "linear")`
+unescaped, then its `stylesheet_tag("app")` for the client stylesheet.
+Name the generated application's class on `body` and its controller on the
+relevant region, as the command prints. For ERB use `<%= ... %>`; for
+autoescaping Erubi use `<%== ... %>`. Add `/public/assets/` and `/tmp/`
+to the application's ignore rules. No dependency or ignore file is edited by
+`init`.
+
 ## The Page Helpers
 
 `Swill::Bundles::Helpers` gives a view context `swill`, the page helpers for
