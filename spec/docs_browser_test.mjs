@@ -358,5 +358,6 @@ try {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
-  await rm(profile, {recursive: true, force: true});
+  // Chrome helpers can briefly write after the main process has exited.
+  await rm(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 100});
 }
