@@ -138,6 +138,7 @@ task test: :typecheck do
     sh "bundle exec ruby spec/data_connection_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
     sh "deno test -A spec/source_maps_test.mjs"
+    sh "deno test -A spec/browser_profile_test.mjs"
     sh "deno test -A spec/data_transport_test.mjs"
     sh "deno test -A spec/data_values_test.mjs"
     sh "deno test -A spec/data_client_test.mjs"

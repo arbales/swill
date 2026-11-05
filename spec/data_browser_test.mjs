@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdtemp, rm} from "node:fs/promises";
+import {mkdtemp} from "node:fs/promises";
 import {resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 import {createServer} from "node:net";
+import {removeBrowserProfile} from "./browser_profile.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -210,5 +211,5 @@ try {
   socket?.close();
   await stop(browser);
   await stop(falcon);
-  await rm(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 100});
+  await removeBrowserProfile(profile);
 }

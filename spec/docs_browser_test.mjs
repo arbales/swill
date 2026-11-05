@@ -7,10 +7,11 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdir, mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile} from "node:fs/promises";
 import {createServer} from "node:http";
 import {resolve, extname, sep} from "node:path";
 import {fileURLToPath, pathToFileURL} from "node:url";
+import {removeBrowserProfile} from "./browser_profile.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -358,6 +359,5 @@ try {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
-  // Chrome helpers can briefly write after the main process has exited.
-  await rm(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 100});
+  await removeBrowserProfile(profile);
 }
