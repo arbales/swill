@@ -99,9 +99,10 @@ module Swill
         Dir.mktmpdir("swill-build") do |dir|
           write_shim(dir, interface)
           compiler.modules(name: "application", runtime: "./framework.external.mjs",
-                           framework: "./framework.external.mjs").each do |name, source|
+                           framework: "./framework.external.mjs", sourcemaps: true).each do |name, source|
             File.write(File.join(dir, name), source)
           end
+          Compiler.format_file(File.join(dir, "application.classes.mjs"))
           File.write(File.join(dir, "entry.mjs"), <<~JS)
             import {Swill__Bundle} from "./framework.external.mjs";
             import "./application.mjs";
@@ -204,7 +205,7 @@ module Swill
       def bundle(entrypoint)
         command = ["esbuild", entrypoint, "--bundle", "--format=iife", "--target=es2022", "--sourcemap", "--outfile=#{out}"]
         # A minified build is optimized, and leaves in_development blocks out.
-        command.push("--minify", "--define:globalThis.__SWILL_DEV__=false") if minify
+        command.push("--minify", "--sources-content=false", "--define:globalThis.__SWILL_DEV__=false") if minify
         output, status = Open3.capture2e(*command)
         raise CompileError, "bundling failed: #{output}" unless status.success?
       rescue Errno::ENOENT

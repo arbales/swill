@@ -1859,6 +1859,76 @@ test("in development, problems are shown as alerts one at a time", async () => {
   }
 });
 
+test("development mapping updates only its live alert and never delays or reorders errors", async () => {
+  const original = Runtime.sourceMappedOrigin;
+  const lookups = [];
+  Runtime.sourceMappedOrigin = detail => new Promise(resolve => lookups.push({detail, resolve}));
+  try {
+    const f = pageFixture({readyState: "complete"});
+    f.body.setAttribute("development", "");
+    const application = new Launcher().launch(f.document);
+    const alerts = () => Array.from(f.body.children).filter(child => child.tagName === "DIALOG");
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    const dismiss = async () => { alerts()[0].querySelector("button").click(); await tick(); };
+    await dismiss(); // the demo's launch warning
+    const error = message => {
+      const made = runInContext(`new Error(${JSON.stringify(message)})`, context);
+      made.stack = `Error: ${message}\n    at test (http://localhost/app.js:3:5)`;
+      return Object.assign(new Event("error"), {error: made});
+    };
+    const first = error("first");
+    f.document.defaultView.dispatchEvent(first);
+    const firstDialog = alerts()[0];
+    assert.ok(firstDialog, "the original error appears before the lookup finishes");
+    assert.equal(firstDialog.querySelector(".alert-text").children[1].textContent, "at test (http://localhost/app.js:3:5)");
+    f.document.defaultView.dispatchEvent(first);
+    f.document.defaultView.dispatchEvent(error("second"));
+    assert.equal(lookups.length, 1, "duplicates coalesce and the next error still waits its turn");
+    await dismiss();
+    assert.equal(lookups.length, 2);
+    const secondDialog = alerts()[0];
+    lookups[0].resolve("at test (http://localhost/first.rb:12:6)");
+    await tick();
+    assert.equal(secondDialog.querySelector(".alert-text").children[1].textContent, "at test (http://localhost/app.js:3:5)",
+      "the dismissed alert's mapping cannot change the next one");
+    lookups[1].resolve("at test (http://localhost/second.rb:12:6)");
+    await tick();
+    assert.equal(secondDialog.querySelector(".alert-text").children[1].textContent, "at test (http://localhost/second.rb:12:6)");
+    await dismiss();
+    f.document.defaultView.dispatchEvent(error("after"));
+    assert.equal(lookups.length, 3);
+    application.terminate();
+    lookups[2].resolve("at test (http://localhost/after.rb:12:6)");
+    await tick();
+    assert.equal(alerts().length, 0, "late completion cannot reopen an alert after teardown");
+  } finally {
+    Runtime.sourceMappedOrigin = original;
+  }
+});
+
+test("mapping failures leave the original alert intact without reporting another error", async () => {
+  const original = Runtime.sourceMappedOrigin;
+  Runtime.sourceMappedOrigin = async () => { throw new Error("mapping broke"); };
+  try {
+    const f = pageFixture({readyState: "complete"});
+    f.body.setAttribute("development", "");
+    new Launcher().launch(f.document);
+    const dialogs = () => Array.from(f.body.children).filter(child => child.tagName === "DIALOG");
+    dialogs()[0].querySelector("button").click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const made = runInContext('new Error("original")', context);
+    made.stack = "Error: original\n    at http://localhost/app.js:3:5";
+    f.document.defaultView.dispatchEvent(Object.assign(new Event("unhandledrejection"), {reason: made}));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const text = dialogs()[0].querySelector(".alert-text");
+    assert.equal(text.children[0].textContent, "original");
+    assert.equal(text.children[1].textContent, "at http://localhost/app.js:3:5");
+    assert.equal(dialogs().length, 1);
+  } finally {
+    Runtime.sourceMappedOrigin = original;
+  }
+});
+
 test("an alert builds its own window and yields the button chosen", async () => {
   const f = windowedPage();
   const [parent] = f.application.controllers;

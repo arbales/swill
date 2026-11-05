@@ -13,9 +13,10 @@ def compile_spike
   end
   FileUtils.mkdir_p(DIST)
   FileUtils.mkdir_p("build")
-  framework.modules(name: "framework", runtime: "../rb/runtime/runtime.mjs").each do |name, source|
+  framework.modules(name: "framework", runtime: "../rb/runtime/runtime.mjs", sourcemaps: true).each do |name, source|
     File.write("build/#{name}", source)
   end
+  Swill::Ruby2JS::Compiler.format_file("build/framework.classes.mjs")
   write_browser_entry("build", "../rb/runtime", "runtime.mjs")
 
   # Compiler facts stay in memory. The application bundle imports references
@@ -36,9 +37,10 @@ def compile_spike
     application.add(File.read(path), file: path)
   end
   application.modules(name: "application", runtime: "./framework.external.mjs",
-                      framework: "./framework.external.mjs").each do |name, source|
+                      framework: "./framework.external.mjs", sourcemaps: true).each do |name, source|
     File.write("build/#{name}", source)
   end
+  Swill::Ruby2JS::Compiler.format_file("build/application.classes.mjs")
   rbi = framework.rbi + application.rbi.lines.drop(2).join
   File.write("sorbet/rbi/generated.rbi", rbi)
   File.write("sorbet/rbi/dom.rbi", Swill::Ruby2JS::DOM.rbi)
@@ -75,9 +77,10 @@ def compile_ui
     framework.add(File.read(path), file: path)
   end
   FileUtils.mkdir_p("build/ui")
-  framework.modules(name: "framework", runtime: "../../rb/runtime/runtime_ui.mjs").each do |name, source|
+  framework.modules(name: "framework", runtime: "../../rb/runtime/runtime_ui.mjs", sourcemaps: true).each do |name, source|
     File.write("build/ui/#{name}", source)
   end
+  Swill::Ruby2JS::Compiler.format_file("build/ui/framework.classes.mjs")
   write_browser_entry("build/ui", "../../rb/runtime", "runtime_ui.mjs")
 end
 
@@ -88,7 +91,7 @@ def bundle_spike(minify: false)
     output = "rb/dist/#{target}#{minify ? '.min' : ''}.js"
     # An optimized build leaves in_development blocks out.
     sh "esbuild", "build/#{source}.mjs", "--bundle", "--format=iife", "--target=es2022",
-       "--sourcemap", "--outfile=#{output}", *(minify ? ["--minify", "--define:globalThis.__SWILL_DEV__=false"] : [])
+       "--sourcemap", "--outfile=#{output}", *(minify ? ["--minify", "--sources-content=false", "--define:globalThis.__SWILL_DEV__=false"] : [])
   end
 end
 
@@ -96,6 +99,13 @@ def build_data_fixture_client
   Swill::Ruby2JS::Build.new(
     "spec/fixtures/data/client/app.rb",
     out: "build/data_client.js"
+  ).run
+end
+
+def build_source_map_fixture_client
+  Swill::Ruby2JS::Build.new(
+    "spec/fixtures/source_maps/app.rb",
+    out: "build/source_map_client.js"
   ).run
 end
 
@@ -117,6 +127,7 @@ desc "Run compiler rejection tests, MRI equivalence, and executable JavaScript c
 task test: :typecheck do
   Dir.chdir(ROOT) do
     sh "bundle exec ruby spec/compiler_test.rb"
+    sh "bundle exec ruby spec/source_map_test.rb"
     sh "bundle exec ruby spec/shared_test.rb"
     sh "bundle exec ruby spec/cli_test.rb"
     sh "bundle exec ruby spec/dev_test.rb"
@@ -126,6 +137,7 @@ task test: :typecheck do
     sh "bundle exec ruby spec/data_test.rb"
     sh "bundle exec ruby spec/data_connection_test.rb"
     sh "deno test -A spec/runtime_test.mjs"
+    sh "deno test -A spec/source_maps_test.mjs"
     sh "deno test -A spec/data_transport_test.mjs"
     sh "deno test -A spec/data_values_test.mjs"
     sh "deno test -A spec/data_client_test.mjs"
@@ -184,6 +196,7 @@ desc "Exercise the example in headless Chrome (set CHROME_BIN outside macOS)"
 task browser: :build do
   Dir.chdir(ROOT) do
     build_data_fixture_client
+    build_source_map_fixture_client
     sh "deno run -A spec/browser_test.mjs"
     sh "deno run -A spec/data_browser_test.mjs"
   end

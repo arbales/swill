@@ -11,15 +11,17 @@ module Swill
         # Ruby exceptions become JavaScript Error objects so browsers keep stack
         # traces and callers can tell errors from thrown values. Rescued errors
         # can be rethrown unchanged, preserving their identity and details.
-        def lower_raise(args)
+        def lower_raise(node, args)
           if args.length == 1 && static_type(args.first) == "Error"
-            return s(:send, nil, :raise, process(args.first))
+            return node.updated(:send, [nil, :raise, process(args.first)])
           end
           # A message is a string literal, or any expression typed String.
           unless args.length == 1 && (%i[str dstr].include?(args.first.type) || static_type(args.first) == "String")
             raise CompileError, "raise supports only a message string"
           end
-          s(:send, nil, :raise, s(:const, nil, :Error), process(args.first))
+          # The Error constructor is where a JavaScript stack points. Keep
+          # the Ruby raise location on its generated `throw new` prefix.
+          node.updated(:send, [nil, :raise, s(:const, nil, :Error), process(args.first)])
         end
 
         # Ruby invokes a callable with `call` or `.()`; JavaScript calls the value.

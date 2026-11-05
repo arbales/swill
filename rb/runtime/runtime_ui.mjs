@@ -47,6 +47,7 @@ import {
   keywordArguments, blockArgument, omittedArgument, isOmittedArgument,
   bindArguments, argument, yieldBlock
 } from "./arguments.mjs";
+import {sourceMappedOrigin} from "./source_maps.mjs";
 
 /**
  * Reports a problem that is not an error: input from outside the application,
@@ -159,7 +160,8 @@ export const UIRuntime = {
   bindArguments, argument, yieldBlock,
 
   // Reporting
-  warn, observeWarnings, reportBuildFailure, buildFailure, isDevelopment, setDevelopment
+  warn, observeWarnings, reportBuildFailure, buildFailure, isDevelopment, setDevelopment,
+  ...(globalThis.__SWILL_DEV__ === false ? {} : {sourceMappedOrigin})
 };
 
 // Generated UI-only modules import Runtime; the full bundle extends this base.

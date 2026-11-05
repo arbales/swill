@@ -20,6 +20,7 @@ end
 require "ruby2js/filter/return"
 require_relative "converter_patches"
 require_relative "names"
+require_relative "source_map"
 require_relative "knowledge"
 require_relative "loader"
 require_relative "filters/sorbet_operations"
@@ -147,7 +148,7 @@ module Swill
           ].join("\n"))
         end
 
-        def modules(name:, runtime:, framework: nil, publish: nil, launch: nil)
+        def modules(name:, runtime:, framework: nil, publish: nil, launch: nil, sourcemaps: false)
           validate!
           references = knowledge.local.flat_map do |entry|
             [entry["identifier"], *(entry["extends_class_methods"] ? ["#{entry['identifier']}_ClassMethods"] : [])]
@@ -172,10 +173,16 @@ module Swill
               "new (Runtime.resolve(#{launch.to_json}))().install(document);"
           end
           entrypoint << "export * from './#{name}.classes.mjs';"
-          {
-            "#{name}.classes.mjs" => self.class.format_javascript(
-              "#{imports(runtime, framework)}\n#{definitions}"
-            ),
+          classes = "#{name}.classes.mjs"
+          if sourcemaps
+            source_map = SourceMap.new.append(imports(runtime, framework))
+            definitions(source_map: source_map)
+            class_source = "#{source_map}//# sourceMappingURL=#{classes}.map\n"
+          else
+            class_source = self.class.format_javascript("#{imports(runtime, framework)}\n#{definitions}")
+          end
+          result = {
+            classes => class_source,
             "#{name}.meta.mjs" => self.class.format_javascript(
               "#{imports(runtime, framework)}\n" \
               "import {#{references}} from './#{name}.classes.mjs';\n" \
@@ -183,6 +190,8 @@ module Swill
             ),
             "#{name}.mjs" => self.class.format_javascript(entrypoint.join("\n"))
           }
+          result["#{classes}.map"] = JSON.generate(source_map.to_h(file: classes)) if sourcemaps
+          result
         end
 
         def imports(runtime, framework)
@@ -198,8 +207,8 @@ module Swill
           lines.join("\n")
         end
 
-        def definitions
-          lines = []
+        def definitions(source_map: nil)
+          output = source_map || SourceMap.new
           knowledge.local.each do |entry|
             scope = entry["scope"]
             id = entry["identifier"]
@@ -207,24 +216,29 @@ module Swill
             parent = mixin ? "Superclass" : (entry["parent"] ? reference(entry["parent"], scope) : "Object")
             class_name = mixin ? "#{id}_Layer" : id
             source = with_generated_methods(entry["node"].loc.expression.source, entry)
-            js = begin
-              convert(source, entry, compiled_class: class_name, compiled_parent: parent)
+            converted = begin
+              conversion(source, entry, compiled_class: class_name, compiled_parent: parent)
             rescue CompileError => error
               raise CompileError, "#{entry['node'].loc.expression.source_buffer.name} (#{entry['name']}): #{error.message}"
             end
+            js = converted.to_s
+            map = converted.sourcemap if source_map
+            origins = (entry["source_origins"] || SourceMap.origins(entry["node"].loc.expression)) if source_map
             if mixin
-              lines << "export function #{id}(Superclass) {\n#{js}\nreturn #{class_name};\n}"
-              lines << module_functions(entry) if entry["module_functions"].any? || entry["constant_nodes"].any?
-              lines << class_method_factory(entry) if entry["extends_class_methods"]
+              output.append("export function #{id}(Superclass) {")
+              output.append(js, map: map, origins: origins)
+              output.append("return #{class_name};\n}")
+              module_functions(entry, output, sourcemaps: !!source_map) if entry["module_functions"].any? || entry["constant_nodes"].any?
+              class_method_factory(entry, output, sourcemaps: !!source_map) if entry["extends_class_methods"]
             else
               # Ruby2JS may prepend truthiness helper declarations, so prefixing the
               # whole conversion with `export` would export a helper instead of the
               # class. Keep conversion structured and export the known declaration.
-              lines << js
-              lines << "export {#{id}};"
+              output.append(js, map: map, origins: origins)
+              output.append("export {#{id}};")
             end
           end
-          lines.join("\n")
+          output.to_s
         end
 
         # Use the project's existing JS parser/printer, not substitutions over
@@ -236,6 +250,21 @@ module Swill
           )
           raise CompileError, "generated JavaScript could not be formatted: #{errors}" unless status.success?
           output
+        rescue Errno::ENOENT
+          raise CompileError, "esbuild is required to format generated JavaScript"
+        end
+
+        # Format from a file, so esbuild reads and composes its sourceMappingURL
+        # instead of discarding locations by treating the input as stdin.
+        def self.format_file(path)
+          # esbuild resolves input symlinks. Its map's relative sources must
+          # use that same directory, notably for macOS's /var -> /private/var.
+          path = File.realpath(path)
+          _output, errors, status = Open3.capture3(
+            "esbuild", path, "--target=es2022", "--charset=utf8",
+            "--sourcemap", "--allow-overwrite", "--outfile=#{path}"
+          )
+          raise CompileError, "generated JavaScript could not be formatted: #{errors}" unless status.success?
         rescue Errno::ENOENT
           raise CompileError, "esbuild is required to format generated JavaScript"
         end
@@ -557,9 +586,17 @@ module Swill
           Knowledge.identifier(resolved)
         end
 
-        def convert(source, entry, compiled_class: nil, compiled_parent: nil)
+        def convert(source, entry, **options)
+          conversion(source, entry, **options).to_s
+        end
+
+        def conversion(source, entry, compiled_class: nil, compiled_parent: nil)
           # Ruby chooses operators from static types, so a native `||` must
           # stay logical: `false ?? x` would keep Ruby's falsy value.
+          # Ruby2JS's compact serializer joins internal rows without newlines,
+          # but its map still counts them. Always select its multiline mode,
+          # including for a one-line Ruby class.
+          source = "#{source}\n" unless source.end_with?("\n")
           ::Ruby2JS.convert(source, filters: [RubySurface, ::Ruby2JS::Filter::Return, RubyCalls],
                           eslevel: 2022, comparison: :identity, truthy: :js, or: :logical,
                           underscored_private: true,
@@ -567,7 +604,7 @@ module Swill
                           entry: entry,
                           compiled_class: compiled_class, compiled_parent: compiled_parent,
                           properties: inherited_properties(entry),
-                          property_types: inherited_property_types(entry)).to_s
+                          property_types: inherited_property_types(entry))
         end
 
         def inherited_properties(entry)

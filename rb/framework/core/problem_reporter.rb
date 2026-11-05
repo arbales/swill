@@ -149,6 +149,9 @@ module Swill
         alert.title = kind.empty? ? (alert.icon == "Stop" ? "Error" : "Warning") : "Application"
         alert.message_text = problem.fetch(:message)
         alert.informative_text = problem.fetch(:detail)
+        in_development do
+          map_origin(alert, alert.informative_text) if kind.empty? && alert.icon == "Stop" && !alert.informative_text.empty?
+        end
         button_titles(kind).each { |label| alert.add_button(label) }
         await alert.run
         @dismissed = true if kind == CONNECTION && %w[disconnected connecting].include?(@state)
@@ -165,6 +168,18 @@ module Swill
     end
 
     private
+
+    # Show the original error immediately. Only the still-active alert may
+    # receive a late mapping; failed lookups leave its original detail intact.
+    sig { params(alert: SystemAlert, detail: String).void }
+    async def map_origin(alert, detail)
+      in_development do
+        mapped = T.cast(await(Runtime.sourceMappedOrigin(detail, @window)), String)
+        alert.informative_text = mapped if !@stopped && @active == alert
+      end
+    rescue => _error
+      # Reporting a mapping failure would recursively hide the original error.
+    end
 
     sig { void }
     def connection_restored

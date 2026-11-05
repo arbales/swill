@@ -86,6 +86,7 @@ class RDoc::Generator::Swill
     write_javascript(javascript)
     write("search_index.js", search_index(classes, pages, javascript))
     copy_assets
+    write(".nojekyll", "")
   end
 
   def render_source(page, source, defined, &link)

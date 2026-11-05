@@ -11,7 +11,7 @@ implemented APIs.
 | Data contracts | [Data plan](DATA_PLAN.md): graph and cross-version compatibility are next. [Schema versioning](DATA_EXCHANGE_DESIGN.md#plan-of-record-schema-versions-and-compatibility) is accepted direction; negotiation, authorization/conversion ordering, and adapter verification still need design. |
 | URLs and server rendering | [URL/SSR plan of record](URL_AND_SSR_DESIGN.md): routing, shared client/server codec, and route-shaped page → preload → bound markup. Grouped fragment restoration already works; the routing and rendering extensions are not implemented. |
 | Framework and compiler | [Framework plan](FRAMEWORK_PLAN.md): row reconciliation, action/visibility rules, runtime cost, and finite compiler gaps. [Cocoa audit](COCOA_API_AUDIT.md) owns collection API alignment proposals. |
-| Developer experience | [Developer-experience plan](DEVX_PLAN.md): Ruby-source maps, first-release verification, editor declarations, and deferred tooling work. |
+| Developer experience | [Developer-experience plan](DEVX_PLAN.md): manual devtools verification, first-release verification, and editor declarations. Source-map builds and development error reports, along with the deferred tooling, are implemented. |
 | Documentation | [Documentation plan](DOCS_PLAN.md): coverage, terminology, guide gaps, and site presentation. |
 
 The data and URL/SSR tracks have their own dependencies; this index does not

@@ -2,17 +2,26 @@
 // navigator (plain JavaScript on the UI build) renders the indexes, filters
 // them as the query changes, answers ~, arrows, Enter, and Escape, and
 // remembers the pane sizes dragged and the language chosen. Run `rake rdoc`
-// first.
+// first. Add --http to check the same viewer over HTTP at /swill/, matching
+// the GitHub Pages project path.
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdtemp, rm} from "node:fs/promises";
-import {resolve} from "node:path";
+import {mkdir, mkdtemp, readFile, rm} from "node:fs/promises";
+import {createServer} from "node:http";
+import {resolve, extname, sep} from "node:path";
 import {fileURLToPath, pathToFileURL} from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const page = pathToFileURL(resolve(root, "rdoc/Swill/Controller.html")).href;
+const httpMode = Deno.args.includes("--http");
+const docs = resolve(root, "rdoc");
+const prefix = "/swill/";
+let base;
+let server;
+const httpFailures = [];
+const pageURL = path => httpMode ? new URL(path, base).href : pathToFileURL(resolve(docs, path || "index.html")).href;
+await mkdir(resolve(root, "build"), {recursive: true});
 const profile = await mkdtemp(resolve(root, "build/chrome-"));
 
 let child;
@@ -52,6 +61,29 @@ const timeout = setTimeout(() => {
 }, 20_000);
 
 try {
+  if (httpMode) {
+    server = createServer(async (request, response) => {
+      const pathname = new URL(request.url, "http://localhost").pathname;
+      if (!pathname.startsWith(prefix)) return response.writeHead(404).end();
+      try {
+        const file = resolve(docs, decodeURIComponent(pathname.slice(prefix.length)) || "index.html");
+        if (!file.startsWith(docs + sep)) throw new Error("outside documentation");
+        const content = await readFile(file);
+        const types = {
+          ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
+          ".woff2": "font/woff2", ".png": "image/png", ".svg": "image/svg+xml"
+        };
+        response.setHeader("Content-Type", types[extname(file)] ?? "application/octet-stream");
+        response.end(content);
+      } catch {
+        httpFailures.push(pathname);
+        response.writeHead(404).end();
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    base = `http://127.0.0.1:${server.address().port}${prefix}`;
+  }
   child = spawn(chrome, [
     "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
     "--disable-background-networking", "--disable-component-update", "--disable-sync",
@@ -84,7 +116,7 @@ try {
   await call("Runtime.enable");
   await call("Page.enable");
   await call("Emulation.setDeviceMetricsOverride", {width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false});
-  await call("Page.navigate", {url: page});
+  await call("Page.navigate", {url: pageURL("Swill/Controller.html")});
   await loaded();
 
   // The indexes render from search_index.js, links relative to this page.
@@ -237,7 +269,7 @@ try {
   assert.equal(await evaluate(`document.querySelector(".class-toggle").getAttribute("aria-expanded")`), "false");
 
   // The sizes carry to the next page.
-  await call("Page.navigate", {url: pathToFileURL(resolve(root, "rdoc/Swill/View.html")).href});
+  await call("Page.navigate", {url: pageURL("Swill/View.html")});
   await new Promise(resolve => setTimeout(resolve, 300));
   await loaded();
   const [kept, keptHeight] = await sizes();
@@ -270,7 +302,7 @@ try {
   assert.equal(await evaluate(`document.documentElement.dataset.language`), "javascript");
   assert.equal(await visibleTitle(), "Swill.View");
   assert.ok((await rows("method-index")).some(text => text.startsWith("#awakeFromDOM")), "the method index is re-spelled");
-  await call("Page.navigate", {url: pathToFileURL(resolve(root, "rdoc/Swill/Controller.html")).href});
+  await call("Page.navigate", {url: pageURL("Swill/Controller.html")});
   await new Promise(resolve => setTimeout(resolve, 300));
   await loaded();
   assert.equal(await visibleTitle(), "Swill.Controller", "the language is remembered");
@@ -294,6 +326,20 @@ try {
   assert.equal(await evaluate(`location.pathname.endsWith("/Swill/Controller/Editor.html") && location.hash`),
                "#method-i-binding_root");
 
+  if (httpMode) {
+    // The project root is a complete viewer, not a directory listing or a
+    // page whose absolute asset URLs accidentally escape the project path.
+    await call("Page.navigate", {url: pageURL("")});
+    await loaded();
+    assert.equal(await evaluate(`document.getElementById("swill")?.textContent`), "Swill");
+    const links = await evaluate(`[...document.querySelectorAll("main a[href]")].map(a => a.href)`);
+    assert.ok(links.includes("https://arbales.github.io/swill/"), "the README links to the hosted viewer");
+    assert.ok(!links.some(link => new URL(link).pathname.endsWith(".md")), "README guide links target built pages");
+    await call("Page.navigate", {url: pageURL("doc/getting_started_md.html#installing-as-a-gem")});
+    await loaded();
+    assert.equal(await evaluate(`document.getElementById(location.hash.slice(1))?.textContent`), "Installing as a Gem");
+    assert.deepEqual(httpFailures, [], "all pages and assets stay reachable under the project prefix");
+  }
   assert.deepEqual(exceptions, []);
   console.log(`Documentation: navigator passed. Filter: ${filtered.elapsed.toFixed(1)}ms to one row, ` +
               `${unfiltered.narrowed.toFixed(1)}ms to a broad match, ${unfiltered.restored.toFixed(1)}ms back to every row.`);
@@ -307,6 +353,10 @@ try {
     const exited = once(child, "exit");
     child.kill();
     await exited;
+  }
+  if (server) {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
   }
   await rm(profile, {recursive: true, force: true});
 }

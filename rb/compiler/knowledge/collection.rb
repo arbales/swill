@@ -399,11 +399,13 @@ module Swill
             key = defined_method_key(statement)
             last_method[key] = index if key
           end
-          body = body_statements.each_with_index.filter_map do |statement, index|
+          kept = body_statements.each_with_index.filter_map do |statement, index|
             key = defined_method_key(statement)
             next if key && last_method[key] != index
-            statement.loc.expression.source
-          end.join("\n")
+            statement
+          end
+          body = kept.map { |statement| statement.loc.expression.source }.join("\n")
+          entry["source_origins"] = [nil] + kept.flat_map { |statement| SourceMap.origins(statement.loc.expression) }
           keyword = entry["kind"] == "mixin" ? "module" : "class"
           source = "#{keyword} Reopened\n#{body}\nend\n"
           ast, = ::Ruby2JS.parse(source, entry["source_files"].join(" + "))

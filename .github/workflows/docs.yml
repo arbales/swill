@@ -3,6 +3,10 @@ name: Documentation
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   docs:
@@ -12,9 +16,47 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           bundler-cache: true
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       # Fails on any RDoc warning, including a link that does not resolve.
       - run: bundle exec rake rdoc
         env:
           STRICT: "1"
-      # Fails if undocumented public API grew past DOC_COVERAGE_BASELINE.
-      - run: bundle exec rake doc_coverage
+      # Coverage is advisory; incomplete API docs must not block publishing.
+      - name: Report documentation coverage
+        id: coverage
+        continue-on-error: true
+        run: bundle exec rake doc_coverage
+      - name: Note incomplete documentation coverage
+        if: steps.coverage.outcome == 'failure'
+        run: echo "::warning::Documentation coverage is above its baseline. This report does not block publication."
+      # Exercise the viewer at /swill/, the same subpath Pages serves.
+      - run: mkdir -p build && deno run -A spec/docs_browser_test.mjs --http
+        env:
+          CHROME_BIN: google-chrome
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          path: rdoc
+
+  pages:
+    needs: docs
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+        with:
+          # Repository setup is explicit, not a side effect of a docs build.
+          enablement: false
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -101,6 +101,9 @@ module Swill
     sig { returns(T.nilable(String)) }
     def self.buildFailure; end
 
+    sig { params(detail: String, window: T.nilable(DOMWindow)).returns(T.untyped) }
+    def self.sourceMappedOrigin(detail, window); end
+
     sig { params(value: T.untyped).returns(T.untyped) }
     def self.duplicate(value); end
 

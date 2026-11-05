@@ -224,13 +224,13 @@ module Swill
         # A block on an untyped receiver has no lowering: only a statically
         # resolved collected method or typed collection can define its call shape.
         def on_block(node)
+          previous_async = @in_async
           return lower_in_development(node) if in_development_block?(node)
           # A block is called at a fixed arity by whatever yields to it, so an
           # optional parameter would only ever take its default.
           if node.children[1].children.any? { |arg| arg.type == :optarg }
             raise CompileError, "a block takes required arguments only"
           end
-          previous_async = @in_async
           # Ordinary callbacks stay synchronous. A block passed to a known
           # async method may await; its result is then a Promise for that method.
           @in_async = false
@@ -366,7 +366,7 @@ module Swill
           end
           return lower_await(args) if receiver.nil? && method == :await
           return lower_sorbet(node) if SorbetOperations.operation?(node)
-          return lower_raise(args) if receiver.nil? && method == :raise
+          return lower_raise(node, args) if receiver.nil? && method == :raise
           return lower_new(receiver, args) if constructed_from_call?(receiver, method)
           return lower_warn(args) if warn_call?(receiver, method)
           return lower_puts(args) if puts_call?(receiver, method)

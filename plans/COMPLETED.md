@@ -175,6 +175,40 @@ server rendering remain in the [URL/SSR plan](URL_AND_SSR_DESIGN.md).
 - Validation for that tooling slice: `rake test optimize`, `rake browser`,
   and `STRICT=1 rake rdoc`, plus the separate Sinatra smoke check.
 
+## Ruby source maps: Phase A
+
+- The compiler keeps Ruby2JS's result and composes its per-extract maps into
+  class-module maps with re-indexed sources and names, original full-file
+  contents, and UTF-16 columns. Row-origin tables retain the right locations
+  for reopened classes, mixins, module functions, and class-method layers.
+  Generated wrappers and argument shims have no fabricated Ruby positions.
+- `swill build` and the framework Rake tasks format from files, preserving
+  the maps through esbuild and bundling. Minified maps omit source contents.
+  Ruby2JS always uses multiline serialization so its map rows match its code;
+  formatting normalizes temporary-file symlinks before relativizing sources.
+- The two-class fixture resolves its second-class token to the original Ruby
+  file, line, and column before and after normal/minified CLI builds. Chrome
+  discovers the map and a real paused frame resolves to that same token.
+  The manual DevTools Sources-interface check is still open. See
+  [the development guide](../doc/development.md#ruby-source-maps).
+- Validation: `bundle exec rake test optimize browser` and
+  `STRICT=1 bundle exec rake rdoc`.
+
+## Development error source mapping
+
+- Development error alerts show their original detail immediately and resolve
+  the first displayed frame to Ruby in the background. A bounded per-window
+  cache shares same-origin script/map requests; a total timeout, strict map
+  handling, and fallback keep lookup failures from hiding the original error.
+  Dismissal and teardown guard late updates. Optimized bundles omit the decoder.
+- `raise` lowering retains the original Ruby range at the generated Error
+  constructor, where JavaScript captures its stack. `in_development` blocks
+  preserve their enclosing method's async state, including a later `await`.
+- Real Chrome verifies an actual compiled Ruby error reaches the alert with
+  its `.rb` location while its raw stack remains JavaScript. Unit and runtime
+  regressions cover cache limits, failures, timeouts, alert ordering, and
+  teardown. See [development](../doc/development.md#ruby-source-maps).
+
 ## Documentation site (September 2026)
 
 - The custom RDoc generator, class pages, Ruby/JavaScript spellings, navigator,

@@ -22,29 +22,25 @@ below.
 
 ## Ruby source maps
 
-**Goal.** Devtools and development problem reports name `hello.rb:12`. The
-compiler converts each class from an extract and formats through esbuild's
-stdin, so the maps need line padding and file-based formatting.
+**Goal.** Devtools and development problem reports name `hello.rb:12`.
 
-- Per-class maps with file-relative lines: `Compiler#convert` pads the class
-  extract with the newlines and columns of its location, and keeps Ruby2JS's
-  result object for its `.sourcemap`.
-- `rb/compiler/source_map.rb` concatenates the per-class maps of a module:
-  VLQ decoding and encoding, row offsets, re-indexed `sources` and `names`;
-  sources absolute, which esbuild relativizes.
-- `modules(sourcemaps: true)` writes the unformatted `.mjs` with a
-  `//# sourceMappingURL`; `Build#run` and the Rakefile format and bundle from
-  files rather than stdin, so esbuild composes the maps; `.meta.mjs` stays
-  unmapped; minified builds pass `--sources-content=false`.
-- Phase A documents that `Error.stack` is unmapped and devtools map it.
-  Phase B, inside an `in_development` block, has `ProblemReporter` fetch the
-  script's map and rewrite the first frame to `.rb:line:col`, tolerating
-  failure.
-- Tests: a two-class fixture whose token in the second class maps to the
-  right file, line and column; `swill build` and `--minify` writing maps with
-  `.rb` sources; a devtools check by hand, recorded in `doc/development.md`.
+The Phase A build pipeline is implemented; see
+[completed](COMPLETED.md#ruby-source-maps-phase-a) and
+[the development guide](../doc/development.md#ruby-source-maps). Extracts use
+row-origin tables rather than padding: one emitted class may combine reopened
+fragments from several files. Automated checks cover exact positions in raw,
+formatted, and minified output, and a paused frame in Chrome.
+Phase B is also implemented: development error alerts resolve their displayed
+first frame to Ruby without delaying the original error or mutating
+`Error.stack`. Failed or late lookups preserve the original report; optimized
+bundles omit the decoder. See
+[completed](COMPLETED.md#development-error-source-mapping).
 
-**Size: M.** The risk is Ruby2JS's token coverage: the fixture comes first.
+Remaining:
+
+- Record the manual DevTools Sources-interface check described in
+  [the guide](../doc/development.md#checks-and-manual-inspection). The automated
+  Chrome debugger-protocol check has passed; the manual UI check has not run.
 
 ## The first release
 

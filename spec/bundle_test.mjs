@@ -11,6 +11,9 @@ test("in_development checks are in a development build and left out of an optimi
   const checks = source.match(/\.isDevelopment\(\)/g) ?? [];
   if (minified) assert.equal(checks.length, 0, "the bundler drops every in_development block");
   else assert.ok(checks.length > 0, "the framework's own checks are there");
+  const Swill = bundleEnvironment({minified}).load("swill");
+  assert.equal(typeof Swill.Runtime.sourceMappedOrigin, minified ? "undefined" : "function");
+  if (minified) assert.ok(!source.includes("Invalid development source map"), "optimized bundles omit the map decoder");
 });
 
 test("script loading installs both artifacts using a single runtime", () => {
@@ -70,7 +73,9 @@ test("the application contains neither the framework implementation nor another 
   assert.ok(map.sources.some(source => source.endsWith("framework.external.mjs")));
   assert.ok(!map.sources.some(source => source.endsWith("runtime.mjs") || source.includes("/runtime/")));
   assert.ok(!map.sources.some(source => source.endsWith("framework.classes.mjs")));
-  assert.equal(map.sources.length, map.sourcesContent.length);
+  assert.ok(map.sources.some(source => source.endsWith("/examples/rb/models.rb")));
+  if (minified) assert.equal(map.sourcesContent, undefined);
+  else assert.equal(map.sources.length, map.sourcesContent.length);
 });
 
 test("plain JavaScript classes use the public registration surface", () => {

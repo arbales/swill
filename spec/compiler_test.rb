@@ -280,6 +280,17 @@ assert_includes js, "Swill__Connections__Actions.establish = Swill__Connections_
                     "in_development runs in place, only in development, and an optimized build can drop it"
   end
 
+  def test_development_blocks_preserve_the_enclosing_async_method
+    js = javascript(<<~RUBY)
+      async def go(value)
+        in_development { await value }
+        await value
+      end
+    RUBY
+    assert_includes js, "async go(value)"
+    assert_equal 2, js.scan("await value").length
+  end
+
   def test_a_constructor_with_keywords_returns_nothing
     js = javascript(<<~RUBY)
       def initialize(name, modal: false)

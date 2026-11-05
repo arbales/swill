@@ -7,6 +7,7 @@ import {createServer} from "node:http";
 import {readFile, mkdtemp, rm} from "node:fs/promises";
 import {resolve, extname, sep} from "node:path";
 import {fileURLToPath} from "node:url";
+import {SourceMap} from "node:module";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -28,6 +29,8 @@ let child;
 let socket;
 const pending = new Map();
 const exceptions = [];
+const scripts = [];
+let onPause;
 let sequence = 0;
 let evaluate;
 const call = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
@@ -70,6 +73,8 @@ try {
       else promise?.resolve(message.result);
     }
     if (message.method === "Runtime.exceptionThrown") exceptions.push(message.params);
+    if (message.method === "Debugger.scriptParsed") scripts.push(message.params);
+    if (message.method === "Debugger.paused") onPause?.(message.params);
   });
   await once(socket, "open");
   const {targetId} = await call("Target.createTarget", {url: "about:blank"});
@@ -526,8 +531,76 @@ try {
   await evaluate(`window.dispatchEvent(new Event("pagehide"))`);
   assert.equal(await evaluate(`Swill.Application.isRunning()`), false);
 
+  // Chrome discovers the composed map and a real paused call frame resolves
+  // to the second class's original Ruby, not its extracted or formatted JS.
+  await call("Debugger.enable", {}, sessionId);
+  await call("Page.navigate", {url: `http://127.0.0.1:${server.address().port}/spec/fixtures/source_maps/index.html`}, sessionId);
+  await evaluate(`new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const poll = () => {
+      try {
+        if (Swill.Runtime.resolve("SourceMapFixture::Second")) return resolve(true);
+      } catch {}
+      if (Date.now() > deadline) reject(new Error("Source-map fixture did not load"));
+      else setTimeout(poll, 20);
+    };
+    poll();
+  })`);
+  const script = scripts.find(script => script.url.endsWith("/build/source_map_client.js"));
+  assert.ok(script?.sourceMapURL, "Chrome found the script's sourceMappingURL");
+  const mapURL = new URL(script.sourceMapURL, script.url);
+  const mapResponse = await fetch(mapURL);
+  assert.ok(mapResponse.ok);
+  const map = await mapResponse.json();
+  const {scriptSource} = await call("Debugger.getScriptSource", {scriptId: script.scriptId}, sessionId);
+  const token = '"second_token"';
+  const prefix = scriptSource.slice(0, scriptSource.indexOf(token)).split("\n");
+  const breakpoint = await call("Debugger.setBreakpointByUrl", {
+    url: script.url, lineNumber: prefix.length - 1, columnNumber: 0
+  }, sessionId);
+  assert.ok(breakpoint.locations.length);
+  const paused = new Promise(resolve => { onPause = resolve; });
+  const result = evaluate(`new (Swill.Runtime.resolve("SourceMapFixture::Second"))().marker()`);
+  const {callFrames: [frame]} = await paused;
+  await call("Debugger.resume", {}, sessionId);
+  onPause = null;
+  assert.equal(await result, "second_token");
+  const original = new SourceMap(map).findEntry(frame.location.lineNumber, frame.location.columnNumber);
+  assert.ok(original.originalSource?.endsWith("/spec/fixtures/source_maps/app.rb"));
+  const source = map.sourcesContent[map.sources.indexOf(original.originalSource)];
+  const rubyLines = source.split("\n");
+  const rubyRow = rubyLines.findIndex(line => line.includes(token));
+  assert.equal(original.originalLine, rubyRow);
+  assert.equal(original.originalColumn, rubyLines[rubyRow].indexOf(token));
+  await call("Debugger.removeBreakpoint", {breakpointId: breakpoint.breakpointId}, sessionId);
+
+  // The actual error reporter follows the bundle's map over HTTP, without
+  // changing Error.stack or waiting to present the original error.
+  await evaluate(`(() => {
+    Swill.start({development: true});
+    try { new (Swill.Runtime.resolve("SourceMapFixture::Second"))().explode(); }
+    catch (error) {
+      window.originalSourceMapStack = error.stack;
+      window.dispatchEvent(new ErrorEvent("error", {error, message: error.message}));
+    }
+    return true;
+  })()`);
+  await evaluate(`new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    const poll = () => {
+      const text = document.querySelector("dialog .alert-text");
+      if (text?.children[0].textContent === "source_map_probe" &&
+          /source_maps\\/app\\.rb:19:\\d+/.test(text.children[1].textContent)) resolve(true);
+      else if (Date.now() > deadline) reject(new Error("Ruby error report did not map: " + text?.textContent));
+      else setTimeout(poll, 20);
+    };
+    poll();
+  })`);
+  assert.equal(await evaluate(`originalSourceMapStack.includes("source_map_client.js:") && !originalSourceMapStack.includes("app.rb:")`), true);
+  await evaluate(`Swill.Application.shared().terminate()`);
+
   assert.deepEqual(exceptions, []);
-  console.log("Chrome: compiled Ruby and no-build JavaScript applications passed.");
+  console.log("Chrome: compiled Ruby, no-build JavaScript, paused Ruby frames, and mapped error reports passed.");
 } catch (error) {
   // What the page saw, for the failure.
   console.error("page exceptions:", JSON.stringify(exceptions.map(e => e.exceptionDetails?.exception?.description ?? e.exceptionDetails?.text), null, 2));

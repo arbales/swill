@@ -60,7 +60,12 @@ or the copy `--with-framework` places beside the output) before `app.js`, and na
 `DOMContentLoaded` and terminates it on a `pagehide` whose `persisted` flag is
 false; a persisted `pagehide` means the page may return from the back-forward
 cache. `Swill::Application#browser` is the window, for `prompt` and `print`.
-`esbuild` must be on the path. A source map is written beside the output.
+`esbuild` must be on the path. A source map is written beside the output,
+composed back to the original Ruby for devtools. Normal builds embed the Ruby
+source; minified maps omit source contents. Raw `Error.stack` strings and the
+initial error alert name generated JavaScript; in development, the reporter
+updates its displayed frame to Ruby when the linked map can be resolved. See
+[Ruby source maps](development.md#ruby-source-maps).
 
 ## Project Workflow
 

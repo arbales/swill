@@ -121,25 +121,32 @@ module Swill
         # there is no class to hang them on; they are converted as the statics
         # of a throwaway class and then moved onto the factory, which is a
         # function and so an object like any other.
-        def module_functions(entry)
+        def module_functions(entry, output, sourcemaps:)
           id = entry["identifier"]
           holder = "#{id}_Functions"
-          sources = (entry["module_functions"] + entry["constant_nodes"]).map { |node| node.loc.expression.source }
-          js = convert("class Placeholder < Object\n#{sources.join("\n")}\nend",
-                       entry, compiled_class: holder, compiled_parent: "Object")
+          nodes = entry["module_functions"] + entry["constant_nodes"]
+          sources = nodes.map { |node| node.loc.expression.source }
+          converted = conversion("class Placeholder < Object\n#{sources.join("\n")}\nend",
+                                 entry, compiled_class: holder, compiled_parent: "Object")
+          js = converted.to_s
+          origins = [nil] + nodes.flat_map { |node| SourceMap.origins(node.loc.expression) } if sourcemaps
+          output.append(js, map: sourcemaps ? converted.sourcemap : nil, origins: origins)
           moves = entry["static_methods"].map do |method|
             "#{id}.#{method['js']} = #{holder}.#{method['js']};"
           end
           moves.concat(entry["constants"].map { |name| "#{id}.#{name} = #{holder}.#{name};" })
-          "#{js}\n#{moves.join("\n")}"
+          output.append(moves.join("\n"))
         end
 
-        def class_method_factory(entry)
+        def class_method_factory(entry, output, sourcemaps:)
           id = entry["identifier"]
           class_name = "#{id}_ClassMethods_Layer"
           methods = entry["class_methods"].map(&:loc).map { |location| location.expression.source }
           source = "class Placeholder < Object\n#{methods.join("\n")}\nend"
-          js = convert(source, entry, compiled_class: class_name, compiled_parent: "Object")
+          converted = conversion(source, entry, compiled_class: class_name, compiled_parent: "Object")
+          js = converted.to_s
+          map = converted.sourcemap if sourcemaps
+          origins = [nil] + entry["class_methods"].flat_map { |node| SourceMap.origins(node.loc.expression) } if sourcemaps
           declarations = entry["registries"].map do |registry|
             name = registry["name"]
             "#{Knowledge.member(name)}() { return Runtime.inheritableRegistry(this, " \
@@ -154,13 +161,9 @@ module Swill
             insertion = declarations.join("\n")
             js = js.sub(/\n}\s*\z/, "\n#{insertion}\n}")
           end
-          <<~JS
-            export function #{id}_ClassMethods(Superclass) {
-              #{js}
-              Object.setPrototypeOf(#{class_name}.prototype, Superclass);
-              return #{class_name}.prototype;
-            }
-          JS
+          output.append("export function #{id}_ClassMethods(Superclass) {")
+          output.append(js, map: map, origins: origins)
+          output.append("Object.setPrototypeOf(#{class_name}.prototype, Superclass);\nreturn #{class_name}.prototype;\n}")
         end
 
     end
